@@ -4,6 +4,9 @@ import { type BaseRoom } from "./game/data";
 import { advanceShelterRoute, clientToShelterPoint, getShelterCell, planShelterRoute, SHELTER_SHAFT_X } from "./shelter-motion";
 import { clampShelterCamera, focusShelterRect, panShelterCamera, projectShelterRect, resizeShelterCamera, shelterViewportForSize, viewportToShelter, zoomShelterCamera, type ShelterCamera, type ShelterRect, type ShelterViewport, type ClientRect } from "./shelter-camera";
 import { advanceShelterLift, createShelterLift, type LiftRequest } from "./shelter-lift";
+import { advanceScavAnimation, createScavAnimation, type ScavAnimationState } from "./shelter-animation";
+import { type ProductionPresentation } from "./shelter-production";
+import { createShelterStation, type ShelterStation } from "./shelter-stations";
 
 export interface WorldSnapshot {
 	base: Record<string, number>;
@@ -43,6 +46,8 @@ type ScavActor = {
 	legB: Phaser.GameObjects.Rectangle;
 	hand: Phaser.GameObjects.Rectangle;
 	sprite: Phaser.GameObjects.Image | null;
+	poses: { idle: Phaser.GameObjects.Image; walkA: Phaser.GameObjects.Image; walkB: Phaser.GameObjects.Image; work: Phaser.GameObjects.Image } | null;
+	animation: ScavAnimationState;
 	appearance: number;
 	gear: Phaser.GameObjects.Graphics;
 	tool: Phaser.GameObjects.Graphics;
@@ -105,6 +110,9 @@ type ShelterCell = {
 	frame: Phaser.GameObjects.Graphics;
 	progress: Phaser.GameObjects.Graphics;
 	animation: Phaser.GameObjects.Graphics;
+	station: ShelterStation;
+	production: ProductionPresentation | null;
+	productLabel: Phaser.GameObjects.Text;
 	label: Phaser.GameObjects.Text;
 	status: Phaser.GameObjects.Text;
 	lamp: Phaser.GameObjects.Image;
@@ -799,12 +807,15 @@ export function createWorld(
 			const animation = this.add.graphics();
 			const label = this.text(10, 2, "", 18, "#fff0d6").setFontFamily("Manrope, sans-serif").setFontStyle("bold").setLetterSpacing(0).setShadow(0, 1, "#081416", 0, true, true);
 			const status = this.text(22, 82, "", 14, "#c1d8bd").setFontFamily("Manrope, sans-serif").setFontStyle("bold").setLetterSpacing(0).setShadow(0, 1, "#051010", 0, true, true);
+			const productLabel = this.text(86, 25, "", 9, "#f4e4bb").setOrigin(.5, 0).setFontFamily("Manrope, sans-serif").setFontStyle("bold").setLetterSpacing(0).setBackgroundColor("#10231e").setPadding(4, 2).setVisible(false);
 			const feedback = this.text(86, 43, "", 16, "#e6ffce").setOrigin(.5).setFontFamily("Manrope, sans-serif").setFontStyle("bold").setLetterSpacing(0).setBackgroundColor("#163023").setPadding(6, 3).setVisible(false);
 			const lamp = this.add.image(85, 43, "prapor-light").setScale(.66, .38).setAlpha(.12).setBlendMode(Phaser.BlendModes.ADD);
 			const zone = this.add.zone(86, 50, ROOM_WIDTH, ROOM_HEIGHT).setInteractive({ useHandCursor: true });
-			const root = this.add.container(p.x, p.y, [...(backdrop ? [backdrop] : []), art, lamp, animation, frame, label, status, progress, feedback, zone]);
+			const root = this.add.container(p.x, p.y, [...(backdrop ? [backdrop] : []), art, lamp, animation, frame, label, status, productLabel, progress, feedback, zone]);
+			const station = createShelterStation(this, root);
+			root.moveTo(station.layer, root.list.indexOf(frame));
 			this.baseLayer.add(root);
-			const cell: ShelterCell = { root, art, backdrop, frame, progress, animation, label, status, lamp, zone, signature: "", column, row, hovered: false, room: null, working: false, operational: "empty", feedback, lastCycles: null, completedAt: -10000 };
+			const cell: ShelterCell = { root, art, backdrop, frame, progress, animation, station, production: null, productLabel, label, status, lamp, zone, signature: "", column, row, hovered: false, room: null, working: false, operational: "empty", feedback, lastCycles: null, completedAt: -10000 };
 			this.cells.set(`${column}:${row}`, cell);
 			zone.on("pointerover", (pointer: Phaser.Input.Pointer) => { if (this.acceptsPointer(pointer, "base")) { cell.hovered = true; this.paintCellFrame(cell); } });
 			zone.on("pointerout", () => { cell.hovered = false; this.paintCellFrame(cell); });
@@ -1158,8 +1169,8 @@ export function createWorld(
 			const body = this.add.container(0, 0);
 			const shadow = this.add.ellipse(0, 1, 20, 5, 0x041014, .6);
 			const selection = this.add.ellipse(0, 1, 27, 9).setStrokeStyle(1.5, C.gold).setVisible(false);
-			const legA = this.add.rectangle(-3, -5, 4, 10, 0x526359).setStrokeStyle(.8, 0x07141b);
-			const legB = this.add.rectangle(3, -5, 4, 10, 0x354f4a).setStrokeStyle(.8, 0x07141b);
+			const legA = this.add.rectangle(-3, 0, 4, 10, 0x526359).setOrigin(.5, 1).setStrokeStyle(.8, 0x07141b);
+			const legB = this.add.rectangle(3, 0, 4, 10, 0x354f4a).setOrigin(.5, 1).setStrokeStyle(.8, 0x07141b);
 			const hand = this.add.rectangle(6, -21, 4, 13, 0xc7ac86).setStrokeStyle(.7, 0x183433).setOrigin(.5, .15);
 			const graphic = this.add.graphics();
 			const coats = [0xbec49a, 0xd1ac78, 0x88c3bd, 0xba9ab7, 0xd08f77];
@@ -1177,13 +1188,15 @@ export function createWorld(
 			const gear = this.add.graphics();
 			const tool = this.add.graphics().setPosition(6, -21);
 			const appearance = index % 4;
-			const sprite = this.textures.exists("scav-workers") ? this.add.image(0, 0, "scav-workers", `idle-${appearance}`).setOrigin(.5, 332 / 340).setScale(44 / 319) : null;
+			const makePose = (pose: string) => this.add.image(0, 0, "scav-workers", `${pose}-${appearance}`).setOrigin(.5, 332 / 340).setScale(44 / 319);
+			const poses = this.textures.exists("scav-workers") ? { idle: makePose("idle"), walkA: makePose("walk-a").setVisible(false), walkB: makePose("walk-b").setVisible(false), work: makePose("work").setVisible(false) } : null;
+			const sprite = poses?.idle ?? null;
 			if (sprite) { legA.setVisible(false); legB.setVisible(false); graphic.setVisible(false); hand.setVisible(false); tool.setPosition(13, -21); }
-			body.add([legA, legB, graphic, ...(sprite ? [sprite] : []), gear, hand, tool]);
+			body.add([legA, legB, graphic, ...(poses ? [poses.idle, poses.walkA, poses.walkB, poses.work] : []), gear, hand, tool]);
 			const label = this.text(0, -64, "", 16, "#ffedc7").setOrigin(.5).setFontFamily("Manrope, sans-serif").setFontStyle("bold").setLetterSpacing(0).setBackgroundColor("#0b1b20").setPadding(7, 4).setVisible(false);
 			const order = this.add.circle(-10, -34, 3.5, C.sage).setStrokeStyle(1, 0x10242b).setVisible(false);
 			const hit = this.add.zone(0, -21, 32, 46).setInteractive({ useHandCursor: true });
-			const slot: ScavActor = { actor, body, legA, legB, hand, sprite, appearance, gear, tool, label, order, selection, hovered: false, gearSignature: "", anchor: { ...at }, route: [], goal: "", assignment: null, role: "idle", dwellUntil: this.time.now + 2000 + index * 800, visit: 0, facing: 1, climbing: false, status: "ready", health: 100, working: false, walking: false, walkSpan: 0, phase: index * 1.71 };
+			const slot: ScavActor = { actor, body, legA, legB, hand, sprite, poses, animation: createScavAnimation(index * .37), appearance, gear, tool, label, order, selection, hovered: false, gearSignature: "", anchor: { ...at }, route: [], goal: "", assignment: null, role: "idle", dwellUntil: this.time.now + 2000 + index * 800, visit: 0, facing: 1, climbing: false, status: "ready", health: 100, working: false, walking: false, walkSpan: 0, phase: index * 1.71 };
 			hit.on("pointerover", (pointer: Phaser.Input.Pointer) => { if (this.acceptsPointer(pointer, "base")) { slot.hovered = true; selection.setVisible(true); label.setVisible(true); actor.setDepth(80); } });
 			hit.on("pointerout", () => { slot.hovered = false; const selected = snapshot().selectedScavId === scavId; selection.setVisible(selected); label.setVisible(selected); actor.setDepth(30); });
 			// Native pointer-up distinguishes a deliberate tap from a drag before opening the inspector.
@@ -1208,6 +1221,9 @@ export function createWorld(
 				if (cell.room?.id !== room?.id) { cell.lastCycles = null; cell.completedAt = -10000; cell.feedback.setVisible(false); }
 				cell.room = room;
 				const production = room ? state.roomProduction?.[room.id] : undefined;
+				cell.production = cell.station.setProduction(room, production ?? null);
+				const productName = cell.production?.jobId ? cell.production.productName : "";
+				cell.productLabel.setText(productName.length > 29 ? `${productName.slice(0, 28)}…` : productName);
 				cell.working = Boolean(room?.status === "ready" && room.queue.length && room.workerIds.length && production?.rate && !production.reason);
 				cell.operational = !room ? "empty" : room.status !== "ready" ? "building" : room.type === "storage" || room.type === "dormitory" ? "passive" : cell.working ? "working" : production?.reason || room.queue.length ? "blocked" : "idle";
 				if (cell.working) workingRooms++;
@@ -1231,12 +1247,9 @@ export function createWorld(
 						const x = 162 - worker * 8;
 						cell.progress.fillStyle(cell.working ? 0xc7dcaa : 0x9eb7ad, .85).fillCircle(x, 7, 1.7).fillRoundedRect(x - 2.4, 9, 4.8, 4, 1);
 					}
-					const seconds = production?.remainingSeconds;
-					const remaining = Math.ceil(seconds ?? 0);
-					const time = seconds === null || seconds === undefined ? "" : `${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, "0")}`;
 					const reason = production?.reason?.toLocaleLowerCase("ru-RU") ?? "";
 					const briefReason = reason.includes("склад") || reason.includes("мест") ? "СКЛАД ПОЛОН" : reason.includes("рабоч") ? "НУЖЕН РАБОЧИЙ" : reason.includes("нужно") ? "НУЖНЫ РЕСУРСЫ" : production?.reason ?? "";
-					const status = construction ? `СТРОЙКА ${Math.floor(progress * 100)}%` : room.type === "storage" ? "ЗАПАСЫ" : room.type === "dormitory" ? "МЕСТА ОТРЯДА" : cell.working ? `РАБОТА ${time}` : production?.reason ? briefReason : !room.workerIds.length ? "НУЖЕН РАБОЧИЙ" : production?.status === "Нет заказа" ? "БЕЗ ЗАКАЗА" : "ЖДЁТ ПАРТИЮ";
+					const status = construction ? `СТРОЙКА ${Math.floor(progress * 100)}%` : room.type === "storage" ? "ЗАПАСЫ" : room.type === "dormitory" ? "МЕСТА ОТРЯДА" : cell.working ? `${Math.floor((cell.production?.progress ?? 0) * 100)}% · ${cell.production?.stageLabel ?? "Сборка"}` : production?.reason ? briefReason : !room.workerIds.length ? "НУЖЕН РАБОЧИЙ" : production?.status === "Нет заказа" ? "БЕЗ ЗАКАЗА" : "ЖДЁТ ПАРТИЮ";
 					const clippedStatus = `${status.toLocaleUpperCase("ru-RU").slice(0, 17)}${status.length > 17 ? "…" : ""}`;
 					cell.status.setText(clippedStatus).setColor(construction ? "#ffd399" : cell.working ? "#d1efb0" : cell.operational === "blocked" ? "#edc294" : "#c1cbbc");
 					if (cell.working) {
@@ -1276,8 +1289,11 @@ export function createWorld(
 			const free = people.filter((scav) => scav.status !== "raiding" && !rooms.some((room) => room.id === scav.assignment && room.workerIds.includes(scav.id)));
 			people.forEach((scav, index) => {
 				const room = rooms.find((candidate) => candidate.id === scav.assignment && candidate.workerIds.includes(scav.id));
+				const production = room ? state.roomProduction?.[room.id] : undefined;
+				const presentation = room ? this.cells.get(`${room.column}:${room.row}`)?.production ?? null : null;
 				const rank = Math.max(0, room?.workerIds.indexOf(scav.id) ?? 0), roomPoint = room ? cellPosition(room.column, room.row) : null;
-				const at = roomPoint ? { x: roomPoint.x + 86 + rank * 28, y: roomPoint.y + 80 } : this.homePosition(Math.max(0, free.indexOf(scav)), free.length);
+				const station = room?.type === "workshop" && presentation?.active ? presentation.stage === "assembly" ? 104 : 51 : 86;
+				const at = roomPoint ? { x: roomPoint.x + station + rank * 24, y: roomPoint.y + 80 } : this.homePosition(Math.max(0, free.indexOf(scav)), free.length);
 				const slot = this.scavs.get(scav.id) ?? this.createScav(scav.id, index, at);
 				const previousStatus = slot.status, previousAssignment = slot.assignment;
 				slot.assignment = room?.id ?? null; slot.status = scav.status; slot.health = scav.health;
@@ -1291,17 +1307,18 @@ export function createWorld(
 					this.sendActor(slot, `rest:${rest?.id ?? "entrance"}`, p ? { x: p.x + 35 + index % 3 * 20, y: p.y + 80 } : at);
 					slot.role = "rest";
 				} else if (room) {
-					this.sendActor(slot, `work:${room.id}:${rank}`, at);
+					// Workshop stages use real bench/lathe positions. Changing stage is
+					// a short floor walk; pausing keeps the last station and route.
+					if (presentation?.active || previousAssignment !== room.id || !slot.goal.startsWith(`work:${room.id}:`)) this.sendActor(slot, `work:${room.id}:${rank}:${presentation?.active ? presentation.stage : "idle"}`, at);
 					slot.role = room.type;
 				} else if (!slot.goal || previousAssignment !== null || previousStatus !== "ready") {
 					this.sendActor(slot, `idle-home:${index}`, at); slot.role = "idle";
 				}
-				const production = room ? state.roomProduction?.[room.id] : undefined;
-				slot.working = Boolean(room && !slot.route.length && scav.health >= 25 && room.status === "ready" && room.queue.length && production?.rate && !production.reason);
+				slot.working = Boolean(room && !slot.route.length && scav.health >= 25 && presentation?.active);
 				const selected = state.selectedScavId === scav.id;
 				slot.selection.setVisible(selected || slot.hovered || this.drag?.scavId === scav.id).setStrokeStyle(1.5, selected ? C.light : C.gold);
 				const activities: Record<string, string> = { workshop: "СОБИРАЕТ ДЕТАЛИ", ammo: "СНАРЯЖАЕТ ПАТРОНЫ", recycler: "СОРТИРУЕТ УТИЛЬ", medbay: "ГОТОВИТ МЕДИКАМЕНТЫ", radio: "РАБОТАЕТ В ЭФИРЕ" };
-				const activity = slot.role === "rest" ? slot.route.length ? "ИДЁТ ОТДЫХАТЬ" : "ВОССТАНАВЛИВАЕТСЯ" : slot.route.length ? room ? `ИДЁТ: ${ROOM_STYLE[room.type]?.label ?? "КОМНАТА"}` : "ОСМАТРИВАЕТ БАЗУ" : slot.working ? activities[slot.role] ?? "РАБОТАЕТ" : room ? production?.reason?.toLocaleUpperCase("ru-RU").slice(0, 24) ?? "ЖДЁТ ЗАКАЗ" : "НА БАЗЕ";
+				const activity = slot.role === "rest" ? slot.route.length ? "ИДЁТ ОТДЫХАТЬ" : "ВОССТАНАВЛИВАЕТСЯ" : slot.route.length ? room ? `ИДЁТ: ${ROOM_STYLE[room.type]?.label ?? "КОМНАТА"}` : "ОСМАТРИВАЕТ БАЗУ" : slot.working ? room?.type === "workshop" ? presentation?.stageLabel.toLocaleUpperCase("ru-RU") ?? "РАБОТАЕТ" : activities[slot.role] ?? "РАБОТАЕТ" : room ? production?.reason?.toLocaleUpperCase("ru-RU").slice(0, 24) ?? "ЖДЁТ ЗАКАЗ" : "НА БАЗЕ";
 				slot.label.setText(`${scav.name?.toLocaleUpperCase("ru-RU") ?? ""}\n${activity}`).setVisible(selected || slot.hovered);
 				slot.order.setVisible(Boolean(scav.autoRaid?.enabled)).setFillStyle(scav.autoRaid?.waitingReason ? C.gold : C.sage);
 				const gearSignature = `${scav.gear?.armor ?? 0}:${scav.gear?.backpack ?? 0}:${slot.role}`;
@@ -1309,11 +1326,11 @@ export function createWorld(
 					slot.gearSignature = gearSignature; slot.gear.clear(); slot.tool.clear();
 					if (!slot.sprite && !room && scav.gear?.backpack) slot.gear.fillStyle(0x8c7650).fillRect(-10, -26, 5, 16).lineStyle(1, 0xbca16b).strokeRect(-10, -26, 5, 16);
 					if (!slot.sprite && scav.gear?.armor) slot.gear.fillStyle(0x708060).fillRect(-4, -25, 8, 9).fillStyle(0xc4bc80).fillRect(-3, -23, 2, 2);
-					if (slot.role === "workshop") { line(slot.tool, [{ x: 1, y: 6 }, { x: 3, y: 16 }], 0xc6cbb6, 2); slot.tool.lineStyle(1.3, 0xd4d5ba).strokeCircle(3, 17, 2.5); }
-					if (slot.role === "ammo") slot.tool.fillStyle(0xe7c577).fillRect(1, 8, 3, 8);
-					if (slot.role === "recycler") { line(slot.tool, [{ x: 1, y: 8 }, { x: 2, y: 17 }], 0xd5bb92, 2); slot.tool.fillStyle(0x9dac9b).fillRect(-2, 16, 8, 3); }
-					if (slot.role === "medbay") slot.tool.fillStyle(0xd8ebe0).fillRect(0, 9, 5, 7).fillStyle(0x98cabc).fillRect(1, 7, 3, 2);
-					if (slot.role === "radio") slot.tool.fillStyle(0xbdc9a6).fillRect(-1, 8, 6, 7).fillStyle(0x659789).fillRect(0, 9, 4, 3);
+					if (slot.role === "workshop") { line(slot.tool, [{ x: 1, y: 1 }, { x: 10, y: 1 }], 0xc6cbb6, 2); slot.tool.lineStyle(1.3, 0xd4d5ba).strokeCircle(11, 1, 2.3); }
+					if (slot.role === "ammo") slot.tool.fillStyle(0xe7c577).fillRect(1, 0, 3, 8).fillStyle(0xffdfa0).fillRect(1, 0, 3, 1);
+					if (slot.role === "recycler") { line(slot.tool, [{ x: 1, y: 0 }, { x: 2, y: 9 }], 0xd5bb92, 2); slot.tool.fillStyle(0x9dac9b).fillRect(-2, 8, 8, 3); }
+					if (slot.role === "medbay") slot.tool.fillStyle(0xd8ebe0).fillRect(0, 1, 5, 7).fillStyle(0x98cabc).fillRect(1, -1, 3, 2);
+					if (slot.role === "radio") slot.tool.fillStyle(0xbdc9a6).fillRect(-1, 0, 6, 7).fillStyle(0x659789).fillRect(0, 1, 4, 3);
 				}
 			});
 		}
@@ -1368,8 +1385,7 @@ export function createWorld(
 				this.ambient.fillStyle(C.light, .48).fillRect(414, y - 1, 12, 2);
 			}
 			for (const [id, slot] of this.scavs) {
-				const phase = time / 340 + slot.phase;
-				const animated = !reducedMotion && slot.actor.visible;
+				let walkedDistance = 0;
 				if (slot.actor.visible && this.drag?.scavId !== id) {
 					this.patrolActor(slot, id, time);
 					const speed = slot.status === "wounded" ? 27 : 58;
@@ -1377,6 +1393,7 @@ export function createWorld(
 					const hadRoute = slot.route.length > 0;
 					const distance = next ? Math.hypot(next.x - slot.actor.x, next.y - slot.actor.y) : 0;
 					const motion = advanceShelterRoute({ x: slot.actor.x, y: slot.actor.y }, slot.route, vertical ? 0 : Math.min(speed * step, distance));
+					if (!vertical) walkedDistance = Math.abs(motion.point.x - slot.actor.x);
 					slot.route = motion.route;
 					if (hadRoute) slot.actor.setPosition(motion.point.x, motion.point.y);
 					slot.walking = hadRoute && !vertical; slot.climbing = this.liftModel.passengerId === id;
@@ -1385,21 +1402,21 @@ export function createWorld(
 				} else { slot.walking = false; slot.climbing = false; }
 				const room = this.viewState?.shelter?.rooms.find((candidate) => candidate.id === slot.assignment);
 				const production = room ? this.viewState?.roomProduction?.[room.id] : undefined;
-				slot.working = Boolean(slot.status !== "raiding" && slot.health >= 25 && !slot.route.length && this.drag?.scavId !== id && room?.status === "ready" && room.queue.length && production?.rate && !production.reason);
-				const walk = animated && slot.walking, work = animated && slot.working;
-				if (slot.sprite) {
-					const pose = slot.working ? "work" : walk ? Math.floor(time / 240 + slot.phase) % 2 ? "walk-a" : "walk-b" : "idle";
-					const frame = `${pose}-${slot.appearance}`;
-					if (slot.sprite.frame.name !== frame) slot.sprite.setFrame(frame);
-					if (slot.working) slot.facing = 1;
-				}
-				slot.body.setY(work ? Math.sin(phase) * .8 : walk ? Math.abs(Math.sin(phase)) * -.9 : animated ? Math.sin(time / 1600 + slot.phase) * .3 : 0);
-				slot.legA.setY(-5 + (walk ? Math.sin(phase) * 2 : 0));
-				slot.legB.setY(-5 - (walk ? Math.sin(phase) * 2 : 0));
-				let angle = walk ? slot.climbing ? -115 + Math.sin(phase) * 20 : Math.sin(phase) * 19 : 0;
-				if (work) angle = slot.role === "radio" ? -125 + Math.sin(time / 900 + slot.phase) * 4 : slot.role === "medbay" ? -38 + Math.sin(time / 700 + slot.phase) * 10 : slot.role === "ammo" ? -53 + Math.sin(time / 350 + slot.phase) * 16 : slot.role === "recycler" ? -35 + Math.sin(time / 280 + slot.phase) * 40 : -45 + Math.sin(time / 320 + slot.phase) * 27;
-				slot.hand.setAngle(angle); slot.tool.setAngle(angle).setVisible(slot.working);
-				slot.body.setScale(slot.facing, 1);
+				const presentation = room ? this.cells.get(`${room.column}:${room.row}`)?.production ?? null : null;
+				slot.working = Boolean(slot.status !== "raiding" && slot.health >= 25 && !slot.route.length && this.drag?.scavId !== id && presentation?.active);
+				if (slot.working) slot.facing = 1;
+				const animation = advanceScavAnimation(slot.animation, { distance: walkedDistance, elapsedMs: step * 1000, walking: slot.walking || walkedDistance > 0, working: slot.working, facing: slot.facing, role: slot.role, workDone: (room?.queue[0]?.workDone ?? 0) / 1_000_000, workRate: production?.rate ?? 0, jobId: presentation?.jobId ?? null, stage: presentation?.stage, stageProgress: presentation?.stageProgress, reducedMotion, paused: !slot.actor.visible || this.drag?.scavId === id });
+				slot.animation = animation.state;
+				const pose = animation.pose;
+				if (slot.poses) for (const key of ["idle", "walkA", "walkB", "work"] as const) slot.poses[key].setVisible(pose.weights[key] > .001).setAlpha(pose.weights[key]);
+				// All visual transforms pivot at the common feet baseline. Physics,
+				// hit zones, lift attachment and drag coordinates remain unchanged.
+				slot.body.setPosition(0, 0).setScale(pose.scaleX, pose.scaleY).setAngle(pose.angle * pose.scaleX);
+				const stride = (slot.animation.stride % 1) * Math.PI * 2;
+				slot.legA.setAngle(Math.sin(stride) * 9 * slot.animation.walkBlend);
+				slot.legB.setAngle(-Math.sin(stride) * 9 * slot.animation.walkBlend);
+				slot.hand.setAngle(pose.handAngle);
+				slot.tool.setPosition(pose.toolX - (slot.sprite ? 0 : 7), pose.toolY).setAngle(pose.toolAngle).setVisible(slot.working);
 				if (slot.actor.visible) {
 					this.ambient.fillStyle(slot.working ? 0xc4d3a4 : 0x9bbebb, slot.working ? .2 : .12).fillEllipse(slot.actor.x, slot.actor.y + 1, 19, 3);
 					if (slot.label.visible) {
@@ -1425,8 +1442,8 @@ export function createWorld(
 			for (const cell of this.cells.values()) {
 				const g = cell.animation;
 				g.clear();
+				cell.productLabel.setVisible(Boolean(cell.production?.jobId) && (this.viewCamera.zoom >= 1.6 || cell.hovered || this.viewState?.selectedRoomId === cell.room?.id));
 				if (!cell.room) continue;
-				const work = cell.working && !reducedMotion;
 				const elapsed = time - cell.completedAt;
 				cell.feedback.setVisible(elapsed >= 0 && elapsed < 1800).setAlpha(reducedMotion ? 1 : Phaser.Math.Clamp(1 - elapsed / 1800, 0, 1)).setY(43 - (reducedMotion ? 0 : Math.max(0, elapsed) / 120));
 				if (cell.room.status !== "ready") {
@@ -1439,28 +1456,7 @@ export function createWorld(
 					}
 					continue;
 				}
-				if (cell.room.type === "radio") {
-					const angle = work ? time / 700 : -.5;
-					const x = cell.backdrop ? 56 : 42, y = cell.backdrop ? 45 : 57;
-					if (work) {
-						line(g, [{ x, y }, { x: x + Math.cos(angle) * 8, y: y + Math.sin(angle) * 8 }], 0x9ed78b, 1.1, .85);
-						g.fillStyle(0xd3df9d, .9).fillCircle(cell.backdrop ? 92 : 151, 37 + Math.floor(time / 400) % 5 * 6, 1.1);
-					}
-				} else if (cell.room.type === "workshop" && work) {
-					const x = cell.backdrop ? 112 : 80, y = cell.backdrop ? 58 : 63;
-					g.lineStyle(.9, 0xd8d7be, .8).strokeEllipse(125, 58, 7, 7 + Math.sin(time / 100) * 2);
-					for (let n = 0; n < 3; n++) { const phase = (time / 300 + n * .32) % 1; line(g, [{ x, y }, { x: x + phase * (9 + n * 4), y: y + phase * 10 }], 0xffd080, 1, 1 - phase); }
-				} else if (cell.room.type === "ammo" && work) {
-					g.fillStyle(0xc0b37c).fillRect(cell.backdrop ? 31 : 42, 43 + (Math.sin(time / 330) + 1) * 4, 4, 10);
-					for (let n = 0; n < 5; n++) g.fillStyle(0xe2bf73).fillRect(60 + (time / 60 + n * 12) % 64, cell.backdrop ? 57 : 65, 1.7, 4);
-				} else if (cell.room.type === "recycler" && work) {
-					for (let n = 0; n < 4; n++) g.fillStyle(0xa3a783).fillRect((cell.backdrop ? 38 : 88) + (time / 75 + n * 12) % 40, cell.backdrop ? 57 : 70, 2.4, 2);
-				} else if (cell.room.type === "medbay" && work) {
-					if (cell.backdrop) {
-						const offset = time / 90 % 7;
-						line(g, [{ x: 63 + offset, y: 49 }, { x: 65 + offset, y: 49 }, { x: 66 + offset, y: 45 }, { x: 68 + offset, y: 51 }, { x: 70 + offset, y: 48 }], 0x91da8d, .8, .9);
-					} else g.fillStyle(0xc0d9a6, .65).fillRect(17 + time / 90 % 34, 42, 1, 11);
-				}
+				cell.station.update(time, delta, reducedMotion);
 			}
 		}
 		private paintMap(): void {
