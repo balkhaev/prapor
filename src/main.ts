@@ -11,7 +11,6 @@ import {
 	RARITY_LABELS,
 	WEAPONS,
 	WEAPON_BY_ID,
-	type Attachment,
 	type BaseRoom,
 	type Contract,
 	type WeaponCategory,
@@ -52,14 +51,12 @@ import {
 	recycleWeapon,
 	getWeaponRecycleYield,
 	getWeaponRole,
-	isAttachmentCompatible,
 	equipWeapon,
 	getContractProgress,
 	getContractLockReason,
 	getAutoRaidStatus,
 	getGearCost,
 	getIncomePerMinute,
-	getModCost,
 	getRaidPhase,
 	getRepairCost,
 	getScavCapacity,
@@ -67,9 +64,32 @@ import {
 	getUpgradeCost,
 	getWeaponDefinition,
 	getWeaponPower,
+	MODULE_SLOTS,
+	MODULE_SLOT_LABELS,
+	MODULE_MODELS,
+	MODULE_BY_ID,
+	RECEIVER_INFO,
+	getModuleDefinition,
+	getWeaponStats,
+	getWeaponBuildIssues,
+	getModuleInstallReason,
+	installModule,
+	removeModule,
+	assembleWeapon,
+	disassembleWeapon,
+	getModuleCapacity,
+	getModuleSaleValue,
+	getModuleRecycleYield,
+	getModuleRepairCost,
+	getWeaponDisassembleReason,
+	getModuleRemoveReason,
+	repairModule,
+	sellModule,
+	recycleModule,
+	craftModule,
+	getModuleCraftReason,
 	healScav,
 	loadGameWithSummary,
-	modWeapon,
 	recruitCost,
 	recruitScav,
 	repairWeapon,
@@ -90,10 +110,13 @@ import {
 	type Raid,
 	type ExpeditionBranch,
 	type RunPerk,
+	type ModuleSlot,
+	type ModuleInstance,
 } from "./game/engine";
 import { GEAR_LABELS, MAX_GEAR_LEVEL, TACTICS, type GearSlot, type RaidTactic } from "./game/operations";
 import { createWorld } from "./scene";
 import { gunArt, scavPortrait } from "./art";
+import { weaponBuildArt, moduleArt } from "./armory-art";
 
 type Page = "home" | "raids" | "arsenal" | "base" | "contracts" | "journal";
 const e = (value: unknown) =>
@@ -157,7 +180,14 @@ let modalOrigin: HTMLElement | null = null;
 let weaponSearch = "";
 let category: WeaponCategory | "all" = "all";
 let collection = false;
-let arsenalTab: "weapons" | "equipment" | "market" = "weapons";
+let arsenalTab: "weapons" | "bench" | "modules" | "equipment" | "market" = "weapons";
+let selectedModuleSlot: ModuleSlot = "optic";
+let selectedBenchModule: string | null = null;
+let moduleSlotFilter: ModuleSlot | "all" = "all";
+let moduleRarityFilter: keyof typeof RARITY_LABELS | "all" = "all";
+let moduleSearch = "";
+let benchPartSearch = "";
+let moduleCraftForWeapon = true;
 const selectedPerks = new Map<string, RunPerk>();
 let contractFilter: "open" | "done" | "all" = "open";
 let deferredRender = false;
@@ -173,7 +203,7 @@ const names: Record<Page, string> = {
 	contracts: "Контракты",
 	journal: "Журнал",
 };
-app.innerHTML = `<div class="shell"><aside class="sidebar"><div class="brand"><div class="brand-mark">П</div><div><strong>ПРАПОР</strong><small>СВОИ ЛЮДИ. СВОЁ ДЕЛО.</small></div></div><div class="nav-label">Оперативный штаб</div><nav class="nav" aria-label="Разделы игры">${(Object.keys(names) as Page[]).map((id) => `<button data-page="${id}" aria-label="${names[id]}">${icon(id)}<span>${id === "base" ? "База" : names[id]}</span>${id === "raids" ? '<b class="badge" id="raid-badge">0</b>' : ""}</button>`).join("")}</nav><div class="base-status"><i class="status-dot"></i>База на связи<span class="muted" id="passive-note">Мастерская работает</span></div><footer>IDLE-РОГУЛАЙТ · 0.4</footer></aside><main class="main"><header class="topbar"><div class="level"><span class="eyebrow">Репутация</span><strong id="level-label"></strong><div class="xp-track"><i id="xp-fill"></i></div></div><div class="resources">${[["money", "Рубли"], ["ammo", "Патроны"], ["medicine", "Медикаменты"], ["scrap", "Детали"], ["intel", "Разведданные"]].map(([key, label]) => `<div class="resource" title="${label}">${icon(key!)}<div><label>${label}</label><strong id="res-${key}"></strong></div></div>`).join("")}</div><button class="settings" data-action="settings" aria-label="Сохранение и помощь">${icon("settings")}</button></header><div class="content"><div id="page-head" class="page-head"></div><div id="offline-summary"></div><div id="expedition-alerts"></div><div id="hero" class="hero-grid"><section class="world-card"><div class="world-head"><div class="view-switch" aria-label="Вид сцены"><button class="active" data-view="base" aria-pressed="true">${icon("home", 15)} Убежище</button><button data-view="map" aria-pressed="false">${icon("raids", 15)} Карта секторов</button></div><span class="mono world-coordinate">БАЗА 07 · СЕВЕР</span></div><div id="world" aria-label="Двумерная сцена убежища и карта рейдов"></div><div class="world-bottom"><span><i class="status-dot"></i><span id="scene-hint">Нажми на комнату или бойца</span></span><span id="world-raid-note">ОТРЯД НА БАЗЕ</span></div><div class="room-shortcuts" aria-label="Комнаты базы">${(Object.keys(BASE_ROOM_LABELS) as BaseRoom[]).map((room) => `<button class="room-shortcut" data-room-link="${room}">${icon(room === "workshop" ? "scrap" : room === "medbay" ? "medicine" : room === "radio" ? "intel" : "arsenal", 15)}${BASE_ROOM_LABELS[room]}</button>`).join("")}</div></section><aside class="briefing"><div class="briefing-top"><div class="portrait">${portrait}</div><div><span class="eyebrow">На связи</span><strong>Прапор</strong></div><span class="radio-live">● ЭФИР</span></div><h2 id="briefing-title">Каждому — ствол.<br>Каждому — маршрут.</h2><p id="briefing-copy"></p><button class="button" data-page="raids">Подготовить выход ${icon("arrow", 17)}</button><div class="briefing-note">База работает и офлайн · до 8 часов</div></aside></div><div id="panel"></div><div class="footer-line"><span id="save-status">ПРОГРЕСС СОХРАНЯЕТСЯ НА ЭТОМ УСТРОЙСТВЕ</span><span>МАСТЕРСКАЯ РАБОТАЕТ И БЕЗ ТЕБЯ</span></div></div></main></div><div id="toast" role="status" aria-live="polite" hidden></div><div id="inspector-root"></div><div id="modal-root"></div>`;
+app.innerHTML = `<div class="shell"><aside class="sidebar"><div class="brand"><div class="brand-mark">П</div><div><strong>ПРАПОР</strong><small>СВОИ ЛЮДИ. СВОЁ ДЕЛО.</small></div></div><div class="nav-label">Оперативный штаб</div><nav class="nav" aria-label="Разделы игры">${(Object.keys(names) as Page[]).map((id) => `<button data-page="${id}" aria-label="${names[id]}">${icon(id)}<span>${id === "base" ? "База" : names[id]}</span>${id === "raids" ? '<b class="badge" id="raid-badge">0</b>' : ""}</button>`).join("")}</nav><div class="base-status"><i class="status-dot"></i>База на связи<span class="muted" id="passive-note">Мастерская работает</span></div><footer>IDLE-РОГУЛАЙТ · 0.5</footer></aside><main class="main"><header class="topbar"><div class="level"><span class="eyebrow">Репутация</span><strong id="level-label"></strong><div class="xp-track"><i id="xp-fill"></i></div></div><div class="resources">${[["money", "Рубли"], ["ammo", "Патроны"], ["medicine", "Медикаменты"], ["scrap", "Детали"], ["intel", "Разведданные"]].map(([key, label]) => `<div class="resource" title="${label}">${icon(key!)}<div><label>${label}</label><strong id="res-${key}"></strong></div></div>`).join("")}</div><button class="settings" data-action="settings" aria-label="Сохранение и помощь">${icon("settings")}</button></header><div class="content"><div id="page-head" class="page-head"></div><div id="offline-summary"></div><div id="expedition-alerts"></div><div id="hero" class="hero-grid"><section class="world-card"><div class="world-head"><div class="view-switch" aria-label="Вид сцены"><button class="active" data-view="base" aria-pressed="true">${icon("home", 15)} Убежище</button><button data-view="map" aria-pressed="false">${icon("raids", 15)} Карта секторов</button></div><span class="mono world-coordinate">БАЗА 07 · СЕВЕР</span></div><div id="world" aria-label="Двумерная сцена убежища и карта рейдов"></div><div class="world-bottom"><span><i class="status-dot"></i><span id="scene-hint">Нажми на комнату или бойца</span></span><span id="world-raid-note">ОТРЯД НА БАЗЕ</span></div><div class="room-shortcuts" aria-label="Комнаты базы">${(Object.keys(BASE_ROOM_LABELS) as BaseRoom[]).map((room) => `<button class="room-shortcut" data-room-link="${room}">${icon(room === "workshop" ? "scrap" : room === "medbay" ? "medicine" : room === "radio" ? "intel" : "arsenal", 15)}${BASE_ROOM_LABELS[room]}</button>`).join("")}</div></section><aside class="briefing"><div class="briefing-top"><div class="portrait">${portrait}</div><div><span class="eyebrow">На связи</span><strong>Прапор</strong></div><span class="radio-live">● ЭФИР</span></div><h2 id="briefing-title">Каждому — ствол.<br>Каждому — маршрут.</h2><p id="briefing-copy"></p><button class="button" data-page="raids">Подготовить выход ${icon("arrow", 17)}</button><div class="briefing-note">База работает и офлайн · до 8 часов</div></aside></div><div id="panel"></div><div class="footer-line"><span id="save-status">ПРОГРЕСС СОХРАНЯЕТСЯ НА ЭТОМ УСТРОЙСТВЕ</span><span>МАСТЕРСКАЯ РАБОТАЕТ И БЕЗ ТЕБЯ</span></div></div></main></div><div id="toast" role="status" aria-live="polite" hidden></div><div id="inspector-root"></div><div id="modal-root"></div>`;
 const panel = document.querySelector<HTMLDivElement>("#panel")!;
 const costLabel = (cost: { money: number; scrap: number }) =>
 	`${n(cost.money)} ₽ · ${cost.scrap} дет.`;
@@ -226,6 +256,8 @@ function act(result: ActionResult) {
 		else {
 			const context = replacement?.closest<HTMLElement>(".card, .weapon-detail, .contract");
 			if (context) { context.tabIndex = -1; context.focus({ preventScroll: true }); }
+			else if (page === "arsenal" && arsenalTab === "bench") document.querySelector<HTMLButtonElement>(`[data-bench-slot="${selectedModuleSlot}"]`)?.focus({ preventScroll: true });
+			else if (page === "arsenal") document.querySelector<HTMLButtonElement>(`[data-arsenal-tab="${arsenalTab}"]`)?.focus({ preventScroll: true });
 		}
 	}
 }
@@ -259,7 +291,14 @@ function cargoWarehouseNotice(raid: Raid) {
 	const supplyCapacity = getSupplyCapacity(state);
 	const overflow = Object.entries(cargo.supplies).filter(([key, amount]) => amount > Math.max(0, supplyCapacity[key as keyof GameState["supplies"]] - state.supplies[key as keyof GameState["supplies"]])).map(([key, amount]) => `${supplyName(key)}: ${Math.ceil(amount - Math.max(0, supplyCapacity[key as keyof GameState["supplies"]] - state.supplies[key as keyof GameState["supplies"]]))}`);
 	const surplusGuns = Math.max(0, cargo.weaponIds.length - Math.max(0, getStorageCapacity(state) - state.weapons.length));
-	return overflow.length || surplusGuns ? `<p class="risk-note"><strong>На базе не всё поместится.</strong>${overflow.length ? ` Лишние припасы останутся за бортом: ${e(overflow.join(" · "))}.` : ""}${surplusGuns ? ` Стволы сверх вместимости арсенала будут проданы: ${surplusGuns}.` : ""} Можно освободить место или улучшить склад перед эвакуацией.</p>` : '<p class="field-hint">Текущая добыча помещается на складе базы.</p>';
+	const surplusModules = Math.max(0, cargo.modules.length - Math.max(0, getModuleCapacity(state) - state.modules.length));
+	return overflow.length || surplusGuns || surplusModules ? `<p class="risk-note"><strong>На базе не всё поместится.</strong>${overflow.length ? ` Лишние припасы останутся за бортом: ${e(overflow.join(" · "))}.` : ""}${surplusGuns ? ` Стволы сверх вместимости арсенала будут проданы: ${surplusGuns}.` : ""}${surplusModules ? ` Модули сверх вместимости стойки будут проданы: ${surplusModules}.` : ""} Можно освободить место или улучшить склад перед эвакуацией.</p>` : '<p class="field-hint">Текущая добыча помещается на складе базы.</p>';
+}
+function moduleCargo(items: ModuleInstance[]) {
+	return items.length ? `<div class="module-loot-strip">${items.map((item) => {
+		const model = getModuleDefinition(item);
+		return `<span class="cargo-module" style="--rarity:${RARITY_COLORS[model.rarity]}">${moduleArt(model)}<span><strong>${e(model.label)}</strong><small>${MODULE_SLOT_LABELS[model.slot]} · ${Math.round(item.durability)}%</small></span></span>`;
+	}).join("")}</div>` : "";
 }
 function expeditionCard(raid: Raid, compact = false) {
 	const run = raid.expedition;
@@ -274,7 +313,7 @@ function expeditionCard(raid: Raid, compact = false) {
 	const weapons = run.cargo.weaponIds.map((id) => WEAPON_BY_ID[id]).filter((item) => Boolean(item)).map((def) => `<span>${icon("arsenal", 14)} ${e(def!.name)}</span>`).join("");
 	const cargoMetrics = `<div class="loadout-stats"><span>Груз: ${getCargoWeight(run.cargo).toFixed(1)} / ${capacity.toFixed(1)} ед.</span><span>Ценность: ≈ ${n(getCargoValue(run.cargo))} ₽</span></div>`;
 	const warehouseWarning = `<div data-cargo-warehouse="${raid.id}">${cargoWarehouseNotice(raid)}</div>`;
-	return `<article class="decision-card" data-expedition="${raid.id}"><div class="decision-head"><div class="scav-avatar">${scavPortrait(scav.personality, scav.name)}</div><div><span class="eyebrow">${e(MAP_BY_ID[raid.mapId]!.name)} · точка ${run.stage} / 3</span><h3>${e(scav.name)} ждёт приказа</h3><p>${run.stage >= 3 ? "Маршрут пройден. Забери добычу на базу." : "Добыча ещё в рюкзаке. Можно уйти или рискнуть дальше."}</p></div>${!compact ? `<button class="button ghost small" data-scav="${scav.id}">Личное дело</button>` : ""}</div><div class="decision-content"><div class="expedition-stage" aria-label="Пройдено этапов: ${run.stage} из 3">${[1, 2, 3].map((stage) => `<span class="${stage < run.stage ? "done" : stage === run.stage ? "current" : ""}">${stage < run.stage ? "✓ " : ""}${stage}. ${stage === 1 ? "Вход" : stage === 2 ? "Глубина" : "Цель"}</span>`).join("")}</div><div class="cargo-summary"><div><span>В рюкзаке</span><strong>${n(run.cargo.money)} ₽</strong><small>Наличными · припасы ниже</small></div><div><span>Защищено от потери</span><strong>Открытия</strong><small>Остаются даже при провале</small></div><div><span>Здоровье бойца</span><strong>${Math.floor(scav.health)} / 100</strong><small>Броня на входе: ${Math.round(run.loadout.armorCondition)}%</small></div></div>${cargoMetrics}<p class="field-hint">Ценность — оценка наличных и находок, а не выплата рублями. Деньги не занимают место. При перегрузе боец оставляет лишние припасы; склад на базе тоже ограничен.</p><div class="cargo-items">${supplies}${weapons || (!supplies ? "<span>Рюкзак пока пуст</span>" : "")}</div>${warehouseWarning}${run.discoveries.length ? `<p class="field-hint">Записаны находки: ${run.discoveries.map((id) => e(BLUEPRINTS[id]?.label ?? "Разведанный маршрут")).join(" · ")}. Останутся у базы.</p>` : ""}${run.perks.length ? `<p class="field-hint">Опыт этой экспедиции: ${run.perks.map((perk) => e(RUN_PERKS[perk].label)).join(" · ")}</p>` : ""}${choices.length ? `<p class="risk-note">Следующий этап опаснее. При провале добыча в рюкзаке может быть потеряна; постоянные открытия сохранятся.</p>${run.offers.length ? `<div class="run-perk-pick"><h3>Находка маршрута</h3><p>Выбери один бонус. Он работает до конца этой экспедиции.</p><div class="decision-branches">${run.offers.map((perk) => `<button class="branch-choice ${perk === selectedPerk ? "active" : ""}" data-action="run-perk" data-id="${raid.id}" data-perk="${perk}" data-focus-key="perk-${perk}" aria-pressed="${perk === selectedPerk}"><strong>${e(RUN_PERKS[perk].label)}</strong><p>${e(RUN_PERKS[perk].description)}</p><small>${perk === selectedPerk ? "✓ Выбрано" : "Выбрать бонус"}</small></button>`).join("")}</div></div>` : ""}<h3>Куда дальше?</h3><div class="decision-branches">${choices.map((choice) => `<button class="branch-choice" data-action="continue-expedition" data-id="${raid.id}" data-branch="${choice.branch}" data-focus-key="branch-${choice.branch}" ${choice.reason || (run.offers.length && !hasPerk) ? "disabled" : ""}><strong>${e(choice.label)}</strong><p>${e(choice.description)}</p><small>${Math.round(choice.chance * 100)}% успеха · ${seconds(choice.duration)} · ${n(choice.money)} ₽ + ${choice.ammo} патр.${choice.intel ? ` + ${choice.intel} разв.` : ""}</small><span class="quote-note">${e(choice.reason ?? (run.offers.length && !hasPerk ? "Сначала выбери бонус маршрута" : `Этап ${run.stage + 1} · добыча под риском`))}</span></button>`).join("")}</div>` : ""}<div class="extract-row"><p>Эвакуация вернёт бойца и доставит добычу в пределах склада. ${run.stage < 3 ? "База готовит следующий выход." : "Экспедиция завершится."}</p><button class="button" data-action="extract" data-id="${raid.id}" data-focus-key="extract">${icon("check", 17)} Эвакуировать с добычей</button></div></div></article>`;
+	return `<article class="decision-card" data-expedition="${raid.id}"><div class="decision-head"><div class="scav-avatar">${scavPortrait(scav.personality, scav.name)}</div><div><span class="eyebrow">${e(MAP_BY_ID[raid.mapId]!.name)} · точка ${run.stage} / 3</span><h3>${e(scav.name)} ждёт приказа</h3><p>${run.stage >= 3 ? "Маршрут пройден. Забери добычу на базу." : "Добыча ещё в рюкзаке. Можно уйти или рискнуть дальше."}</p></div>${!compact ? `<button class="button ghost small" data-scav="${scav.id}">Личное дело</button>` : ""}</div><div class="decision-content"><div class="expedition-stage" aria-label="Пройдено этапов: ${run.stage} из 3">${[1, 2, 3].map((stage) => `<span class="${stage < run.stage ? "done" : stage === run.stage ? "current" : ""}">${stage < run.stage ? "✓ " : ""}${stage}. ${stage === 1 ? "Вход" : stage === 2 ? "Глубина" : "Цель"}</span>`).join("")}</div><div class="cargo-summary"><div><span>В рюкзаке</span><strong>${n(run.cargo.money)} ₽</strong><small>Наличными · припасы ниже</small></div><div><span>Защищено от потери</span><strong>Открытия</strong><small>Остаются даже при провале</small></div><div><span>Здоровье бойца</span><strong>${Math.floor(scav.health)} / 100</strong><small>Броня на входе: ${Math.round(run.loadout.armorCondition)}%</small></div></div>${cargoMetrics}<p class="field-hint">Ценность — оценка наличных и находок, а не выплата рублями. Деньги не занимают место. При перегрузе боец оставляет лишние припасы; склад на базе тоже ограничен.</p><div class="cargo-items">${supplies}${weapons || (!supplies ? "<span>Рюкзак пока пуст</span>" : "")}</div>${moduleCargo(run.cargo.modules)}${warehouseWarning}${run.discoveries.length ? `<p class="field-hint">Записаны находки: ${run.discoveries.map((id) => e(BLUEPRINTS[id]?.label ?? "Разведанный маршрут")).join(" · ")}. Останутся у базы.</p>` : ""}${run.perks.length ? `<p class="field-hint">Опыт этой экспедиции: ${run.perks.map((perk) => e(RUN_PERKS[perk].label)).join(" · ")}</p>` : ""}${choices.length ? `<p class="risk-note">Следующий этап опаснее. При провале добыча в рюкзаке может быть потеряна; постоянные открытия сохранятся.</p>${run.offers.length ? `<div class="run-perk-pick"><h3>Находка маршрута</h3><p>Выбери один бонус. Он работает до конца этой экспедиции.</p><div class="decision-branches">${run.offers.map((perk) => `<button class="branch-choice ${perk === selectedPerk ? "active" : ""}" data-action="run-perk" data-id="${raid.id}" data-perk="${perk}" data-focus-key="perk-${perk}" aria-pressed="${perk === selectedPerk}"><strong>${e(RUN_PERKS[perk].label)}</strong><p>${e(RUN_PERKS[perk].description)}</p><small>${perk === selectedPerk ? "✓ Выбрано" : "Выбрать бонус"}</small></button>`).join("")}</div></div>` : ""}<h3>Куда дальше?</h3><div class="decision-branches">${choices.map((choice) => `<button class="branch-choice" data-action="continue-expedition" data-id="${raid.id}" data-branch="${choice.branch}" data-focus-key="branch-${choice.branch}" ${choice.reason || (run.offers.length && !hasPerk) ? "disabled" : ""}><strong>${e(choice.label)}</strong><p>${e(choice.description)}</p><small>${Math.round(choice.chance * 100)}% успеха · ${seconds(choice.duration)} · ${n(choice.money)} ₽ + ${choice.ammo} патр.${choice.intel ? ` + ${choice.intel} разв.` : ""}</small><span class="quote-note">${e(choice.reason ?? (run.offers.length && !hasPerk ? "Сначала выбери бонус маршрута" : `Этап ${run.stage + 1} · добыча под риском`))}</span></button>`).join("")}</div>` : ""}<div class="extract-row"><p>Эвакуация вернёт бойца и доставит добычу в пределах склада. ${run.stage < 3 ? "База готовит следующий выход." : "Экспедиция завершится."}</p><button class="button" data-action="extract" data-id="${raid.id}" data-focus-key="extract">${icon("check", 17)} Эвакуировать с добычей</button></div></div></article>`;
 }
 function hud() {
 	document.querySelector("#res-money")!.textContent = `${n(state.money)} ₽`;
@@ -368,15 +407,12 @@ function hud() {
 		const note = document.querySelector(`[data-room-cost="${room}"]`);
 		if (note) note.textContent = state.base[room] >= MAX_ROOM_LEVEL ? "Помещение полностью развито" : costReason(cost);
 	});
-	document.querySelectorAll<HTMLButtonElement>('[data-action="repair"], [data-action="mod"]').forEach((node) => {
-		const weapon = state.weapons.find((w) => w.id === node.dataset.id); if (!weapon) return;
-		const busy = state.raids.some((r) => r.weaponInstanceId === weapon.id), mod = node.dataset.mod as Attachment;
-		const repair = node.dataset.action === "repair", cost = repair ? getRepairCost(weapon) : getModCost(weapon, mod);
-		const max = repair ? weapon.durability >= 100 : weapon.attachments[mod] >= 3;
-		const compatible = repair || isAttachmentCompatible(weapon, mod);
-		node.disabled = busy || max || !compatible || !canAfford(cost);
-		const note = document.querySelector(`[data-weapon-cost="${weapon.id}-${repair ? "repair" : mod}"]`);
-		if (note) note.textContent = busy ? "Оружие в рейде" : !compatible ? "Не подходит этому оружию" : max ? repair ? "Ремонт не нужен" : "Максимальный уровень" : costReason(cost);
+	document.querySelectorAll<HTMLButtonElement>('[data-action="repair"]').forEach((node) => {
+		const weapon = state.weapons.find((item) => item.id === node.dataset.id); if (!weapon) return;
+		const busy = state.raids.some((raid) => raid.weaponInstanceId === weapon.id), cost = getRepairCost(weapon);
+		node.disabled = busy || !needsWeaponRepair(weapon) || !canAfford(cost);
+		const note = document.querySelector(`[data-weapon-cost="${weapon.id}-repair"]`);
+		if (note) note.textContent = busy ? "Оружие в рейде" : !needsWeaponRepair(weapon) ? "Ремонт не нужен" : costReason(cost);
 	});
 	document.querySelectorAll<HTMLElement>('[data-gear-note]').forEach((node) => {
 		const scav = state.scavs.find((s) => s.id === node.dataset.gearNote), slot = node.dataset.slot as GearSlot;
@@ -419,15 +455,35 @@ function hud() {
 		if (!gear && !weapon) return;
 		const yieldValue = gear ? getGearRecycleYield(gear) : getWeaponRecycleYield(weapon!);
 		const busy = gear ? state.scavs.some((scav) => scav.status === "raiding" && (scav.loadout.armorItemId === gear.id || scav.loadout.backpackItemId === gear.id)) : state.raids.some((raid) => raid.weaponInstanceId === weapon!.id);
-		const reason = busy ? "Предмет сейчас на маршруте" : weapon && state.weapons.length <= 1 ? "Последний ствол нужен отряду" : state.supplies.scrap + yieldValue > capacities.scrap ? "Нет места для деталей: потрать запас или развивай склад" : null;
+		const liquidationReason = weapon ? weaponLiquidationReason(weapon) : null;
+		const reason = busy ? "Предмет сейчас на маршруте" : liquidationReason ?? (state.supplies.scrap + yieldValue > capacities.scrap ? "Нет места для материалов: потрать запас или развивай склад" : null);
 		node.disabled = Boolean(reason);
 		node.title = reason ?? `Разбор даст ${yieldValue} деталей`;
-		const note = node.parentElement?.querySelector<HTMLElement>('[data-recycle-note]'); if (note) note.textContent = reason ?? "Разбор возвращает детали; предмет исчезнет";
+		const note = node.parentElement?.querySelector<HTMLElement>('[data-recycle-note]'); if (note) note.textContent = reason ?? "Утилизация уничтожит предмет и его модули. Чтобы сохранить модули, используй верстак";
+	});
+	document.querySelectorAll<HTMLButtonElement>('[data-action="sell"]').forEach((node) => {
+		const weapon = state.weapons.find((item) => item.id === node.dataset.id); if (!weapon) return;
+		const reason = weaponLiquidationReason(weapon); node.disabled = Boolean(reason); node.title = reason ?? "Продажа оружия вместе с установленными модулями";
 	});
 	document.querySelectorAll<HTMLElement>('[data-cargo-warehouse]').forEach((node) => {
 		const raid = state.raids.find((item) => item.id === node.dataset.cargoWarehouse); if (!raid) return;
 		const notice = cargoWarehouseNotice(raid); if (node.innerHTML !== notice) node.innerHTML = notice;
 	});
+	document.querySelectorAll<HTMLButtonElement>('[data-action="craft-module"]').forEach((node) => {
+		const reason = getModuleCraftReason(state, node.dataset.id ?? ""); node.disabled = Boolean(reason);
+		const note = document.querySelector<HTMLElement>(`[data-module-craft-note="${node.dataset.id}"]`); if (note) note.textContent = reason ?? "Новый экземпляр появится в запасе";
+	});
+	document.querySelectorAll<HTMLButtonElement>('[data-action="repair-module"]').forEach((node) => {
+		const item = state.modules.find((module) => module.id === node.dataset.id); if (!item) return;
+		const cost = getModuleRepairCost(item); node.disabled = item.durability >= 100 || !canAfford(cost);
+		const note = document.querySelector<HTMLElement>(`[data-module-repair-note="${item.id}"]`); if (note) note.textContent = item.durability >= 100 ? "Ремонт не нужен" : costReason(cost);
+	});
+	document.querySelectorAll<HTMLButtonElement>('[data-action="recycle-module"]').forEach((node) => {
+		const item = state.modules.find((module) => module.id === node.dataset.id); if (!item) return;
+		const blocked = state.supplies.scrap + getModuleRecycleYield(item) > capacities.scrap; node.disabled = blocked;
+		const note = document.querySelector<HTMLElement>(`[data-module-recycle-note="${item.id}"]`); if (note) note.textContent = blocked ? "Нет места для деталей на складе" : "Продажа и утилизация уничтожают этот экземпляр";
+	});
+	document.querySelectorAll<HTMLButtonElement>('[data-action="assemble-weapon"]').forEach((node) => { node.disabled = state.weapons.length >= getStorageCapacity(state); node.title = node.disabled ? "Арсенал полон: освободи место или развивай склад" : "Коробка станет основой новой сборки"; });
 }
 function gearCard(scav: Scav, slot: GearSlot) {
 	const level = scav.gear[slot], max = level >= MAX_GEAR_LEVEL, cost = getGearCost(scav, slot);
@@ -454,7 +510,7 @@ function loadoutEditor(scav: Scav, trainingExpanded = false) {
 		const model = item ? getGearModel(item) : null;
 		return `<label class="field-label">${slot === "armor" ? "Броня" : "Рюкзак"}<select data-equip-gear="${scav.id}" data-slot="${slot}" data-focus-key="equip-${slot}" aria-label="${slot === "armor" ? "Броня" : "Рюкзак"} для ${e(scav.name)}" ${busy ? "disabled" : ""}><option value="">Без отдельного предмета</option>${state.gearItems.filter((gear) => getGearModel(gear).slot === slot && !state.scavs.some((person) => person.id !== scav.id && (person.loadout.armorItemId === gear.id || person.loadout.backpackItemId === gear.id))).map((gear) => `<option value="${gear.id}" ${gear.id === itemId ? "selected" : ""}>${e(getGearModel(gear).label)} · ${Math.round(gear.durability)}%</option>`).join("")}</select></label>${model && item ? `<div class="loadout-item-note"><p>${e(model.description)}</p><small>Состояние ${Math.round(item.durability)}% · вес ${model.weight} кг${model.protection ? ` · защита до ${Math.round(model.protection * 100)}%` : ""}${model.capacity ? ` · вместимость ${model.capacity} ед.` : ""}</small>${item.durability < 100 ? `<button class="button ghost small" data-action="repair-gear" data-id="${item.id}" data-focus-key="repair-${slot}" ${busy || !canAfford(getGearRepairCost(item)) ? "disabled" : ""}>Ремонт · ${costLabel(getGearRepairCost(item))}</button>` : ""}</div>` : '<p class="field-hint">Базовое оснащение сохранится. Отдельный предмет добавит свойства и износ.</p>'}`;
 	}).join("");
-	return `<section class="inspector-section loadout-section"><div class="inspector-section-title"><h3>${busy ? "Комплект следующего выхода" : "Комплект для выхода"}</h3><button class="text-button" data-action="open-equipment" data-focus-key="equipment-store">Склад и сборка →</button></div><div class="loadout-stats"><span>Вес ${stats.weight.toFixed(1)} кг</span><span>Защита ${Math.round(stats.protection * 100)}%</span><span>Груз до ${stats.capacity.toFixed(1)} ед.</span><span>Время ×${stats.speedMultiplier.toFixed(2)}</span></div>${role ? `<p class="field-hint">${e(getWeaponRole(role).label)}: ${e(getWeaponRole(role).description)}</p>` : ""}${options}<label class="field-label">Боеприпас<select data-ammo-type="${scav.id}" data-focus-key="ammo-type" aria-label="Боеприпас для ${e(scav.name)}" ${busy ? "disabled" : ""}><option value="standard" ${scav.loadout.ammoType === "standard" ? "selected" : ""}>Обычный · меньше расход</option><option value="piercing" ${scav.loadout.ammoType === "piercing" ? "selected" : ""}>Бронебойный · больше расход</option></select></label><p class="field-hint">Бронебойный боеприпас повышает шанс в бою, но требует больше патронов.</p><label class="loadout-check"><input type="checkbox" data-medkit="${scav.id}" data-focus-key="medkit" ${scav.loadout.medkit ? "checked" : ""} ${busy ? "disabled" : ""}><span>Аптечка в рейд<small>Тратит медикаменты на входе и снижает тяжесть травм.</small></span></label><details class="training-section" ${trainingExpanded ? "open" : ""}><summary data-focus-key="training-summary">Подготовка оснащения · броня ${scav.gear.armor} / рюкзак ${scav.gear.backpack}</summary><p class="field-hint">Постоянная подготовка бойца дополняет выбранные предметы.</p><div class="gear-grid">${gearCard(scav, "armor")}${gearCard(scav, "backpack")}</div></details></section>`;
+	return `<section class="inspector-section loadout-section"><div class="inspector-section-title"><h3>${busy ? "Комплект в рейде" : "Комплект для выхода"}</h3><button class="text-button" data-action="open-equipment" data-focus-key="equipment-store">Склад и сборка →</button></div><div class="loadout-stats"><span>Вес ${stats.weight.toFixed(1)} кг</span><span>Защита ${Math.round(stats.protection * 100)}%</span><span>Груз до ${stats.capacity.toFixed(1)} ед.</span><span>Время ×${stats.speedMultiplier.toFixed(2)}</span></div>${role ? `<p class="field-hint">${e(getWeaponRole(role).label)}: ${e(getWeaponRole(role).description)}</p>` : ""}${options}<label class="field-label">Боеприпас<select data-ammo-type="${scav.id}" data-focus-key="ammo-type" aria-label="Боеприпас для ${e(scav.name)}" ${busy ? "disabled" : ""}><option value="standard" ${scav.loadout.ammoType === "standard" ? "selected" : ""}>Обычный · меньше расход</option><option value="piercing" ${scav.loadout.ammoType === "piercing" ? "selected" : ""}>Бронебойный · больше расход</option></select></label><p class="field-hint">Бронебойный боеприпас повышает шанс в бою, но требует больше патронов.</p><label class="loadout-check"><input type="checkbox" data-medkit="${scav.id}" data-focus-key="medkit" ${scav.loadout.medkit ? "checked" : ""} ${busy ? "disabled" : ""}><span>Аптечка в рейд<small>Тратит медикаменты на входе и снижает тяжесть травм.</small></span></label><details class="training-section" ${trainingExpanded ? "open" : ""}><summary data-focus-key="training-summary">Подготовка оснащения · броня ${scav.gear.armor} / рюкзак ${scav.gear.backpack}</summary><p class="field-hint">Постоянная подготовка бойца дополняет выбранные предметы.</p><div class="gear-grid">${gearCard(scav, "armor")}${gearCard(scav, "backpack")}</div></details></section>`;
 }
 function sortiePreview(scav: Scav) {
 	const map = MAP_BY_ID[selectedMap]!, quote = getRaidQuote(state, scav, map);
@@ -502,7 +558,7 @@ function renderInspector() {
 	const trainingExpanded = root.querySelector<HTMLDetailsElement>(".training-section")?.open;
 	const raid = state.raids.find((r) => r.scavId === scav.id);
 	const weapon = state.weapons.find((w) => w.id === scav.weaponInstanceId);
-	root.innerHTML = `<div class="inspector-backdrop"><aside class="inspector" role="dialog" aria-modal="true" aria-labelledby="scav-title"><div class="inspector-head"><div><span class="eyebrow">Личное дело · ур. ${scav.level}</span><h2 id="scav-title">${e(scav.name)}</h2></div><button class="icon-button" data-action="close-inspector" data-focus-key="close" aria-label="Закрыть бойца">×</button></div><div class="inspector-scroll">${raid?.expedition?.status === "choice" ? activeRaidPanel(raid) : ""}<div class="scav-profile"><div class="inspector-portrait">${scavPortrait(scav.personality, scav.name)}</div><div><strong>${e(PERSONALITY_BY_ID[scav.personality]!.name)}</strong><p>${e(PERSONALITY_BY_ID[scav.personality]!.description)}</p><div class="profile-stats"><span>Бой <b>${scav.combat}</b></span><span>Поиск <b>${scav.scouting}</b></span><span>Выходы <b>${scav.raids}</b></span></div></div></div><div class="health-panel"><div><span>Здоровье</span><strong data-health="${scav.id}">${Math.floor(scav.health)} / 100</strong></div><div class="health-track"><i data-health-fill="${scav.id}" style="width:${scav.health}%"></i></div><div class="health-panel-bottom"><span data-heal-note="${scav.id}">Медблок восстанавливает бесплатно</span><button class="button ghost small" data-action="heal" data-id="${scav.id}" data-focus-key="heal" ${raid || scav.health >= 100 || state.supplies.medicine < medicineCost(scav) ? "disabled" : ""}>${icon("medicine", 15)} Лечить · ${medicineCost(scav)} мед.</button></div></div>${raid && raid.expedition?.status !== "choice" ? activeRaidPanel(raid) : ""}<section class="inspector-section"><div class="inspector-section-title"><h3>Оружие</h3>${weapon ? `<button class="text-button" data-action="inspect-weapon" data-id="${weapon.id}" data-focus-key="weapon-detail">Ремонт и моды →</button>` : ""}</div>${weapon ? `<div class="equipped-art" style="--rarity:${RARITY_COLORS[getWeaponDefinition(weapon).rarity]}">${gunArt(getWeaponDefinition(weapon).category, RARITY_COLORS[getWeaponDefinition(weapon).rarity])}<span><b>${e(getWeaponDefinition(weapon).name)}</b><small>Мощь ${getWeaponPower(weapon)} · состояние ${Math.round(weapon.durability)}%</small></span></div>` : '<p class="field-hint">Для выхода нужен исправный ствол из арсенала.</p>'}<label class="field-label">${raid ? "Оружие занято в рейде" : "Выдать оружие"}<select aria-label="Оружие для ${e(scav.name)}" data-equip="${scav.id}" data-focus-key="weapon" ${raid ? "disabled" : ""}><option value="">Без оружия</option>${state.weapons.filter((w) => !state.scavs.some((s) => s.id !== scav.id && s.weaponInstanceId === w.id)).map((w) => `<option value="${w.id}" ${w.id === scav.weaponInstanceId ? "selected" : ""}>${e(getWeaponDefinition(w).name)} · ${Math.round(w.durability)}%</option>`).join("")}</select></label></section><section class="inspector-section"><h3>${raid ? "Тактика следующего выхода" : "Тактика"}</h3><div class="tactics" role="group" aria-label="Тактика для ${e(scav.name)}">${(Object.keys(TACTICS) as RaidTactic[]).map((tactic) => `<button class="${tactic === scav.tactic ? "active" : ""}" data-action="tactic" data-id="${scav.id}" data-tactic-value="${tactic}" data-focus-key="tactic-${tactic}" aria-pressed="${scav.tactic === tactic}">${TACTICS[tactic].label}</button>`).join("")}</div><p class="field-hint">${e(TACTICS[scav.tactic].description)}</p></section>${loadoutEditor(scav, trainingExpanded)}${sortiePreview(scav)}<details class="order-section" ${autoExpanded ?? scav.autoRaid.enabled ? "open" : ""}><summary data-focus-key="order-summary">${icon("repeat", 18)}<span>Постоянный приказ<small>${scav.autoRaid.enabled ? `${e(MAP_BY_ID[scav.autoRaid.mapId]!.name)} · включён` : "Повторять выходы автоматически"}</small></span><b>${scav.autoRaid.enabled ? "ВКЛ" : "+"}</b></summary>${autoRaidCard(scav)}</details></div>${inspectorFooter(scav, raid)}</aside></div>`;
+	root.innerHTML = `<div class="inspector-backdrop"><aside class="inspector" role="dialog" aria-modal="true" aria-labelledby="scav-title"><div class="inspector-head"><div><span class="eyebrow">Личное дело · ур. ${scav.level}</span><h2 id="scav-title">${e(scav.name)}</h2></div><button class="icon-button" data-action="close-inspector" data-focus-key="close" aria-label="Закрыть бойца">×</button></div><div class="inspector-scroll">${raid?.expedition?.status === "choice" ? activeRaidPanel(raid) : ""}<div class="scav-profile"><div class="inspector-portrait">${scavPortrait(scav.personality, scav.name)}</div><div><strong>${e(PERSONALITY_BY_ID[scav.personality]!.name)}</strong><p>${e(PERSONALITY_BY_ID[scav.personality]!.description)}</p><div class="profile-stats"><span>Бой <b>${scav.combat}</b></span><span>Поиск <b>${scav.scouting}</b></span><span>Выходы <b>${scav.raids}</b></span></div></div></div><div class="health-panel"><div><span>Здоровье</span><strong data-health="${scav.id}">${Math.floor(scav.health)} / 100</strong></div><div class="health-track"><i data-health-fill="${scav.id}" style="width:${scav.health}%"></i></div><div class="health-panel-bottom"><span data-heal-note="${scav.id}">Медблок восстанавливает бесплатно</span><button class="button ghost small" data-action="heal" data-id="${scav.id}" data-focus-key="heal" ${raid || scav.health >= 100 || state.supplies.medicine < medicineCost(scav) ? "disabled" : ""}>${icon("medicine", 15)} Лечить · ${medicineCost(scav)} мед.</button></div></div>${raid && raid.expedition?.status !== "choice" ? activeRaidPanel(raid) : ""}<section class="inspector-section"><div class="inspector-section-title"><h3>Оружие</h3>${weapon ? `<button class="text-button" data-action="inspect-weapon" data-id="${weapon.id}" data-focus-key="weapon-detail">Оружейный верстак →</button>` : ""}</div>${weapon ? `<div class="equipped-art" style="--rarity:${RARITY_COLORS[getWeaponDefinition(weapon).rarity]}">${weaponBuildArt(weapon)}<span><b>${e(getWeaponDefinition(weapon).name)}</b><small>Мощь ${getWeaponPower(weapon)} · состояние ${Math.round(weapon.durability)}%</small>${weaponReadiness(weapon)}</span></div>` : '<p class="field-hint">Для выхода нужен исправный ствол из арсенала.</p>'}<label class="field-label">${raid ? "Оружие занято в рейде" : "Выдать оружие"}<select aria-label="Оружие для ${e(scav.name)}" data-equip="${scav.id}" data-focus-key="weapon" ${raid ? "disabled" : ""}><option value="">Без оружия</option>${state.weapons.filter((w) => !state.scavs.some((s) => s.id !== scav.id && s.weaponInstanceId === w.id)).map((w) => `<option value="${w.id}" ${w.id === scav.weaponInstanceId ? "selected" : ""}>${e(getWeaponDefinition(w).name)} · ${Math.round(w.durability)}%${getWeaponStats(w).ready ? "" : " · не собрано"}</option>`).join("")}</select></label></section><section class="inspector-section"><h3>${raid ? "Тактика следующего выхода" : "Тактика"}</h3><div class="tactics" role="group" aria-label="Тактика для ${e(scav.name)}">${(Object.keys(TACTICS) as RaidTactic[]).map((tactic) => `<button class="${tactic === scav.tactic ? "active" : ""}" data-action="tactic" data-id="${scav.id}" data-tactic-value="${tactic}" data-focus-key="tactic-${tactic}" aria-pressed="${scav.tactic === tactic}">${TACTICS[tactic].label}</button>`).join("")}</div><p class="field-hint">${e(TACTICS[scav.tactic].description)}</p></section>${loadoutEditor(scav, trainingExpanded)}${sortiePreview(scav)}<details class="order-section" ${autoExpanded ?? scav.autoRaid.enabled ? "open" : ""}><summary data-focus-key="order-summary">${icon("repeat", 18)}<span>Постоянный приказ<small>${scav.autoRaid.enabled ? `${e(MAP_BY_ID[scav.autoRaid.mapId]!.name)} · включён` : "Повторять выходы автоматически"}</small></span><b>${scav.autoRaid.enabled ? "ВКЛ" : "+"}</b></summary>${autoRaidCard(scav)}</details></div>${inspectorFooter(scav, raid)}</aside></div>`;
 	const scroll = root.querySelector<HTMLElement>(".inspector-scroll"); if (scroll) scroll.scrollTop = oldScroll;
 	if (focusKey) {
 		const replacement = root.querySelector<HTMLElement>(`[data-focus-key="${focusKey}"]`);
@@ -548,7 +604,7 @@ function contractCard(contract: Contract) {
 	return `<article class="contract ${lockReason && !claimed ? "contract-locked" : ""}"><div class="contract-mark">${icon(claimed ? "check" : lockReason ? "lock" : "contracts", 21)}</div><div class="contract-copy"><h3>${e(contract.name)}</h3><p>${e(contract.description)}</p><div class="progress"><i style="width:${Math.min(100, (progress / contract.target) * 100)}%"></i></div><small>${n(Math.min(contract.target, progress))} / ${n(contract.target)}</small>${lockReason && !claimed ? `<div class="contract-lock">${icon("lock", 11)} ${e(lockReason)}</div>` : ""}<div class="reward-supplies">${supplies}</div></div><div class="contract-reward"><span>+${n(contract.reward.money)} ₽</span><span class="muted">+${contract.reward.xp} опыта</span><button class="button secondary small" data-action="claim" data-id="${contract.id}" ${!ready || claimed ? "disabled" : ""}>${claimed ? "Выполнено" : lockReason ? "Закрыт" : ready ? "Забрать" : "В работе"}</button></div></article>`;
 }
 function journalCard(report: RaidReport) {
-	return `<details class="journal-entry" data-report="${report.id}"><summary><time>${new Date(report.at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</time><div class="journal-copy"><strong>${e(report.scavName)} · ${e(MAP_BY_ID[report.mapId]!.name)}</strong><p>${e(report.description)}</p><div class="journal-meta"><span>${report.isAuto ? "АВТОВЫХОД" : "ЭКСПЕДИЦИЯ"} · этапов ${report.depth} · ${e(TACTICS[report.tactic].label)}</span><span>${report.money ? `+${n(report.money)} ₽ · ` : ""}Детали +${report.supplies.scrap} · патроны +${report.supplies.ammo}</span></div></div><b class="tag report-result ${report.success ? "success" : "failure"}">${report.success ? "ВЕРНУЛСЯ" : report.lostScav ? "ПОТЕРЯН" : "ПРОВАЛ"}</b><span class="journal-expand">${icon("arrow", 14)}</span></summary><div class="journal-detail">${report.discoveries.length ? `<div class="report-memory">${icon("intel", 18)} Сохранены открытия: ${report.discoveries.map((id) => e(BLUEPRINTS[id]?.label ?? id)).join(" · ")}</div>` : ""}${report.lostCargo ? `<p class="risk-note">Потеряна добыча из рюкзака: ≈ ${n(getCargoValue(report.lostCargo))} ₽. Постоянные открытия остались у базы.</p>` : ""}${report.weaponId ? `<div class="report-trophy" style="--rarity:${RARITY_COLORS[WEAPON_BY_ID[report.weaponId]!.rarity]}">${icon("arsenal", 21)}<div><strong>${e(WEAPON_BY_ID[report.weaponId]!.name)}</strong><span>${report.weaponAutoSold ? "Продано: арсенал заполнен" : "Найдено и отправлено в арсенал"}</span></div></div>` : ""}<ol class="route-timeline">${report.events.map((event, i) => `<li class="event-${event.kind}"><div class="timeline-marker">${String(i + 1).padStart(2, "0")}</div><div><div class="timeline-label"><strong>${e(event.label)}</strong><time>${new Date(event.at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time></div><p>${e(event.text)}</p></div></li>`).join("")}</ol><div class="report-bottom"><span>Разведданные +${report.supplies.intel} · медикаменты +${report.supplies.medicine}</span><span>${report.lostScav ? "Боец потерян" : report.lostWeapon ? "Оружие потеряно" : "Отчёт закрыт"}</span></div></div></details>`;
+	return `<details class="journal-entry" data-report="${report.id}"><summary><time>${new Date(report.at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</time><div class="journal-copy"><strong>${e(report.scavName)} · ${e(MAP_BY_ID[report.mapId]!.name)}</strong><p>${e(report.description)}</p><div class="journal-meta"><span>${report.isAuto ? "АВТОВЫХОД" : "ЭКСПЕДИЦИЯ"} · этапов ${report.depth} · ${e(TACTICS[report.tactic].label)}</span><span>${report.money ? `+${n(report.money)} ₽ · ` : ""}Детали +${report.supplies.scrap} · патроны +${report.supplies.ammo}</span></div></div><b class="tag report-result ${report.success ? "success" : "failure"}">${report.success ? "ВЕРНУЛСЯ" : report.lostScav ? "ПОТЕРЯН" : "ПРОВАЛ"}</b><span class="journal-expand">${icon("arrow", 14)}</span></summary><div class="journal-detail">${report.moduleIds.length ? `<div class="module-loot-strip">${report.moduleIds.map((id) => { const model = MODULE_BY_ID[id]; return model ? `<span class="cargo-module" style="--rarity:${RARITY_COLORS[model.rarity]}">${moduleArt(model)}<span><strong>${e(model.label)}</strong><small>Доставлено на базу</small></span></span>` : ""; }).join("")}</div>` : ""}${report.discoveries.length ? `<div class="report-memory">${icon("intel", 18)} Сохранены открытия: ${report.discoveries.map((id) => e(BLUEPRINTS[id]?.label ?? id)).join(" · ")}</div>` : ""}${report.lostCargo ? `<p class="risk-note">Потеряна добыча из рюкзака: ≈ ${n(getCargoValue(report.lostCargo))} ₽. Постоянные открытия остались у базы.</p>` : ""}${report.weaponId ? `<div class="report-trophy" style="--rarity:${RARITY_COLORS[WEAPON_BY_ID[report.weaponId]!.rarity]}">${icon("arsenal", 21)}<div><strong>${e(WEAPON_BY_ID[report.weaponId]!.name)}</strong><span>${report.weaponAutoSold ? "Продано: арсенал заполнен" : "Найдено и отправлено в арсенал"}</span></div></div>` : ""}<ol class="route-timeline">${report.events.map((event, i) => `<li class="event-${event.kind}"><div class="timeline-marker">${String(i + 1).padStart(2, "0")}</div><div><div class="timeline-label"><strong>${e(event.label)}</strong><time>${new Date(event.at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time></div><p>${e(event.text)}</p></div></li>`).join("")}</ol><div class="report-bottom"><span>Разведданные +${report.supplies.intel} · медикаменты +${report.supplies.medicine}</span><span>${report.lostScav ? "Боец потерян" : report.lostWeapon ? "Оружие потеряно" : "Отчёт закрыт"}</span></div></div></details>`;
 }
 function renderOfflineSummary() {
 	const node = document.querySelector<HTMLElement>("#offline-summary")!;
@@ -568,6 +624,8 @@ function operationsBar() {
 }
 function render() {
 	deferredRender = false;
+	const tabsScroll = panel.querySelector<HTMLElement>(".armory-tabs")?.scrollLeft ?? 0;
+	const panelFocus = document.activeElement instanceof HTMLElement && panel.contains(document.activeElement) ? document.activeElement.dataset.focusKey : undefined;
 	const expandedReports = Array.from(panel.querySelectorAll<HTMLDetailsElement>("details[data-report][open]")).map((node) => node.dataset.report);
 	document
 		.querySelectorAll<HTMLButtonElement>(".nav button")
@@ -577,7 +635,7 @@ function render() {
 	const captions: Record<Page, string> = {
 		home: "Железо в арсенале. Свои люди на связи.",
 		raids: "Три этапа. Выбери путь, сохрани добычу или рискни дальше.",
-		arsenal: "Оружие, комплекты и снабжение — один план выхода.",
+		arsenal: "Собери оружие из деталей. Настрой комплект под свой маршрут.",
 		base: "Развивай базу и сохраняй открытия после потерь.",
 		contracts: "Репутация строится на выполненных обещаниях.",
 		journal: "Кто вышел, кто вернулся и что принёс.",
@@ -640,7 +698,7 @@ function render() {
 			workshop: `Пополняет резерв до ${n(getRecoveryAllowance(state))} ₽ со скоростью ${getIncomePerMinute(state)} ₽/мин. Производит патроны и детали в пределах склада.`,
 			medbay: `Бесплатно восстанавливает ${((0.04 + state.base.medbay * 0.025) * 60).toFixed(1)} здоровья в минуту. Улучшение ускоряет лечение.`,
 			radio: `Мест для диких: ${getScavCapacity(state)}. Пополняет ограниченный запас разведданных, повышает шанс успеха и сокращает путь.`,
-			storage: `${getStorageCapacity(state)} мест под оружие. Повышает вместимость запасов и арсенала. Оружие сверх лимита автоматически продаётся при возвращении.`,
+			storage: `${getStorageCapacity(state)} мест под оружие, ${getModuleCapacity(state)} свободных модулей. Повышает вместимость запасов и арсенала. Оружие сверх лимита автоматически продаётся при возвращении.`,
 		};
 		panel.innerHTML = `<div class="card-grid">${(
 			Object.keys(BASE_ROOM_LABELS) as BaseRoom[]
@@ -665,8 +723,12 @@ function render() {
 	panel.querySelectorAll<HTMLDetailsElement>("details[data-report]").forEach((node) => { node.open = expandedReports.includes(node.dataset.report); });
 	renderInspector();
 	hud();
+	const tabs = panel.querySelector<HTMLElement>(".armory-tabs"); if (tabs) tabs.scrollLeft = tabsScroll;
+	if (panelFocus && !selectedScav && !document.querySelector("#modal-root .modal")) panel.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(panelFocus)}"]`)?.focus({ preventScroll: true });
 }
 function renderArsenal() {
+	if (arsenalTab === "bench") { renderWorkbench(); return; }
+	if (arsenalTab === "modules") { renderModules(); return; }
 	if (arsenalTab === "equipment") { renderEquipment(); return; }
 	if (arsenalTab === "market") { renderMarket(); return; }
 	const noMatches = `<div class="empty">Ничего не найдено.<br>Измени поиск или категорию.<button class="button ghost small" data-action="reset-weapon-filters">Сбросить поиск и фильтры</button></div>`;
@@ -692,7 +754,7 @@ function renderArsenal() {
 						.map((w) => {
 							const def = getWeaponDefinition(w),
 								owner = state.scavs.find((s) => s.weaponInstanceId === w.id);
-							return `<button class="weapon-card ${w.id === selectedWeapon ? "selected" : ""}" style="--rarity:${RARITY_COLORS[def.rarity]}" data-weapon="${w.id}"><span class="eyebrow">${RARITY_LABELS[def.rarity]}</span>${gunArt(def.category, RARITY_COLORS[def.rarity])}<h3>${e(def.name)}</h3><div class="weapon-meta"><span>МОЩЬ ${getWeaponPower(w)} · ${Math.round(w.durability)}%</span><span>${owner ? e(owner.name) : "НА СКЛАДЕ"}</span></div></button>`;
+							return `<button class="weapon-card ${w.id === selectedWeapon ? "selected" : ""}" style="--rarity:${RARITY_COLORS[def.rarity]}" data-weapon="${w.id}"><span class="eyebrow">${RARITY_LABELS[def.rarity]}</span>${weaponBuildArt(w)}<h3>${e(def.name)}</h3>${weaponReadiness(w)}<div class="weapon-meta"><span>МОЩЬ ${getWeaponPower(w)} · ${Math.round(w.durability)}%</span><span>${owner ? e(owner.name) : "НА СКЛАДЕ"}</span></div></button>`;
 						})
 						.join("") ||
 					(state.weapons.length ? noMatches : emptyArsenal)
@@ -700,14 +762,138 @@ function renderArsenal() {
 	}`;
 }
 function arsenalTabs() {
-	return `<div class="section-tabs" role="group" aria-label="Раздел арсенала">${([["weapons", "arsenal", "Оружие"], ["equipment", "armor", "Комплекты"], ["market", "money", "Снабжение"]] as const).map(([id, symbol, label]) => `<button data-arsenal-tab="${id}" aria-pressed="${arsenalTab === id}" class="${arsenalTab === id ? "active" : ""}">${icon(symbol, 17)} ${label}</button>`).join("")}</div>`;
+	return `<div class="section-tabs armory-tabs" role="group" aria-label="Раздел арсенала">${([["weapons", "arsenal", "Оружие"], ["bench", "scrap", "Верстак"], ["modules", "settings", "Модули"], ["equipment", "armor", "Комплекты"], ["market", "money", "Снабжение"]] as const).map(([id, symbol, label]) => `<button data-arsenal-tab="${id}" aria-pressed="${arsenalTab === id}" class="${arsenalTab === id ? "active" : ""}">${icon(symbol, 17)} ${label}</button>`).join("")}</div>`;
+}
+function weaponReadiness(weapon: WeaponInstance) {
+	const stats = getWeaponStats(weapon);
+	return `<span class="build-status ${stats.ready ? "ready" : "incomplete"}">${icon(stats.ready ? "check" : "scrap", 14)} ${stats.ready ? "Готов к выходу" : "Нужна сборка"}</span>`;
+}
+function needsWeaponRepair(weapon: WeaponInstance) {
+	return weapon.durability < 100 || Object.values(weapon.modules).some((part) => part.durability < 100);
+}
+function weaponLiquidationReason(weapon: WeaponInstance): string | null {
+	if (state.raids.some((raid) => raid.weaponInstanceId === weapon.id)) return "Оружие занято на маршруте";
+	if (state.weapons.length <= 1) return "Последний ствол нужен отряду для восстановления";
+	if (getWeaponStats(weapon).ready && !state.weapons.some((other) => other.id !== weapon.id && getWeaponStats(other).ready)) return "Последняя готовая пушка нужна отряду. Сначала собери ещё одну";
+	return null;
+}
+function mountLabel(mount: string) {
+	return mount === "rail-top" ? "Верхняя планка" : mount === "rail-bottom" ? "Нижняя планка цевья" : mount === "dovetail" ? "Боковой кронштейн" : mount.startsWith("thread:") ? `Резьба ${mount.slice(7)}` : mount;
+}
+function weaponStatRows(weapon: WeaponInstance, preview?: WeaponInstance) {
+	const stats = getWeaponStats(weapon), next = preview ? getWeaponStats(preview) : stats;
+	const baseAmmoMultiplier = getWeaponRole(weapon).ammoMultiplier;
+	const metrics = [
+		["power", "Мощь", false, ""], ["ergonomics", "Эргономика", false, ""],
+		["recoil", "Отдача", true, ""], ["reliability", "Надёжность", false, "%"],
+		["weight", "Вес", true, " кг"], ["ammoMultiplier", "Расход", true, "×"],
+	] as const;
+	return `<div class="bench-stat-grid">${metrics.map(([key, label, lower, unit]) => {
+		const before = stats[key] * (key === "ammoMultiplier" ? baseAmmoMultiplier : 1), after = next[key] * (key === "ammoMultiplier" ? baseAmmoMultiplier : 1), delta = Math.round((after - before) * 100) / 100;
+		const format = (value: number) => key === "weight" || key === "ammoMultiplier" ? value.toFixed(2) : String(Math.round(value));
+		return `<div class="bench-stat"><span>${label}${key === "recoil" ? " ↓" : ""}</span><strong>${format(before)}${unit}${preview && delta ? `<b class="stat-after">→ ${format(after)}${unit}</b>` : ""}</strong><small class="${delta ? (lower ? delta < 0 : delta > 0) ? "better" : "worse" : ""}">${preview ? delta ? `${delta > 0 ? "+" : ""}${format(delta)}${unit}` : "Без изменений" : key === "ergonomics" ? "Выше — быстрее путь" : key === "recoil" ? "Ниже — точнее бой" : key === "reliability" ? "С учётом состояния" : key === "weight" ? "Влияет на комплект" : key === "ammoMultiplier" ? "Без веса всего комплекта" : "С учётом износа"}</small></div>`;
+	}).join("")}</div>`;
+}
+function moduleTraits(item: ModuleInstance) {
+	const model = getModuleDefinition(item), traits = model.stats;
+	const values = [
+		["damage", "Мощь", ""], ["ergonomics", "Эрго", ""], ["recoil", "Отдача", ""],
+		["reliability", "Надёжн.", ""], ["weight", "Вес", " кг"], ["ammoMultiplier", "Патроны", "×"],
+	] as const;
+	return `<div class="module-traits">${values.filter(([key]) => key === "ammoMultiplier" ? traits[key] !== 1 : traits[key] !== 0).map(([key, label, unit]) => `<span>${label} <b>${key === "ammoMultiplier" ? `×${traits[key].toFixed(2)}` : `${key !== "weight" && traits[key] > 0 ? "+" : ""}${Math.round(traits[key] * 100) / 100}${unit}`}</b></span>`).join("") || '<span>Штатный элемент · без дополнительных бонусов</span>'}</div>`;
+}
+function preservedTuning(weapon: WeaponInstance) {
+	const legacy = Object.entries(weapon.attachments).filter(([, level]) => level > 0);
+	return legacy.length ? `<div class="preserved-tuning"><strong>Сохранённая доводка</strong><p>${legacy.map(([slot, level]) => `${ATTACHMENT_LABELS[slot as keyof typeof ATTACHMENT_LABELS]}: ур. ${level}`).join(" · ")}. Бонусы прежнего оружия учтены в характеристиках; физические модули настраиваются отдельно.</p></div>` : "";
+}
+function buildRaidEffects(weapon: WeaponInstance, preview?: WeaponInstance) {
+	const scav = state.scavs.find((person) => person.weaponInstanceId === weapon.id);
+	if (!scav) return '<p class="bench-raid-note">Выдай оружие бойцу, чтобы увидеть стоимость и время первого этапа с его комплектом.</p>';
+	const map = MAP_BY_ID[selectedMap]!, quote = getRaidQuote(state, scav, map);
+	const afterState = preview ? { ...state, weapons: state.weapons.map((gun) => gun.id === weapon.id ? preview : gun) } : state;
+	const after = getRaidQuote(afterState, scav, map);
+	return `<div class="bench-raid-effects"><span class="eyebrow">Первый этап · ${e(scav.name)} · ${e(map.name)}</span><div><span>Шанс <b>${Math.round(quote.chance * 100)}%${preview ? ` → ${Math.round(after.chance * 100)}%` : ""}</b></span><span>Патроны <b>${quote.ammo}${preview ? ` → ${after.ammo}` : ""}</b></span><span>До связи <b>${seconds(quote.duration)}${preview ? ` → ${seconds(after.duration)}` : ""}</b></span></div><small>Тактика, здоровье, броня и рюкзак бойца уже учтены.${scav.status === "raiding" ? " Текущая экспедиция сохранит исходную сборку." : ""}</small></div>`;
+}
+function selectBenchSlot(slot: ModuleSlot) {
+	selectedModuleSlot = slot;
+	selectedBenchModule = null;
+	benchPartSearch = "";
+	renderWorkbench();
+	document.querySelector<HTMLButtonElement>(`[data-bench-slot="${slot}"]`)?.focus({ preventScroll: true });
+	if (window.innerWidth <= 760) document.querySelector("#bench-slot-panel")?.scrollIntoView({ block: "start", behavior: scrollBehavior() });
+}
+function openWorkbench(id: string) {
+	closeInspector();
+	page = "arsenal";
+	arsenalTab = "bench";
+	selectedWeapon = id;
+	selectedBenchModule = null;
+	selectedModuleSlot = "optic";
+	render();
+	window.scrollTo(0, 0);
+}
+function renderWorkbench() {
+	const weapon = state.weapons.find((item) => item.id === selectedWeapon) ?? state.weapons[0];
+	if (!weapon) {
+		panel.innerHTML = `${arsenalTabs()}<div class="empty">Верстак свободен. Начни сборку со ствольной коробки на складе модулей.<button class="button secondary" data-arsenal-tab="modules">${icon("settings", 17)} К модулям</button></div>`;
+		return;
+	}
+	selectedWeapon = weapon.id;
+	const def = getWeaponDefinition(weapon), info = RECEIVER_INFO[weapon.weaponId]!;
+	const busy = state.raids.some((raid) => raid.weaponInstanceId === weapon.id);
+	const owner = state.scavs.find((scav) => scav.weaponInstanceId === weapon.id);
+	const current = weapon.modules[selectedModuleSlot];
+	const candidate = state.modules.find((item) => item.id === selectedBenchModule && getModuleDefinition(item).slot === selectedModuleSlot);
+	const reason = candidate ? getModuleInstallReason(state, weapon.id, candidate.id) : null;
+	const preview: WeaponInstance | undefined = candidate && !reason ? { ...weapon, durability: selectedModuleSlot === "receiver" ? candidate.durability : weapon.durability, attachments: selectedModuleSlot === "receiver" ? { ...(candidate.legacyAttachments ?? { optic: 0, magazine: 0, stock: 0 }) } : weapon.attachments, modules: { ...weapon.modules, [selectedModuleSlot]: candidate } } : undefined;
+	const issues = getWeaponBuildIssues(weapon), disassembleReason = getWeaponDisassembleReason(state, weapon.id);
+	const oldScroll = panel.querySelector<HTMLElement>(".bench-candidates")?.scrollTop ?? 0;
+	const parts = state.modules.filter((item) => getModuleDefinition(item).slot === selectedModuleSlot && getModuleDefinition(item).label.toLocaleLowerCase("ru").includes(benchPartSearch.toLocaleLowerCase("ru"))).sort((a, b) => Number(Boolean(getModuleInstallReason(state, weapon.id, a.id))) - Number(Boolean(getModuleInstallReason(state, weapon.id, b.id))));
+	const slotCards = MODULE_SLOTS.map((slot) => {
+		const item = weapon.modules[slot], required = info.requiredSlots.includes(slot);
+		return `<button class="bench-slot ${slot === selectedModuleSlot ? "active" : ""} ${item ? "filled" : required ? "missing" : "empty"}" data-bench-slot="${slot}" data-focus-key="bench-slot-${slot}" aria-pressed="${slot === selectedModuleSlot}" aria-label="${MODULE_SLOT_LABELS[slot]}: ${item ? e(getModuleDefinition(item).label) : required ? "обязательный модуль отсутствует" : "не установлен"}"><span class="bench-slot-label">${MODULE_SLOT_LABELS[slot]}${required ? '<b title="Обязателен для выхода">●</b>' : ""}</span><span class="bench-slot-art">${item ? moduleArt(getModuleDefinition(item)) : `<span class="empty-slot-icon">${icon(slot === "receiver" ? "arsenal" : "settings", 29)}</span>`}</span><strong>${item ? e(getModuleDefinition(item).label) : required ? "Нужно установить" : "Свободный слот"}</strong><small>${item ? `${Math.round(item.durability)}% состояния` : required ? "Обязателен для выхода" : "Дополнительная настройка"}</small></button>`;
+	}).join("");
+	panel.innerHTML = `${arsenalTabs()}<div class="bench-toolbar"><div><span class="eyebrow">Мастерская Прапора · оружейный стол</span><h2>${e(def.name)}</h2><p>${e(info.platform)} · ${e(info.caliber)}${owner ? ` · выдано: ${e(owner.name)}` : " · резерв базы"}</p></div><label class="field-label">Оружие на верстаке<select data-bench-weapon aria-label="Оружие на верстаке">${state.weapons.map((gun) => `<option value="${gun.id}" ${gun.id === weapon.id ? "selected" : ""}>${e(getWeaponDefinition(gun).name)}${getWeaponStats(gun).ready ? "" : " · не собрано"}</option>`).join("")}</select></label></div><div class="workbench-layout"><section class="bench-build"><div class="bench-mat"><div class="bench-mat-head">${weaponReadiness(weapon)}<span class="mono">${preview ? "ПРЕДПРОСМОТР · НЕ УСТАНОВЛЕНО" : "ТЕКУЩАЯ СБОРКА"}</span></div><div class="workbench-stage">${weaponBuildArt(preview ?? weapon, selectedModuleSlot)}</div><div class="bench-mat-foot"><span>${icon("settings", 14)} Выбери деталь на оружии или слот ниже</span><span>${Object.keys(weapon.modules).length} / 8 СЛОТОВ</span></div></div>${busy ? '<p class="risk-note">Оружие сейчас в рейде. Осмотр доступен; сборку и обслуживание можно изменить после возвращения.</p>' : issues.length ? `<div class="assembly-warning">${icon("scrap", 20)}<div><strong>Сборка пока не готова к рейду.</strong>${issues.map((issue) => `<p>${e(issue)}</p>`).join("")}</div></div>` : '<p class="assembly-ready">✓ Все обязательные элементы на месте. Настрой комплект под маршрут.</p>'}${weaponStatRows(weapon, preview)}${buildRaidEffects(weapon, preview)}${preservedTuning(weapon)}<div class="bench-slots" role="group" aria-label="Слоты сборки оружия">${slotCards}</div><div class="bench-service"><button class="button secondary small" data-action="repair" data-id="${weapon.id}" ${busy || !needsWeaponRepair(weapon) || !canAfford(getRepairCost(weapon)) ? "disabled" : ""}>Ремонт сборки · ${costLabel(getRepairCost(weapon))}</button><button class="button ghost small" data-action="disassemble-weapon" data-id="${weapon.id}" ${disassembleReason ? "disabled" : ""}>Разобрать на модули</button></div><small class="cost-reason" data-weapon-cost="${weapon.id}-repair">${busy ? "Оружие в рейде" : !needsWeaponRepair(weapon) ? "Ремонт не нужен" : costReason(getRepairCost(weapon))}</small><small class="quote-note" data-disassemble-note>${e(disassembleReason ?? "Разбор сохранит все установленные физические детали")}</small></section><aside class="bench-slot-panel" id="bench-slot-panel"><div class="bench-panel-head"><span class="eyebrow">Выбранный слот</span><h3>${MODULE_SLOT_LABELS[selectedModuleSlot]}</h3></div>${current ? installedModulePanel(weapon, current) : `<div class="bench-current empty-current"><span>${icon("settings", 23)}</span><strong>Модуль не установлен</strong><p>${info.requiredSlots.includes(selectedModuleSlot) ? "Выбери совместимую деталь ниже, чтобы завершить сборку." : "Можно оставить слот свободным или настроить оружие."}</p></div>`}${candidate ? candidateModulePanel(weapon, candidate, reason) : '<div class="bench-preview-hint">Выбери деталь из запаса. Увидишь сборку и изменение характеристик до установки.</div>'}<div class="bench-candidate-head"><h3>Детали из запаса <span class="muted">/ ${parts.length}</span></h3><button class="text-button" data-action="browse-modules" data-slot="${selectedModuleSlot}">Склад →</button></div><label class="weapon-search bench-part-search">${icon("settings", 16)}<input type="search" data-bench-search aria-label="Поиск деталей для выбранного слота" placeholder="Название детали" value="${e(benchPartSearch)}"></label><div class="bench-candidates">${parts.map((item) => {
+		const model = getModuleDefinition(item), blocked = getModuleInstallReason(state, weapon.id, item.id);
+		return `<button class="bench-candidate ${item.id === candidate?.id ? "selected" : ""} ${blocked ? "incompatible" : ""}" data-action="pick-module" data-id="${item.id}" data-focus-key="candidate-${item.id}" style="--rarity:${RARITY_COLORS[model.rarity]}"><span class="candidate-art">${moduleArt(model)}</span><span class="candidate-copy"><b>${e(model.label)}</b><small>${RARITY_LABELS[model.rarity]} · ${Math.round(item.durability)}%</small><span>${e(blocked ?? "Совместим · доступен для установки")}</span></span></button>`;
+	}).join("") || '<div class="empty compact-empty">В запасе нет таких деталей.<br>Найди их в рейде или изготовь на складе модулей.</div>'}</div></aside></div>`;
+	const candidates = panel.querySelector<HTMLElement>(".bench-candidates"); if (candidates) candidates.scrollTop = oldScroll;
+}
+function installedModulePanel(weapon: WeaponInstance, item: ModuleInstance) {
+	const model = getModuleDefinition(item), reason = getModuleRemoveReason(state, weapon.id, model.slot);
+	return `<div class="bench-current" style="--rarity:${RARITY_COLORS[model.rarity]}"><span class="eyebrow">Установлено · ${RARITY_LABELS[model.rarity]}</span>${moduleArt(model)}<h3>${e(model.label)}</h3><p>${e(model.description)}</p><div class="module-condition"><span>Состояние</span><strong>${Math.round(item.durability)}%</strong><i class="health-track"><i style="width:${item.durability}%"></i></i></div>${moduleTraits(item)}<button class="button ghost small" data-action="remove-module" data-id="${weapon.id}" data-slot="${model.slot}" data-focus-key="remove-${model.slot}" ${reason ? "disabled" : ""}>Снять на склад</button><small class="quote-note">${e(reason ?? "Деталь сохранит состояние и вернётся в запас")}</small></div>`;
+}
+function candidateModulePanel(weapon: WeaponInstance, item: ModuleInstance, reason: string | null) {
+	const model = getModuleDefinition(item);
+	return `<div class="bench-candidate-preview" style="--rarity:${RARITY_COLORS[model.rarity]}"><span class="eyebrow">${reason ? "Проверка совместимости" : "Предпросмотр замены"}</span>${moduleArt(model)}<h3>${e(model.label)}</h3><p>${e(model.description)}</p>${moduleTraits(item)}<div class="module-fit"><span>Платформа: ${model.platforms.includes("*") ? "любая" : e(model.platforms.join(" / ").toUpperCase())}</span><span>Калибр: ${model.calibers.includes("*") ? "любой" : e(model.calibers.join(" / "))}</span>${model.requiresMount ? `<span>Крепление: ${e(mountLabel(model.requiresMount))}</span>` : ""}</div><button class="button" data-action="install-module" data-id="${weapon.id}" data-module-id="${item.id}" data-focus-key="install-${model.slot}" ${reason ? "disabled" : ""}>${weapon.modules[model.slot] ? "Заменить модуль" : "Установить модуль"} ${icon("check", 16)}</button><small class="quote-note">${e(reason ?? "При замене текущая деталь вернётся на склад; состояние обеих сохранится")}</small></div>`;
+}
+function moduleMatches(item: ModuleInstance) {
+	const model = getModuleDefinition(item);
+	return (moduleSlotFilter === "all" || model.slot === moduleSlotFilter) && (moduleRarityFilter === "all" || model.rarity === moduleRarityFilter) && `${model.label} ${model.description}`.toLocaleLowerCase("ru").includes(moduleSearch.toLocaleLowerCase("ru"));
+}
+function renderModules() {
+	const craftExpanded = panel.querySelector<HTMLDetailsElement>(".module-craft-catalog")?.open;
+	const installedExpanded = panel.querySelector<HTMLDetailsElement>(".installed-parts-list")?.open;
+	const loose = state.modules.filter(moduleMatches);
+	const installed = state.weapons.flatMap((weapon) => MODULE_SLOTS.map((slot) => weapon.modules[slot]).filter((item): item is ModuleInstance => Boolean(item)).filter(moduleMatches).map((item) => ({ item, weapon })));
+	const craftWeapon = state.weapons.find((weapon) => weapon.id === selectedWeapon) ?? state.weapons[0];
+	const craftInfo = craftWeapon ? RECEIVER_INFO[craftWeapon.weaponId] : null;
+	const recipes = MODULE_MODELS.filter((model) => (moduleSlotFilter === "all" || model.slot === moduleSlotFilter) && (moduleRarityFilter === "all" || model.rarity === moduleRarityFilter) && `${model.label} ${model.description}`.toLocaleLowerCase("ru").includes(moduleSearch.toLocaleLowerCase("ru")) && (!moduleCraftForWeapon || !craftInfo || ((model.platforms.includes("*") || model.platforms.includes(craftInfo.platform)) && (model.calibers.includes("*") || model.calibers.includes(craftInfo.caliber)) && (model.slot !== "receiver" || model.weaponId === craftWeapon?.weaponId))));
+	panel.innerHTML = `${arsenalTabs()}<div class="module-storage-head"><div><span class="eyebrow">Физические детали · каждый экземпляр сохранён</span><h2>Склад модулей</h2><p>Снимай, меняй и собирай. Износ остаётся с деталью; найденная ствольная коробка становится основой нового оружия.</p></div><span class="tag">${state.modules.length} / ${getModuleCapacity(state)} В ЗАПАСЕ</span></div><div class="module-filters"><label class="field-label">Слот<select data-module-slot-filter aria-label="Фильтр модулей по слоту"><option value="all" ${moduleSlotFilter === "all" ? "selected" : ""}>Все слоты</option>${MODULE_SLOTS.map((slot) => `<option value="${slot}" ${moduleSlotFilter === slot ? "selected" : ""}>${MODULE_SLOT_LABELS[slot]}</option>`).join("")}</select></label><label class="field-label">Редкость<select data-module-rarity-filter aria-label="Фильтр модулей по редкости"><option value="all" ${moduleRarityFilter === "all" ? "selected" : ""}>Любая редкость</option>${Object.keys(RARITY_LABELS).map((rarity) => `<option value="${rarity}" ${moduleRarityFilter === rarity ? "selected" : ""}>${RARITY_LABELS[rarity as keyof typeof RARITY_LABELS]}</option>`).join("")}</select></label><label class="weapon-search module-search">${icon("settings", 18)}<input type="search" data-module-search aria-label="Поиск модулей" placeholder="Название или свойства детали" value="${e(moduleSearch)}"></label></div><div class="section-head"><h2>Свободные детали <span class="muted">/ ${loose.length}</span></h2><button class="text-button" data-arsenal-tab="bench">На верстак →</button></div><div class="module-inventory-grid">${loose.map((item) => moduleInventoryCard(item)).join("") || '<div class="empty compact-empty">Здесь пока нет деталей. Проверь фильтры, сними деталь с оружия или изготовь нужный модуль ниже.</div>'}</div>${installed.length ? `<details class="installed-parts-list" ${installedExpanded ? "open" : ""}><summary>На оружии · ${installed.length} ${icon("arsenal", 17)}</summary><div class="module-inventory-grid">${installed.map(({ item, weapon }) => moduleInventoryCard(item, weapon)).join("")}</div></details>` : ""}<details class="module-craft-catalog" ${craftExpanded ?? (moduleSlotFilter !== "all" || Boolean(moduleSearch)) ? "open" : ""}><summary><span>${icon("scrap", 21)} Изготовление деталей<small>${recipes.length} моделей по выбранным фильтрам · за рубли и детали</small></span><b>+</b></summary><div class="craft-context"><label class="loadout-check"><input type="checkbox" data-craft-for-weapon ${moduleCraftForWeapon ? "checked" : ""}><span>Для текущего оружия<small>${craftWeapon ? e(getWeaponDefinition(craftWeapon).name) : "Нет выбранной сборки"}</small></span></label>${craftWeapon ? `<select data-craft-weapon aria-label="Оружие для фильтра изготовления">${state.weapons.map((gun) => `<option value="${gun.id}" ${gun.id === craftWeapon.id ? "selected" : ""}>${e(getWeaponDefinition(gun).name)}</option>`).join("")}</select>` : ""}</div><p class="field-hint">Штатные детали закрывают недостающие обязательные слоты. Более сложные варианты требуют развитой мастерской; ствольные коробки — открытия оружия.</p><div class="module-inventory-grid">${recipes.map((model) => {
+		const reason = getModuleCraftReason(state, model.id);
+		return `<article class="module-card recipe-card" style="--rarity:${RARITY_COLORS[model.rarity]}"><span class="eyebrow">${MODULE_SLOT_LABELS[model.slot]} · ${RARITY_LABELS[model.rarity]}</span><div class="module-card-art">${moduleArt(model)}</div><h3>${e(model.label)}</h3><p>${e(model.description)}</p><div class="module-fit"><span>${model.platforms.includes("*") ? "Универсальная платформа" : `Платформа ${e(model.platforms.join(" / ").toUpperCase())}`}</span><span>Мастерская ур. ${model.workshopLevel}</span></div><button class="button secondary small" data-action="craft-module" data-id="${model.id}" ${reason ? "disabled" : ""}>Изготовить · ${costLabel(model.craftCost)}</button><small class="quote-note" data-module-craft-note="${model.id}">${e(reason ?? "Новый экземпляр появится в запасе")}</small></article>`;
+	}).join("") || '<div class="empty compact-empty">Нет моделей по выбранным фильтрам.</div>'}</div></details>`;
+}
+function moduleInventoryCard(item: ModuleInstance, weapon?: WeaponInstance) {
+	const model = getModuleDefinition(item), cost = getModuleRepairCost(item), stats = model.stats;
+	return `<article class="module-card ${weapon ? "installed" : ""}" style="--rarity:${RARITY_COLORS[model.rarity]}"><div class="module-card-heading"><span class="eyebrow">${MODULE_SLOT_LABELS[model.slot]}</span><b>${RARITY_LABELS[model.rarity]}</b></div><div class="module-card-art">${moduleArt(model)}</div><h3>${e(model.label)}</h3><p>${e(model.description)}</p><div class="module-condition"><span>${weapon ? `На оружии: ${e(getWeaponDefinition(weapon).name)}` : "На складе"}</span><strong>${Math.round(item.durability)}%</strong><i class="health-track"><i style="width:${item.durability}%"></i></i></div><div class="module-fit"><span>${model.platforms.includes("*") ? "Универсальная платформа" : `Платформа ${e(model.platforms.join(" / ").toUpperCase())}`}</span><span>${model.calibers.includes("*") ? "Любой калибр" : `Калибр ${e(model.calibers.join(" / "))}`}</span>${model.requiresMount ? `<span>Нужно крепление ${e(mountLabel(model.requiresMount))}</span>` : ""}<span>Вес ${stats.weight.toFixed(2)} кг</span></div>${moduleTraits(item)}${weapon ? `<button class="button ghost small" data-action="open-bench" data-id="${weapon.id}" data-slot="${model.slot}">Осмотреть на верстаке →</button><small class="quote-note">Сними деталь с оружия, чтобы обслужить или продать её отдельно</small>` : `${model.slot === "receiver" ? `<button class="button secondary" data-action="assemble-weapon" data-id="${item.id}">Начать сборку оружия</button>` : `<button class="button secondary" data-action="use-module" data-id="${item.id}">Подобрать на верстаке →</button>`}<button class="button ghost small" data-action="repair-module" data-id="${item.id}" ${item.durability >= 100 || !canAfford(cost) ? "disabled" : ""}>Ремонт · ${costLabel(cost)}</button><small class="quote-note" data-module-repair-note="${item.id}">${item.durability >= 100 ? "Ремонт не нужен" : costReason(cost)}</small><div class="module-disposal"><button class="text-button" data-action="sell-module" data-id="${item.id}">Продать · ${n(getModuleSaleValue(item))} ₽</button><button class="text-button" data-action="recycle-module" data-id="${item.id}" ${state.supplies.scrap + getModuleRecycleYield(item) > getSupplyCapacity(state).scrap ? "disabled" : ""}>Утилизация · ${getModuleRecycleYield(item)} дет.</button></div><small class="quote-note" data-module-recycle-note="${item.id}">${state.supplies.scrap + getModuleRecycleYield(item) > getSupplyCapacity(state).scrap ? "Нет места для деталей на складе" : "Продажа и утилизация уничтожают этот экземпляр"}</small>`}</article>`;
 }
 function renderEquipment() {
 	const items = state.gearItems.map((item) => {
 		const model = getGearModel(item), repair = getGearRepairCost(item);
 		const owner = state.scavs.find((scav) => scav.loadout.armorItemId === item.id || scav.loadout.backpackItemId === item.id);
 		const busy = owner?.status === "raiding";
-		return `<article class="logistics-card"><span class="eyebrow">${model.slot === "armor" ? "Броня" : "Рюкзак"} · ${owner ? e(owner.name) : "На складе"}</span><h3>${icon(model.slot, 23)} ${e(model.label)}</h3><p>${e(model.description)}</p><div class="loadout-stats"><span>Состояние ${Math.round(item.durability)}%</span><span>Вес ${model.weight} кг</span>${model.protection ? `<span>Защита до ${Math.round(model.protection * 100)}%</span>` : ""}${model.capacity ? `<span>Груз до ${model.capacity} ед.</span>` : ""}</div><div class="health-track"><i style="width:${item.durability}%"></i></div>${owner ? `<button class="button ghost" data-scav="${owner.id}">Комплект: ${e(owner.name)}</button>` : `<label class="field-label">Выдать бойцу<select data-assign-gear="${item.id}" data-slot="${model.slot}" aria-label="Выдать ${e(model.label)} бойцу"><option value="">Выбери бойца</option>${state.scavs.filter((scav) => scav.status !== "raiding").map((scav) => `<option value="${scav.id}">${e(scav.name)}${(model.slot === "armor" ? scav.loadout.armorItemId : scav.loadout.backpackItemId) ? " · заменить предмет" : ""}</option>`).join("")}</select></label>`}<button class="button secondary small" data-action="repair-gear" data-id="${item.id}" ${busy || item.durability >= 100 || !canAfford(repair) ? "disabled" : ""}>Ремонт · ${costLabel(repair)}</button><small class="quote-note">${busy ? "Предмет на маршруте" : item.durability >= 100 ? "Ремонт не нужен" : costReason(repair)}</small><button class="button ghost small" data-action="recycle-gear" data-id="${item.id}" ${busy ? "disabled" : ""}>Разобрать · ${getGearRecycleYield(item)} дет.</button><small class="quote-note" data-recycle-note>Разбор возвращает детали; предмет исчезнет</small></article>`;
+		return `<article class="logistics-card"><span class="eyebrow">${model.slot === "armor" ? "Броня" : "Рюкзак"} · ${owner ? e(owner.name) : "На складе"}</span><h3>${icon(model.slot, 23)} ${e(model.label)}</h3><p>${e(model.description)}</p><div class="loadout-stats"><span>Состояние ${Math.round(item.durability)}%</span><span>Вес ${model.weight} кг</span>${model.protection ? `<span>Защита до ${Math.round(model.protection * 100)}%</span>` : ""}${model.capacity ? `<span>Груз до ${model.capacity} ед.</span>` : ""}</div><div class="health-track"><i style="width:${item.durability}%"></i></div>${owner ? `<button class="button ghost" data-scav="${owner.id}">Комплект: ${e(owner.name)}</button>` : `<label class="field-label">Выдать бойцу<select data-assign-gear="${item.id}" data-slot="${model.slot}" aria-label="Выдать ${e(model.label)} бойцу"><option value="">Выбери бойца</option>${state.scavs.filter((scav) => scav.status !== "raiding").map((scav) => `<option value="${scav.id}">${e(scav.name)}${(model.slot === "armor" ? scav.loadout.armorItemId : scav.loadout.backpackItemId) ? " · заменить предмет" : ""}</option>`).join("")}</select></label>`}<button class="button secondary small" data-action="repair-gear" data-id="${item.id}" ${busy || item.durability >= 100 || !canAfford(repair) ? "disabled" : ""}>Ремонт · ${costLabel(repair)}</button><small class="quote-note">${busy ? "Предмет на маршруте" : item.durability >= 100 ? "Ремонт не нужен" : costReason(repair)}</small><button class="button ghost small" data-action="recycle-gear" data-id="${item.id}" ${busy ? "disabled" : ""}>Утилизация · ${getGearRecycleYield(item)} дет.</button><small class="quote-note" data-recycle-note>Утилизация возвращает материалы; предмет исчезнет</small></article>`;
 	}).join("");
 	const recipes = GEAR_MODELS.map((model) => {
 		const reason = getGearCraftReason(state, model.id);
@@ -718,10 +904,10 @@ function renderEquipment() {
 }
 function renderMarket() {
 	const capacities = getSupplyCapacity(state);
-	panel.innerHTML = `${arsenalTabs()}<div class="logistics-intro">${icon("money", 28)}<div><h3>Планируй расходы до выхода.</h3><p>Патроны, разведданные, лечение и ремонт расходуются. База даёт ограниченный запас для восстановления, основная прибыль — добыча. Излишки оружия можно продать или разобрать на детали.</p></div></div><div class="economy-balance"><div>Резерв для восстановления<strong>${n(getRecoveryAllowance(state))} ₽</strong><span>Пассивные рубли до этой суммы</span></div><div>Отряд на автовыходах<strong>${state.scavs.filter((scav) => scav.autoRaid.enabled).length}</strong><span>Каждый повтор оплачивается</span></div><div>Запасной арсенал<strong>${state.weapons.filter((weapon) => !state.scavs.some((scav) => scav.weaponInstanceId === weapon.id)).length}</strong><span>Продажа или разбор</span></div></div><div class="section-head"><h2>Закупить припасы</h2><span class="muted">Склад имеет предел</span></div><div class="logistics-grid">${MARKET_OFFERS.map((offer) => {
+	panel.innerHTML = `${arsenalTabs()}<div class="logistics-intro">${icon("money", 28)}<div><h3>Планируй расходы до выхода.</h3><p>Патроны, разведданные, лечение и ремонт расходуются. База даёт ограниченный запас для восстановления, основная прибыль — добыча. Излишки оружия можно продать или утилизировать на материалы.</p></div></div><div class="economy-balance"><div>Резерв для восстановления<strong>${n(getRecoveryAllowance(state))} ₽</strong><span>Пассивные рубли до этой суммы</span></div><div>Отряд на автовыходах<strong>${state.scavs.filter((scav) => scav.autoRaid.enabled).length}</strong><span>Каждый повтор оплачивается</span></div><div>Запасной арсенал<strong>${state.weapons.filter((weapon) => !state.scavs.some((scav) => scav.weaponInstanceId === weapon.id)).length}</strong><span>Продажа или разбор</span></div></div><div class="section-head"><h2>Закупить припасы</h2><span class="muted">Склад имеет предел</span></div><div class="logistics-grid">${MARKET_OFFERS.map((offer) => {
 		const reason = getMarketReason(state, offer.id);
 		return `<article class="logistics-card"><span class="eyebrow">${supplyName(offer.supply)}</span><h3>${icon(offer.supply, 25)} ${e(offer.label)}</h3><p>На складе <b data-supply-count="${offer.supply}">${n(state.supplies[offer.supply])}</b> / ${capacities[offer.supply]} · партия +${offer.amount}</p><div class="progress"><i style="width:${Math.min(100, state.supplies[offer.supply] / capacities[offer.supply] * 100)}%"></i></div><button class="button secondary" data-action="buy-supplies" data-id="${offer.id}" ${reason ? "disabled" : ""}>Купить ${offer.amount} · ${n(offer.money)} ₽</button><small class="quote-note" data-market-note="${offer.id}">${e(reason ?? "Полная партия поместится на складе")}</small></article>`;
-	}).join("")}</div><div class="raid-instruction">${icon("scrap", 25)}<div>Разбор возвращает детали для ремонта и сборки.<br><span class="muted">Во вкладке «Оружие» выбери лишний ствол. Продажа принесёт рубли, разбор — детали. Сначала сними предмет с бойца, если хочешь сохранить его комплект.</span></div></div>`;
+	}).join("")}</div><div class="raid-instruction">${icon("scrap", 25)}<div>Утилизация возвращает материалы для ремонта и изготовления.<br><span class="muted">Во вкладке «Оружие» выбери лишний ствол. Продажа принесёт рубли, утилизация — материалы. Чтобы сохранить физические модули, сними их на верстаке. Сначала сними предмет с бойца, если хочешь сохранить его комплект.</span></div></div>`;
 }
 function discoveriesSection() {
 	const unlocked = Object.keys(BLUEPRINTS).filter((id) => state.blueprints.includes(id)).length;
@@ -731,19 +917,16 @@ function discoveriesSection() {
 	}).join("")}</div></section>`;
 }
 function weaponDetail(weapon: WeaponInstance) {
-	const def = getWeaponDefinition(weapon), role = getWeaponRole(weapon);
+	const def = getWeaponDefinition(weapon), role = getWeaponRole(weapon), stats = getWeaponStats(weapon);
 	const owner = state.scavs.find((scav) => scav.weaponInstanceId === weapon.id);
 	const busy = state.raids.some((raid) => raid.weaponInstanceId === weapon.id);
-	const repair = getRepairCost(weapon);
-	const mods = (Object.keys(ATTACHMENT_LABELS) as Attachment[]).map((mod) => {
-		const compatible = isAttachmentCompatible(weapon, mod), cost = getModCost(weapon, mod), max = weapon.attachments[mod] >= 3;
-		return `<div class="mod-row"><div>${ATTACHMENT_LABELS[mod]} <span>ур. ${weapon.attachments[mod]}</span></div><button class="button ghost small" data-action="mod" data-id="${weapon.id}" data-mod="${mod}" ${busy || max || !compatible || !canAfford(cost) ? "disabled" : ""}>${!compatible ? "Не подходит" : max ? "MAX" : costLabel(cost)}</button><small class="cost-reason" data-weapon-cost="${weapon.id}-${mod}">${busy ? "Оружие в рейде" : !compatible ? "Не подходит этому оружию" : max ? "Максимальный уровень" : costReason(cost)}</small></div>`;
-	}).join("");
-	return `<aside class="weapon-detail"><span class="eyebrow" style="color:${RARITY_COLORS[def.rarity]}">${RARITY_LABELS[def.rarity]} · ${CATEGORY_LABELS[def.category]}</span><h2>${e(def.name)}</h2>${gunArt(def.category, RARITY_COLORS[def.rarity])}<p>${e(def.description)}</p><div class="weapon-role"><strong>${e(role.label)}</strong><p>${e(role.description)}</p><div class="loadout-stats"><span>Вес ${role.weight} кг</span><span>Патроны ×${role.ammoMultiplier.toFixed(2)}</span></div></div><div class="detail-row"><span>Мощность</span><strong>${getWeaponPower(weapon)}</strong></div><div class="detail-row"><span>Надёжность</span><strong>${def.reliability}%</strong></div><div class="detail-row"><span>Состояние</span><strong>${Math.round(weapon.durability)}%</strong></div><div class="health-track"><i style="width:${weapon.durability}%"></i></div><div class="detail-row"><span>Выдано</span><strong>${owner ? e(owner.name) : "На складе"}</strong></div><div class="weapon-assign">${owner ? `<button class="button ghost" data-scav="${owner.id}">${icon("people",16)} Личное дело: ${e(owner.name)}</button>` : `<label class="field-label">Выдать бойцу<select data-assign-weapon="${weapon.id}" aria-label="Выдать ${e(def.name)} бойцу"><option value="">Выбери бойца</option>${state.scavs.filter((scav) => scav.status !== "raiding").map((scav) => `<option value="${scav.id}">${e(scav.name)}${scav.weaponInstanceId ? " · заменить ствол" : " · без оружия"}</option>`).join("")}</select></label>`}</div><div class="mods">${mods}</div><div class="detail-actions"><button class="button secondary" data-action="repair" data-id="${weapon.id}" ${busy || weapon.durability >= 100 || !canAfford(repair) ? "disabled" : ""}>Ремонт · ${costLabel(repair)}</button><small class="cost-reason" data-weapon-cost="${weapon.id}-repair">${busy ? "Оружие в рейде" : weapon.durability >= 100 ? "Ремонт не нужен" : costReason(repair)}</small><button class="button ghost" data-action="sell" data-id="${weapon.id}" ${busy || state.weapons.length <= 1 ? "disabled" : ""}>Продать · ${n(getWeaponSaleValue(weapon))} ₽</button><button class="button ghost" data-action="recycle-weapon" data-id="${weapon.id}" ${busy || state.weapons.length <= 1 ? "disabled" : ""}>Разобрать · ${getWeaponRecycleYield(weapon)} дет.</button><small class="quote-note" data-recycle-note>${busy ? "Оружие занято на маршруте" : state.weapons.length <= 1 ? "Последний ствол нужен отряду для восстановления" : "Продажа даёт рубли; разбор — детали в пределах склада"}</small></div></aside>`;
+	const repair = getRepairCost(weapon), issues = getWeaponBuildIssues(weapon);
+	const liquidationReason = weaponLiquidationReason(weapon);
+	return `<aside class="weapon-detail"><span class="eyebrow" style="color:${RARITY_COLORS[def.rarity]}">${RARITY_LABELS[def.rarity]} · ${CATEGORY_LABELS[def.category]}</span><h2>${e(def.name)}</h2>${weaponBuildArt(weapon)}${weaponReadiness(weapon)}<p>${e(def.description)}</p>${preservedTuning(weapon)}<div class="weapon-role"><strong>${e(role.label)}</strong><p>${e(role.description)}</p><div class="loadout-stats"><span>Вес ${stats.weight.toFixed(2)} кг</span><span>Патроны ×${(stats.ammoMultiplier * role.ammoMultiplier).toFixed(2)}</span><span>Модулей ${Object.keys(weapon.modules).length} / 8</span></div></div><div class="detail-row"><span>Мощность</span><strong>${stats.power}</strong></div><div class="detail-row"><span>Эргономика</span><strong>${Math.round(stats.ergonomics)}</strong></div><div class="detail-row"><span>Отдача · ниже лучше</span><strong>${Math.round(stats.recoil)}</strong></div><div class="detail-row"><span>Надёжность</span><strong>${Math.round(stats.reliability)}%</strong></div><div class="detail-row"><span>Состояние</span><strong>${Math.round(weapon.durability)}%</strong></div><div class="health-track"><i style="width:${weapon.durability}%"></i></div>${issues.length ? `<p class="risk-note">${issues.map(e).join(" · ")}</p>` : ""}<button class="button bench-entry" data-action="open-bench" data-id="${weapon.id}">${icon("scrap", 18)} Открыть оружейный верстак</button><div class="detail-row"><span>Выдано</span><strong>${owner ? e(owner.name) : "На складе"}</strong></div><div class="weapon-assign">${owner ? `<button class="button ghost" data-scav="${owner.id}">${icon("people", 16)} Личное дело: ${e(owner.name)}</button>` : `<label class="field-label">Выдать бойцу<select data-assign-weapon="${weapon.id}" aria-label="Выдать ${e(def.name)} бойцу"><option value="">Выбери бойца</option>${state.scavs.filter((scav) => scav.status !== "raiding").map((scav) => `<option value="${scav.id}">${e(scav.name)}${scav.weaponInstanceId ? " · заменить ствол" : " · без оружия"}</option>`).join("")}</select></label>`}</div><div class="detail-actions"><button class="button secondary" data-action="repair" data-id="${weapon.id}" ${busy || !needsWeaponRepair(weapon) || !canAfford(repair) ? "disabled" : ""}>Ремонт сборки · ${costLabel(repair)}</button><small class="cost-reason" data-weapon-cost="${weapon.id}-repair">${busy ? "Оружие в рейде" : !needsWeaponRepair(weapon) ? "Ремонт не нужен" : costReason(repair)}</small><button class="button ghost" data-action="sell" data-id="${weapon.id}" ${liquidationReason ? "disabled" : ""} title="${e(liquidationReason ?? "Продажа вместе с установленными модулями")}">Продать сборку · ${n(getWeaponSaleValue(weapon))} ₽</button><button class="button ghost" data-action="recycle-weapon" data-id="${weapon.id}" ${liquidationReason ? "disabled" : ""} title="${e(liquidationReason ?? "Уничтожить сборку и модули, получить материалы")}">Утилизация сборки · ${getWeaponRecycleYield(weapon)} дет.</button><small class="quote-note" data-recycle-note>${e(liquidationReason ?? "Продажа и утилизация удалят всю сборку с модулями. Чтобы сохранить модули, используй верстак")}</small></div></aside>`;
 }
 function showSettings() {
 	document.querySelector("#modal-root")!.innerHTML =
-		`<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title"><h2 id="settings-title">Твоё дело — при тебе.</h2><p>Прогресс хранится в этом браузере. Перед сменой устройства экспортируй сохранение. За отсутствие учитывается до 8 часов пополнения резерва, запасов, лечения и рейдов по постоянным приказам. Рубли и припасы пополняются до предела базы.</p><p>Автовыходы повторяются офлайн до выбранной глубины и нехватки ресурсов, здоровья или исправного оружия. Ручная экспедиция остановится в точке связи до твоего приказа. Они несут риск потери бойца и ствола. Останови постоянный приказ в карточке дикого, чтобы отменить будущие выходы.</p>${protectedSave ? '<p class="order-risk">Исходный файл не удалось прочитать. Он остаётся в браузере без изменений; автоматическое сохранение временной сессии отключено. Скачай исходный файл и импортируй корректное сохранение.</p>' : ""}<p>Начни с «Дворов»: выбери бойца и оружие, отправь на первый этап. После точки связи эвакуируйся или выбери бонус и путь дальше. Чертежи и память маршрутов сохраняются после потерь; рубли и найденные предметы попадут на базу при эвакуации.</p><div class="detail-actions"><button class="button secondary" data-action="export">${protectedSave ? "Скачать исходный файл" : "Экспорт"}</button><button class="button ghost" data-action="import">Импорт</button></div><input type="file" accept="application/json,.json" id="save-file" hidden><div class="save-note">Сохранение восстанавливает отряд, оружие, износ снаряжения, комплекты, чертежи, приказы и текущие этапы. Ручные экспедиции ждут твоего приказа в точке связи. Импорт заменит текущий прогресс после проверки файла.</div><button class="button ghost" style="width:100%;margin-top:20px" data-action="close-modal">Продолжить</button></section></div>`;
+		`<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title"><h2 id="settings-title">Твоё дело — при тебе.</h2><p>Прогресс хранится в этом браузере. Перед сменой устройства экспортируй сохранение. За отсутствие учитывается до 8 часов пополнения резерва, запасов, лечения и рейдов по постоянным приказам. Рубли и припасы пополняются до предела базы.</p><p>Автовыходы повторяются офлайн до выбранной глубины и нехватки ресурсов, здоровья или исправного оружия. Ручная экспедиция остановится в точке связи до твоего приказа. Они несут риск потери бойца и ствола. Останови постоянный приказ в карточке дикого, чтобы отменить будущие выходы.</p>${protectedSave ? '<p class="order-risk">Исходный файл не удалось прочитать. Он остаётся в браузере без изменений; автоматическое сохранение временной сессии отключено. Скачай исходный файл и импортируй корректное сохранение.</p>' : ""}<p>Начни с «Дворов»: выбери бойца и оружие, отправь на первый этап. После точки связи эвакуируйся или выбери бонус и путь дальше. Чертежи и память маршрутов сохраняются после потерь; рубли и найденные предметы попадут на базу при эвакуации.</p><div class="detail-actions"><button class="button secondary" data-action="export">${protectedSave ? "Скачать исходный файл" : "Экспорт"}</button><button class="button ghost" data-action="import">Импорт</button></div><input type="file" accept="application/json,.json" id="save-file" hidden><div class="save-note">Сохранение восстанавливает отряд, физические сборки и запасные модули с их состоянием, комплекты, чертежи, приказы и текущие этапы. Ручные экспедиции ждут твоего приказа в точке связи. Импорт заменит текущий прогресс после проверки файла.</div><button class="button ghost" style="width:100%;margin-top:20px" data-action="close-modal">Продолжить</button></section></div>`;
 	focusModal();
 }
 function showAutoRaidOrder(scavId: string) {
@@ -754,6 +937,8 @@ function showAutoRaidOrder(scavId: string) {
 	focusModal();
 }
 document.addEventListener("click", (event) => {
+	const artSlot = (event.target as Element).closest<SVGElement>('.workbench-stage [data-module-slot]');
+	if (artSlot?.dataset.moduleSlot) { selectBenchSlot(artSlot.dataset.moduleSlot as ModuleSlot); return; }
 	const target = (event.target as HTMLElement).closest<HTMLButtonElement>(
 		"button"
 	);
@@ -763,6 +948,7 @@ document.addEventListener("click", (event) => {
 		return;
 	}
 	if (target.dataset.scav) { openInspector(target.dataset.scav); return; }
+	if (target.dataset.benchSlot) { selectBenchSlot(target.dataset.benchSlot as ModuleSlot); return; }
 	if (target.dataset.roomLink) { openRoom(target.dataset.roomLink as BaseRoom); return; }
 	if (target.dataset.page) {
 		closeInspector();
@@ -796,6 +982,7 @@ document.addEventListener("click", (event) => {
 	if (target.dataset.arsenalTab) {
 		arsenalTab = target.dataset.arsenalTab as typeof arsenalTab;
 		render();
+		document.querySelector<HTMLButtonElement>(`[data-arsenal-tab="${arsenalTab}"]`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
 		return;
 	}
 	if (target.dataset.contractFilter) {
@@ -805,6 +992,82 @@ document.addEventListener("click", (event) => {
 	}
 	const id = target.dataset.id ?? "";
 	switch (target.dataset.action) {
+		case "open-bench":
+			openWorkbench(id);
+			if (target.dataset.slot) selectBenchSlot(target.dataset.slot as ModuleSlot);
+			break;
+		case "browse-modules":
+			moduleSlotFilter = target.dataset.slot as ModuleSlot;
+			moduleSearch = "";
+			moduleRarityFilter = "all";
+			arsenalTab = "modules";
+			render();
+			window.scrollTo(0, 0);
+			break;
+		case "pick-module":
+			selectedBenchModule = id;
+			renderWorkbench();
+			document.querySelector<HTMLButtonElement>(`[data-action="pick-module"][data-id="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
+			if (window.innerWidth <= 760) document.querySelector(".bench-candidate-preview")?.scrollIntoView({ block: "start", behavior: scrollBehavior() });
+			break;
+		case "use-module": {
+			const item = state.modules.find((module) => module.id === id); if (!item) break;
+			arsenalTab = "bench";
+			selectedModuleSlot = getModuleDefinition(item).slot;
+			selectedBenchModule = id;
+			benchPartSearch = "";
+			render();
+			window.scrollTo(0, 0);
+			break;
+		}
+		case "install-module":
+			act(installModule(state, id, target.dataset.moduleId ?? ""));
+			break;
+		case "remove-module":
+			act(removeModule(state, id, target.dataset.slot as ModuleSlot));
+			break;
+		case "assemble-weapon": {
+			const existing = new Set(state.weapons.map((weapon) => weapon.id));
+			const result = assembleWeapon(state, id);
+			if (result.ok) {
+				const built = state.weapons.find((weapon) => !existing.has(weapon.id));
+				if (built) { selectedWeapon = built.id; selectedModuleSlot = RECEIVER_INFO[built.weaponId]!.requiredSlots.find((slot) => !built.modules[slot]) ?? "barrel"; }
+				arsenalTab = "bench";
+				selectedBenchModule = null;
+			}
+			act(result);
+			if (result.ok) window.scrollTo(0, 0);
+			break;
+		}
+		case "craft-module":
+			act(craftModule(state, id));
+			break;
+		case "repair-module":
+			act(repairModule(state, id));
+			break;
+		case "disassemble-weapon": {
+			const weapon = state.weapons.find((item) => item.id === id); if (!weapon) break;
+			document.querySelector("#modal-root")!.innerHTML = `<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="disassemble-title"><span class="eyebrow">Сохранить физические детали</span><h2 id="disassemble-title">Разобрать ${e(getWeaponDefinition(weapon).name)} на модули?</h2><p>Все ${Object.keys(weapon.modules).length} установленных деталей вернутся на склад со своим состоянием. Сборка исчезнет; её нужно будет собрать заново со ствольной коробки. Боец получит пустой оружейный слот.</p><div class="detail-actions"><button class="button secondary" data-action="confirm-disassemble" data-id="${id}">Разобрать на модули</button><button class="button ghost" data-action="close-modal">Сохранить сборку</button></div></section></div>`;
+			focusModal();
+			break;
+		}
+		case "confirm-disassemble":
+			closeModal();
+			act(disassembleWeapon(state, id));
+			break;
+		case "sell-module":
+		case "recycle-module": {
+			const item = state.modules.find((module) => module.id === id); if (!item) break;
+			const sale = target.dataset.action === "sell-module", model = getModuleDefinition(item);
+			const quote = sale ? `${n(getModuleSaleValue(item))} ₽` : `${getModuleRecycleYield(item)} деталей`;
+			document.querySelector("#modal-root")!.innerHTML = `<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="module-disposal-title"><h2 id="module-disposal-title">${sale ? "Продать" : "Утилизировать"} ${e(model.label)}?</h2><div class="modal-module-art">${moduleArt(model)}</div><p>Этот экземпляр исчезнет без возврата модулей. База получит ${quote}. ${sale ? "Стоимость зависит от состояния." : "Для деталей должно хватать места на складе."}</p><div class="detail-actions"><button class="button danger" data-action="confirm-module-disposal" data-id="${id}" data-kind="${sale ? "sale" : "recycle"}">${sale ? "Продать" : "Утилизировать"} · ${quote}</button><button class="button ghost" data-action="close-modal">Оставить</button></div></section></div>`;
+			focusModal();
+			break;
+		}
+		case "confirm-module-disposal":
+			closeModal();
+			act(target.dataset.kind === "sale" ? sellModule(state, id) : recycleModule(state, id));
+			break;
 		case "review-decisions":
 			closeInspector();
 			page = "raids";
@@ -863,7 +1126,7 @@ document.addEventListener("click", (event) => {
 			if (!gear && !weapon) break;
 			const label = gear ? getGearModel(gear).label : getWeaponDefinition(weapon!).name;
 			const yieldValue = gear ? getGearRecycleYield(gear) : getWeaponRecycleYield(weapon!);
-			document.querySelector("#modal-root")!.innerHTML = `<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="recycle-title"><h2 id="recycle-title">Разобрать ${e(label)}?</h2><p>Предмет исчезнет. База получит ${yieldValue} деталей. Для них должно хватать места на складе. Если предмет выдан бойцу, слот станет пустым.</p><div class="detail-actions"><button class="button danger" data-action="confirm-recycle" data-kind="${gear ? "gear" : "weapon"}" data-id="${id}">Разобрать · +${yieldValue} дет.</button><button class="button ghost" data-action="close-modal">Оставить</button></div></section></div>`;
+			document.querySelector("#modal-root")!.innerHTML = `<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="recycle-title"><h2 id="recycle-title">Утилизировать ${e(label)}?</h2><p>Предмет и все установленные модули будут уничтожены. Физические модули не вернутся на склад. База получит ${yieldValue} деталей. Для них должно хватать места на складе. Если предмет выдан бойцу, слот станет пустым.</p><div class="detail-actions"><button class="button danger" data-action="confirm-recycle" data-kind="${gear ? "gear" : "weapon"}" data-id="${id}">Утилизировать · ${yieldValue} дет.</button><button class="button ghost" data-action="close-modal">Оставить</button></div></section></div>`;
 			focusModal();
 			break;
 		}
@@ -887,16 +1150,7 @@ document.addEventListener("click", (event) => {
 			act(setRaidTactic(state, id, target.dataset.tacticValue as RaidTactic));
 			break;
 		case "inspect-weapon":
-			arsenalTab = "weapons";
-			selectedWeapon = id;
-			category = "all";
-			weaponSearch = "";
-			collection = false;
-			closeInspector();
-			page = "arsenal";
-			render();
-			window.scrollTo(0, 0);
-			document.querySelector<HTMLElement>(".weapon-detail")?.scrollIntoView({ block: "nearest" });
+			openWorkbench(id);
 			break;
 		case "gear":
 			act(upgradeScavGear(state, id, target.dataset.slot as GearSlot));
@@ -939,16 +1193,13 @@ document.addEventListener("click", (event) => {
 			const weapon = state.weapons.find((w) => w.id === id);
 			if (weapon)
 				document.querySelector("#modal-root")!.innerHTML =
-					`<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="sell-title"><h2 id="sell-title">Продать ${e(getWeaponDefinition(weapon).name)}?</h2><p>Оружие уйдёт из арсенала. Если оно выдано дикому, его нужно будет вооружить другим стволом.</p><div class="detail-actions"><button class="button danger" data-action="confirm-sell" data-id="${id}">Продать</button><button class="button ghost" data-action="close-modal">Оставить</button></div></section></div>`;
+					`<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="sell-title"><h2 id="sell-title">Продать ${e(getWeaponDefinition(weapon).name)}?</h2><p>Оружие и все установленные модули уйдут из арсенала. Чтобы сохранить детали, сначала сними их на верстаке. Если оно выдано дикому, его нужно будет вооружить другим стволом.</p><div class="detail-actions"><button class="button danger" data-action="confirm-sell" data-id="${id}">Продать</button><button class="button ghost" data-action="close-modal">Оставить</button></div></section></div>`;
 			focusModal();
 			break;
 		}
 		case "confirm-sell":
 			closeModal();
 			act(sellWeapon(state, id));
-			break;
-		case "mod":
-			act(modWeapon(state, id, target.dataset.mod as Attachment));
 			break;
 		case "claim":
 			act(claimContract(state, id));
@@ -989,6 +1240,25 @@ document.addEventListener("click", (event) => {
 });
 document.addEventListener("change", async (event) => {
 	const target = event.target as HTMLInputElement | HTMLSelectElement;
+	if (target.hasAttribute("data-bench-weapon")) {
+		selectedWeapon = target.value; selectedBenchModule = null; benchPartSearch = "";
+		renderWorkbench(); document.querySelector<HTMLSelectElement>('[data-bench-weapon]')?.focus({ preventScroll: true }); return;
+	}
+	if (target.hasAttribute("data-module-slot-filter")) {
+		moduleSlotFilter = target.value as typeof moduleSlotFilter;
+		renderModules(); document.querySelector<HTMLSelectElement>('[data-module-slot-filter]')?.focus({ preventScroll: true }); return;
+	}
+	if (target.hasAttribute("data-module-rarity-filter")) {
+		moduleRarityFilter = target.value as typeof moduleRarityFilter;
+		renderModules(); document.querySelector<HTMLSelectElement>('[data-module-rarity-filter]')?.focus({ preventScroll: true }); return;
+	}
+	if (target.hasAttribute("data-craft-for-weapon")) {
+		moduleCraftForWeapon = (target as HTMLInputElement).checked;
+		renderModules(); document.querySelector<HTMLInputElement>('[data-craft-for-weapon]')?.focus({ preventScroll: true }); return;
+	}
+	if (target.hasAttribute("data-craft-weapon")) {
+		selectedWeapon = target.value; renderModules(); document.querySelector<HTMLSelectElement>('[data-craft-weapon]')?.focus({ preventScroll: true }); return;
+	}
 	if (target.hasAttribute("data-inspector-map")) { selectedMap = target.value; render(); }
 	if (target.dataset.assignWeapon && target.value) act(equipWeapon(state, target.value, target.dataset.assignWeapon));
 	if (target.dataset.equip)
@@ -1041,6 +1311,15 @@ document.addEventListener("change", async (event) => {
 });
 document.addEventListener("input", (event) => {
 	const input = event.target as HTMLInputElement;
+	if (input.hasAttribute("data-module-search") || input.hasAttribute("data-bench-search")) {
+		const isModule = input.hasAttribute("data-module-search"), selector = isModule ? "[data-module-search]" : "[data-bench-search]";
+		if (isModule) moduleSearch = input.value; else benchPartSearch = input.value;
+		const caret = input.selectionStart;
+		if (isModule) renderModules(); else renderWorkbench();
+		const replacement = document.querySelector<HTMLInputElement>(selector); replacement?.focus({ preventScroll: true });
+		if (caret != null) replacement?.setSelectionRange(caret, caret);
+		return;
+	}
 	if (!input.hasAttribute("data-weapon-search")) return;
 	weaponSearch = input.value;
 	const caret = input.selectionStart;

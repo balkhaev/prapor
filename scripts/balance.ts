@@ -1,7 +1,7 @@
 import {
 	advance, continueExpedition, craftGear, createGame, dispatchRaid, equipGear,
 	extractRaid, getGearModel, getGearRepairCost, getRepairCost,
-	getWeaponDefinition, getWeaponSaleValue, type GameState,
+	getWeaponDefinition, getWeaponSaleValue, getModuleSaleValue, type GameState,
 } from "../src/game/engine";
 import type { ExpeditionBranch } from "../src/game/systems";
 
@@ -29,7 +29,7 @@ function recoveryCost(state: GameState, originalWeapon: GameState["weapons"][num
 }
 
 for (const build of builds) for (const branch of ["scavenge", "combat", "recon"] as ExpeditionBranch[]) for (const depth of [1, 2, 3]) {
-	let successes = 0, cash = 0, repairs = 0, newGuns = 0, trophyValue = 0, reachedDepth = 0;
+	let successes = 0, cash = 0, repairs = 0, newGuns = 0, newModules = 0, trophyValue = 0, moduleValue = 0, reachedDepth = 0;
 	for (let index = 0; index < samples; index++) {
 		const state = createGame(NOW);
 		state.rng = Math.imul(index + 1, 0x9e3779b1) >>> 0 || 1;
@@ -47,6 +47,7 @@ for (const build of builds) for (const branch of ["scavenge", "combat", "recon"]
 		const originalWeapon = structuredClone(state.weapons.find((item) => item.id === scav.weaponInstanceId)!);
 		const initialGear = structuredClone(state.gearItems);
 		const initialIds = new Set(state.weapons.map((item) => item.id));
+		const initialModuleIds = new Set(state.modules.map((item) => item.id));
 		const initialMoney = state.money;
 		const started = dispatchRaid(state, scav.id, "courtyard", NOW);
 		if (!started.ok) throw new Error(started.message);
@@ -77,6 +78,9 @@ for (const build of builds) for (const branch of ["scavenge", "combat", "recon"]
 		const trophies = state.weapons.filter((item) => !initialIds.has(item.id));
 		newGuns += trophies.length;
 		trophyValue += trophies.reduce((sum, item) => sum + getWeaponSaleValue(item), 0);
+		const parts = state.modules.filter((item) => !initialModuleIds.has(item.id));
+		newModules += parts.length;
+		moduleValue += parts.reduce((sum, item) => sum + getModuleSaleValue(item), 0);
 		reachedDepth += report.depth;
 	}
 	rows.push({
@@ -86,8 +90,10 @@ for (const build of builds) for (const branch of ["scavenge", "combat", "recon"]
 		cashAfterFees: Math.round(cash / samples),
 		recoveryCost: Math.round(repairs / samples),
 		trophyResale: Math.round(trophyValue / samples),
-		netAfterRecovery: Math.round((cash + trophyValue - repairs) / samples),
+		moduleResale: Math.round(moduleValue / samples),
+		netAfterRecovery: Math.round((cash + trophyValue + moduleValue - repairs) / samples),
 		trophiesPerRun: Math.round(newGuns * 100 / samples) / 100,
+		modulesPerRun: Math.round(newModules * 100 / samples) / 100,
 	});
 }
 console.log(JSON.stringify({ samples, sector: "courtyard", tactic: "balanced", weapon: "sks", rows }, null, 2));

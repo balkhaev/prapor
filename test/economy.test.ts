@@ -1,3 +1,4 @@
+import { copyWeaponFixture } from "./weapon-fixtures";
 import { describe, expect, test } from "bun:test";
 import { MAPS } from "../src/game/data";
 import {
@@ -275,10 +276,10 @@ describe("a bounded economy and shared equipment", () => {
 			state.scavs = [];
 			state.money = 0;
 			state.supplies.ammo = 0;
-			for (const weapon of state.weapons) weapon.durability = 0;
+			for (const weapon of state.weapons) { weapon.durability = 0; weapon.modules.receiver!.durability = 0; }
 			if (full) while (state.weapons.length < getStorageCapacity(state)) {
 				const source = state.weapons[0]!;
-				state.weapons.push({ ...source, attachments: { ...source.attachments }, id: `gun-${state.nextId++}` });
+				state.weapons.push(copyWeaponFixture(state, source));
 			}
 			const existing = state.weapons.map((weapon) => weapon.id);
 			expect(recruitScav(state).ok).toBe(true);

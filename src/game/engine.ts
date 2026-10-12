@@ -16,9 +16,11 @@ import { GEAR_LABELS, MAX_GEAR_LEVEL, TACTICS, type GearSlot, type RaidTactic } 
 export { GEAR_LABELS, MAX_GEAR_LEVEL, TACTICS, type GearSlot, type RaidTactic } from "./operations";
 import { BLUEPRINTS, EXPEDITION_BRANCHES, GEAR_MODEL_BY_ID, MARKET_OFFERS, RUN_PERKS, WEAPON_ROLES, type AmmoType, type Cargo, type ExpeditionBranch, type GearItem, type Loadout, type RunPerk } from "./systems";
 export * from "./systems";
+import { FACTORY_KITS, MODULE_BY_ID, MODULE_MODELS, MODULE_SLOTS, MODULE_SLOT_LABELS, RECEIVER_INFO, type ModuleInstance, type ModuleSlot } from "./modules";
+export * from "./modules";
 
 export const SAVE_KEY = "prapor.save.v1";
-export const SAVE_VERSION = 3;
+export const SAVE_VERSION = 4;
 export const MAX_OFFLINE_MS = 8 * 60 * 60 * 1000;
 export const MAX_ROOM_LEVEL = 5;
 
@@ -28,6 +30,7 @@ export interface WeaponInstance {
 	durability: number;
 	attachments: Record<Attachment, number>;
 	foundAt: number;
+	modules: Partial<Record<ModuleSlot, ModuleInstance>>;
 }
 export interface Scav {
 	id: string;
@@ -53,6 +56,8 @@ export interface Expedition {
 	autoDepth: number;
 	baseChance: number; baseDuration: number; capacity: number; ammoMultiplier: number;
 	trail: RaidReport["events"];
+	legacyLoot: boolean;
+	gunCombatBonus: number;
 }
 export interface Raid {
 	id: string;
@@ -92,6 +97,7 @@ export interface RaidReport {
 	depth: number;
 	discoveries: string[];
 	lostCargo: Cargo | null;
+	moduleIds: string[];
 }
 export interface GameState {
 	schemaVersion: number;
@@ -110,6 +116,7 @@ export interface GameState {
 	discoveredWeapons: string[];
 	gearItems: GearItem[];
 	blueprints: string[];
+	modules: ModuleInstance[];
 	stats: {
 		raidsWon: number;
 		raidsCompleted: number;
@@ -220,11 +227,20 @@ function createWeapon(
 		durability,
 		attachments: { optic: 0, magazine: 0, stock: 0 },
 		foundAt: now,
+		modules: {},
 	};
+	fillFactoryKit(state, weapon);
 	state.weapons.push(weapon);
 	if (!state.discoveredWeapons.includes(weaponId))
 		state.discoveredWeapons.push(weaponId);
 	return weapon;
+}
+function createModule(state: GameState, modelId: string, now: number, durability = 100): ModuleInstance {
+	return { id: id(state, "module"), modelId, durability, foundAt: now };
+}
+function fillFactoryKit(state: GameState, weapon: WeaponInstance) {
+	for (const [slot, modelId] of Object.entries(FACTORY_KITS[weapon.weaponId]!)) weapon.modules[slot as ModuleSlot] = createModule(state, modelId, weapon.foundAt, slot === "receiver" ? weapon.durability : 100);
+	if (attachmentKeys.some((key) => weapon.attachments[key] > 0)) weapon.modules.receiver!.legacyAttachments = { ...weapon.attachments };
 }
 function createScav(
 	state: GameState,
@@ -273,6 +289,7 @@ export function createGame(now = Date.now()): GameState {
 		discoveredWeapons: [],
 		gearItems: [],
 		blueprints: ["light_vest", "scout_pack"],
+		modules: [],
 		stats: {
 			raidsWon: 0,
 			raidsCompleted: 0,
@@ -299,6 +316,7 @@ export function createGame(now = Date.now()): GameState {
 	scavs.forEach((scav, index) => {
 		scav.weaponInstanceId = guns[index]!.id;
 	});
+	for (const modelId of ["handguard-sks-rail", "optic-reflex", "stock-sks-folding", "magazine-sks-7.62x39-quick"]) state.modules.push(createModule(state, modelId, now));
 	return state;
 }
 
@@ -308,14 +326,156 @@ export function getWeaponDefinition(weapon: WeaponInstance): WeaponDefinition {
 	return definition;
 }
 export function getWeaponPower(weapon: WeaponInstance): number {
+	return getWeaponStats(weapon).power;
+}
+export function getModuleDefinition(item: ModuleInstance) {
+	const model = ownValue(MODULE_BY_ID, item.modelId);
+	if (!model) throw new Error("Неизвестная оружейная деталь");
+	return model;
+}
+function moduleFitReason(weapon: WeaponInstance, item: ModuleInstance): string | null {
+	const model = getModuleDefinition(item), info = RECEIVER_INFO[weapon.weaponId]!;
+	if (model.slot === "receiver" && model.weaponId !== weapon.weaponId) return "Эта ствольная коробка относится к другой пушке. Собери её отдельно.";
+	if (!model.platforms.includes("*") && !model.platforms.includes(info.platform)) return `Нужна платформа ${model.platforms.join(" / ")}; у пушки ${info.platform}.`;
+	if (!model.calibers.includes("*") && !model.calibers.includes(info.caliber)) return `Калибр ${model.calibers.join(" / ")} не подходит к ${info.caliber}.`;
+	if (model.requiresMount && !Object.values(weapon.modules).some((part) => getModuleDefinition(part).providesMounts.includes(model.requiresMount!))) return `Нет крепления ${model.requiresMount === "rail-top" ? "верхней планки" : model.requiresMount === "rail-bottom" ? "нижней планки цевья" : model.requiresMount === "dovetail" ? "бокового кронштейна" : `резьбы ${info.caliber}`}.`;
+	return null;
+}
+export function getWeaponBuildIssues(weapon: WeaponInstance): string[] {
+	const issues: string[] = [];
+	for (const slot of RECEIVER_INFO[weapon.weaponId]!.requiredSlots) {
+		const part = weapon.modules[slot];
+		if (!part) issues.push(`Нет детали: ${MODULE_SLOT_LABELS[slot].toLowerCase()}.`);
+		else if (part.durability < 10) issues.push(`Нужен ремонт: ${MODULE_SLOT_LABELS[slot].toLowerCase()}.`);
+	}
+	for (const [slot, part] of Object.entries(weapon.modules)) {
+		if (getModuleDefinition(part).slot !== slot) issues.push("Деталь установлена в неправильный слот.");
+		const reason = moduleFitReason(weapon, part);
+		if (reason) issues.push(reason);
+	}
+	return issues;
+}
+export function getWeaponStats(weapon: WeaponInstance) {
 	const definition = getWeaponDefinition(weapon);
-	const mods =
-		weapon.attachments.optic * 4 +
-		weapon.attachments.magazine * 3 +
-		weapon.attachments.stock * 3;
-	return Math.round(
-		(definition.power + mods) * (0.35 + (0.65 * weapon.durability) / 100)
-	);
+	const baseRecoil = { pistol: 38, shotgun: 72, smg: 45, rifle: 60, sniper: 65 }[definition.category];
+	const baseErgo = { pistol: 70, shotgun: 45, smg: 60, rifle: 50, sniper: 40 }[definition.category];
+	const legacy = weapon.modules.receiver?.legacyAttachments ?? { optic: 0, magazine: 0, stock: 0 };
+	let damage = definition.power + legacy.optic * 4 + legacy.magazine * 3 + legacy.stock * 3;
+	let ergonomics = baseErgo, recoil = baseRecoil, reliability = definition.reliability, weight = 0, ammoMultiplier = 1;
+	for (const part of Object.values(weapon.modules)) {
+		const model = getModuleDefinition(part), condition = part.durability / 100;
+		damage += model.stats.damage * condition; ergonomics += model.stats.ergonomics * condition;
+		recoil += model.stats.recoil * condition; reliability += model.stats.reliability * condition;
+		weight += model.stats.weight; ammoMultiplier *= model.stats.ammoMultiplier;
+		if (model.slot !== "receiver" && RECEIVER_INFO[weapon.weaponId]!.requiredSlots.includes(model.slot)) reliability -= (100 - part.durability) * 0.025;
+	}
+	const issues = getWeaponBuildIssues(weapon), ready = issues.length === 0 && weapon.durability >= 10;
+	return { damage: Math.max(1, Math.round(damage)), power: issues.some((issue) => issue.startsWith("Нет детали")) ? 0 : Math.round(Math.max(1, damage) * (0.35 + weapon.durability * 0.0065)),
+		ergonomics: Math.round(clamp(ergonomics, 0, 100)), recoil: Math.round(clamp(recoil, 0, 100)), reliability: Math.round(clamp(reliability, 10, 100)),
+		weight: Math.round(weight * 100) / 100, ammoMultiplier, ready, issues };
+}
+export function getModuleCapacity(state: GameState): number { return 40 + state.base.storage * 20; }
+export function getModuleInstallReason(state: GameState, gunId: string, moduleId: string): string | null {
+	const weapon = state.weapons.find((gun) => gun.id === gunId), item = state.modules.find((part) => part.id === moduleId);
+	if (!weapon || !item) return "Пушка или свободная деталь не найдена.";
+	if (state.raids.some((raid) => raid.weaponInstanceId === gunId)) return "Сборка зафиксирована: пушка сейчас в рейде.";
+	const slot = getModuleDefinition(item).slot;
+	const preview = { ...weapon, modules: { ...weapon.modules, [slot]: item } };
+	const reason = moduleFitReason(preview, item);
+	if (reason) return reason;
+	for (const installed of Object.values(preview.modules)) {
+		const dependency = moduleFitReason(preview, installed);
+		if (dependency) return `Сначала сними «${getModuleDefinition(installed).label}»: ${dependency}`;
+	}
+	if (getWeaponStats(weapon).ready && !getWeaponStats(preview).ready && !state.weapons.some((other) => other.id !== gunId && getWeaponStats(other).ready)) return "Нельзя вывести из строя последнюю готовую пушку отряда.";
+	return null;
+}
+export function installModule(state: GameState, gunId: string, moduleId: string): ActionResult {
+	const reason = getModuleInstallReason(state, gunId, moduleId); if (reason) return fail(reason);
+	const weapon = state.weapons.find((gun) => gun.id === gunId)!, item = state.modules.find((part) => part.id === moduleId)!;
+	const slot = getModuleDefinition(item).slot, old = weapon.modules[slot];
+	state.modules = state.modules.filter((part) => part.id !== moduleId);
+	if (old) state.modules.push(old);
+	weapon.modules[slot] = item;
+	if (slot === "receiver") { weapon.durability = item.durability; weapon.attachments = { ...(item.legacyAttachments ?? { optic: 0, magazine: 0, stock: 0 }) }; }
+	return ok(`${getModuleDefinition(item).label} установлен. ${old ? "Снятая деталь возвращена на стойку." : ""}`);
+}
+export function getModuleRemoveReason(state: GameState, gunId: string, slot: ModuleSlot): string | null {
+	const weapon = state.weapons.find((gun) => gun.id === gunId);
+	if (!weapon || !MODULE_SLOTS.includes(slot) || !weapon.modules[slot]) return "Установленная деталь не найдена.";
+	if (slot === "receiver") return "Коробка — основа пушки. Используй полный разбор сборки.";
+	if (state.raids.some((raid) => raid.weaponInstanceId === gunId)) return "Пушка сейчас в рейде.";
+	if (state.modules.length >= getModuleCapacity(state)) return "Стойка деталей полна.";
+	const preview = { ...weapon, modules: { ...weapon.modules } }; delete preview.modules[slot];
+	for (const part of Object.values(preview.modules)) { const reason = moduleFitReason(preview, part); if (reason) return `Сначала сними «${getModuleDefinition(part).label}»: ${reason}`; }
+	if (getWeaponStats(weapon).ready && !getWeaponStats(preview).ready && !state.weapons.some((other) => other.id !== gunId && getWeaponStats(other).ready)) return "Это последняя готовая пушка отряда. Сначала собери ещё одну.";
+	return null;
+}
+export function removeModule(state: GameState, gunId: string, slot: ModuleSlot): ActionResult {
+	const reason = getModuleRemoveReason(state, gunId, slot); if (reason) return fail(reason);
+	const weapon = state.weapons.find((gun) => gun.id === gunId)!; state.modules.push(weapon.modules[slot]!); delete weapon.modules[slot];
+	return ok("Деталь снята и возвращена на стойку.");
+}
+export function assembleWeapon(state: GameState, receiverId: string): ActionResult {
+	const receiver = state.modules.find((part) => part.id === receiverId);
+	if (!receiver || getModuleDefinition(receiver).slot !== "receiver") return fail("Нужна свободная ствольная коробка.");
+	if (state.weapons.length >= getStorageCapacity(state)) return fail("Арсенал полон.");
+	const weaponId = getModuleDefinition(receiver).weaponId!;
+	state.modules = state.modules.filter((part) => part.id !== receiverId);
+	state.weapons.push({ id: id(state, "gun"), weaponId, durability: receiver.durability, foundAt: receiver.foundAt,
+		attachments: { ...(receiver.legacyAttachments ?? { optic: 0, magazine: 0, stock: 0 }) }, modules: { receiver } });
+	if (!state.discoveredWeapons.includes(weaponId)) state.discoveredWeapons.push(weaponId);
+	return ok("Коробка заняла место в арсенале. Установи обязательные детали.");
+}
+export function getWeaponDisassembleReason(state: GameState, gunId: string): string | null {
+	const weapon = state.weapons.find((gun) => gun.id === gunId);
+	if (!weapon) return "Пушка не найдена.";
+	if (state.raids.some((raid) => raid.weaponInstanceId === gunId)) return "Пушка сейчас в рейде.";
+	if (getWeaponStats(weapon).ready && !state.weapons.some((gun) => gun.id !== gunId && getWeaponStats(gun).ready)) return "Последнюю готовую пушку нужно оставить отряду.";
+	if (state.modules.length + Object.keys(weapon.modules).length > getModuleCapacity(state)) return "Недостаточно места для всех деталей сборки.";
+	return null;
+}
+export function disassembleWeapon(state: GameState, gunId: string): ActionResult {
+	const reason = getWeaponDisassembleReason(state, gunId); if (reason) return fail(reason);
+	const weapon = state.weapons.find((gun) => gun.id === gunId)!;
+	state.modules.push(...Object.values(weapon.modules)); state.weapons = state.weapons.filter((gun) => gun.id !== gunId);
+	for (const scav of state.scavs) if (scav.weaponInstanceId === gunId) scav.weaponInstanceId = null;
+	return ok("Сборка разобрана. Все её детали на стойке.");
+}
+export function getModuleCraftReason(state: GameState, modelId: string): string | null {
+	const model = ownValue(MODULE_BY_ID, modelId); if (!model) return "Модель не найдена.";
+	if (model.slot === "receiver" && !state.discoveredWeapons.includes(model.weaponId!)) return "Сначала найди эту оружейную платформу в рейде.";
+	if (state.base.workshop < model.workshopLevel) return `Нужна мастерская уровня ${model.workshopLevel}.`;
+	if (state.modules.length >= getModuleCapacity(state)) return "Стойка деталей полна.";
+	if (state.money < model.craftCost.money || state.supplies.scrap < model.craftCost.scrap) return `Нужно ${model.craftCost.money} ₽ и ${model.craftCost.scrap} деталей.`;
+	return null;
+}
+export function craftModule(state: GameState, modelId: string): ActionResult {
+	const reason = getModuleCraftReason(state, modelId); if (reason) return fail(reason);
+	const model = ownValue(MODULE_BY_ID, modelId)!;
+	state.money -= model.craftCost.money; state.supplies.scrap -= model.craftCost.scrap;
+	state.modules.push(createModule(state, modelId, state.lastUpdated));
+	return ok(`${model.label} изготовлен.`);
+}
+export function getModuleSaleValue(item: ModuleInstance): number { return Math.max(2, Math.floor(getModuleDefinition(item).value * (0.2 + item.durability * 0.003))); }
+export function getModuleRecycleYield(item: ModuleInstance): number { return Math.max(1, Math.floor(getModuleDefinition(item).value / 100 * (0.2 + item.durability * 0.004))); }
+export function getModuleRepairCost(item: ModuleInstance): UpgradeCost { return { money: Math.ceil(getModuleDefinition(item).value * (100 - item.durability) / 180), scrap: Math.ceil((100 - item.durability) / 25) }; }
+export function sellModule(state: GameState, moduleId: string): ActionResult {
+	const item = state.modules.find((part) => part.id === moduleId); if (!item) return fail("Свободная деталь не найдена.");
+	state.modules = state.modules.filter((part) => part.id !== moduleId); const value = getModuleSaleValue(item); addMoney(state, value);
+	return ok(`Деталь продана за ${value} ₽.`);
+}
+export function recycleModule(state: GameState, moduleId: string): ActionResult {
+	const item = state.modules.find((part) => part.id === moduleId); if (!item) return fail("Свободная деталь не найдена.");
+	const amount = getModuleRecycleYield(item); if (state.supplies.scrap + amount > getSupplyCapacity(state).scrap) return fail("Нет места для деталей.");
+	state.modules = state.modules.filter((part) => part.id !== moduleId); state.supplies.scrap += amount;
+	return ok(`Разобрано: +${amount} деталей.`);
+}
+export function repairModule(state: GameState, moduleId: string): ActionResult {
+	const item = state.modules.find((part) => part.id === moduleId); if (!item) return fail("Свободная деталь не найдена. Сначала сними установленную деталь.");
+	if (item.durability >= 100) return fail("Ремонт не требуется.");
+	const cost = getModuleRepairCost(item); if (state.money < cost.money || state.supplies.scrap < cost.scrap) return fail(`Нужно ${cost.money} ₽ и ${cost.scrap} деталей.`);
+	state.money -= cost.money; state.supplies.scrap -= cost.scrap; item.durability = 100; return ok("Деталь отремонтирована.");
 }
 export function getStorageCapacity(state: GameState): number {
 	return 15 + state.base.storage * 10;
@@ -350,16 +510,17 @@ export function getLoadoutStats(state: GameState, scav: Scav) {
 	const armor = state.gearItems.find((item) => item.id === scav.loadout.armorItemId);
 	const pack = state.gearItems.find((item) => item.id === scav.loadout.backpackItemId);
 	const weapon = state.weapons.find((item) => item.id === scav.weaponInstanceId);
-	const weight = (armor ? getGearModel(armor).weight : 0) + (pack ? getGearModel(pack).weight : 0) + (weapon ? getWeaponRole(weapon).weight : 0) + (scav.loadout.medkit ? 1 : 0);
+	const weight = (armor ? getGearModel(armor).weight : 0) + (pack ? getGearModel(pack).weight : 0) + (weapon ? getWeaponStats(weapon).weight : 0) + (scav.loadout.medkit ? 1 : 0);
 	return { weight, protection: scav.gear.armor * 0.012 + (armor ? getGearModel(armor).protection * armor.durability / 100 : 0),
 		capacity: (pack ? 10 + (getGearModel(pack).capacity - 10) * (0.6 + pack.durability * 0.004) : 10) + scav.gear.backpack * 2,
 		speedMultiplier: 1 + weight * 0.017, ammoMultiplier: 1 + Math.max(0, weight - 5) * 0.025 };
 }
 export function getCargoWeight(cargo: Cargo): number {
-	return Math.round((cargo.weaponIds.length * 6 + cargo.supplies.ammo * 0.1 + cargo.supplies.medicine + cargo.supplies.scrap * 0.5 + cargo.supplies.intel * 0.25) * 10) / 10;
+	return Math.round((cargo.weaponIds.length * 6 + cargo.modules.reduce((sum, part) => sum + getModuleDefinition(part).stats.weight, 0) + cargo.supplies.ammo * 0.1 + cargo.supplies.medicine + cargo.supplies.scrap * 0.5 + cargo.supplies.intel * 0.25) * 10) / 10;
 }
 export function getCargoValue(cargo: Cargo): number {
 	return Math.round(cargo.money + cargo.weaponIds.reduce((sum, weaponId) => sum + (ownValue(WEAPON_BY_ID, weaponId)?.value ?? 0) * 0.5, 0)
+		+ cargo.modules.reduce((sum, item) => sum + getModuleSaleValue(item), 0)
 		+ cargo.supplies.ammo * 6.5 + cargo.supplies.medicine * (100 / 3) + cargo.supplies.scrap * 14.5 + cargo.supplies.intel * (140 / 3));
 }
 export function getMarketReason(state: GameState, offerId: string): string | null {
@@ -453,10 +614,13 @@ export function getRaidDuration(
 	map: RaidMap
 ): number {
 	const personality = getPersonality(scav);
+	const weapon = state.weapons.find((item) => item.id === scav.weaponInstanceId);
+	const baseErgo = weapon ? { pistol: 70, shotgun: 45, smg: 60, rifle: 50, sniper: 40 }[getWeaponDefinition(weapon).category] : 50;
+	const ergoSpeed = weapon ? 1 - (getWeaponStats(weapon).ergonomics - baseErgo) / 400 : 1;
 	return Math.max(
 		20,
 		Math.round(
-			map.duration * TACTICS[scav.tactic].durationMultiplier * getLoadoutStats(state, scav).speedMultiplier *
+			map.duration * TACTICS[scav.tactic].durationMultiplier * getLoadoutStats(state, scav).speedMultiplier * ergoSpeed *
 				(1 - personality.speedBonus - (state.base.radio - 1) * 0.035)
 		)
 	);
@@ -469,9 +633,9 @@ export function getRaidChance(
 	const weapon = state.weapons.find(
 		(item) => item.id === scav.weaponInstanceId
 	);
-	if (!weapon || weapon.durability < 10 || scav.health < 25) return 0;
+	if (!weapon || !getWeaponStats(weapon).ready || scav.health < 25) return 0;
 	const personality = getPersonality(scav);
-	const reliability = getWeaponDefinition(weapon).reliability / 100;
+	const reliability = getWeaponStats(weapon).reliability / 100;
 	return clamp(
 		0.76 +
 			getWeaponPower(weapon) / 360 +
@@ -494,12 +658,20 @@ export function getUpgradeCost(state: GameState, room: BaseRoom): UpgradeCost {
 	return { money: Math.round(180 * level ** 1.7), scrap: 5 + level * 3 };
 }
 export function getRepairCost(weapon: WeaponInstance): UpgradeCost {
-	return {
+	const cost = {
 		money: Math.ceil(
 			((100 - weapon.durability) * getWeaponDefinition(weapon).value) / 250
 		),
 		scrap: Math.ceil((100 - weapon.durability) / 20),
 	};
+	let componentWear = 0;
+	for (const [slot, part] of Object.entries(weapon.modules)) if (slot !== "receiver" && part.durability < 100) {
+		const partCost = getModuleRepairCost(part); cost.money += partCost.money;
+		componentWear += 100 - part.durability;
+	}
+	// Bench servicing uses one batch of materials instead of a minimum per part.
+	cost.scrap += Math.ceil(componentWear / 25);
+	return cost;
 }
 export function getModCost(
 	weapon: WeaponInstance,
@@ -535,7 +707,7 @@ export function getRaidAmmoCost(scav: Scav, map: RaidMap, state?: GameState): nu
 	const weapon = state?.weapons.find((item) => item.id === scav.weaponInstanceId);
 	return Math.max(1, Math.ceil(map.ammoCost * TACTICS[scav.tactic].ammoMultiplier
 		* (scav.loadout.ammoType === "piercing" ? 1.65 : 1)
-		* (weapon ? getWeaponRole(weapon).ammoMultiplier : 1) * (state ? getLoadoutStats(state, scav).ammoMultiplier : 1)));
+		* (weapon ? getWeaponRole(weapon).ammoMultiplier * getWeaponStats(weapon).ammoMultiplier : 1) * (state ? getLoadoutStats(state, scav).ammoMultiplier : 1)));
 }
 
 export function getRaidQuote(state: GameState, scav: Scav, map: RaidMap) {
@@ -549,6 +721,7 @@ export function getRaidQuote(state: GameState, scav: Scav, map: RaidMap) {
 	else if (scav.health < 25) reason = "Бойцу нужно восстановиться до 25%.";
 	else if (!weapon) reason = "Сначала выдай дикому оружие.";
 	else if (weapon.durability < 10) reason = "Оружию нужен ремонт.";
+	else if (!getWeaponStats(weapon).ready) reason = getWeaponBuildIssues(weapon)[0] ?? "Пушка не готова к выходу.";
 	else if (state.money < money) reason = `Для выхода нужно ${money} ₽.`;
 	else if (state.supplies.ammo < ammo) reason = `Нужно ${ammo} патронов.`;
 	else if (state.supplies.intel < map.intelCost) reason = `Нужно ${map.intelCost} разведданных.`;
@@ -622,11 +795,12 @@ function startRaid(state: GameState, scav: Scav, map: RaidMap, now: number, isAu
 		lootBonus: getPersonality(scav).lootBonus + scav.scouting / 450 + TACTICS[scav.tactic].lootBonus + scav.gear.backpack * 0.12,
 		seed: takeSeed(state), isAuto, tactic: scav.tactic,
 		armorLevel: scav.gear.armor, backpackLevel: scav.gear.backpack,
-		expedition: { stage: 1, status: "travel", branch: "scavenge", cargo: { money: 0, supplies: emptySupplies(), weaponIds: [] },
+		expedition: { stage: 1, status: "travel", branch: "scavenge", cargo: { money: 0, supplies: emptySupplies(), weaponIds: [], modules: [] },
+			legacyLoot: false, gunCombatBonus: (60 - getWeaponStats(state.weapons.find((item) => item.id === scav.weaponInstanceId)!).recoil) / 1000,
 			perks: [], offers: [], discoveries: [], autoDepth: isAuto ? scav.autoRaid.maxDepth : 1,
 			baseChance: quote.chance, baseDuration: quote.duration, capacity: stats.capacity,
 			trail: [{ at: now, label: "Выход · этап 1", text: `${scav.name} вышел в «${map.name}». ${TACTICS[scav.tactic].label}: ${quote.money} ₽, ${quote.ammo} патронов${quote.intel ? `, ${quote.intel} разведданных` : ""}${quote.medicine ? ", аптечка" : ""}.`, kind: "neutral" }],
-			ammoMultiplier: getWeaponRole(state.weapons.find((item) => item.id === scav.weaponInstanceId)!).ammoMultiplier * stats.ammoMultiplier,
+			ammoMultiplier: getWeaponRole(state.weapons.find((item) => item.id === scav.weaponInstanceId)!).ammoMultiplier * getWeaponStats(state.weapons.find((item) => item.id === scav.weaponInstanceId)!).ammoMultiplier * stats.ammoMultiplier,
 			loadout: { armorModelId: armor?.modelId ?? "none", armorCondition: armor?.durability ?? 0,
 				packModelId: pack?.modelId ?? "none", packCondition: pack?.durability ?? 0,
 				ammoType: scav.loadout.ammoType, medkit: scav.loadout.medkit } },
@@ -754,7 +928,7 @@ export function recruitScav(state: GameState): ActionResult {
 		23 + Math.floor(random() * 21)
 	);
 	const available = state.weapons.find(
-		(weapon) => weapon.durability >= 10 && !state.scavs.some((item) => item.weaponInstanceId === weapon.id)
+		(weapon) => getWeaponStats(weapon).ready && !state.scavs.some((item) => item.weaponInstanceId === weapon.id)
 	);
 	if (available) scav.weaponInstanceId = available.id;
 	else if (cost === 0) {
@@ -762,7 +936,13 @@ export function recruitScav(state: GameState): ActionResult {
 		else {
 			// A full ruined arsenal must not block the recovery kit or discard owned guns.
 			const emergency = [...state.weapons].sort((a, b) => getWeaponDefinition(a).value - getWeaponDefinition(b).value || a.id.localeCompare(b.id))[0]!;
-			emergency.durability = 70; scav.weaponInstanceId = emergency.id;
+			emergency.durability = 70;
+			if (emergency.modules.receiver) emergency.modules.receiver.durability = 70;
+			for (const slot of RECEIVER_INFO[emergency.weaponId]!.requiredSlots) {
+				if (!emergency.modules[slot]) emergency.modules[slot] = createModule(state, FACTORY_KITS[emergency.weaponId]![slot]!, state.lastUpdated, 70);
+				else emergency.modules[slot]!.durability = Math.max(70, emergency.modules[slot]!.durability);
+			}
+			scav.weaponInstanceId = emergency.id;
 		}
 	}
 	if (cost === 0) {
@@ -797,13 +977,14 @@ export function repairWeapon(
 	if (!weapon) return fail("Оружие не найдено.");
 	if (state.raids.some((raid) => raid.weaponInstanceId === weapon.id))
 		return fail("Оружие сейчас в рейде.");
-	if (weapon.durability >= 100) return fail("Оружие уже в отличном состоянии.");
+	if (weapon.durability >= 100 && Object.values(weapon.modules).every((part) => part.durability >= 100)) return fail("Оружие уже в отличном состоянии.");
 	const cost = getRepairCost(weapon);
 	if (state.money < cost.money || state.supplies.scrap < cost.scrap)
 		return fail(`Для ремонта нужно ${cost.money} ₽ и ${cost.scrap} деталей.`);
 	state.money -= cost.money;
 	state.supplies.scrap -= cost.scrap;
 	weapon.durability = 100;
+	for (const part of Object.values(weapon.modules)) part.durability = 100;
 	return ok("Оружие отремонтировано до 100%.");
 }
 
@@ -826,6 +1007,7 @@ export function modWeapon(
 	state.money -= cost.money;
 	state.supplies.scrap -= cost.scrap;
 	weapon.attachments[attachment]++;
+	weapon.modules.receiver!.legacyAttachments = { ...weapon.attachments };
 	return ok("Модуль установлен. Мощность оружия выросла.");
 }
 
@@ -839,6 +1021,7 @@ export function sellWeapon(
 		return fail("Оружие сейчас в рейде.");
 	if (state.weapons.length <= 1)
 		return fail("Последнюю пушку нужно оставить для отряда.");
+	if (getWeaponStats(weapon).ready && !state.weapons.some((other) => other.id !== weapon.id && getWeaponStats(other).ready)) return fail("Последнюю готовую пушку нужно оставить отряду.");
 	const value = getWeaponSaleValue(weapon);
 	state.weapons = state.weapons.filter((item) => item.id !== weapon.id);
 	state.scavs.forEach((scav) => {
@@ -848,16 +1031,17 @@ export function sellWeapon(
 	return ok(`Оружие продано за ${value} ₽.`);
 }
 export function getWeaponSaleValue(weapon: WeaponInstance): number {
-	return Math.max(10, Math.round(getWeaponDefinition(weapon).value * (0.2 + weapon.durability * 0.003)));
+	return Math.max(2, Object.values(weapon.modules).reduce((sum, part) => sum + getModuleSaleValue(part), 0));
 }
 export function getWeaponRecycleYield(weapon: WeaponInstance): number {
-	return Math.max(1, Math.floor(getWeaponDefinition(weapon).value / 90 * (0.5 + weapon.durability / 200)));
+	return Math.max(1, Object.values(weapon.modules).reduce((sum, part) => sum + getModuleRecycleYield(part), 0));
 }
 export function recycleWeapon(state: GameState, weaponInstanceId: string): ActionResult {
 	const weapon = state.weapons.find((item) => item.id === weaponInstanceId);
 	if (!weapon) return fail("Оружие не найдено.");
 	if (state.raids.some((raid) => raid.weaponInstanceId === weapon.id)) return fail("Оружие сейчас в рейде.");
 	if (state.weapons.length <= 1) return fail("Последнюю пушку нужно оставить для отряда.");
+	if (getWeaponStats(weapon).ready && !state.weapons.some((other) => other.id !== weapon.id && getWeaponStats(other).ready)) return fail("Последнюю готовую пушку нужно оставить отряду.");
 	const amount = getWeaponRecycleYield(weapon);
 	if (state.supplies.scrap + amount > getSupplyCapacity(state).scrap) return fail("Нет места для деталей.");
 	state.weapons = state.weapons.filter((item) => item.id !== weapon.id);
@@ -924,13 +1108,14 @@ export function getExpeditionChoices(state: GameState, raid: Raid, selectedPerk?
 			* expedition.ammoMultiplier * (expedition.loadout.ammoType === "piercing" ? 1.65 : 1)) + (perks.includes("pathfinder") ? 1 : 0));
 		const intel = map.intelCost + (branch === "recon" ? 1 : 0);
 		const chance = clamp(expedition.baseChance - (stage - 1) * 0.09 + definition.chanceBonus
+			+ (branch === "combat" ? expedition.gunCombatBonus : 0)
 			+ (weapon ? getWeaponRole(weapon).branches[branch] ?? 0 : 0)
 			+ (perks.includes("careful") ? 0.06 : 0) - (perks.includes("haggler") ? 0.04 : 0), 0.15, 0.97);
 		const duration = Math.max(20, Math.round(expedition.baseDuration * (1 + (stage - 1) * 0.16)
 			* definition.durationMultiplier * (perks.includes("pathfinder") ? 0.8 : 1)));
 		let reason: string | null = null;
 		if (expedition.status !== "choice") reason = "Дождись контрольной точки.";
-		else if (!scav || !weapon || weapon.durability < 10) reason = "Оружию нужен ремонт: пора эвакуироваться.";
+		else if (!scav || !weapon || !getWeaponStats(weapon).ready) reason = "Оружию нужен ремонт: пора эвакуироваться.";
 		else if (scav.health < 25) reason = "Боец слишком тяжело ранен: пора эвакуироваться.";
 		else if (state.money < money) reason = `Нужно ${money} ₽ на следующий этап.`;
 		else if (state.supplies.ammo < ammo) reason = `Нужно ${ammo} патронов.`;
@@ -984,6 +1169,7 @@ function fitCargo(cargo: Cargo, capacity: number) {
 		cargo.supplies[key] = Math.max(0, cargo.supplies[key] - Math.ceil((overflow - 0.00001) / weight));
 	}
 	while (getCargoWeight(cargo) > capacity && cargo.weaponIds.length > 0) cargo.weaponIds.pop();
+	while (getCargoWeight(cargo) > capacity && cargo.modules.length > 0) cargo.modules.pop();
 }
 function wearEquippedGear(state: GameState, scav: Scav, stage: number, failed: boolean) {
 	for (const key of ["armorItemId", "backpackItemId"] as const) {
@@ -1012,6 +1198,8 @@ function reachCheckpoint(state: GameState, raid: Raid, now: number): RaidReport 
 		* (expedition.perks.includes("fieldMedic") ? 0.5 : 1) * (expedition.loadout.medkit ? 0.75 : 1);
 	weapon.durability = Math.max(0, weapon.durability - Math.ceil((5 + random() * (7 + map.danger * 8) + expedition.stage * 2)
 		* (expedition.perks.includes("gunsmith") ? 0.5 : 1)));
+	if (weapon.modules.receiver) weapon.modules.receiver.durability = weapon.durability;
+	if (!expedition.legacyLoot) for (const [slot, part] of Object.entries(weapon.modules)) if (slot !== "receiver") part.durability = Math.max(0, part.durability - (expedition.perks.includes("gunsmith") ? 1 : 2 + expedition.stage));
 	wearEquippedGear(state, scav, expedition.stage, !success);
 	if (!success) {
 		expedition.trail.push({ at: now, label: `Засада · этап ${expedition.stage}`, text: `Маршрут «${EXPEDITION_BRANCHES[expedition.branch].label}» сорван. Невынесенный груз потерян.${discoveriesText ? ` По рации передано: ${discoveriesText}.` : ""}`, kind: "danger" });
@@ -1029,11 +1217,26 @@ function reachCheckpoint(state: GameState, raid: Raid, now: number): RaidReport 
 	expedition.cargo.supplies.medicine += random() < 0.45 ? 1 : 0;
 	expedition.cargo.supplies.scrap += 2 + Math.floor(random() * (expedition.branch === "scavenge" ? 7 + map.level : 4 + map.level));
 	expedition.cargo.supplies.intel += expedition.branch === "recon" ? 2 + Math.floor(random() * 2) : random() < 0.4 ? 1 : 0;
-	const weaponChance = map.weaponChance * (expedition.branch === "combat" ? 1.15 : 0.7) + (expedition.perks.includes("gunsmith") ? 0.1 : 0);
+	const weaponChance = map.weaponChance * (expedition.branch === "combat" ? 1.15 : 0.7) * (expedition.legacyLoot ? 1 : 0.24) + (expedition.perks.includes("gunsmith") ? 0.1 : 0);
 	if (random() < weaponChance) {
 		const weaponId = map.weapons[Math.min(map.weapons.length - 1, Math.floor(random() ** (1.5 - expedition.stage * 0.16) * map.weapons.length))]!;
 		if (!state.discoveredWeapons.includes(weaponId)) state.discoveredWeapons.push(weaponId);
 		expedition.cargo.weaponIds.push(weaponId);
+	}
+	if (!expedition.legacyLoot) {
+		const partsRandom = generator((raid.seed ^ Math.imul(expedition.stage, 0x2c1b3c6d)) >>> 0);
+		const count = expedition.branch === "combat" ? 2 + Math.floor(partsRandom() * 2) : 1 + (partsRandom() < 0.35 ? 1 : 0);
+		for (let i = 0; i < count; i++) {
+			const receiverRoll = partsRandom() < (expedition.branch === "combat" ? 0.32 : 0.12);
+			const weaponId = map.weapons[Math.floor(partsRandom() * map.weapons.length)]!;
+			const info = RECEIVER_INFO[weaponId]!;
+			const pool = MODULE_MODELS.filter((model) => receiverRoll ? model.id === `receiver-${weaponId}`
+				: model.slot !== "receiver" && model.lootTier <= expedition.stage + (expedition.perks.includes("gunsmith") ? 1 : 0)
+					&& (model.platforms.includes("*") || model.platforms.includes(info.platform)) && (model.calibers.includes("*") || model.calibers.includes(info.caliber)));
+			const model = pool[Math.floor(partsRandom() * pool.length)]!;
+			expedition.cargo.modules.push(createModule(state, model.id, now, Math.min(100, 45 + Math.floor(partsRandom() * 46) + (expedition.perks.includes("gunsmith") ? 10 : 0))));
+			if (model.slot === "receiver" && !state.discoveredWeapons.includes(model.weaponId!)) state.discoveredWeapons.push(model.weaponId!);
+		}
 	}
 	fitCargo(expedition.cargo, expedition.capacity);
 	expedition.trail.push({ at: now, label: `Контрольная точка ${expedition.stage}`, text: `Маршрут «${EXPEDITION_BRANCHES[expedition.branch].label}» пройден. В рюкзаке ${expedition.cargo.money} ₽, ${getCargoWeight(expedition.cargo)} ед. груза и ${expedition.cargo.weaponIds.length} ед. оружия.${discoveriesText ? ` Передано: ${discoveriesText}.` : ""}`, kind: "loot" });
@@ -1059,7 +1262,7 @@ function finishExpedition(state: GameState, raid: Raid, success: boolean, now: n
 	const report: RaidReport = { id: id(state, "report"), raidId: raid.id, scavName: raid.scavName, mapId: raid.mapId,
 		at: now, success, lostScav: false, lostWeapon: false, money: 0, supplies: emptySupplies(), weaponId: null,
 		weaponAutoSold: false, description: "", isAuto: raid.isAuto, tactic: raid.tactic, events: [], depth: expedition.stage,
-		discoveries: [...expedition.discoveries], lostCargo: success ? null : structuredClone(expedition.cargo) };
+		discoveries: [...expedition.discoveries], lostCargo: success ? null : structuredClone(expedition.cargo), moduleIds: [] };
 	state.stats.raidsCompleted++; scav.raids++;
 	if (raid.isAuto) { state.stats.autoRaidsCompleted++; scav.autoRaid.runs++; }
 	const oldLevel = scav.level;
@@ -1074,14 +1277,26 @@ function finishExpedition(state: GameState, raid: Raid, success: boolean, now: n
 			state.stats.weaponsFound++;
 			if (["rare", "epic", "legendary"].includes(definition.rarity)) state.stats.rareWeaponsFound++;
 			report.weaponId = weaponId;
-			if (state.weapons.length < getStorageCapacity(state)) createWeapon(state, weaponId, now, 50 + Math.floor(random() * 46));
+			if (state.weapons.length < getStorageCapacity(state)) {
+				const found = createWeapon(state, weaponId, now, 50 + Math.floor(random() * 46));
+				if (!expedition.legacyLoot) {
+					const stripped = generator((raid.seed ^ Math.imul(expedition.stage, 0x297a2d39) ^ found.weaponId.length) >>> 0)() < 0.3;
+					if (stripped) delete found.modules[getWeaponDefinition(found).category === "pistol" ? "magazine" : "stock"];
+				}
+			}
 			else { report.weaponAutoSold = true; report.money += Math.round(definition.value * 0.35); }
+		}
+		for (const part of expedition.cargo.modules) {
+			report.moduleIds.push(part.modelId);
+			const model = getModuleDefinition(part);
+			if (model.slot === "receiver") { state.stats.weaponsFound++; if (["rare", "epic", "legendary"].includes(ownValue(WEAPON_BY_ID, model.weaponId!)!.rarity)) state.stats.rareWeaponsFound++; }
+			if (state.modules.length < getModuleCapacity(state)) state.modules.push(part); else report.money += getModuleSaleValue(part);
 		}
 		addMoney(state, report.money);
 		report.description = `Эвакуация после этапа ${expedition.stage}. Груз доставлен${report.weaponAutoSold ? "; лишний трофей продан" : ""}.`;
 		const discarded = getCargoWeight({ money: 0, supplies: {
 			ammo: expedition.cargo.supplies.ammo - report.supplies.ammo, medicine: expedition.cargo.supplies.medicine - report.supplies.medicine,
-			scrap: expedition.cargo.supplies.scrap - report.supplies.scrap, intel: expedition.cargo.supplies.intel - report.supplies.intel }, weaponIds: [] });
+			scrap: expedition.cargo.supplies.scrap - report.supplies.scrap, intel: expedition.cargo.supplies.intel - report.supplies.intel }, weaponIds: [], modules: [] });
 		if (discarded > 0) report.description += " Часть припасов оставлена: склад полон.";
 	} else {
 		report.lostWeapon = random() < 0.2 + map.danger * 0.22 + (expedition.stage - 1) * 0.08;
@@ -1140,6 +1355,7 @@ function finishRaid(state: GameState, raid: Raid): RaidReport {
 		depth: 1,
 		discoveries: [],
 		lostCargo: null,
+		moduleIds: [],
 	};
 	state.stats.raidsCompleted++;
 	if (raid.isAuto) { state.stats.autoRaidsCompleted++; scav.autoRaid.runs++; }
@@ -1150,6 +1366,7 @@ function finishRaid(state: GameState, raid: Raid): RaidReport {
 		0,
 		weapon.durability - 8 - Math.floor(random() * (7 + map.danger * 9))
 	);
+	if (weapon.modules.receiver) weapon.modules.receiver.durability = weapon.durability;
 	if (success) {
 		state.stats.raidsWon++;
 		state.stats.mapWins[map.id] = (state.stats.mapWins[map.id] ?? 0) + 1;
@@ -1424,16 +1641,29 @@ function parseSupplies(value: unknown): Supplies {
 		intel: number(source.intel),
 	};
 }
-function parseWeapon(value: unknown): WeaponInstance {
+function parseModule(value: unknown): ModuleInstance {
+	const source = record(value); fields(source, ["id", "modelId", "durability", "foundAt", "legacyAttachments"]);
+	const item: ModuleInstance = { id: string(source.id), modelId: known(source.modelId, MODULE_BY_ID), durability: number(source.durability, 100), foundAt: number(source.foundAt) };
+	if (source.legacyAttachments !== undefined) {
+		if (getModuleDefinition(item).slot !== "receiver") throw new Error("legacy-module");
+		const legacy = record(source.legacyAttachments); fields(legacy, attachmentKeys);
+		item.legacyAttachments = { optic: number(legacy.optic, 3, 0, true), magazine: number(legacy.magazine, 3, 0, true), stock: number(legacy.stock, 3, 0, true) };
+	}
+	return item;
+}
+function parseWeapon(value: unknown, version: number): WeaponInstance {
 	const source = record(value);
-	fields(source, ["id", "weaponId", "durability", "foundAt", "attachments"]);
+	fields(source, ["id", "weaponId", "durability", "foundAt", "attachments", ...(version === 4 ? ["modules"] : [])]);
 	const attachments = record(source.attachments);
 	fields(attachments, attachmentKeys);
+	const modules: WeaponInstance["modules"] = {};
+	if (version === 4) { const parts = record(source.modules); fields(parts, MODULE_SLOTS); for (const [slot, value] of Object.entries(parts)) modules[slot as ModuleSlot] = parseModule(value); }
 	return {
 		id: string(source.id),
 		weaponId: known(source.weaponId, WEAPON_BY_ID),
 		durability: number(source.durability, 100),
 		foundAt: number(source.foundAt),
+		modules,
 		attachments: {
 			optic: number(attachments.optic, 3, 0, true),
 			magazine: number(attachments.magazine, 3, 0, true),
@@ -1454,10 +1684,10 @@ function parseLoadout(value: unknown): Loadout {
 		backpackItemId: source.backpackItemId === null ? null : string(source.backpackItemId),
 		ammoType: source.ammoType, medkit: bool(source.medkit) };
 }
-function parseCargo(value: unknown): Cargo {
+function parseCargo(value: unknown, version: number): Cargo {
 	const source = record(value);
-	fields(source, ["money", "supplies", "weaponIds"]);
-	return { money: number(source.money, 1e8), supplies: parseSupplies(source.supplies), weaponIds: array(source.weaponIds, 3, (value) => known(value, WEAPON_BY_ID)) };
+	fields(source, ["money", "supplies", "weaponIds", ...(version === 4 ? ["modules"] : [])]);
+	return { money: number(source.money, 1e8), supplies: parseSupplies(source.supplies), weaponIds: array(source.weaponIds, 3, (value) => known(value, WEAPON_BY_ID)), modules: version === 4 ? array(source.modules, 12, parseModule) : [] };
 }
 function parseEvents(value: unknown, max: number): RaidReport["events"] {
 	return array(value, max, (value) => {
@@ -1467,10 +1697,10 @@ function parseEvents(value: unknown, max: number): RaidReport["events"] {
 		return { at: number(event.at), label: string(event.label, 50), text: string(event.text, 400), kind: event.kind as RaidReport["events"][number]["kind"] };
 	});
 }
-function parseExpedition(value: unknown): Expedition | null {
+function parseExpedition(value: unknown, version: number): Expedition | null {
 	if (value === null) return null;
 	const source = record(value);
-	fields(source, ["stage", "status", "branch", "cargo", "perks", "offers", "discoveries", "loadout", "autoDepth", "baseChance", "baseDuration", "capacity", "ammoMultiplier", "trail"]);
+	fields(source, ["stage", "status", "branch", "cargo", "perks", "offers", "discoveries", "loadout", "autoDepth", "baseChance", "baseDuration", "capacity", "ammoMultiplier", "trail", ...(version === 4 ? ["legacyLoot", "gunCombatBonus"] : [])]);
 	const loadout = record(source.loadout);
 	fields(loadout, ["armorModelId", "armorCondition", "packModelId", "packCondition", "ammoType", "medkit"]);
 	if (source.status !== "travel" && source.status !== "choice") throw new Error("checkpoint-status");
@@ -1480,7 +1710,8 @@ function parseExpedition(value: unknown): Expedition | null {
 	if (armorModelId !== "none" && ownValue(GEAR_MODEL_BY_ID, armorModelId)?.slot !== "armor") throw new Error("armor-slot");
 	if (packModelId !== "none" && ownValue(GEAR_MODEL_BY_ID, packModelId)?.slot !== "backpack") throw new Error("pack-slot");
 	const expedition: Expedition = { stage: number(source.stage, 3, 1, true), status: source.status,
-		branch: known(source.branch, EXPEDITION_BRANCHES) as ExpeditionBranch, cargo: parseCargo(source.cargo),
+		branch: known(source.branch, EXPEDITION_BRANCHES) as ExpeditionBranch, cargo: parseCargo(source.cargo, version),
+		legacyLoot: version === 4 ? bool(source.legacyLoot) : true, gunCombatBonus: version === 4 ? number(source.gunCombatBonus, 0.1, -0.1) : 0,
 		perks: array(source.perks, 2, (value) => known(value, RUN_PERKS) as RunPerk),
 		offers: array(source.offers, 2, (value) => known(value, RUN_PERKS) as RunPerk),
 		discoveries: array(source.discoveries, Object.keys(BLUEPRINTS).length, (value) => known(value, BLUEPRINTS)),
@@ -1495,7 +1726,7 @@ function parseExpedition(value: unknown): Expedition | null {
 }
 function parseScav(value: unknown, version: number): Scav {
 	const source = record(value);
-	fields(source, ["id", "name", "personality", "level", "xp", "health", "combat", "scouting", "weaponInstanceId", "status", "raids", ...(version >= 2 ? ["tactic", "gear", "autoRaid"] : []), ...(version === 3 ? ["loadout"] : [])]);
+	fields(source, ["id", "name", "personality", "level", "xp", "health", "combat", "scouting", "weaponInstanceId", "status", "raids", ...(version >= 2 ? ["tactic", "gear", "autoRaid"] : []), ...(version >= 3 ? ["loadout"] : [])]);
 	if (!["ready", "raiding", "wounded"].includes(source.status as string))
 		throw new Error("status");
 	let gear: Scav["gear"] = { armor: 0, backpack: 0 };
@@ -1504,13 +1735,13 @@ function parseScav(value: unknown, version: number): Scav {
 		const gearSource = record(source.gear);
 		const autoSource = record(source.autoRaid);
 		fields(gearSource, ["armor", "backpack"]);
-		fields(autoSource, ["mapId", "enabled", "minHealth", "runs", "waitingReason", ...(version === 3 ? ["maxDepth"] : [])]);
+		fields(autoSource, ["mapId", "enabled", "minHealth", "runs", "waitingReason", ...(version >= 3 ? ["maxDepth"] : [])]);
 		gear = { armor: number(gearSource.armor, 3, 0, true), backpack: number(gearSource.backpack, 3, 0, true) };
 		autoRaid = {
 			mapId: known(autoSource.mapId, MAP_BY_ID), enabled: bool(autoSource.enabled),
 			minHealth: number(autoSource.minHealth, 100, 25, true), runs: number(autoSource.runs, 1e9, 0, true),
 			waitingReason: autoSource.waitingReason === null ? null : string(autoSource.waitingReason, 200),
-			maxDepth: version === 3 ? number(autoSource.maxDepth, 3, 1, true) : 1,
+			maxDepth: version >= 3 ? number(autoSource.maxDepth, 3, 1, true) : 1,
 		};
 	}
 	return {
@@ -1528,16 +1759,16 @@ function parseScav(value: unknown, version: number): Scav {
 		raids: number(source.raids, 1e9, 0, true),
 		tactic: version === 1 ? "balanced" : known(source.tactic, TACTICS) as RaidTactic,
 		gear,
-		loadout: version === 3 ? parseLoadout(source.loadout) : { armorItemId: null, backpackItemId: null, ammoType: "standard", medkit: false },
+		loadout: version >= 3 ? parseLoadout(source.loadout) : { armorItemId: null, backpackItemId: null, ammoType: "standard", medkit: false },
 		autoRaid,
 	};
 }
 function parseRaid(value: unknown, version: number): Raid {
 	const source = record(value);
-	fields(source, ["id", "scavId", "scavName", "mapId", "weaponInstanceId", "startedAt", "endsAt", "chance", "lootBonus", "seed", ...(version >= 2 ? ["isAuto", "tactic", "armorLevel", "backpackLevel"] : []), ...(version === 3 ? ["expedition"] : [])]);
+	fields(source, ["id", "scavId", "scavName", "mapId", "weaponInstanceId", "startedAt", "endsAt", "chance", "lootBonus", "seed", ...(version >= 2 ? ["isAuto", "tactic", "armorLevel", "backpackLevel"] : []), ...(version >= 3 ? ["expedition"] : [])]);
 	const startedAt = number(source.startedAt);
 	const endsAt = number(source.endsAt);
-	const expedition = version === 3 ? parseExpedition(source.expedition) : null;
+	const expedition = version >= 3 ? parseExpedition(source.expedition, version) : null;
 	if ((expedition?.status === "choice" ? endsAt < startedAt : endsAt <= startedAt) || endsAt - startedAt > 600_000)
 		throw new Error("duration");
 	return {
@@ -1560,7 +1791,7 @@ function parseRaid(value: unknown, version: number): Raid {
 }
 function parseReport(value: unknown, version: number): RaidReport {
 	const source = record(value);
-	fields(source, ["id", "raidId", "scavName", "mapId", "at", "success", "lostScav", "lostWeapon", "money", "supplies", "weaponId", "weaponAutoSold", "description", ...(version >= 2 ? ["isAuto", "tactic", "events"] : []), ...(version === 3 ? ["depth", "discoveries", "lostCargo"] : [])]);
+	fields(source, ["id", "raidId", "scavName", "mapId", "at", "success", "lostScav", "lostWeapon", "money", "supplies", "weaponId", "weaponAutoSold", "description", ...(version >= 2 ? ["isAuto", "tactic", "events"] : []), ...(version >= 3 ? ["depth", "discoveries", "lostCargo"] : []), ...(version === 4 ? ["moduleIds"] : [])]);
 	return {
 		id: string(source.id),
 		raidId: string(source.raidId),
@@ -1576,12 +1807,13 @@ function parseReport(value: unknown, version: number): RaidReport {
 			source.weaponId === null ? null : known(source.weaponId, WEAPON_BY_ID),
 		weaponAutoSold: bool(source.weaponAutoSold),
 		description: string(source.description, 300),
-		depth: version === 3 ? number(source.depth, 3, 1, true) : 1,
-		discoveries: version === 3 ? array(source.discoveries, Object.keys(BLUEPRINTS).length, (value) => known(value, BLUEPRINTS)) : [],
-		lostCargo: version === 3 && source.lostCargo !== null ? parseCargo(source.lostCargo) : null,
+		depth: version >= 3 ? number(source.depth, 3, 1, true) : 1,
+		discoveries: version >= 3 ? array(source.discoveries, Object.keys(BLUEPRINTS).length, (value) => known(value, BLUEPRINTS)) : [],
+		lostCargo: version >= 3 && source.lostCargo !== null ? parseCargo(source.lostCargo, version) : null,
+		moduleIds: version === 4 ? array(source.moduleIds, 12, (value) => known(value, MODULE_BY_ID)) : [],
 		isAuto: version === 1 ? false : bool(source.isAuto),
 		tactic: version === 1 ? "balanced" : known(source.tactic, TACTICS) as RaidTactic,
-		events: version === 1 ? [] : parseEvents(source.events, version === 3 ? 10 : 4),
+		events: version === 1 ? [] : parseEvents(source.events, version >= 3 ? 10 : 4),
 	};
 }
 
@@ -1590,9 +1822,9 @@ export function parseSave(raw: string): GameState | null {
 	try {
 		if (typeof raw !== "string" || raw.length > 200_000) return null;
 		const source = record(JSON.parse(raw));
-		if (source.schemaVersion !== 1 && source.schemaVersion !== 2 && source.schemaVersion !== SAVE_VERSION) return null;
+		if (source.schemaVersion !== 1 && source.schemaVersion !== 2 && source.schemaVersion !== 3 && source.schemaVersion !== SAVE_VERSION) return null;
 		const version = source.schemaVersion;
-		fields(source, ["schemaVersion", "createdAt", "lastUpdated", "money", "supplies", "xp", "level", "base", "scavs", "weapons", "raids", "history", "claimedContracts", "discoveredWeapons", "stats", "clock", "rng", "nextId", ...(version === 3 ? ["gearItems", "blueprints"] : [])]);
+		fields(source, ["schemaVersion", "createdAt", "lastUpdated", "money", "supplies", "xp", "level", "base", "scavs", "weapons", "raids", "history", "claimedContracts", "discoveredWeapons", "stats", "clock", "rng", "nextId", ...(version >= 3 ? ["gearItems", "blueprints"] : []), ...(version === 4 ? ["modules"] : [])]);
 		const base = record(source.base);
 		const stats = record(source.stats);
 		const clock = record(source.clock);
@@ -1622,7 +1854,7 @@ export function parseSave(raw: string): GameState | null {
 				storage: number(base.storage, 5, 1, true),
 			},
 			scavs: array(source.scavs, 7, (value) => parseScav(value, version)),
-			weapons: array(source.weapons, 65, parseWeapon),
+			weapons: array(source.weapons, 65, (value) => parseWeapon(value, version)),
 			raids: array(source.raids, 7, (value) => parseRaid(value, version)),
 			history: array(source.history, 40, (value) => parseReport(value, version)),
 			claimedContracts: array(
@@ -1640,8 +1872,9 @@ export function parseSave(raw: string): GameState | null {
 				Object.keys(WEAPON_BY_ID).length,
 				(value) => known(value, WEAPON_BY_ID)
 			),
-			gearItems: version === 3 ? array(source.gearItems, 28, parseGear) : [],
-			blueprints: version === 3 ? array(source.blueprints, Object.keys(BLUEPRINTS).length, (value) => known(value, BLUEPRINTS)) : ["light_vest", "scout_pack"],
+			gearItems: version >= 3 ? array(source.gearItems, 28, parseGear) : [],
+			blueprints: version >= 3 ? array(source.blueprints, Object.keys(BLUEPRINTS).length, (value) => known(value, BLUEPRINTS)) : ["light_vest", "scout_pack"],
+			modules: version === 4 ? array(source.modules, 1000, parseModule) : [],
 			stats: {
 				raidsWon: number(stats.raidsWon, 1e9, 0, true),
 				raidsCompleted: number(stats.raidsCompleted, 1e9, 0, true),
@@ -1665,6 +1898,10 @@ export function parseSave(raw: string): GameState | null {
 			nextId: number(source.nextId, 1e12, 1, true),
 		};
 		// Only retained evidence can seed per-sector counters from an old save.
+		if (version < 4) for (const weapon of state.weapons) {
+			fillFactoryKit(state, weapon);
+			if (!state.discoveredWeapons.includes(weapon.weaponId)) state.discoveredWeapons.push(weapon.weaponId);
+		}
 		if (version === 1) for (const report of state.history) if (report.success)
 			state.stats.mapWins[report.mapId] = (state.stats.mapWins[report.mapId] ?? 0) + 1;
 		const allIds = [
@@ -1673,8 +1910,12 @@ export function parseSave(raw: string): GameState | null {
 			...state.raids.map((item) => item.id),
 			...state.history.map((item) => item.id),
 			...state.gearItems.map((item) => item.id),
+			...state.modules.map((item) => item.id),
+			...state.weapons.flatMap((weapon) => Object.values(weapon.modules).map((item) => item.id)),
+			...state.raids.flatMap((raid) => raid.expedition?.cargo.modules.map((item) => item.id) ?? []),
 		];
 		unique(allIds);
+		for (const part of [...state.modules, ...state.weapons.flatMap((weapon) => Object.values(weapon.modules)), ...state.raids.flatMap((raid) => raid.expedition?.cargo.modules ?? [])]) if (!part.id.startsWith("module-")) throw new Error("module-id");
 		unique(state.claimedContracts);
 		unique(state.discoveredWeapons);
 		unique(state.blueprints);
@@ -1755,7 +1996,11 @@ export function parseSave(raw: string): GameState | null {
 				if (raid.expedition.trail.some((event, index) => event.at > state.lastUpdated || (index > 0 && event.at < raid.expedition!.trail[index - 1]!.at))) throw new Error("raid-trail-time");
 			}
 		}
-		for (const weapon of state.weapons) if (!weapon.id.startsWith("gun-")) throw new Error("gun-id");
+		for (const weapon of state.weapons) {
+			if (!weapon.id.startsWith("gun-") || !weapon.modules.receiver || weapon.modules.receiver.durability !== weapon.durability) throw new Error("gun-id");
+			if (attachmentKeys.some((key) => weapon.attachments[key] !== (weapon.modules.receiver!.legacyAttachments?.[key] ?? 0))) throw new Error("legacy-bonus");
+			for (const [slot, part] of Object.entries(weapon.modules)) if (getModuleDefinition(part).slot !== slot || moduleFitReason(weapon, part)) throw new Error("module-fit");
+		}
 		for (const gear of state.gearItems) if (!gear.id.startsWith("gear-")) throw new Error("gear-id");
 		for (const report of state.history) {
 			if (!report.id.startsWith("report-") || !/^raid-[1-9]\d*$/.test(report.raidId) || Number(report.raidId.slice(5)) >= state.nextId) throw new Error("report-id");
@@ -1768,7 +2013,7 @@ export function parseSave(raw: string): GameState | null {
 		if (
 			allIds.some(
 				(value) =>
-					!/^(gun|scav|raid|report|gear)-[1-9]\d*$/.test(value) ||
+					!/^(gun|scav|raid|report|gear|module)-[1-9]\d*$/.test(value) ||
 					Number(value.split("-")[1]) >= state.nextId
 			)
 		)
