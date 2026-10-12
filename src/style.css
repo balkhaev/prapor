@@ -975,6 +975,8 @@ button {
 	padding: 20px;
 }
 .modal {
+	max-height: calc(100dvh - 40px);
+	overflow-y: auto;
 	max-width: 480px;
 	width: 100%;
 	background: #1c2317;

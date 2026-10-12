@@ -839,10 +839,10 @@ function createRaidEvents(raid: Raid, report: RaidReport, map: RaidMap): RaidRep
 	const random = generator(raid.seed ^ 0x52c731ab);
 	const search = ["Обследовал старый тайник.", "Проверил ящики у обходной тропы.", "Нашёл следы недавнего прохода."];
 	return [
-		{ at: raid.startedAt, label: "Выход", text: `${raid.scavName} вышел в сектор «${map.name}». Тактика: ${TACTICS[raid.tactic].label}.`, kind: "neutral" },
+		{ at: raid.startedAt, label: "Отправление", text: `${raid.scavName} вышел в сектор «${map.name}». Тактика: ${TACTICS[raid.tactic].label}.`, kind: "neutral" },
 		{ at: raid.startedAt + Math.round((raid.endsAt - raid.startedAt) * 0.32), label: "Поиск", text: search[Math.floor(random() * search.length)]!, kind: "neutral" },
 		{ at: raid.startedAt + Math.round((raid.endsAt - raid.startedAt) * 0.65), label: "Контакт", text: report.success ? "Обошёл опасный участок и удержал маршрут." : "Попал в засаду. Пришлось бросить поиск и отходить.", kind: report.success ? "neutral" : "danger" },
-		{ at: raid.endsAt, label: report.lostScav ? "Связь потеряна" : "Выход", text: report.description + (report.success ? ` Доставлено ${report.money} ₽ и припасы.` : ""), kind: report.success ? "success" : "danger" },
+		{ at: raid.endsAt, label: report.lostScav ? "Связь потеряна" : "Возвращение", text: report.description + (report.success ? ` Доставлено ${report.money} ₽ и припасы.` : ""), kind: report.success ? "success" : "danger" },
 	];
 }
 
