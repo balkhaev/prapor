@@ -54,12 +54,17 @@ export type ContractMetric =
 	| "mapsVisited"
 	| "raidsCompleted"
 	| "baseLevels"
-	| "rareWeaponsFound";
+	| "rareWeaponsFound"
+	| "gearLevels"
+	| "autoRaidsCompleted"
+	| "mapRaidsWon";
 export interface Contract {
 	id: string;
 	name: string;
 	description: string;
 	metric: ContractMetric;
+	requires?: string[];
+	mapId?: string;
 	target: number;
 	level: number;
 	reward: { money: number; xp: number; supplies: Partial<Supplies> };
@@ -438,6 +443,7 @@ export const CONTRACTS: Contract[] = [
 	},
 	{
 		id: "arms-dealer",
+		requires: ["first-return"],
 		name: "Поставщик",
 		description: "Найди в рейдах 5 единиц оружия.",
 		metric: "weaponsFound",
@@ -447,6 +453,7 @@ export const CONTRACTS: Contract[] = [
 	},
 	{
 		id: "steady-returns",
+		requires: ["first-return"],
 		name: "Свои люди",
 		description: "Успешно заверши 8 рейдов.",
 		metric: "raidsWon",
@@ -456,6 +463,7 @@ export const CONTRACTS: Contract[] = [
 	},
 	{
 		id: "builder",
+		requires: ["gear-ready"],
 		name: "Хозяйский подход",
 		description: "Подними общий уровень помещений до 8.",
 		metric: "baseLevels",
@@ -465,6 +473,7 @@ export const CONTRACTS: Contract[] = [
 	},
 	{
 		id: "cartographer",
+		requires: ["depot-route"],
 		name: "Тропы и тайники",
 		description: "Посети 4 разных сектора.",
 		metric: "mapsVisited",
@@ -474,6 +483,7 @@ export const CONTRACTS: Contract[] = [
 	},
 	{
 		id: "rare-cargo",
+		requires: ["arms-dealer"],
 		name: "Ценный груз",
 		description: "Найди 6 редких или лучших пушек.",
 		metric: "rareWeaponsFound",
@@ -483,6 +493,7 @@ export const CONTRACTS: Contract[] = [
 	},
 	{
 		id: "business",
+		requires: ["builder"],
 		name: "Дело Прапора",
 		description: "Заработай 6000 рублей в рейдах и мастерской.",
 		metric: "moneyEarned",
@@ -492,12 +503,38 @@ export const CONTRACTS: Contract[] = [
 	},
 	{
 		id: "veteran-command",
+		requires: ["auto-route", "steady-returns"],
 		name: "Твёрдая рука",
 		description: "Заверши 40 рейдов, даже если не все были удачными.",
 		metric: "raidsCompleted",
 		target: 40,
 		level: 6,
 		reward: { money: 2200, xp: 420, supplies: { medicine: 12, scrap: 35 } },
+	},
+	{
+		id: "gear-ready", name: "Подготовка отряда",
+		description: "Установи 2 уровня личной брони или рюкзаков.",
+		metric: "gearLevels", target: 2, level: 1, requires: ["first-return"],
+		reward: { money: 240, xp: 50, supplies: { scrap: 6, medicine: 2 } },
+	},
+	{
+		id: "auto-route", name: "Постоянный маршрут",
+		description: "Заверши 5 рейдов по автоматическому приказу.",
+		metric: "autoRaidsCompleted", target: 5, level: 2, requires: ["gear-ready"],
+		reward: { money: 480, xp: 90, supplies: { ammo: 16, scrap: 10 } },
+	},
+	{
+		id: "depot-route", name: "Снабжение через депо",
+		description: "Успешно вернись из Депо 3 раза.",
+		metric: "mapRaidsWon", mapId: "depot", target: 3, level: 2, requires: ["first-return"],
+		reward: { money: 420, xp: 80, supplies: { intel: 3, ammo: 12 } },
+	},
+	{
+		id: "forest-line", name: "Тихая линия",
+		description: "Успешно вернись из Лесополосы 4 раза.",
+		metric: "mapRaidsWon", mapId: "forest", target: 4, level: 3,
+		requires: ["depot-route", "auto-route"],
+		reward: { money: 850, xp: 150, supplies: { intel: 5, medicine: 5 } },
 	},
 ];
 
