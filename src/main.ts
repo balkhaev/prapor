@@ -231,6 +231,7 @@ let worldOverlaySignature = "";
 let worldView: "base" | "map" | "raid" = "base";
 let selectedRaidId: string | null = state.raids[0]?.id ?? null;
 let lastWatchedRaid: Raid | null = null;
+let lastWatchedReport: RaidReport | null = null;
 type WorkerPlacement = { scavId: string; mode: "pointer" | "keyboard"; roomId: string | null; reason: string | null };
 type CrewPointer = { scavId: string; pointerId: number; startX: number; startY: number; clientX: number; clientY: number; source: HTMLElement; started: boolean };
 let workerPlacement: WorkerPlacement | null = null;
@@ -277,6 +278,10 @@ const costLabel = (cost: { money: number; scrap: number }) =>
 function updateCameraControls() {
 	const controls = document.querySelector<HTMLElement>(".camera-controls"); if (!controls) return;
 	controls.hidden = worldView === "map";
+	controls.setAttribute("aria-label", worldView === "raid" ? "Вид улицы" : "Вид убежища");
+	worldViewport.setAttribute("aria-label", worldView === "raid" ? "Уличный рейд: движение бойца, укрытия и поиск" : "Графический штаб: комнаты, рабочие и стройка");
+	const help = document.querySelector<HTMLElement>("#camera-help"); if (help) help.textContent = worldView === "raid" ? "Уличный рейд: плюс и минус меняют масштаб, ноль возвращает следование за бойцом, стрелки сдвигают вид. Перетаскивай улицу мышью или пальцем. Выбор бойца, события и приказы находятся рядом со сценой." : "Вид убежища: плюс и минус меняют масштаб, ноль возвращает обзор, стрелки сдвигают вид. Рука позволяет перетаскивать убежище. Чтобы назначить бойца, перетащи его портрет или выбери комнату с клавиатуры.";
+	const coordinate = document.querySelector<HTMLElement>(".world-coordinate"); if (coordinate) coordinate.textContent = worldView === "raid" ? `ЗА ПЕРИМЕТРОМ · ЭТАП ${watchedRaid()?.expedition?.stage ?? 1}` : "БАЗА 07 · СЕВЕР";
 	const available = canWorldCamera();
 	controls.querySelectorAll<HTMLButtonElement>("[data-camera]").forEach((button) => { button.disabled = !available; });
 	const farther = controls.querySelector<HTMLButtonElement>('[data-camera="out"]'), closer = controls.querySelector<HTMLButtonElement>('[data-camera="in"]');
@@ -953,6 +958,7 @@ function closeInspector() {
 	else focusScavOrTool(closedId ?? "");
 }
 function focusScavOrTool(id: string) {
+	if (page === "home" && worldView === "raid") { document.querySelector<HTMLElement>('.live-raid-scroll')?.scrollTo({ top: 0 }); document.querySelector<HTMLSelectElement>('[data-live-raid-select]')?.focus({ preventScroll: true }); return; }
 	if (page === "home" && window.innerWidth <= 850 && contextMode !== "overview") { document.querySelector<HTMLButtonElement>('#command-dock [data-action="close-context"]')?.focus({ preventScroll: true }); return; }
 	const scope = page !== "home" ? document.querySelector<HTMLElement>("#tool-root") : document.querySelector<HTMLElement>("#command-crew");
 	const target = scope?.querySelector<HTMLButtonElement>(`[data-scav="${CSS.escape(id)}"]`);
@@ -1055,7 +1061,7 @@ function focusCommandControl(key: string) {
 	}
 }
 function refreshCommandOverview(summary: CommandSummary) {
-	if (contextMode !== "overview" || interacting() || commandSummaryKey(summary) === commandSummarySignature) return;
+	if (worldView === "raid" || contextMode !== "overview" || interacting() || commandSummaryKey(summary) === commandSummarySignature) return;
 	const dock = document.querySelector<HTMLElement>("#command-dock"); if (!dock) return;
 	const activeKey = document.activeElement instanceof HTMLElement && dock.contains(document.activeElement) ? document.activeElement.dataset.focusKey : null;
 	const stripScroll = dock.querySelector<HTMLElement>(".command-system-grid")?.scrollLeft ?? 0;
@@ -1119,7 +1125,7 @@ function renderCommandBoard() {
 	cancelWorkerPlacement(false, true);
 	const dock = document.querySelector<HTMLElement>("#command-dock")!;
 	const room = state.shelter.rooms.find((item) => item.id === selectedRoomId);
-	const oldScroll = dock.querySelector<HTMLElement>(".command-dock-scroll")?.scrollTop ?? 0;
+	const oldScroll = dock.querySelector<HTMLElement>(".command-dock-scroll, .live-raid-scroll")?.scrollTop ?? 0;
 	const activeKey = document.activeElement instanceof HTMLElement && dock.contains(document.activeElement) ? document.activeElement.dataset.focusKey : undefined;
 	const mobileContext = window.innerWidth <= 850 && contextMode !== "overview";
 	dock.classList.toggle("context-open", contextMode !== "overview");
@@ -1127,8 +1133,8 @@ function renderCommandBoard() {
 	dock.setAttribute("role", mobileContext ? "dialog" : "complementary");
 	if (mobileContext) { dock.setAttribute("aria-modal", "true"); dock.setAttribute("aria-label", contextMode === "build" ? "Строительство комнаты" : "Управление комнатой"); }
 	else { dock.removeAttribute("aria-modal"); dock.setAttribute("aria-label", "Сводка и управление объектом"); }
-	dock.innerHTML = worldView === "raid" ? renderLiveRaidPanel(state, watchedRaid(), getWatchedReport(state, selectedRaidId), liveCheckpointControls(watchedRaid())) : contextMode === "room" && room ? managedRoomPanel(room) : contextMode === "build" && selectedShelterSite ? `<header class="command-context-head"><span class="eyebrow">Новая комната</span><button class="icon-button" data-action="close-context" data-focus-key="context-close" aria-label="Закрыть строительство">×</button></header><div class="command-dock-scroll">${buildSitePanel(selectedShelterSite.column, selectedShelterSite.row)}</div>` : commandOverview();
-	const scroll = dock.querySelector<HTMLElement>(".command-dock-scroll"); if (scroll) scroll.scrollTop = oldScroll;
+	dock.innerHTML = worldView === "raid" ? renderLiveRaidPanel(state, watchedRaid(), watchedReport(), liveCheckpointControls(watchedRaid())) : contextMode === "room" && room ? managedRoomPanel(room) : contextMode === "build" && selectedShelterSite ? `<header class="command-context-head"><span class="eyebrow">Новая комната</span><button class="icon-button" data-action="close-context" data-focus-key="context-close" aria-label="Закрыть строительство">×</button></header><div class="command-dock-scroll">${buildSitePanel(selectedShelterSite.column, selectedShelterSite.row)}</div>` : commandOverview();
+	const scroll = dock.querySelector<HTMLElement>(".command-dock-scroll, .live-raid-scroll"); if (scroll) scroll.scrollTop = oldScroll;
 	if (activeKey) {
 		const replacement = dock.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(activeKey)}"]`);
 		if (replacement?.getClientRects().length && !replacement.closest("[inert]")) replacement.focus({ preventScroll: true });
@@ -2063,6 +2069,7 @@ document.addEventListener("change", async (event) => {
 			selectedRoomId = state.shelter.rooms[0]?.id ?? null;
 			selectedRaidId = state.raids[0]?.id ?? null;
 			lastWatchedRaid = null;
+			lastWatchedReport = null;
 			world?.selectRaid(selectedRaidId);
 			selectedBenchModule = null;
 			productionWorkshopId = null;
@@ -2134,6 +2141,11 @@ function watchedRaid() {
 	if (active) lastWatchedRaid = active;
 	return active ?? (lastWatchedRaid?.id === selectedRaidId ? lastWatchedRaid : null);
 }
+function watchedReport() {
+	const report = getWatchedReport(state, selectedRaidId);
+	if (report) lastWatchedReport = report;
+	return report ?? (lastWatchedReport?.raidId === selectedRaidId ? lastWatchedReport : null);
+}
 function liveCheckpointControls(raid: Raid | null) {
 	const run = raid?.expedition;
 	if (!raid || !run || run.status !== "choice") return "";
@@ -2145,7 +2157,9 @@ function liveCheckpointControls(raid: Raid | null) {
 function watchRaid(id: string) {
 	const raid = state.raids.find(item => item.id === id);
 	if (!raid && lastWatchedRaid?.id !== id) { toast("Этот выход уже завершён. Отчёт сохранён в журнале."); return; }
+	if (selectedRaidId !== id) lastWatchedReport = null;
 	selectedRaidId = id; if (raid) lastWatchedRaid = raid;
+	document.querySelector<HTMLElement>('.live-raid-scroll, .command-dock-scroll')?.scrollTo({ top: 0 });
 	selectedScav = null;
 	document.querySelector<HTMLElement>('#inspector-root')!.innerHTML = '';
 	page = "home"; contextMode = "overview"; selectedShelterSite = null;
@@ -2157,7 +2171,7 @@ function watchRaid(id: string) {
 }
 function setView(view: "base" | "map" | "raid") {
 	if (view === "raid") {
-		const target = state.raids.find(raid => raid.id === selectedRaidId) ?? state.raids[0];
+		const target = state.raids.find(raid => raid.id === selectedRaidId) ?? (lastWatchedRaid?.id === selectedRaidId ? null : state.raids[0]);
 		if (target) { selectedRaidId = target.id; lastWatchedRaid = target; world?.selectRaid(target.id); }
 		else if (!lastWatchedRaid) { toast("Подготовь выход, чтобы наблюдать улицу."); return; }
 		contextMode = "overview";
@@ -2246,7 +2260,7 @@ const simulationTimer = setInterval(() => {
 		beforeContracts = readyContracts();
 	const summary = advance(state);
 	hud();
-	if (worldView === "raid") { const raid = watchedRaid(); if (raid) updateLiveRaidPanel(document.querySelector<HTMLElement>('#command-dock')!, raid, getWatchedReport(state, selectedRaidId)); }
+	if (worldView === "raid") { const raid = watchedRaid(); if (raid) updateLiveRaidPanel(document.querySelector<HTMLElement>('#command-dock')!, raid, watchedReport()); }
 	if (
 		summary.completedCount ||
 		state.level !== beforeLevel ||

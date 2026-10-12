@@ -187,7 +187,7 @@ export function getRaidFieldPlan(raid: Raid): RaidFieldPlan {
 	for (let i = 0; i < plan.lootSpots.length; i++) {
 		const spot = plan.lootSpots[i]!, path = findRaidFieldPath(plan, cursor, spot.approach);
 		const split = path.length > 1 ? Math.max(1, Math.min(path.length - 1, Math.floor(path.length * .58))) : 0, mid = path[split] ?? cursor;
-		add("move", path.slice(0, split + 1), Math.max(2, split * .55), i ? "Следующая улица" : "Выход на улицы", `Движение по ${theme.label.toLocaleLowerCase("ru-RU")} к точке «${spot.label}».`);
+		add("move", path.slice(0, split + 1), Math.max(2, split * .55), i ? "Следующая улица" : "Выход на улицы", `Движение через район «${theme.label}» к точке «${spot.label}».`);
 		const enemy = nearestWalkable(plan, { x: mid.x + (random() < .5 ? 2 : -2), y: mid.y - 2 });
 		const encounter = branch === "combat" || raid.tactic === "bold" ? "skirmish" : "cover";
 		add(encounter, [{ ...mid }], encounter === "skirmish" ? 4 : raid.tactic === "cautious" ? 4.8 : 2.8,
