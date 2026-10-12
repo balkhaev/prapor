@@ -18,9 +18,11 @@ import { BLUEPRINTS, EXPEDITION_BRANCHES, GEAR_MODEL_BY_ID, MARKET_OFFERS, RUN_P
 export * from "./systems";
 import { FACTORY_KITS, MODULE_BY_ID, MODULE_MODELS, MODULE_SLOTS, MODULE_SLOT_LABELS, modulePlatformLabel, RECEIVER_INFO, type ModuleInstance, type ModuleSlot } from "./modules";
 export * from "./modules";
+import { initialShelter, ROOM_DEFINITIONS, RESOURCE_RECIPE_BY_ID, type ProductionJob, type RoomInstance, type ShelterCost, type ShelterRoomType } from "./shelter";
+export * from "./shelter";
 
 export const SAVE_KEY = "prapor.save.v1";
-export const SAVE_VERSION = 4;
+export const SAVE_VERSION = 5;
 export const MAX_OFFLINE_MS = 8 * 60 * 60 * 1000;
 export const MAX_ROOM_LEVEL = 5;
 
@@ -47,6 +49,7 @@ export interface Scav {
 	tactic: RaidTactic;
 	gear: Record<GearSlot, number>;
 	loadout: Loadout;
+	assignment: string | null;
 	autoRaid: { mapId: string; enabled: boolean; minHealth: number; runs: number; waitingReason: string | null; maxDepth: number };
 }
 export interface Expedition {
@@ -117,6 +120,7 @@ export interface GameState {
 	gearItems: GearItem[];
 	blueprints: string[];
 	modules: ModuleInstance[];
+	shelter: { rooms: RoomInstance[] };
 	stats: {
 		raidsWon: number;
 		raidsCompleted: number;
@@ -264,6 +268,7 @@ function createScav(
 		tactic: "balanced",
 		gear: { armor: 0, backpack: 0 },
 		loadout: { armorItemId: null, backpackItemId: null, ammoType: "standard", medkit: false },
+		assignment: null,
 		autoRaid: { mapId: "courtyard", enabled: false, minHealth: 70, runs: 0, waitingReason: null, maxDepth: 1 },
 	};
 	state.scavs.push(scav);
@@ -290,6 +295,7 @@ export function createGame(now = Date.now()): GameState {
 		gearItems: [],
 		blueprints: ["light_vest", "scout_pack"],
 		modules: [],
+		shelter: initialShelter({ workshop: 1, medbay: 1, radio: 1, storage: 1 }),
 		stats: {
 			raidsWon: 0,
 			raidsCompleted: 0,
@@ -374,7 +380,7 @@ export function getWeaponStats(weapon: WeaponInstance) {
 		ergonomics: Math.round(clamp(ergonomics, 0, 100)), recoil: Math.round(clamp(recoil, 0, 100)), reliability: Math.round(clamp(reliability, 10, 100)),
 		weight: Math.round(weight * 100) / 100, ammoMultiplier, ready, issues };
 }
-export function getModuleCapacity(state: GameState): number { return 40 + state.base.storage * 20; }
+export function getModuleCapacity(state: GameState): number { return 40 + state.base.storage * 20 + extraStorageLevels(state) * 12; }
 export function getModuleInstallReason(state: GameState, gunId: string, moduleId: string): string | null {
 	const weapon = state.weapons.find((gun) => gun.id === gunId), item = state.modules.find((part) => part.id === moduleId);
 	if (!weapon || !item) return "Пушка или свободная деталь не найдена.";
@@ -477,11 +483,241 @@ export function repairModule(state: GameState, moduleId: string): ActionResult {
 	const cost = getModuleRepairCost(item); if (state.money < cost.money || state.supplies.scrap < cost.scrap) return fail(`Нужно ${cost.money} ₽ и ${cost.scrap} деталей.`);
 	state.money -= cost.money; state.supplies.scrap -= cost.scrap; item.durability = 100; return ok("Деталь отремонтирована.");
 }
+
+export function getRoomWorkerCapacity(room: RoomInstance): number {
+	return ROOM_DEFINITIONS[room.type].production ? 1 + Math.floor(room.level / 2) : 0;
+}
+export function getWorkerAffinity(scav: Scav, type: ShelterRoomType): number {
+	const skill = ROOM_DEFINITIONS[type].workerSkill;
+	return Math.round(clamp(skill === "combat" ? scav.combat : skill === "scouting" ? scav.scouting : (scav.combat + scav.scouting) / 2, 0, 100));
+}
+function roomWorkRate(state: GameState, room: RoomInstance): number {
+	if (room.status !== "ready") return 0;
+	const work = room.workerIds.reduce((sum, workerId) => {
+		const scav = state.scavs.find((item) => item.id === workerId);
+		return sum + (scav && scav.status !== "raiding" && scav.health >= 25 ? 700 + getWorkerAffinity(scav, room.type) * 10 : 0);
+	}, 0);
+	return Math.floor(work * (9 + room.level) / 10);
+}
+function roomById(state: GameState, roomId: string): RoomInstance | undefined { return state.shelter.rooms.find((room) => room.id === roomId); }
+function roomOutputReason(state: GameState, job: ProductionJob): string | null {
+	if (job.output.moduleModelId && state.modules.length >= getModuleCapacity(state)) return "Стойка деталей полна. Готовая деталь сохранена в очереди.";
+	const capacity = getSupplyCapacity(state);
+	for (const key of Object.keys(job.output.supplies) as (keyof Supplies)[]) if (job.output.supplies[key] > 0 && state.supplies[key] + job.output.supplies[key] > capacity[key]) return "Склад полон. Вся готовая партия сохранена в очереди.";
+	return null;
+}
+function productionCostReason(state: GameState, cost: ShelterCost): string | null {
+	if (state.money < cost.money) return `Нужно ${cost.money} ₽.`;
+	for (const key of Object.keys(cost.supplies) as (keyof Supplies)[]) if (state.supplies[key] < cost.supplies[key]) return "Для партии не хватает припасов.";
+	return null;
+}
+function reserveProduction(state: GameState, cost: ShelterCost) {
+	state.money -= cost.money;
+	for (const key of Object.keys(cost.supplies) as (keyof Supplies)[]) state.supplies[key] -= cost.supplies[key];
+}
+export function getRoomProductionState(state: GameState, room: RoomInstance) {
+	if (room.construction) return { progress: room.construction.workDone / room.construction.workRequired,
+		remainingSeconds: (room.construction.workRequired - room.construction.workDone) / 1_000_000, rate: 1,
+		status: room.status === "building" ? "Строительство" : "Улучшение", reason: null, job: null };
+	const job = room.queue[0] ?? null, rate = roomWorkRate(state, room);
+	if (!job) {
+		const quote = room.recipeId ? getResourceProductionQuote(state, room.id, room.recipeId) : null;
+		return { progress: 0, remainingSeconds: null, rate: rate / 1000,
+			status: !ROOM_DEFINITIONS[room.type].production ? "Работает без персонала" : (room.repeat || room.pending) && room.recipeId ? "Ожидание партии" : "Нет заказа",
+			reason: quote?.reason ?? null, job: null };
+	}
+	const blocked = job.workDone >= job.workRequired ? roomOutputReason(state, job) : null;
+	const reason = blocked ?? (rate === 0 ? "Назначь здорового рабочего: очередь на паузе." : null);
+	return { progress: Math.min(1, job.workDone / job.workRequired), remainingSeconds: reason ? null : Math.max(0, (job.workRequired - job.workDone) / rate / 1000),
+		rate: rate / 1000, status: blocked ? "Партия готова · склад полон" : rate === 0 ? "Ожидает рабочего" : "Производство", reason, job };
+}
+export function getBuildRoomQuote(state: GameState, type: ShelterRoomType, column: number, row: number) {
+	const definition = ownValue(ROOM_DEFINITIONS, type);
+	let reason: string | null = null;
+	if (!definition) reason = "Помещение не найдено.";
+	else if (!Number.isInteger(column) || !Number.isInteger(row) || column < 0 || column > 3 || row < 0 || row > 2) reason = "Участок вне убежища.";
+	else if (state.shelter.rooms.some((room) => room.column === column && room.row === row)) reason = "Этот участок уже занят.";
+	else if (state.money < definition.cost.money || state.supplies.scrap < definition.cost.scrap) reason = `Нужно ${definition.cost.money} ₽ и ${definition.cost.scrap} деталей.`;
+	return { money: definition?.cost.money ?? 0, scrap: definition?.cost.scrap ?? 0, duration: definition?.buildSeconds ?? 0, reason };
+}
+export function buildRoom(state: GameState, type: ShelterRoomType, column: number, row: number, now = Date.now()): ActionResult {
+	if (!isTime(now) || !Object.hasOwn(ROOM_DEFINITIONS, type)) return fail("Некорректное помещение или время.");
+	advance(state, now);
+	const quote = getBuildRoomQuote(state, type, column, row); if (quote.reason) return fail(quote.reason);
+	state.money -= quote.money; state.supplies.scrap -= quote.scrap;
+	state.shelter.rooms.push({ id: `room-${column}-${row}`, type, column, row, level: 0, status: "building",
+		construction: { workDone: 0, workRequired: quote.duration * 1_000_000, targetLevel: 1, cost: { money: quote.money, scrap: quote.scrap } },
+		workerIds: [], queue: [], recipeId: null, repeat: false, pending: false, cycles: 0 });
+	return ok(`${ROOM_DEFINITIONS[type].label}: строительство началось.`);
+}
+export function getRoomUpgradeQuote(state: GameState, roomId: string) {
+	const room = roomById(state, roomId);
+	const level = room?.level ?? 1;
+	const money = Math.round(180 * level ** 1.7), scrap = 5 + level * 3, duration = 45 + level * 25;
+	const reason = !room ? "Помещение не найдено." : room.status !== "ready" ? "Дождись завершения строительства."
+		: level >= 5 ? "Максимальный уровень помещения." : state.money < money || state.supplies.scrap < scrap ? `Нужно ${money} ₽ и ${scrap} деталей.` : null;
+	return { money, scrap, duration, reason };
+}
+export function upgradeRoom(state: GameState, roomId: string, now = Date.now()): ActionResult {
+	if (!isTime(now)) return fail("Некорректное время."); advance(state, now);
+	const quote = getRoomUpgradeQuote(state, roomId); if (quote.reason) return fail(quote.reason);
+	const room = roomById(state, roomId)!;
+	state.money -= quote.money; state.supplies.scrap -= quote.scrap;
+	room.status = "upgrading"; room.construction = { workDone: 0, workRequired: quote.duration * 1_000_000, targetLevel: room.level + 1, cost: { money: quote.money, scrap: quote.scrap } };
+	return ok("Улучшение началось. Производственная очередь ждёт завершения работ.");
+}
+export function assignWorker(state: GameState, scavId: string, roomId: string | null, now = Date.now()): ActionResult {
+	if (!isTime(now)) return fail("Некорректное время.");
+	rebaseClock(state, now); simulateAdvance(state, now, roomId !== null ? new Set([scavId]) : new Set());
+	const scav = state.scavs.find((item) => item.id === scavId), room = roomId === null ? null : roomById(state, roomId);
+	if (!scav || (roomId !== null && !room)) return fail("Боец или помещение не найдены.");
+	if (scav.status === "raiding") return fail("Боец сейчас в рейде.");
+	if (room) {
+		if (room.status !== "ready") return fail("Помещение ещё не готово.");
+		if (scav.health < 25) return fail("Бойцу нужно восстановиться до 25% здоровья.");
+		if (!ROOM_DEFINITIONS[room.type].production) return fail("В этом помещении рабочие не требуются.");
+		if (!room.workerIds.includes(scavId) && room.workerIds.length >= getRoomWorkerCapacity(room)) return fail("Все рабочие места заняты.");
+	}
+	for (const current of state.shelter.rooms) current.workerIds = current.workerIds.filter((workerId) => workerId !== scavId);
+	scav.assignment = room?.id ?? null;
+	if (room) room.workerIds.push(scavId);
+	settleShelter(state, now);
+	return ok(room ? `${scav.name}: ${ROOM_DEFINITIONS[room.type].label}. Для рейда сначала освободи бойца.` : `${scav.name} освобождён от работы.`);
+}
+export function getModuleProductionQuote(state: GameState, roomId: string, modelId: string) {
+	const room = roomById(state, roomId), model = ownValue(MODULE_BY_ID, modelId);
+	const duration = model ? Math.max(25, Math.round(35 + model.value * 0.25)) : 0;
+	let reason: string | null = null;
+	if (!room || room.type !== "workshop") reason = "Нужна мастерская.";
+	else if (room.status !== "ready") reason = "Мастерская ещё не готова.";
+	else if (!model) reason = "Модель не найдена.";
+	else if (model.slot === "receiver" && !state.discoveredWeapons.includes(model.weaponId!)) reason = "Сначала найди эту оружейную платформу в рейде.";
+	else if (room.level < model.workshopLevel) reason = `Нужна эта мастерская уровня ${model.workshopLevel}.`;
+	else if (room.queue.length >= 5) reason = "В очереди уже пять заказов.";
+	else if (state.money < model.craftCost.money || state.supplies.scrap < model.craftCost.scrap) reason = `Нужно ${model.craftCost.money} ₽ и ${model.craftCost.scrap} деталей.`;
+	return { money: model?.craftCost.money ?? 0, scrap: model?.craftCost.scrap ?? 0, duration, reason };
+}
+export function queueModuleProduction(state: GameState, roomId: string, modelId: string, now = Date.now()): ActionResult {
+	if (!isTime(now)) return fail("Некорректное время."); advance(state, now);
+	const quote = getModuleProductionQuote(state, roomId, modelId); if (quote.reason) return fail(quote.reason);
+	const paid = { money: quote.money, supplies: { ...emptySupplies(), scrap: quote.scrap } };
+	reserveProduction(state, paid);
+	roomById(state, roomId)!.queue.push({ id: id(state, "job"), kind: "module", recipeId: `module:${modelId}`, modelId,
+		workDone: 0, workRequired: quote.duration * 1_000_000, paid, output: { supplies: emptySupplies(), moduleModelId: modelId }, createdAt: now });
+	return ok("Заказ поставлен в очередь. Материалы зарезервированы один раз.");
+}
+export function getResourceProductionQuote(state: GameState, roomId: string, recipeId: string) {
+	const room = roomById(state, roomId), recipe = ownValue(RESOURCE_RECIPE_BY_ID, recipeId);
+	let reason: string | null = null;
+	if (!room || !recipe || recipe.roomType !== room.type) reason = "Рецепт не подходит этому помещению.";
+	else if (room.status !== "ready") reason = "Помещение ещё не готово.";
+	else if (roomWorkRate(state, room) === 0) reason = "Назначь здорового рабочего.";
+	else {
+		reason = productionCostReason(state, recipe.cost);
+		if (!reason) reason = roomOutputReason(state, { output: { supplies: recipe.output, moduleModelId: null } } as ProductionJob);
+	}
+	return { money: recipe?.cost.money ?? 0, supplies: { ...(recipe?.cost.supplies ?? emptySupplies()) }, duration: recipe?.durationSeconds ?? 0, reason };
+}
+export function setRoomRecipe(state: GameState, roomId: string, recipeId: string | null, repeat: boolean, now = Date.now()): ActionResult {
+	if (!isTime(now) || typeof repeat !== "boolean") return fail("Некорректное время или режим.");
+	const wasRepeating = roomById(state, roomId)?.repeat ?? false;
+	rebaseClock(state, now); simulateAdvance(state, now, new Set(), recipeId === null || !repeat ? new Set([roomId]) : new Set());
+	const room = roomById(state, roomId), recipe = recipeId === null ? null : ownValue(RESOURCE_RECIPE_BY_ID, recipeId);
+	if (!room || room.status !== "ready" || (recipeId !== null && (!recipe || recipe.roomType !== room.type))) return fail("Помещение или рецепт не готовы.");
+	room.recipeId = recipeId; room.repeat = recipeId !== null && repeat;
+	room.pending = recipeId !== null && room.queue.length === 0 && (!wasRepeating || repeat);
+	if (recipe && room.queue.length === 0 && (room.repeat || room.pending)) tryStartResourceJob(state, room, now);
+	return ok(recipe ? "Рецепт выбран. Партия начнётся при наличии персонала, припасов и места." : "Повторение отключено. Оплаченная партия остаётся в очереди.");
+}
+export function cancelProduction(state: GameState, roomId: string, jobId: string, now = Date.now()): ActionResult {
+	if (!isTime(now)) return fail("Некорректное время.");
+	const initiallyPresent = roomById(state, roomId)?.queue.some((job) => job.id === jobId) ?? false;
+	rebaseClock(state, now); simulateAdvance(state, now, new Set(), initiallyPresent ? new Set([roomId]) : new Set());
+	const room = roomById(state, roomId), job = room?.queue.find((item) => item.id === jobId);
+	if (!room || !job) {
+		if (room && initiallyPresent) { room.repeat = false; room.pending = false; return ok("Партия успела завершиться и доставлена. Повторение выключено."); }
+		return fail("Заказ уже завершён или не найден.");
+	}
+	room.queue = room.queue.filter((item) => item.id !== jobId);
+	if (job.workDone === 0) {
+		addMoney(state, job.paid.money, false);
+		for (const key of Object.keys(job.paid.supplies) as (keyof Supplies)[]) state.supplies[key] += job.paid.supplies[key];
+	}
+	room.repeat = false;
+	room.pending = false;
+	return ok(job.workDone === 0 ? "Не начатый заказ отменён: все материалы возвращены. Повторение выключено." : "Начатый заказ отменён без возврата материалов. Повторение выключено.");
+}
+function tryStartResourceJob(state: GameState, room: RoomInstance, now: number): boolean {
+	if (!room.recipeId || room.queue.length || getResourceProductionQuote(state, room.id, room.recipeId).reason) return false;
+	const recipe = ownValue(RESOURCE_RECIPE_BY_ID, room.recipeId)!;
+	reserveProduction(state, recipe.cost);
+	room.pending = false;
+	room.queue.push({ id: id(state, "job"), kind: "resource", recipeId: recipe.id, modelId: null, workDone: 0,
+		workRequired: recipe.durationSeconds * 1_000_000, paid: structuredClone(recipe.cost), output: { supplies: { ...recipe.output }, moduleModelId: null }, createdAt: now });
+	return true;
+}
+function settleShelter(state: GameState, now: number, stoppedAtBoundary: ReadonlySet<string> = new Set()) {
+	for (let pass = 0; pass < 24; pass++) {
+	let changed = false;
+	for (const room of [...state.shelter.rooms].sort((a, b) => a.id.localeCompare(b.id))) {
+		if (room.construction && room.construction.workDone >= room.construction.workRequired) {
+			room.level = room.construction.targetLevel; room.construction = null; room.status = "ready";
+			if (roomKeys.includes(room.type as BaseRoom)) state.base[room.type as BaseRoom] = Math.max(state.base[room.type as BaseRoom], room.level);
+			addXp(state, 12 * room.level);
+			changed = true;
+		}
+		if (room.status !== "ready") continue;
+		const job = room.queue[0];
+		if (job && job.workDone >= job.workRequired && !roomOutputReason(state, job)) {
+			if (job.output.moduleModelId) state.modules.push(createModule(state, job.output.moduleModelId, now));
+			for (const key of Object.keys(job.output.supplies) as (keyof Supplies)[]) state.supplies[key] += job.output.supplies[key];
+			room.queue.shift(); room.cycles++;
+			changed = true;
+			for (const workerId of room.workerIds) {
+				const scav = state.scavs.find((item) => item.id === workerId); if (!scav) continue;
+				const previous = scav.level; scav.xp += job.kind === "module" ? 3 : 1;
+				scav.level = Math.min(15, 1 + Math.floor(Math.sqrt(scav.xp / 60)));
+				scav.combat = Math.min(100, scav.combat + (scav.level - previous) * 4); scav.scouting = Math.min(100, scav.scouting + (scav.level - previous) * 3);
+			}
+		}
+		if (!stoppedAtBoundary.has(room.id) && (room.repeat || room.pending) && room.queue.length === 0 && tryStartResourceJob(state, room, now)) changed = true;
+	}
+	if (!changed) break;
+	}
+}
+function progressShelter(state: GameState, elapsedMs: number) {
+	for (const room of state.shelter.rooms) {
+		if (room.construction) room.construction.workDone = Math.min(room.construction.workRequired, room.construction.workDone + elapsedMs * 1000);
+		else if (room.queue[0]) room.queue[0].workDone = Math.min(room.queue[0].workRequired, room.queue[0].workDone + elapsedMs * roomWorkRate(state, room));
+	}
+}
+function nextShelterEvent(state: GameState, cursor: number, end: number): number {
+	let next = end;
+	for (const room of state.shelter.rooms) {
+		if (room.construction) next = Math.min(next, cursor + Math.max(1, Math.ceil((room.construction.workRequired - room.construction.workDone) / 1000)));
+		else if (room.queue[0] && room.queue[0].workDone < room.queue[0].workRequired) {
+			const rate = roomWorkRate(state, room); if (rate > 0) next = Math.min(next, cursor + Math.max(1, Math.ceil((room.queue[0].workRequired - room.queue[0].workDone) / rate)));
+		}
+		if (room.status === "ready" && (room.repeat || room.pending || room.queue.length > 0)) {
+			for (const workerId of room.workerIds) {
+				const scav = state.scavs.find((item) => item.id === workerId);
+				if (scav && scav.health < 25) next = Math.min(next, cursor + Math.max(1, Math.ceil((25_000_000 - Math.round(scav.health * 1_000_000)) / (40 + state.base.medbay * 25))));
+			}
+			if ((room.repeat || room.pending) && room.queue.length === 0 && roomWorkRate(state, room) > 0) next = Math.min(next,
+				cursor + 10_000 - state.clock.income, cursor + 30_000 - state.clock.ammo, cursor + 60_000 - state.clock.scrap, cursor + 180_000 - state.clock.intel);
+		}
+	}
+	return next;
+}
+function extraStorageLevels(state: GameState): number {
+	const levels = state.shelter.rooms.filter((room) => room.type === "storage" && room.level > 0).map((room) => room.level);
+	return levels.reduce((sum, level) => sum + level, 0) - Math.max(0, ...levels);
+}
 export function getStorageCapacity(state: GameState): number {
-	return 15 + state.base.storage * 10;
+	return 15 + state.base.storage * 10 + extraStorageLevels(state) * 6;
 }
 export function getScavCapacity(state: GameState): number {
-	return 2 + state.base.radio;
+	return Math.min(15, 2 + state.base.radio + state.shelter.rooms.filter((room) => room.type === "dormitory" && room.level > 0).reduce((sum, room) => sum + room.level + 1, 0));
 }
 export function getIncomePerMinute(state: GameState): number {
 	return state.base.workshop * 6;
@@ -489,8 +725,9 @@ export function getIncomePerMinute(state: GameState): number {
 /** A small recovery float, not an unlimited idle-money printer. Existing cash is never reduced. */
 export function getRecoveryAllowance(state: GameState): number { return 300 + state.base.workshop * 60; }
 export function getSupplyCapacity(state: GameState): Supplies {
-	return { ammo: 48 + state.base.storage * 24, medicine: 8 + state.base.storage * 4,
-		scrap: 24 + state.base.storage * 16, intel: 8 + state.base.radio * 4 };
+	const extra = extraStorageLevels(state);
+	return { ammo: 48 + state.base.storage * 24 + extra * 16, medicine: 8 + state.base.storage * 4 + extra * 3,
+		scrap: 24 + state.base.storage * 16 + extra * 12, intel: 8 + state.base.radio * 4 + extra * 3 };
 }
 function addSupply(state: GameState, key: keyof Supplies, amount: number): number {
 	const accepted = Math.max(0, Math.min(amount, getSupplyCapacity(state)[key] - state.supplies[key]));
@@ -717,6 +954,7 @@ export function getRaidQuote(state: GameState, scav: Scav, map: RaidMap) {
 	let reason: string | null = null;
 	const weapon = state.weapons.find((item) => item.id === scav.weaponInstanceId);
 	if (scav.status === "raiding") reason = "Боец уже в рейде.";
+	else if (scav.assignment) reason = "Боец работает в убежище. Сначала освободи его от работы.";
 	else if (state.level < map.level) reason = `Сектор откроется на ${map.level} уровне.`;
 	else if (scav.health < 25) reason = "Бойцу нужно восстановиться до 25%.";
 	else if (!weapon) reason = "Сначала выдай дикому оружие.";
@@ -1514,7 +1752,7 @@ export function advance(state: GameState, now = Date.now()): AdvanceSummary {
 	return simulateAdvance(state, now);
 }
 
-function simulateAdvance(state: GameState, now: number, stoppedAtBoundary: ReadonlySet<string> = new Set()): AdvanceSummary {
+function simulateAdvance(state: GameState, now: number, stoppedAtBoundary: ReadonlySet<string> = new Set(), stoppedProductionAtBoundary: ReadonlySet<string> = new Set()): AdvanceSummary {
 	const summary: AdvanceSummary = {
 		elapsedMs: 0,
 		capped: false,
@@ -1523,7 +1761,7 @@ function simulateAdvance(state: GameState, now: number, stoppedAtBoundary: Reado
 		completedCount: 0,
 	};
 	if (!isTime(now) || now < state.lastUpdated) return summary;
-	if (now === state.lastUpdated) { attemptAutoRaids(state, now, stoppedAtBoundary); return summary; }
+	if (now === state.lastUpdated) { settleShelter(state, now, stoppedProductionAtBoundary); attemptAutoRaids(state, now, stoppedAtBoundary); settleShelter(state, now, stoppedProductionAtBoundary); return summary; }
 	const elapsed = now - state.lastUpdated;
 	summary.elapsedMs = Math.min(elapsed, MAX_OFFLINE_MS);
 	summary.capped = elapsed > MAX_OFFLINE_MS;
@@ -1531,6 +1769,7 @@ function simulateAdvance(state: GameState, now: number, stoppedAtBoundary: Reado
 	const end = state.lastUpdated + summary.elapsedMs;
 	let cursor = state.lastUpdated;
 	while (true) {
+		settleShelter(state, cursor, cursor === end ? stoppedProductionAtBoundary : new Set());
 		// Production and recovery for this timestamp precede settlements; all
 		// simultaneous settlements precede resource competition for new exits.
 		const due = state.raids.filter((raid) => raid.endsAt <= cursor && raid.expedition?.status !== "choice")
@@ -1545,11 +1784,12 @@ function simulateAdvance(state: GameState, now: number, stoppedAtBoundary: Reado
 			}
 		}
 		attemptAutoRaids(state, cursor, cursor === end ? stoppedAtBoundary : new Set());
+		settleShelter(state, cursor, cursor === end ? stoppedProductionAtBoundary : new Set());
 		if (cursor >= end) break;
-		let next = end;
+		let next = nextShelterEvent(state, cursor, end);
 		for (const raid of state.raids) if (raid.expedition?.status !== "choice") next = Math.min(next, raid.endsAt);
 		for (const scav of state.scavs) {
-			if (!scav.autoRaid.enabled || scav.status === "raiding") continue;
+			if (!scav.autoRaid.enabled || scav.status === "raiding" || scav.assignment) continue;
 			const map = ownValue(MAP_BY_ID, scav.autoRaid.mapId);
 			const weapon = state.weapons.find((item) => item.id === scav.weaponInstanceId);
 			if (!map || state.level < map.level || !weapon || weapon.durability < 10) continue;
@@ -1563,6 +1803,7 @@ function simulateAdvance(state: GameState, now: number, stoppedAtBoundary: Reado
 			else if (state.supplies.intel < map.intelCost)
 				next = Math.min(next, cursor + 180_000 - state.clock.intel);
 		}
+		progressShelter(state, next - cursor);
 		progressBase(state, next - cursor);
 		cursor = next;
 	}
@@ -1653,11 +1894,11 @@ function parseModule(value: unknown): ModuleInstance {
 }
 function parseWeapon(value: unknown, version: number): WeaponInstance {
 	const source = record(value);
-	fields(source, ["id", "weaponId", "durability", "foundAt", "attachments", ...(version === 4 ? ["modules"] : [])]);
+	fields(source, ["id", "weaponId", "durability", "foundAt", "attachments", ...(version >= 4 ? ["modules"] : [])]);
 	const attachments = record(source.attachments);
 	fields(attachments, attachmentKeys);
 	const modules: WeaponInstance["modules"] = {};
-	if (version === 4) { const parts = record(source.modules); fields(parts, MODULE_SLOTS); for (const [slot, value] of Object.entries(parts)) modules[slot as ModuleSlot] = parseModule(value); }
+	if (version >= 4) { const parts = record(source.modules); fields(parts, MODULE_SLOTS); for (const [slot, value] of Object.entries(parts)) modules[slot as ModuleSlot] = parseModule(value); }
 	return {
 		id: string(source.id),
 		weaponId: known(source.weaponId, WEAPON_BY_ID),
@@ -1686,8 +1927,8 @@ function parseLoadout(value: unknown): Loadout {
 }
 function parseCargo(value: unknown, version: number): Cargo {
 	const source = record(value);
-	fields(source, ["money", "supplies", "weaponIds", ...(version === 4 ? ["modules"] : [])]);
-	return { money: number(source.money, 1e8), supplies: parseSupplies(source.supplies), weaponIds: array(source.weaponIds, 3, (value) => known(value, WEAPON_BY_ID)), modules: version === 4 ? array(source.modules, 12, parseModule) : [] };
+	fields(source, ["money", "supplies", "weaponIds", ...(version >= 4 ? ["modules"] : [])]);
+	return { money: number(source.money, 1e8), supplies: parseSupplies(source.supplies), weaponIds: array(source.weaponIds, 3, (value) => known(value, WEAPON_BY_ID)), modules: version >= 4 ? array(source.modules, 12, parseModule) : [] };
 }
 function parseEvents(value: unknown, max: number): RaidReport["events"] {
 	return array(value, max, (value) => {
@@ -1700,7 +1941,7 @@ function parseEvents(value: unknown, max: number): RaidReport["events"] {
 function parseExpedition(value: unknown, version: number): Expedition | null {
 	if (value === null) return null;
 	const source = record(value);
-	fields(source, ["stage", "status", "branch", "cargo", "perks", "offers", "discoveries", "loadout", "autoDepth", "baseChance", "baseDuration", "capacity", "ammoMultiplier", "trail", ...(version === 4 ? ["legacyLoot", "gunCombatBonus"] : [])]);
+	fields(source, ["stage", "status", "branch", "cargo", "perks", "offers", "discoveries", "loadout", "autoDepth", "baseChance", "baseDuration", "capacity", "ammoMultiplier", "trail", ...(version >= 4 ? ["legacyLoot", "gunCombatBonus"] : [])]);
 	const loadout = record(source.loadout);
 	fields(loadout, ["armorModelId", "armorCondition", "packModelId", "packCondition", "ammoType", "medkit"]);
 	if (source.status !== "travel" && source.status !== "choice") throw new Error("checkpoint-status");
@@ -1711,7 +1952,7 @@ function parseExpedition(value: unknown, version: number): Expedition | null {
 	if (packModelId !== "none" && ownValue(GEAR_MODEL_BY_ID, packModelId)?.slot !== "backpack") throw new Error("pack-slot");
 	const expedition: Expedition = { stage: number(source.stage, 3, 1, true), status: source.status,
 		branch: known(source.branch, EXPEDITION_BRANCHES) as ExpeditionBranch, cargo: parseCargo(source.cargo, version),
-		legacyLoot: version === 4 ? bool(source.legacyLoot) : true, gunCombatBonus: version === 4 ? number(source.gunCombatBonus, 0.1, -0.1) : 0,
+		legacyLoot: version >= 4 ? bool(source.legacyLoot) : true, gunCombatBonus: version >= 4 ? number(source.gunCombatBonus, 0.1, -0.1) : 0,
 		perks: array(source.perks, 2, (value) => known(value, RUN_PERKS) as RunPerk),
 		offers: array(source.offers, 2, (value) => known(value, RUN_PERKS) as RunPerk),
 		discoveries: array(source.discoveries, Object.keys(BLUEPRINTS).length, (value) => known(value, BLUEPRINTS)),
@@ -1724,9 +1965,68 @@ function parseExpedition(value: unknown, version: number): Expedition | null {
 		|| getCargoWeight(expedition.cargo) > expedition.capacity + 0.1 || expedition.trail.length === 0) throw new Error("checkpoint-state");
 	return expedition;
 }
+function sameSupplies(a: Supplies, b: Supplies): boolean { return (Object.keys(a) as (keyof Supplies)[]).every((key) => a[key] === b[key]); }
+function parseProductionJob(value: unknown, roomType: ShelterRoomType): ProductionJob {
+	const source = record(value);
+	fields(source, ["id", "kind", "recipeId", "modelId", "workDone", "workRequired", "paid", "output", "createdAt"]);
+	if (source.kind !== "module" && source.kind !== "resource") throw new Error("production-kind");
+	const paid = record(source.paid), output = record(source.output);
+	fields(paid, ["money", "supplies"]); fields(output, ["supplies", "moduleModelId"]);
+	const job: ProductionJob = { id: string(source.id), kind: source.kind, recipeId: string(source.recipeId),
+		modelId: source.modelId === null ? null : known(source.modelId, MODULE_BY_ID), workDone: number(source.workDone, 1e12, 0, true),
+		workRequired: number(source.workRequired, 1e12, 1, true), paid: { money: number(paid.money), supplies: parseSupplies(paid.supplies) },
+		output: { supplies: parseSupplies(output.supplies), moduleModelId: output.moduleModelId === null ? null : known(output.moduleModelId, MODULE_BY_ID) }, createdAt: number(source.createdAt) };
+	if (job.workDone > job.workRequired) throw new Error("production-work");
+	if (job.kind === "module") {
+		const model = job.modelId ? ownValue(MODULE_BY_ID, job.modelId) : null;
+		if (!model || roomType !== "workshop" || job.recipeId !== `module:${model.id}` || job.output.moduleModelId !== model.id
+			|| !sameSupplies(job.output.supplies, emptySupplies()) || job.paid.money !== model.craftCost.money
+			|| !sameSupplies(job.paid.supplies, { ...emptySupplies(), scrap: model.craftCost.scrap })
+			|| job.workRequired !== Math.max(25, Math.round(35 + model.value * 0.25)) * 1_000_000) throw new Error("module-order");
+	} else {
+		const recipe = ownValue(RESOURCE_RECIPE_BY_ID, job.recipeId);
+		if (!recipe || recipe.roomType !== roomType || job.modelId !== null || job.output.moduleModelId !== null
+			|| job.workRequired !== recipe.durationSeconds * 1_000_000 || job.paid.money !== recipe.cost.money
+			|| !sameSupplies(job.paid.supplies, recipe.cost.supplies) || !sameSupplies(job.output.supplies, recipe.output)) throw new Error("resource-order");
+	}
+	return job;
+}
+function parseShelter(value: unknown): GameState["shelter"] {
+	const source = record(value); fields(source, ["rooms"]);
+	const rooms = array(source.rooms, 12, (value): RoomInstance => {
+		const roomSource = record(value);
+		fields(roomSource, ["id", "type", "column", "row", "level", "status", "construction", "workerIds", "queue", "recipeId", "repeat", "pending", "cycles"]);
+		const type = known(roomSource.type, ROOM_DEFINITIONS) as ShelterRoomType;
+		if (!["ready", "building", "upgrading"].includes(roomSource.status as string)) throw new Error("room-status");
+		const room: RoomInstance = { id: string(roomSource.id), type, column: number(roomSource.column, 3, 0, true), row: number(roomSource.row, 2, 0, true),
+			level: number(roomSource.level, 5, 0, true), status: roomSource.status as RoomInstance["status"], construction: null,
+			workerIds: array(roomSource.workerIds, 3, (value) => string(value)), queue: array(roomSource.queue, 5, (value) => parseProductionJob(value, type)),
+			recipeId: roomSource.recipeId === null ? null : known(roomSource.recipeId, RESOURCE_RECIPE_BY_ID), repeat: bool(roomSource.repeat), pending: bool(roomSource.pending), cycles: number(roomSource.cycles, 1e9, 0, true) };
+		if (room.id !== `room-${room.column}-${room.row}` && room.id !== `room-${room.type}`) throw new Error("room-id");
+		if (room.workerIds.length > getRoomWorkerCapacity(room) || room.queue.some((job, index) => index > 0 && job.workDone !== 0)
+			|| (room.type !== "workshop" && room.queue.length > 1)
+			|| (room.recipeId !== null && ownValue(RESOURCE_RECIPE_BY_ID, room.recipeId)!.roomType !== room.type)
+			|| (room.recipeId === null && (room.repeat || room.pending))) throw new Error("room-production");
+		if (room.queue.some((job) => job.kind === "module" && ownValue(MODULE_BY_ID, job.modelId!)!.workshopLevel > room.level)) throw new Error("room-recipe-level");
+		if (roomSource.construction !== null) {
+			const building = record(roomSource.construction), cost = record(building.cost);
+			fields(building, ["workDone", "workRequired", "targetLevel", "cost"]); fields(cost, ["money", "scrap"]);
+			room.construction = { workDone: number(building.workDone, 1e12, 0, true), workRequired: number(building.workRequired, 1e12, 1, true),
+				targetLevel: number(building.targetLevel, 5, 1, true), cost: { money: number(cost.money), scrap: number(cost.scrap) } };
+			const expected = room.status === "building" ? ROOM_DEFINITIONS[type].cost : { money: Math.round(180 * room.level ** 1.7), scrap: 5 + room.level * 3 };
+			const seconds = room.status === "building" ? ROOM_DEFINITIONS[type].buildSeconds : 45 + room.level * 25;
+			if (room.status === "ready" || room.construction.targetLevel !== room.level + 1 || room.construction.workDone > room.construction.workRequired
+				|| room.construction.workRequired !== seconds * 1_000_000 || room.construction.cost.money !== expected.money || room.construction.cost.scrap !== expected.scrap) throw new Error("construction");
+		} else if (room.status !== "ready") throw new Error("construction-missing");
+		if (room.status === "building" ? room.level !== 0 || room.workerIds.length > 0 || room.queue.length > 0 || room.recipeId !== null : room.level < 1) throw new Error("room-level");
+		return room;
+	});
+	if (roomKeys.some((key) => !rooms.some((room) => room.id === `room-${key}` && room.type === key && room.level >= 1))) throw new Error("foundation-room");
+	return { rooms };
+}
 function parseScav(value: unknown, version: number): Scav {
 	const source = record(value);
-	fields(source, ["id", "name", "personality", "level", "xp", "health", "combat", "scouting", "weaponInstanceId", "status", "raids", ...(version >= 2 ? ["tactic", "gear", "autoRaid"] : []), ...(version >= 3 ? ["loadout"] : [])]);
+	fields(source, ["id", "name", "personality", "level", "xp", "health", "combat", "scouting", "weaponInstanceId", "status", "raids", ...(version >= 2 ? ["tactic", "gear", "autoRaid"] : []), ...(version >= 3 ? ["loadout"] : []), ...(version === 5 ? ["assignment"] : [])]);
 	if (!["ready", "raiding", "wounded"].includes(source.status as string))
 		throw new Error("status");
 	let gear: Scav["gear"] = { armor: 0, backpack: 0 };
@@ -1760,6 +2060,7 @@ function parseScav(value: unknown, version: number): Scav {
 		tactic: version === 1 ? "balanced" : known(source.tactic, TACTICS) as RaidTactic,
 		gear,
 		loadout: version >= 3 ? parseLoadout(source.loadout) : { armorItemId: null, backpackItemId: null, ammoType: "standard", medkit: false },
+		assignment: version === 5 && source.assignment !== null ? string(source.assignment) : null,
 		autoRaid,
 	};
 }
@@ -1791,7 +2092,7 @@ function parseRaid(value: unknown, version: number): Raid {
 }
 function parseReport(value: unknown, version: number): RaidReport {
 	const source = record(value);
-	fields(source, ["id", "raidId", "scavName", "mapId", "at", "success", "lostScav", "lostWeapon", "money", "supplies", "weaponId", "weaponAutoSold", "description", ...(version >= 2 ? ["isAuto", "tactic", "events"] : []), ...(version >= 3 ? ["depth", "discoveries", "lostCargo"] : []), ...(version === 4 ? ["moduleIds"] : [])]);
+	fields(source, ["id", "raidId", "scavName", "mapId", "at", "success", "lostScav", "lostWeapon", "money", "supplies", "weaponId", "weaponAutoSold", "description", ...(version >= 2 ? ["isAuto", "tactic", "events"] : []), ...(version >= 3 ? ["depth", "discoveries", "lostCargo"] : []), ...(version >= 4 ? ["moduleIds"] : [])]);
 	return {
 		id: string(source.id),
 		raidId: string(source.raidId),
@@ -1810,7 +2111,7 @@ function parseReport(value: unknown, version: number): RaidReport {
 		depth: version >= 3 ? number(source.depth, 3, 1, true) : 1,
 		discoveries: version >= 3 ? array(source.discoveries, Object.keys(BLUEPRINTS).length, (value) => known(value, BLUEPRINTS)) : [],
 		lostCargo: version >= 3 && source.lostCargo !== null ? parseCargo(source.lostCargo, version) : null,
-		moduleIds: version === 4 ? array(source.moduleIds, 12, (value) => known(value, MODULE_BY_ID)) : [],
+		moduleIds: version >= 4 ? array(source.moduleIds, 12, (value) => known(value, MODULE_BY_ID)) : [],
 		isAuto: version === 1 ? false : bool(source.isAuto),
 		tactic: version === 1 ? "balanced" : known(source.tactic, TACTICS) as RaidTactic,
 		events: version === 1 ? [] : parseEvents(source.events, version >= 3 ? 10 : 4),
@@ -1820,11 +2121,11 @@ function parseReport(value: unknown, version: number): RaidReport {
 /** Returns null for invalid/unsupported saves; no user-controlled object reaches gameplay. */
 export function parseSave(raw: string): GameState | null {
 	try {
-		if (typeof raw !== "string" || raw.length > 200_000) return null;
+		if (typeof raw !== "string" || raw.length > 1_000_000) return null;
 		const source = record(JSON.parse(raw));
-		if (source.schemaVersion !== 1 && source.schemaVersion !== 2 && source.schemaVersion !== 3 && source.schemaVersion !== SAVE_VERSION) return null;
+		if (source.schemaVersion !== 1 && source.schemaVersion !== 2 && source.schemaVersion !== 3 && source.schemaVersion !== 4 && source.schemaVersion !== SAVE_VERSION) return null;
 		const version = source.schemaVersion;
-		fields(source, ["schemaVersion", "createdAt", "lastUpdated", "money", "supplies", "xp", "level", "base", "scavs", "weapons", "raids", "history", "claimedContracts", "discoveredWeapons", "stats", "clock", "rng", "nextId", ...(version >= 3 ? ["gearItems", "blueprints"] : []), ...(version === 4 ? ["modules"] : [])]);
+		fields(source, ["schemaVersion", "createdAt", "lastUpdated", "money", "supplies", "xp", "level", "base", "scavs", "weapons", "raids", "history", "claimedContracts", "discoveredWeapons", "stats", "clock", "rng", "nextId", ...(version >= 3 ? ["gearItems", "blueprints"] : []), ...(version >= 4 ? ["modules"] : []), ...(version === 5 ? ["shelter"] : [])]);
 		const base = record(source.base);
 		const stats = record(source.stats);
 		const clock = record(source.clock);
@@ -1853,9 +2154,9 @@ export function parseSave(raw: string): GameState | null {
 				radio: number(base.radio, 5, 1, true),
 				storage: number(base.storage, 5, 1, true),
 			},
-			scavs: array(source.scavs, 7, (value) => parseScav(value, version)),
-			weapons: array(source.weapons, 65, (value) => parseWeapon(value, version)),
-			raids: array(source.raids, 7, (value) => parseRaid(value, version)),
+			scavs: array(source.scavs, version === 5 ? 15 : 7, (value) => parseScav(value, version)),
+			weapons: array(source.weapons, version === 5 ? 350 : 65, (value) => parseWeapon(value, version)),
+			raids: array(source.raids, version === 5 ? 15 : 7, (value) => parseRaid(value, version)),
 			history: array(source.history, 40, (value) => parseReport(value, version)),
 			claimedContracts: array(
 				source.claimedContracts,
@@ -1874,7 +2175,8 @@ export function parseSave(raw: string): GameState | null {
 			),
 			gearItems: version >= 3 ? array(source.gearItems, 28, parseGear) : [],
 			blueprints: version >= 3 ? array(source.blueprints, Object.keys(BLUEPRINTS).length, (value) => known(value, BLUEPRINTS)) : ["light_vest", "scout_pack"],
-			modules: version === 4 ? array(source.modules, 1000, parseModule) : [],
+			modules: version >= 4 ? array(source.modules, 1000, parseModule) : [],
+			shelter: version === 5 ? parseShelter(source.shelter) : initialShelter(base as Record<string, number>),
 			stats: {
 				raidsWon: number(stats.raidsWon, 1e9, 0, true),
 				raidsCompleted: number(stats.raidsCompleted, 1e9, 0, true),
@@ -1913,12 +2215,16 @@ export function parseSave(raw: string): GameState | null {
 			...state.modules.map((item) => item.id),
 			...state.weapons.flatMap((weapon) => Object.values(weapon.modules).map((item) => item.id)),
 			...state.raids.flatMap((raid) => raid.expedition?.cargo.modules.map((item) => item.id) ?? []),
+			...state.shelter.rooms.flatMap((room) => room.queue.map((job) => job.id)),
 		];
 		unique(allIds);
 		for (const part of [...state.modules, ...state.weapons.flatMap((weapon) => Object.values(weapon.modules)), ...state.raids.flatMap((raid) => raid.expedition?.cargo.modules ?? [])]) if (!part.id.startsWith("module-")) throw new Error("module-id");
 		unique(state.claimedContracts);
 		unique(state.discoveredWeapons);
 		unique(state.blueprints);
+		unique(state.shelter.rooms.map((room) => room.id));
+		unique(state.shelter.rooms.map((room) => `${room.column}:${room.row}`));
+		unique(state.shelter.rooms.flatMap((room) => room.workerIds));
 		unique(state.stats.mapsVisited);
 		unique(state.history.map((report) => report.raidId));
 		unique(
@@ -1960,6 +2266,8 @@ export function parseSave(raw: string): GameState | null {
 				throw new Error("health-status");
 			if (scav.status === "ready" && scav.health < 25)
 				throw new Error("health-status");
+			const workplaces = state.shelter.rooms.filter((room) => room.workerIds.includes(scav.id));
+			if (scav.assignment === null ? workplaces.length !== 0 : workplaces.length !== 1 || workplaces[0]!.id !== scav.assignment || scav.status === "raiding") throw new Error("worker-owner");
 			for (const [key, slot] of [["armorItemId", "armor"], ["backpackItemId", "backpack"]] as const) {
 				const gearId = scav.loadout[key];
 				if (gearId !== null && !state.gearItems.some((item) => item.id === gearId && getGearModel(item).slot === slot)) throw new Error("gear-owner");
@@ -2002,6 +2310,14 @@ export function parseSave(raw: string): GameState | null {
 			for (const [slot, part] of Object.entries(weapon.modules)) if (getModuleDefinition(part).slot !== slot || moduleFitReason(weapon, part)) throw new Error("module-fit");
 		}
 		for (const gear of state.gearItems) if (!gear.id.startsWith("gear-")) throw new Error("gear-id");
+		for (const room of state.shelter.rooms) {
+			if (room.workerIds.some((workerId) => !state.scavs.some((scav) => scav.id === workerId))) throw new Error("worker-ref");
+			for (const job of room.queue) {
+				if (!job.id.startsWith("job-")) throw new Error("job-id");
+				const model = job.modelId ? ownValue(MODULE_BY_ID, job.modelId) : null;
+				if (model?.slot === "receiver" && !state.discoveredWeapons.includes(model.weaponId!)) throw new Error("room-recipe-discovery");
+			}
+		}
 		for (const report of state.history) {
 			if (!report.id.startsWith("report-") || !/^raid-[1-9]\d*$/.test(report.raidId) || Number(report.raidId.slice(5)) >= state.nextId) throw new Error("report-id");
 			if ((report.lostScav && !report.lostWeapon) || (report.success && (report.lostScav || report.lostWeapon))) throw new Error("report-outcome");
@@ -2013,7 +2329,7 @@ export function parseSave(raw: string): GameState | null {
 		if (
 			allIds.some(
 				(value) =>
-					!/^(gun|scav|raid|report|gear|module)-[1-9]\d*$/.test(value) ||
+					!/^(gun|scav|raid|report|gear|module|job)-[1-9]\d*$/.test(value) ||
 					Number(value.split("-")[1]) >= state.nextId
 			)
 		)

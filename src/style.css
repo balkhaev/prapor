@@ -1,6 +1,110 @@
 @font-face{font-family:Manrope;src:url("/fonts/manrope.ttf") format("truetype");font-weight:200 800;font-display:swap}
 @font-face{font-family:"IBM Plex Mono";src:url("/fonts/ibm-plex-mono.ttf") format("truetype");font-weight:400;font-display:swap}
 :root{font-family:Manrope,system-ui,sans-serif;color:#eeeede;background:#131813;font-synthesis:none;--muted:#b0b7a3;--line:#3b4636;--panel:#20291f;--amber:#f0c783;--green:#bed299;--red:#f0a594;--radius:12px;color-scheme:dark}
+/* A staffed shelter puts rooms, work and production in one visible place. */
+.hero-grid.shelter-hero{grid-template-columns:minmax(0,1fr)}
+.shelter-hero .briefing{display:none}
+#world{aspect-ratio:840/520}
+.shelter-overview{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:11px;margin:21px 0}
+.shelter-overview>div{border:1px solid #5c704a;border-radius:8px;padding:14px 16px;background:linear-gradient(120deg,#2d3c27,#212c21)}
+.shelter-overview span{display:block;font-size:10px;color:#b3c49d}
+.shelter-overview strong{display:block;font-size:22px;color:#e8dcba;margin-top:3px;line-height:1.5;font-variant-numeric:tabular-nums}
+.shelter-overview small{display:block;font-size:10px;color:#a8bc90;margin-top:4px}
+.shelter-layout{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(330px,1fr);gap:20px;align-items:start;margin-top:21px}
+.shelter-sites{min-width:0;border:1px solid #62774e;border-radius:11px;background:#1c2b21;padding:16px}
+.shelter-sites-head{display:flex;justify-content:space-between;gap:14px;align-items:center;margin-bottom:17px}
+.shelter-sites-head h2{font-size:18px;color:#dddcc1}
+.shelter-floor{margin-bottom:14px}
+.shelter-floor:last-child{margin-bottom:0}
+.shelter-floor-label{display:flex;align-items:center;gap:7px;font:10px "IBM Plex Mono",monospace;color:#a6bc8c;margin:0 0 9px}
+.shelter-floor-label:after{content:"";height:1px;background:#455d3b;flex:1}
+.shelter-floor-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.shelter-site{display:flex;flex-direction:column;align-items:stretch;text-align:left;border:1px dashed #5c7550;border-radius:8px;background:#223121;padding:13px 11px;min-width:0;min-height:155px}
+.shelter-site:hover:not(:disabled){background:#34452c;border-color:#b6c98b}
+.shelter-site.active{border:1px solid var(--amber);background:#42452e;box-shadow:inset 0 0 0 1px #ccac6b44}
+.shelter-site.built{border-style:solid;background:linear-gradient(135deg,#35452d,#243422)}
+.shelter-site.building{border-color:#a99461;background:linear-gradient(135deg,#3c3b27,#2c3323)}
+.shelter-site.blocked{border-color:#966d48}
+.shelter-site>svg{width:25px;height:25px;color:#c8d6a7;margin-bottom:13px}
+.shelter-site>strong{font-size:12px;color:#e0e4c5;line-height:1.5;min-height:36px;overflow-wrap:anywhere}
+.shelter-site>span{font-size:10px;color:#adc293;margin-top:5px;line-height:1.55}
+.shelter-site>small{font-size:9px;color:#d7c396;margin-top:auto;padding-top:8px;line-height:1.65}
+.shelter-site .progress{height:3px;margin-top:9px}
+.room-management{min-width:0;border:1px solid #8a9363;border-radius:12px;background:linear-gradient(140deg,#2d3c28,#202f22);overflow:hidden}
+.room-management-head{padding:19px 21px;border-bottom:1px solid #5c7148;background:#34432c}
+.room-management-head h2{font-size:23px;margin:5px 0 8px;color:#efdfb5}
+.room-management-head p{font-size:12px;line-height:1.8}
+.room-management-state{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:14px;color:#c7dbad;font-size:11px}
+.room-management-body{padding:20px 21px}
+.room-panel-section{border-top:1px solid #526a43;padding-top:20px;margin-top:20px}
+.room-panel-section:first-child{border-top:0;padding-top:0;margin-top:0}
+.room-panel-section h3{font-size:16px;margin-bottom:10px;color:#e4e8ca}
+.room-panel-section>p{font-size:12px;line-height:1.8}
+.room-queue-empty{border:1px dashed #668352;border-radius:7px;padding:17px;background:#253720;color:#bdcf9f;font-size:12px;line-height:1.8}
+.room-job{border:1px solid #7d8959;border-radius:8px;background:#35402b;padding:14px;margin:12px 0}
+.room-job.running{border-color:#aebc78;background:linear-gradient(120deg,#465036,#2a3926)}
+.room-job-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+.room-job-head strong{font-size:13px;color:#e5e9cd;line-height:1.5}
+.room-job-head span{font:10px "IBM Plex Mono",monospace;color:#e9ce94;white-space:nowrap}
+.room-job p{font-size:11px;line-height:1.7;color:#b8c99f;margin:8px 0}
+.room-job-foot{display:flex;align-items:center;justify-content:space-between;gap:9px;margin-top:11px}
+.room-job-foot>span{font-size:10px;color:#afc193}
+.room-job-foot .button{min-height:34px;padding:6px 9px;font-size:10px}
+.room-job-art{width:100%;max-width:180px;margin:6px auto}
+.worker-list{display:grid;gap:9px;margin:14px 0}
+.worker-row{display:flex;gap:11px;align-items:center;border:1px solid #61754b;border-radius:7px;padding:10px;background:#253522;min-width:0}
+.worker-row .scav-avatar{width:40px;height:43px;flex:0 0 40px}
+.worker-row>div{flex:1;min-width:0}
+.worker-row strong{display:block;font-size:13px;color:#e2e9c5}
+.worker-row p{font-size:10px;line-height:1.65;margin-top:3px;color:#b9c9a1}
+.worker-row .icon-button{width:34px;min-width:34px;height:34px;font-size:17px}
+.worker-fit{font-size:10px;color:#cee1a9;border:1px solid #687f4c;border-radius:4px;padding:4px 6px;background:#314429;display:inline-block;margin-top:5px}
+.worker-assign-field{margin-top:13px}
+.worker-assign-field .button{width:100%;margin-top:12px}
+.room-recipe-tabs{display:flex;gap:5px;padding:4px;background:#1b2c1c;border-radius:7px;margin:13px 0}
+.room-recipe-tabs button{flex:1;min-height:40px;border:1px solid transparent;background:transparent;border-radius:5px;color:#b8cca0;font-size:12px;padding:8px}
+.room-recipe-tabs button.active{background:#43472e;border-color:#a99158;color:#efd39e}
+.resource-recipe-list{display:grid;gap:10px;margin:13px 0}
+.resource-recipe{border:1px solid #5c7749;border-radius:8px;background:#263a24;padding:14px}
+.resource-recipe-head{display:flex;align-items:center;gap:9px;margin-bottom:6px;color:#d0dfb4}
+.resource-recipe-head strong{font-size:13px}
+.resource-recipe>p{font-size:11px;line-height:1.75}
+.resource-recipe .button{width:100%;margin-top:12px}
+.recipe-output{display:flex;flex-wrap:wrap;gap:7px;margin:10px 0}
+.recipe-output>span{display:inline-flex;align-items:center;gap:5px;font-size:10px;border:1px solid #6c8053;border-radius:4px;padding:5px 7px;background:#21331e;color:#d0dfb1}
+.room-module-filters{display:grid;grid-template-columns:1fr;gap:10px;margin:12px 0}
+.room-module-recipes{display:grid;gap:10px;max-height:420px;overflow-y:auto;padding:3px;scrollbar-width:thin;scrollbar-color:#7a9258 #1e2e1e}
+.room-module-recipe{border:1px solid #63754f;border-left:3px solid var(--rarity);border-radius:7px;background:#283624;padding:13px}
+.room-module-recipe-art{max-width:155px;margin:0 auto}
+.room-module-recipe h4{font-size:13px;margin:5px 0;color:#e0e6c7;line-height:1.6}
+.room-module-recipe p{font-size:11px;line-height:1.8}
+.room-module-recipe .button{width:100%;margin-top:11px}
+.shelter-build-options{display:grid;grid-template-columns:1fr;gap:11px;margin-top:18px}
+.shelter-build-option{border:1px solid #758554;border-radius:8px;background:#2c3c24;padding:17px}
+.shelter-build-option h3{display:flex;align-items:center;gap:8px;font-size:16px;color:#e5dfbc;margin-bottom:8px}
+.shelter-build-option p{font-size:12px;line-height:1.8}
+.shelter-build-option .button{width:100%;margin-top:13px}
+.room-work-note{border-left:3px solid #90af63;border-radius:0 6px 6px 0;background:#2c4026;padding:12px 14px;margin:18px 0}
+.room-work-note>strong{display:block;font-size:13px;color:#d8e8bf;margin-bottom:6px}
+.room-work-note p{font-size:11px;line-height:1.8}
+.room-work-note .button{margin-top:11px;width:100%}
+.shelter-home-note{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:18px 20px;border:1px solid #768d51;border-radius:10px;background:linear-gradient(120deg,#35452a,#24331f);margin:22px 0}
+.shelter-home-note h3{font-size:16px;margin-bottom:5px}
+.shelter-home-note p{font-size:12px;line-height:1.8}
+.shelter-home-note .button{white-space:nowrap;flex-shrink:0}
+.shelter-first-steps{border:1px solid #8b9760;border-radius:9px;background:#35432b;padding:16px 19px;margin:18px 0}
+.shelter-first-steps strong{display:block;font-size:15px;color:#e7dfb8;margin-bottom:5px}
+.shelter-first-steps p{font-size:12px;line-height:1.85;color:#beceab}
+.room-management .cost-reason,.shelter-build-option .quote-note{font-size:11px;line-height:1.8;display:block;margin-top:8px}
+.room-management .button.secondary{border-color:#8b9c65}
+.production-workshop-picker{margin:17px 0;padding:15px;border:1px solid #6b8051;border-radius:8px;background:#2a3b24}
+.production-workshop-picker>.button{margin-top:12px}
+.resource-recipe.selected{border-color:#c0ad6f;box-shadow:inset 3px 0 #c0ad6f}
+.room-badge{display:inline-flex;align-items:center;gap:5px;font-size:10px;color:#d2e0ba}
+.scav-state.working{color:#e2d4a2;background:#3d4528;border-color:#829453}
+@media(max-width:1200px){.shelter-layout{grid-template-columns:minmax(0,1fr) minmax(310px,1fr);gap:16px}.shelter-floor-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.shelter-site{min-height:135px}.shelter-site>strong{font-size:12px;min-height:25px}.shelter-site>svg{margin-bottom:9px}}
+@media(max-width:900px){.shelter-layout{grid-template-columns:1fr}.shelter-floor-grid{grid-template-columns:repeat(4,minmax(0,1fr))}.room-management{scroll-margin-top:18px}.shelter-site{min-height:135px}.shelter-sites{padding:17px}.room-management-head,.room-management-body{padding:20px}.shelter-overview strong{font-size:20px}}
+@media(max-width:640px){.shelter-overview{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin:17px 0}.shelter-overview>div{padding:13px}.shelter-overview strong{font-size:21px}.shelter-overview span,.shelter-overview small{font-size:10px}.shelter-floor-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.shelter-site{min-height:132px;padding:13px}.shelter-site>strong{font-size:13px}.shelter-site>span{font-size:11px}.shelter-site>small{font-size:10px}.shelter-sites{padding:15px}.shelter-layout{gap:17px}.room-management-head,.room-management-body{padding:17px}.room-management-head h2{font-size:22px}.worker-row{padding:11px}.worker-row p{font-size:11px}.shelter-home-note{flex-direction:column;align-items:stretch;padding:16px}.shelter-home-note .button{width:100%}.room-job-head strong{font-size:13px}.room-job p{font-size:11px}.room-recipe-tabs button{font-size:12px}}
 /* Expedition decisions and logistics share the same readable visual language. */
 .section-tabs{display:flex;gap:7px;padding:5px;background:#161f18;border:1px solid var(--line);border-radius:10px;margin-bottom:20px}
 .section-tabs button{display:flex;align-items:center;justify-content:center;gap:8px;flex:1;min-height:46px;border:1px solid transparent;border-radius:7px;background:transparent;color:var(--muted);font-weight:700}
@@ -296,7 +400,7 @@ small{font-size:12px}
 .view-switch button{display:flex;align-items:center;gap:7px;background:transparent;border:0;border-radius:4px;color:var(--muted);padding:8px 11px;font-size:12px;min-height:36px;white-space:nowrap}
 .view-switch button.active{color:var(--amber);background:#41412e}
 .world-coordinate{font-size:9px;color:#a8b094;white-space:nowrap}
-#world{aspect-ratio:840/460;width:100%;overflow:hidden;position:relative;background:radial-gradient(ellipse at center,#303b26,#111710)}
+#world{aspect-ratio:840/520;width:100%;overflow:hidden;position:relative;background:radial-gradient(ellipse at center,#303b26,#111710)}
 #world canvas{display:block}
 .world-bottom{display:flex;justify-content:space-between;gap:12px;padding:10px 16px;background:#1b241b;border-top:1px solid var(--line);font-size:11px;color:#bbc4a7}
 .world-bottom>span{display:flex;align-items:center}
