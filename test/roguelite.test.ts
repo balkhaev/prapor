@@ -361,3 +361,58 @@ describe("checkpoint expeditions", () => {
 		expect(parseSave(saveGame(state))).toEqual(state);
 	});
 });
+
+describe("branch-specific permanent recipes", () => {
+	for (const branch of ["combat", "scavenge", "recon"] as const) {
+		for (const success of [true, false]) {
+			test(`${branch} arrival ${success ? "survives" : "fails"} and transmits only its own specialist recipe`, () => {
+				const { state, raid } = checkpoint();
+				expect(state.blueprints).not.toContain("plate_armor");
+				expect(state.blueprints).not.toContain("cargo_pack");
+				expect(continueExpedition(state, raid.id, branch, raid.expedition!.offers[0]!, state.lastUpdated).ok).toBe(true);
+				raid.chance = success ? 1 : 0;
+				const summary = advance(state, raid.endsAt);
+				expect(summary.completedCount).toBe(success ? 0 : 1);
+				const recipe = branch === "combat" ? "plate_armor" : branch === "scavenge" ? "cargo_pack" : null;
+				expect(state.blueprints.filter((id) => id === "plate_armor" || id === "cargo_pack")).toEqual(recipe ? [recipe] : []);
+				expect(state.blueprints).toContain("route:courtyard");
+				if (recipe) {
+					const transmitted = success ? raid.expedition!.discoveries : state.history[0]!.discoveries;
+					expect(transmitted).toContain(recipe);
+				}
+				expect(parseSave(saveGame(state))).toEqual(state);
+				const settled = saveGame(state);
+				expect(advance(state, state.lastUpdated).completedCount).toBe(0);
+				expect(saveGame(state)).toBe(settled);
+			});
+		}
+	}
+
+	test("a saved v3 recon run keeps specialist discoveries earned before branch recipes were corrected", () => {
+		const { state, raid } = checkpoint();
+		// Capture the former v3 recon behavior: stage two radioed plate armor,
+		// then stage three radioed a cargo pack. Both were already owned unlocks.
+		for (const recipe of ["plate_armor", "cargo_pack"]) {
+			expect(continueExpedition(state, raid.id, "recon", raid.expedition!.offers[0]!, state.lastUpdated).ok).toBe(true);
+			raid.chance = 1;
+			expect(advance(state, raid.endsAt).completedCount).toBe(0);
+			state.blueprints.push(recipe);
+			raid.expedition!.discoveries.push(recipe);
+		}
+		const saved = saveGame(state);
+		const loaded = loadGameWithSummary(saved, state.lastUpdated + 60_000)!;
+		expect(loaded).not.toBeNull();
+		expect(loaded.summary.completedCount).toBe(0);
+		expect(loaded.state.blueprints).toContain("plate_armor");
+		expect(loaded.state.blueprints).toContain("cargo_pack");
+		expect(loaded.state.raids[0]!.expedition!.discoveries).toEqual(raid.expedition!.discoveries);
+		expect(extractRaid(loaded.state, raid.id, loaded.state.lastUpdated).ok).toBe(true);
+		expect(loaded.state.history[0]!.discoveries).toContain("plate_armor");
+		expect(loaded.state.history[0]!.discoveries).toContain("cargo_pack");
+		loaded.state.money = 5_000;
+		loaded.state.supplies.scrap = 100;
+		expect(craftGear(loaded.state, "plate_armor").ok).toBe(true);
+		expect(craftGear(loaded.state, "cargo_pack").ok).toBe(true);
+		expect(parseSave(saveGame(loaded.state))).toEqual(loaded.state);
+	});
+});

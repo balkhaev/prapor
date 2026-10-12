@@ -1002,10 +1002,8 @@ function reachCheckpoint(state: GameState, raid: Raid, now: number): RaidReport 
 	const discoveriesBefore = expedition.discoveries.length;
 	// Discoveries are radioed home on arrival, before the fight or attempted escape.
 	discoverBlueprint(state, expedition, `route:${map.id}`);
-	if (expedition.stage >= 2) {
-		const blueprint = expedition.branch === "combat" ? "plate_armor" : expedition.branch === "scavenge" ? "cargo_pack"
-			: !state.blueprints.includes("plate_armor") ? "plate_armor" : "cargo_pack";
-		discoverBlueprint(state, expedition, blueprint);
+	if (expedition.stage >= 2 && expedition.branch !== "recon") {
+		discoverBlueprint(state, expedition, expedition.branch === "combat" ? "plate_armor" : "cargo_pack");
 	}
 	const discoveriesText = expedition.discoveries.slice(discoveriesBefore).map((blueprint) => BLUEPRINTS[blueprint]!.label).join(", ");
 	const armor = ownValue(GEAR_MODEL_BY_ID, expedition.loadout.armorModelId);
@@ -1038,7 +1036,7 @@ function reachCheckpoint(state: GameState, raid: Raid, now: number): RaidReport 
 		expedition.cargo.weaponIds.push(weaponId);
 	}
 	fitCargo(expedition.cargo, expedition.capacity);
-	expedition.trail.push({ at: now, label: `Контрольная точка ${expedition.stage}`, text: `Маршрут «${EXPEDITION_BRANCHES[expedition.branch].label}» пройден. В рюкзаке ${expedition.cargo.money} ₽, ${getCargoWeight(expedition.cargo)} ед. груза и ${expedition.cargo.weaponIds.length} пушек.${discoveriesText ? ` Передано: ${discoveriesText}.` : ""}`, kind: "loot" });
+	expedition.trail.push({ at: now, label: `Контрольная точка ${expedition.stage}`, text: `Маршрут «${EXPEDITION_BRANCHES[expedition.branch].label}» пройден. В рюкзаке ${expedition.cargo.money} ₽, ${getCargoWeight(expedition.cargo)} ед. груза и ${expedition.cargo.weaponIds.length} ед. оружия.${discoveriesText ? ` Передано: ${discoveriesText}.` : ""}`, kind: "loot" });
 	expedition.status = "choice";
 	const candidates = (Object.keys(RUN_PERKS) as RunPerk[]).filter((perk) => !expedition.perks.includes(perk));
 	expedition.offers = [];
