@@ -395,7 +395,7 @@ export function createWorld(
 			}
 			this.ambient = this.add.graphics().setDepth(10);
 			this.baseLayer.add(this.ambient);
-			this.baseCaption = this.text(31, 25, "УБЕЖИЩЕ · СВОИ ЛЮДИ", 15, "#ded2ae");
+			this.baseCaption = this.text(31, 25, "УБЕЖИЩЕ · СВОИ ЛЮДИ", 15, "#ded2ae").setVisible(false);
 			this.baseLayer.add(this.baseCaption);
 			this.baseLayer.add(this.text(99, 75, "07", 10, "#e4c994"));
 			this.baseLayer.add(this.text(545, 116, "ВХОД · СВОБОДНЫЙ ОТРЯД", 9, "#8f9f81"));

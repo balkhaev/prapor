@@ -610,7 +610,7 @@ function closeInspector() {
 	else focusScavOrTool(closedId ?? "");
 }
 function focusScavOrTool(id: string) {
-	if (page === "home" && window.innerWidth <= 640 && contextMode !== "overview") { document.querySelector<HTMLButtonElement>('#command-dock [data-action="close-context"]')?.focus({ preventScroll: true }); return; }
+	if (page === "home" && window.innerWidth <= 850 && contextMode !== "overview") { document.querySelector<HTMLButtonElement>('#command-dock [data-action="close-context"]')?.focus({ preventScroll: true }); return; }
 	const scope = page !== "home" ? document.querySelector<HTMLElement>("#tool-root") : document.querySelector<HTMLElement>("#command-crew");
 	const target = scope?.querySelector<HTMLButtonElement>(`[data-scav="${CSS.escape(id)}"]`);
 	if (target) target.focus({ preventScroll: true });
@@ -642,7 +642,7 @@ function setOverlayState() {
 	const modalOpen = Boolean(document.querySelector("#modal-root .modal"));
 	const drawerOpen = Boolean(selectedScav);
 	const toolsOpen = page !== "home";
-	const mobileContext = window.innerWidth <= 640 && contextMode !== "overview";
+	const mobileContext = window.innerWidth <= 850 && contextMode !== "overview";
 	const shell = document.querySelector<HTMLElement>(".shell")!;
 	shell.inert = modalOpen || drawerOpen || toolsOpen;
 	const tools = document.querySelector<HTMLElement>("#tool-root")!; tools.inert = modalOpen || drawerOpen;
@@ -711,7 +711,7 @@ function closeTools() {
 	const closedPage = page;
 	page = "home";
 	render();
-	if (window.innerWidth <= 640 && contextMode !== "overview") document.querySelector<HTMLButtonElement>('#command-dock [data-action="close-context"]')?.focus({ preventScroll: true });
+	if (window.innerWidth <= 850 && contextMode !== "overview") document.querySelector<HTMLButtonElement>('#command-dock [data-action="close-context"]')?.focus({ preventScroll: true });
 	else if (toolOrigin?.isConnected && !toolOrigin.closest("[inert]") && toolOrigin.getClientRects().length) toolOrigin.focus({ preventScroll: true });
 	else document.querySelector<HTMLButtonElement>(`.command-tools [data-page="${closedPage}"]`)?.focus({ preventScroll: true });
 }
@@ -744,7 +744,7 @@ function renderCommandBoard() {
 	const room = state.shelter.rooms.find((item) => item.id === selectedRoomId);
 	const oldScroll = dock.querySelector<HTMLElement>(".command-dock-scroll")?.scrollTop ?? 0;
 	const activeKey = document.activeElement instanceof HTMLElement && dock.contains(document.activeElement) ? document.activeElement.dataset.focusKey : undefined;
-	const mobileContext = window.innerWidth <= 640 && contextMode !== "overview";
+	const mobileContext = window.innerWidth <= 850 && contextMode !== "overview";
 	dock.classList.toggle("context-open", contextMode !== "overview");
 	dock.setAttribute("role", mobileContext ? "dialog" : "complementary");
 	if (mobileContext) { dock.setAttribute("aria-modal", "true"); dock.setAttribute("aria-label", contextMode === "build" ? "Строительство комнаты" : "Управление комнатой"); }
@@ -1642,7 +1642,7 @@ document.addEventListener("input", (event) => {
 	if (caret != null) replacement?.setSelectionRange(caret, caret);
 });
 document.addEventListener("keydown", (event) => {
-	const dialog = document.querySelector<HTMLElement>("#modal-root .modal") ?? document.querySelector<HTMLElement>(".inspector") ?? (page !== "home" ? document.querySelector<HTMLElement>(".tool-window") : window.innerWidth <= 640 && contextMode !== "overview" ? document.querySelector<HTMLElement>("#command-dock") : null);
+	const dialog = document.querySelector<HTMLElement>("#modal-root .modal") ?? document.querySelector<HTMLElement>(".inspector") ?? (page !== "home" ? document.querySelector<HTMLElement>(".tool-window") : window.innerWidth <= 850 && contextMode !== "overview" ? document.querySelector<HTMLElement>("#command-dock") : null);
 	if (!dialog) return;
 	if (event.key === "Escape") {
 		if (event.target instanceof HTMLSelectElement) return;
@@ -1746,9 +1746,9 @@ document.addEventListener("visibilitychange", () => {
 });
 window.addEventListener("pagehide", persist);
 window.addEventListener("beforeunload", persist);
-let contextIsMobile = window.innerWidth <= 640;
+let contextIsMobile = window.innerWidth <= 850;
 const responsiveContext = () => {
-	const mobile = window.innerWidth <= 640;
+	const mobile = window.innerWidth <= 850;
 	if (mobile === contextIsMobile) return;
 	contextIsMobile = mobile;
 	renderCommandBoard(); setOverlayState();
