@@ -1622,7 +1622,7 @@ document.addEventListener("click", (event) => {
 	if (target.dataset.cameraRoom) { inspectRoomView(target.dataset.cameraRoom); return; }
 	if (target.dataset.commandRoom) { openShelterRoom(target.dataset.commandRoom, target.dataset.commandTab as CommandRoomTab); return; }
 	if (target.dataset.shelterRoom) { openShelterRoom(target.dataset.shelterRoom); return; }
-	if (target.dataset.roomContextTab) { roomContextTab = target.dataset.roomContextTab as typeof roomContextTab; renderCommandBoard(); document.querySelector<HTMLButtonElement>(`[data-room-context-tab="${roomContextTab}"]`)?.focus({ preventScroll: true }); return; }
+	if (target.dataset.roomContextTab) { roomContextTab = target.dataset.roomContextTab as typeof roomContextTab; renderCommandBoard(); document.querySelector<HTMLElement>("#room-management")?.scrollTo({ top: 0 }); document.querySelector<HTMLButtonElement>(`[data-room-context-tab="${roomContextTab}"]`)?.focus({ preventScroll: true }); return; }
 	if (target.dataset.commandMap) { selectedMap = target.dataset.commandMap; toolOrigin = target; page = "raids"; render(); document.querySelector<HTMLButtonElement>('[data-action="close-tools"]')?.focus(); return; }
 	if (target.dataset.shelterColumn != null) { openShelterSite(Number(target.dataset.shelterColumn), Number(target.dataset.shelterRow)); return; }
 	if (target.dataset.benchSlot) { selectBenchSlot(target.dataset.benchSlot as ModuleSlot); return; }
