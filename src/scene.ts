@@ -1,8 +1,9 @@
 import Phaser from "phaser";
+import { getRaidPhase, type Raid } from "./game/engine";
 
 export interface WorldSnapshot {
 	base: Record<string, number>;
-	raids: { id: string; mapId: string; startedAt: number; endsAt: number }[];
+	raids: Raid[];
 	maps: {
 		id: string;
 		name: string;
@@ -13,8 +14,11 @@ export interface WorldSnapshot {
 	level: number;
 	scavs?: {
 		id: string;
+		name?: string;
 		status: "ready" | "raiding" | "wounded";
 		health: number;
+		gear?: { armor: number; backpack: number };
+		autoRaid?: { enabled: boolean; waitingReason: string | null };
 	}[];
 }
 
@@ -24,6 +28,16 @@ type MapPlace = WorldSnapshot["maps"][number];
 type ScavActor = {
 	actor: Phaser.GameObjects.Container;
 	motion: Phaser.Tweens.Tween[];
+	gear: Phaser.GameObjects.Graphics;
+	label: Phaser.GameObjects.Text;
+	order: Phaser.GameObjects.Arc;
+	gearSignature: string;
+};
+type RaidMarker = {
+	actor: Phaser.GameObjects.Container;
+	ring: Phaser.GameObjects.Ellipse;
+	label: Phaser.GameObjects.Text;
+	phase: Phaser.GameObjects.Text;
 };
 const WIDTH = 840;
 const HEIGHT = 460;
@@ -201,6 +215,7 @@ export function createWorld(
 		private baseLayer!: Phaser.GameObjects.Container;
 		private mapLayer!: Phaser.GameObjects.Container;
 		private baseCaption!: Phaser.GameObjects.Text;
+		private operationsCaption!: Phaser.GameObjects.Text;
 		private places = new Map<
 			string,
 			{
@@ -210,7 +225,7 @@ export function createWorld(
 				active: boolean;
 			}
 		>();
-		private raidActors = new Map<string, Phaser.GameObjects.Container>();
+		private raidActors = new Map<string, RaidMarker>();
 		private scavs: ScavActor[] = [];
 		private lastSync = 0;
 		private hq: Point = { x: 110, y: 357 };
@@ -729,8 +744,11 @@ export function createWorld(
 			graphic.fillStyle(coat).fillRect(5, -25, 5, 10);
 			graphic.fillStyle(0xbea87b).fillRect(7, -17, 4, 4);
 			rifle(graphic, 6, -16, 0.41, false);
-			body.add([legA, legB, graphic]);
-			actor.add([shadow, body]);
+			const gear = this.add.graphics();
+			body.add([legA, legB, graphic, gear]);
+			const label = this.text(0, -51, "", 7, "#c9c5a8").setOrigin(0.5);
+			const order = this.add.circle(-14, -33, 2.5, C.sage).setVisible(false);
+			actor.add([shadow, body, label, order]);
 			this.baseLayer.add(actor);
 			const motion = [
 				this.tweens.add({
@@ -767,7 +785,7 @@ export function createWorld(
 					onRepeat: () => body.setScale(1, 1),
 				}),
 			];
-			this.scavs.push({ actor, motion });
+			this.scavs.push({ actor, motion, gear, label, order, gearSignature: "" });
 		}
 
 		private lamp(u: number, v: number): void {
@@ -1001,6 +1019,8 @@ export function createWorld(
 			this.mapLayer.add(
 				this.text(33, 32, "ОПЕРАТИВНАЯ КАРТА / РАЙОН ТАРКОВА", 9, "#b2b590")
 			);
+			this.operationsCaption = this.text(33, 48, "", 8, "#a7b18e");
+			this.mapLayer.add(this.operationsCaption);
 			this.mapLayer.add(
 				this.text(
 					32,
@@ -1062,7 +1082,11 @@ export function createWorld(
 			if (!this.baseCaption) return;
 			const state = snapshot();
 			this.baseCaption.setText(`УКРЫТИЕ / РЕПУТАЦИЯ ${state.level}`);
-			this.scavs.forEach(({ actor, motion }, index) => {
+			this.operationsCaption.setText(
+				`ГРУПП НА ВЫХОДЕ: ${state.raids.length} / ПОСТОЯННЫХ МАРШРУТОВ: ${state.scavs?.filter((scav) => scav.autoRaid?.enabled).length ?? 0}`
+			);
+			this.scavs.forEach((slot, index) => {
+				const { actor, motion, gear, label, order } = slot;
 				const scav = state.scavs?.[index];
 				const visible =
 					state.scavs === undefined
@@ -1070,6 +1094,31 @@ export function createWorld(
 						: Boolean(scav && scav.status !== "raiding");
 				const moving = visible && (!scav || scav.status === "ready");
 				actor.setVisible(visible);
+				label.setText(scav?.name?.toLocaleUpperCase("ru-RU") ?? "");
+				order.setVisible(Boolean(scav?.autoRaid?.enabled));
+				order.setFillStyle(scav?.autoRaid?.waitingReason ? C.gold : C.sage);
+				const armor = scav?.gear?.armor ?? 0;
+				const backpack = scav?.gear?.backpack ?? 0;
+				const gearSignature = `${armor}:${backpack}`;
+				if (slot.gearSignature !== gearSignature) {
+					slot.gearSignature = gearSignature;
+					gear.clear();
+					if (backpack) {
+						gear
+							.fillStyle(0x776743)
+							.fillRect(-12, -26, 5 + backpack, 14 + backpack);
+						gear
+							.lineStyle(1, 0xa79664)
+							.strokeRect(-12, -26, 5 + backpack, 14 + backpack);
+					}
+					if (armor) {
+						gear
+							.fillStyle(armor > 1 ? 0x606d4e : 0x465640)
+							.fillRect(-5, -25, 9, 10);
+						gear.fillStyle(0xa8aa7e).fillRect(-4, -24, armor, 2);
+						gear.lineStyle(1, 0x263525).strokeRect(-5, -25, 9, 10);
+					}
+				}
 				actor.setAlpha(
 					scav?.status === "wounded"
 						? 0.45
@@ -1135,19 +1184,46 @@ export function createWorld(
 			const live = new Set(state.raids.map((raid) => raid.id));
 			for (const [id, marker] of this.raidActors)
 				if (!live.has(id)) {
-					marker.destroy(true);
+					this.tweens.killTweensOf(marker.ring);
+					marker.actor.destroy(true);
 					this.raidActors.delete(id);
 				}
 			for (const raid of state.raids)
 				if (!this.raidActors.has(raid.id)) {
 					const marker = this.add.container(this.hq.x, this.hq.y);
+					const color = raid.isAuto ? 0xa8c986 : 0xe8bb76;
 					const ring = this.add
 						.ellipse(0, 0, 16, 16)
-						.setStrokeStyle(1, 0xe8bb76, 0.6);
-					const dot = this.add.rectangle(0, 0, 5, 5, 0xf4c87e).setAngle(45);
-					marker.add([ring, dot]);
+						.setStrokeStyle(1, color, 0.6);
+					const dot = this.add.rectangle(0, 0, 5, 5, color).setAngle(45);
+					const label = this.text(
+						0,
+						-22,
+						raid.scavName.toLocaleUpperCase("ru-RU"),
+						7,
+						"#ddd6b4"
+					).setOrigin(0.5);
+					const phase = this.text(0, 17, "", 7, "#d5ba83").setOrigin(0.5);
+					label
+						.setBackgroundColor("#17231b")
+						.setPadding(3, 2)
+						.setVisible(false);
+					phase
+						.setBackgroundColor("#17231b")
+						.setPadding(3, 2)
+						.setVisible(false);
+					marker.setSize(25, 25).setInteractive({ useHandCursor: true });
+					marker.on("pointerover", () => {
+						label.setVisible(true);
+						phase.setVisible(true);
+					});
+					marker.on("pointerout", () => {
+						label.setVisible(false);
+						phase.setVisible(false);
+					});
+					marker.add([ring, dot, label, phase]);
 					this.mapLayer.add(marker);
-					this.raidActors.set(raid.id, marker);
+					this.raidActors.set(raid.id, { actor: marker, ring, label, phase });
 					this.tweens.add({
 						targets: ring,
 						scale: 1.65,
@@ -1156,6 +1232,13 @@ export function createWorld(
 						repeat: -1,
 					});
 				}
+			for (const raid of state.raids) {
+				this.raidActors
+					.get(raid.id)
+					?.phase.setText(
+						`${raid.isAuto ? "↻ " : ""}${getRaidPhase(raid, Date.now()).label.toLocaleUpperCase("ru-RU")}`
+					);
+			}
 		}
 
 		update(time: number): void {
@@ -1185,10 +1268,18 @@ export function createWorld(
 					else if (progress > 0.8) travel = (1 - progress) / 0.2;
 					else travel = 1;
 					const search = progress >= 0.22 && progress <= 0.8;
-					marker.setPosition(
+					const siblings = state.raids.filter(
+						(candidate) => candidate.mapId === raid.mapId
+					);
+					const rank = siblings.findIndex(
+						(candidate) => candidate.id === raid.id
+					);
+					const offset = (rank - (siblings.length - 1) / 2) * 13;
+					marker.actor.setPosition(
 						this.hq.x +
 							(p.x - this.hq.x) * travel +
-							(search ? Math.sin(time / 1800 + raid.startedAt) * 14 : 0),
+							(search ? Math.sin(time / 1800 + raid.startedAt) * 14 : 0) +
+							offset,
 						this.hq.y +
 							(p.y - this.hq.y) * travel +
 							(search

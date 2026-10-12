@@ -25,10 +25,15 @@ import {
 	dispatchRaid,
 	equipWeapon,
 	getContractProgress,
+	getContractLockReason,
+	getAutoRaidStatus,
+	getGearCost,
 	getIncomePerMinute,
 	getModCost,
 	getRaidChance,
 	getRaidDuration,
+	getRaidAmmoCost,
+	getRaidPhase,
 	getRepairCost,
 	getScavCapacity,
 	getStorageCapacity,
@@ -36,20 +41,27 @@ import {
 	getWeaponDefinition,
 	getWeaponPower,
 	healScav,
-	loadGame,
+	loadGameWithSummary,
 	modWeapon,
 	recruitCost,
 	recruitScav,
 	repairWeapon,
 	saveGame,
 	sellWeapon,
+	setAutoRaid,
+	setRaidTactic,
+	stopAllAutoRaids,
 	upgradeBase,
+	upgradeScavGear,
 	xpForLevel,
 	type ActionResult,
+	type AdvanceSummary,
 	type GameState,
+	type RaidReport,
 	type Scav,
 	type WeaponInstance,
 } from "./game/engine";
+import { GEAR_LABELS, MAX_GEAR_LEVEL, TACTICS, type GearSlot, type RaidTactic } from "./game/operations";
 import { createWorld } from "./scene";
 
 type Page = "home" | "raids" | "arsenal" | "base" | "contracts" | "journal";
@@ -85,6 +97,10 @@ const paths: Record<string, string> = {
 	settings: "M12 3v4M12 17v4M3 12h4M17 12h4M8 12a4 4 0 1 0 8 0 4 4 0 1 0-8 0",
 	time: "M12 2a10 10 0 1 0 0 20 10 10 0 1 0 0-20M12 6v6l4 2",
 	star: "m12 3 3 6 7 1-5 5 1 7-6-3-6 3 1-7-5-5 7-1Z",
+	armor: "M8 3h8l1 4 4 2-2 10-7 3-7-3L3 9l4-2ZM8 8h8M8 12h8M12 8v9",
+	backpack: "M8 7V5a4 4 0 0 1 8 0v2M7 7h10l3 4v10H4V11ZM8 14h8v7H8M4 11h16",
+	repeat: "M20 8H5l4-4M4 16h15l-4 4M20 8v4M4 16v-4",
+	stop: "M5 5h14v14H5Z",
 };
 const icon = (name: string, size = 19) =>
 	`<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${paths[name] ?? paths.base}"/></svg>`;
@@ -101,12 +117,16 @@ try {
 } catch {
 	/* A playable session still works without storage. */
 }
-let state: GameState = loadGame(raw) ?? createGame();
+const loaded = loadGameWithSummary(raw);
+let state: GameState = loaded?.state ?? createGame();
+let offlineSummary: AdvanceSummary | null = loaded && (loaded.summary.elapsedMs >= 60_000 || loaded.summary.completedCount) ? loaded.summary : null;
 let page: Page = "home";
 let selectedMap = MAPS[0]!.id;
 let selectedWeapon = state.weapons[0]?.id ?? "";
 let category: WeaponCategory | "all" = "all";
 let collection = false;
+let contractFilter: "open" | "done" | "all" = "open";
+let deferredRender = false;
 let world: ReturnType<typeof createWorld> | null = null;
 let toastTimer: ReturnType<typeof setTimeout>;
 let storageWarning = false;
@@ -119,7 +139,7 @@ const names: Record<Page, string> = {
 	contracts: "Контракты",
 	journal: "Журнал",
 };
-app.innerHTML = `<div class="shell"><aside class="sidebar"><div class="brand"><div class="brand-mark">П</div><div><strong>ПРАПОР</strong><small>ДЕЛО ИМЕЕТ ЗНАЧЕНИЕ</small></div></div><div class="nav-label">Оперативный штаб</div><nav class="nav" aria-label="Разделы игры">${(Object.keys(names) as Page[]).map((id) => `<button data-page="${id}" title="${names[id]}">${icon(id)}<span>${names[id]}</span>${id === "raids" ? '<b class="badge" id="raid-badge">0</b>' : ""}</button>`).join("")}</nav><div class="base-status"><i class="status-dot"></i>Убежище работает<span class="muted" id="passive-note">Мастерская приносит доход</span></div><footer>ОДИНОЧНАЯ IDLE-ИГРА · 0.1</footer></aside><main class="main"><header class="topbar"><div class="level"><span class="eyebrow">Репутация Прапора</span><strong id="level-label"></strong><div class="xp-track"><i id="xp-fill"></i></div></div><div class="resources">${[
+app.innerHTML = `<div class="shell"><aside class="sidebar"><div class="brand"><div class="brand-mark">П</div><div><strong>ПРАПОР</strong><small>ДЕЛО ИМЕЕТ ЗНАЧЕНИЕ</small></div></div><div class="nav-label">Оперативный штаб</div><nav class="nav" aria-label="Разделы игры">${(Object.keys(names) as Page[]).map((id) => `<button data-page="${id}" title="${names[id]}">${icon(id)}<span>${names[id]}</span>${id === "raids" ? '<b class="badge" id="raid-badge">0</b>' : ""}</button>`).join("")}</nav><div class="base-status"><i class="status-dot"></i>Убежище работает<span class="muted" id="passive-note">Мастерская приносит доход</span></div><footer>ОДИНОЧНАЯ IDLE-ИГРА · 0.2</footer></aside><main class="main"><header class="topbar"><div class="level"><span class="eyebrow">Репутация Прапора</span><strong id="level-label"></strong><div class="xp-track"><i id="xp-fill"></i></div></div><div class="resources">${[
 	["money", "Рубли"],
 	["ammo", "Патроны"],
 	["medicine", "Медикаменты"],
@@ -132,11 +152,16 @@ app.innerHTML = `<div class="shell"><aside class="sidebar"><div class="brand"><d
 	)
 	.join(
 		""
-	)}</div><button class="settings" data-action="settings" aria-label="Сохранение и помощь">${icon("settings")}</button></header><div class="content"><div id="page-head" class="page-head"></div><div id="hero" class="hero-grid"><section class="world-card"><div class="world-head"><div class="view-switch"><button class="active" data-view="base">УБЕЖИЩЕ</button><button data-view="map">КАРТА СЕКТОРОВ</button></div><span class="mono">БАЗА № 07 · СЕКТОР СЕВЕР</span></div><div id="world" aria-label="Двумерная сцена убежища и карта рейдов"></div><div class="world-bottom"><span><i class="status-dot"></i>РАДИОСВЯЗЬ УСТОЙЧИВА</span><span id="world-raid-note">ОТРЯД НА БАЗЕ</span></div></section><aside class="briefing"><div class="stamp">ПРАПОР</div><div class="briefing-top"><div class="portrait">${portrait}</div><div><span class="eyebrow">На связи</span><div style="font-size:13px;font-weight:700;margin-top:5px">Прапор · хозяин базы</div></div></div><h2>Пушки сами себя<br>не найдут, брат.</h2><p>Выдай дикому ствол, выбери сектор и отправляй за добычей. Кто вернётся — принесёт железо. А мы сделаем из этого дело.</p><button class="button" data-page="raids">Снарядить первый рейд ${icon("arrow", 16)}</button><div class="briefing-note">ДВОРЫ · ОТ 30 СЕКУНД · ДОСТУПНЫ СРАЗУ<br>При провале можно потерять оружие и бойца.</div></aside></div><div id="panel"></div><div class="footer-line"><span id="save-status">ПРОГРЕСС СОХРАНЯЕТСЯ НА ЭТОМ УСТРОЙСТВЕ</span><span>МАСТЕРСКАЯ РАБОТАЕТ И БЕЗ ТЕБЯ · ДО 8 ЧАСОВ</span></div></div></main></div><div id="toast" role="status" aria-live="polite" hidden></div><div id="modal-root"></div>`;
+	)}</div><button class="settings" data-action="settings" aria-label="Сохранение и помощь">${icon("settings")}</button></header><div class="content"><div id="page-head" class="page-head"></div><div id="offline-summary"></div><div id="hero" class="hero-grid"><section class="world-card"><div class="world-head"><div class="view-switch"><button class="active" data-view="base">УБЕЖИЩЕ</button><button data-view="map">КАРТА СЕКТОРОВ</button></div><span class="mono">БАЗА № 07 · СЕКТОР СЕВЕР</span></div><div id="world" aria-label="Двумерная сцена убежища и карта рейдов"></div><div class="world-bottom"><span><i class="status-dot"></i>РАДИОСВЯЗЬ УСТОЙЧИВА</span><span id="world-raid-note">ОТРЯД НА БАЗЕ</span></div></section><aside class="briefing"><div class="stamp">ПРАПОР</div><div class="briefing-top"><div class="portrait">${portrait}</div><div><span class="eyebrow">На связи</span><div style="font-size:13px;font-weight:700;margin-top:5px">Прапор · хозяин базы</div></div></div><h2 id="briefing-title">Пушки сами себя<br>не найдут, брат.</h2><p id="briefing-copy">Снаряди дикого, задай тактику и маршрут. Постоянный приказ отправит его снова, когда здоровье восстановится.</p><button class="button" data-page="raids">Приказы и снаряжение ${icon("arrow", 16)}</button><div class="briefing-note">ПРИКАЗЫ СОХРАНЯЮТСЯ · ОФЛАЙН ДО 8 ЧАСОВ<br>Любой выход несёт риск потери оружия и бойца.</div></aside></div><div id="panel"></div><div class="footer-line"><span id="save-status">ПРОГРЕСС СОХРАНЯЕТСЯ НА ЭТОМ УСТРОЙСТВЕ</span><span>МАСТЕРСКАЯ РАБОТАЕТ И БЕЗ ТЕБЯ · ДО 8 ЧАСОВ</span></div></div></main></div><div id="toast" role="status" aria-live="polite" hidden></div><div id="modal-root"></div>`;
 const panel = document.querySelector<HTMLDivElement>("#panel")!;
 const costLabel = (cost: { money: number; scrap: number }) =>
 	`${n(cost.money)} ₽ · ${cost.scrap} дет.`;
+let protectedSave = Boolean(raw && !loaded);
 function persist(): boolean {
+	if (protectedSave) {
+		document.querySelector("#save-status")!.textContent = "ИСХОДНЫЙ ПРОГРЕСС НЕ ПЕРЕЗАПИСАН · НУЖЕН КОРРЕКТНЫЙ ИМПОРТ";
+		return false;
+	}
 	try {
 		localStorage.setItem(SAVE_KEY, saveGame(state));
 		document.querySelector("#save-status")!.textContent =
@@ -170,6 +195,20 @@ function act(result: ActionResult) {
 	persist();
 	render();
 }
+function canAfford(cost: { money: number; scrap: number }) {
+	return state.money >= cost.money && state.supplies.scrap >= cost.scrap;
+}
+function dispatchBlock(scav: Scav) {
+	const map = MAP_BY_ID[selectedMap]!, weapon = state.weapons.find((w) => w.id === scav.weaponInstanceId);
+	if (state.raids.some((r) => r.scavId === scav.id)) return "Дикий уже на маршруте";
+	if (!weapon) return "Выдай оружие";
+	if (weapon.durability < 10) return "Нужен ремонт оружия";
+	if (scav.health < 25) return "Нужно хотя бы 25 здоровья";
+	if (state.level < map.level) return `Нужен уровень ${map.level}`;
+	if (state.supplies.ammo < getRaidAmmoCost(scav, map)) return "Мастерская пополняет патроны";
+	if (state.supplies.intel < map.intelCost) return "Радиорубка пополняет разведданные";
+	return null;
+}
 function hud() {
 	document.querySelector("#res-money")!.textContent = `${n(state.money)} ₽`;
 	for (const key of ["ammo", "medicine", "scrap", "intel"] as const)
@@ -188,6 +227,8 @@ function hud() {
 	document.querySelector("#world-raid-note")!.textContent = state.raids.length
 		? `В РЕЙДАХ: ${state.raids.length} · ДИКИЕ НА СВЯЗИ`
 		: "ОТРЯД НА БАЗЕ";
+	const orderCounter = document.querySelector("#auto-order-count");
+	if (orderCounter) orderCounter.textContent = String(state.scavs.filter((scav) => scav.autoRaid.enabled).length);
 	document
 		.querySelectorAll<HTMLElement>("[data-raid-progress]")
 		.forEach((node) => {
@@ -199,6 +240,10 @@ function hud() {
 		const raid = state.raids.find((r) => r.id === node.dataset.raidTime);
 		if (raid) node.textContent = seconds((raid.endsAt - Date.now()) / 1000);
 	});
+	document.querySelectorAll<HTMLElement>("[data-raid-phase]").forEach((node) => {
+		const raid = state.raids.find((r) => r.id === node.dataset.raidPhase);
+		if (raid) node.textContent = getRaidPhase(raid, Date.now()).label;
+	});
 	document.querySelectorAll<HTMLElement>("[data-health]").forEach((node) => {
 		const scav = state.scavs.find((s) => s.id === node.dataset.health);
 		if (scav) node.textContent = `${Math.round(scav.health)} / 100`;
@@ -209,16 +254,50 @@ function hud() {
 			const scav = state.scavs.find((s) => s.id === node.dataset.healthFill);
 			if (scav) node.style.width = `${scav.health}%`;
 		});
+	document.querySelectorAll<HTMLElement>("[data-auto-status]").forEach((node) => {
+		const scav = state.scavs.find((s) => s.id === node.dataset.autoStatus);
+		if (scav) node.textContent = getAutoRaidStatus(state, scav);
+	});
+	document.querySelectorAll<HTMLElement>("[data-chance]").forEach((node) => {
+		const scav = state.scavs.find((s) => s.id === node.dataset.chance);
+		if (scav) node.textContent = `${Math.round(getRaidChance(state, scav, MAP_BY_ID[selectedMap]!) * 100)}% успеха`;
+	});
+	document.querySelectorAll<HTMLButtonElement>('[data-action="dispatch"]').forEach((node) => {
+		const scav = state.scavs.find((s) => s.id === node.dataset.id);
+		const reason = scav ? dispatchBlock(scav) : "Боец не найден";
+		node.disabled = Boolean(reason);
+		node.title = reason ?? "Разовый выход в выбранный сектор";
+	});
+	document.querySelectorAll<HTMLButtonElement>('[data-action="gear"]').forEach((node) => {
+		const scav = state.scavs.find((s) => s.id === node.dataset.id);
+		const slot = node.dataset.slot as GearSlot;
+		if (scav) node.disabled = scav.status === "raiding" || scav.gear[slot] >= MAX_GEAR_LEVEL || !canAfford(getGearCost(scav, slot));
+	});
+	document.querySelectorAll<HTMLButtonElement>('[data-action="heal"]').forEach((node) => {
+		const scav = state.scavs.find((s) => s.id === node.dataset.id);
+		if (scav) node.disabled = scav.status === "raiding" || scav.health >= 100 || state.supplies.medicine < 1;
+	});
+	document.querySelectorAll<HTMLElement>("[data-dispatch-note]").forEach((node) => {
+		const scav = state.scavs.find((s) => s.id === node.dataset.dispatchNote);
+		if (scav) node.textContent = dispatchBlock(scav) ?? "Готов к разовому выходу";
+	});
+}
+function gearCard(scav: Scav, slot: GearSlot) {
+	const level = scav.gear[slot], max = level >= MAX_GEAR_LEVEL, cost = getGearCost(scav, slot);
+	const effect = slot === "armor"
+		? level ? `+${level * 2} п.п. успеха · травмы −${level * 16}%` : "Защита от ранений и гибели"
+		: level ? `+${level * 12}% добычи` : "Больше добычи с каждого выхода";
+	return `<div class="gear-card"><div class="gear-head">${icon(slot, 22)}<div><strong>${GEAR_LABELS[slot]}</strong><span>УР. ${level} / ${MAX_GEAR_LEVEL}</span></div><div class="gear-pips" aria-label="Уровень ${level} из ${MAX_GEAR_LEVEL}">${Array.from({ length: MAX_GEAR_LEVEL }, (_, i) => `<i class="${i < level ? "filled" : ""}"></i>`).join("")}</div></div><p>${effect}</p><button class="button ghost small" data-action="gear" data-id="${scav.id}" data-slot="${slot}" ${max || scav.status === "raiding" || !canAfford(cost) ? "disabled" : ""}>${max ? "Полный комплект" : `Улучшить · ${costLabel(cost)}`}</button></div>`;
+}
+function autoRaidCard(scav: Scav) {
+	const plan = scav.autoRaid, route = MAP_BY_ID[plan.mapId], selected = MAP_BY_ID[selectedMap]!;
+	return `<div class="auto-order ${plan.enabled ? "enabled" : ""}"><div class="auto-order-head"><span>${icon("repeat", 15)} ПОСТОЯННЫЙ ПРИКАЗ</span><b>${plan.enabled ? "ВКЛ" : "ВЫКЛ"}</b></div><div class="auto-route">${route ? e(route.name) : "Маршрут не задан"}<span>Выходов: ${n(plan.runs)}</span></div><p data-auto-status="${scav.id}">${e(getAutoRaidStatus(state, scav))}</p><label class="threshold-label">Выходить при здоровье<select data-auto-health="${scav.id}" aria-label="Порог здоровья для ${e(scav.name)}">${[70, 85, 100].map((health) => `<option value="${health}" ${plan.minHealth === health ? "selected" : ""}>${health} / 100${health === 70 ? " · обычный" : health === 85 ? " · бережный" : " · полное"}</option>`).join("")}</select></label>${plan.enabled ? `<div class="auto-order-actions"><button class="button ghost small" data-action="auto-route" data-id="${scav.id}">Маршрут: ${e(selected.name)}</button><button class="button danger small" data-action="auto-stop" data-id="${scav.id}">${icon("stop", 12)} Остановить автовыходы</button></div><small>Текущий рейд продолжится. Следующий выход отменится.</small>` : `<button class="button secondary small" data-action="auto-enable" data-id="${scav.id}">${icon("repeat", 14)} Автовыходы: ${e(selected.name)}</button><small>Повторяет рейды и офлайн. Может потерять бойца и оружие.</small>`}</div>`;
 }
 function scavCard(scav: Scav) {
-	const weapon = state.weapons.find((w) => w.id === scav.weaponInstanceId),
-		raid = state.raids.find((r) => r.scavId === scav.id),
+	const raid = state.raids.find((r) => r.scavId === scav.id),
 		map = MAP_BY_ID[selectedMap]!;
 	const personality = PERSONALITY_BY_ID[scav.personality]!;
-	return `<article class="card scav-card"><div class="card-heading"><div class="scav-avatar">${e(scav.name[0])}</div><div><h3>${e(scav.name)}</h3><span class="muted">${e(personality.name)} · ур. ${scav.level}</span></div><span class="tag">${raid ? "В РЕЙДЕ" : scav.health < 25 ? "РАНЕН" : "НА БАЗЕ"}</span></div><div class="scav-stats"><span>Бой <strong>${scav.combat}</strong></span><span>Поиск <strong>${scav.scouting}</strong></span><span data-health="${scav.id}">${Math.round(scav.health)} / 100</span></div><div class="health-track"><i data-health-fill="${scav.id}" style="width:${scav.health}%"></i></div>${
-		raid
-			? `<p style="margin-top:18px">${e(MAP_BY_ID[raid.mapId]!.name)} · ${weapon ? e(getWeaponDefinition(weapon).name) : ""}</p><div class="raid-time"><span>НА МАРШРУТЕ</span><strong data-raid-time="${raid.id}"></strong></div><div class="progress"><i data-raid-progress="${raid.id}"></i></div><p>Добыча и отчёт появятся после возвращения.</p>`
-			: `<select aria-label="Оружие для ${e(scav.name)}" data-equip="${scav.id}"><option value="">Без оружия</option>${state.weapons
+	return `<article class="card scav-card"><div class="card-heading"><div class="scav-avatar">${e(scav.name[0])}</div><div><h3>${e(scav.name)}</h3><span class="muted">${e(personality.name)} · ур. ${scav.level}</span></div><span class="tag">${raid ? "В РЕЙДЕ" : scav.health < 25 ? "РАНЕН" : "НА БАЗЕ"}</span></div><div class="scav-stats"><span>Бой <strong>${scav.combat}</strong></span><span>Поиск <strong>${scav.scouting}</strong></span><span data-health="${scav.id}">${Math.round(scav.health)} / 100</span></div><div class="health-track"><i data-health-fill="${scav.id}" style="width:${scav.health}%"></i></div><label class="field-label">Оружие<select aria-label="Оружие для ${e(scav.name)}" data-equip="${scav.id}" ${raid ? "disabled" : ""}><option value="">Без оружия</option>${state.weapons
 					.filter(
 						(w) =>
 							!state.scavs.some(
@@ -231,17 +310,34 @@ function scavCard(scav: Scav) {
 					)
 					.join(
 						""
-					)}</select><div class="scav-action"><span class="chance" title="Вероятность успешного возвращения">${Math.round(getRaidChance(state, scav, map) * 100)}% успеха<br><small class="muted">${seconds(getRaidDuration(state, scav, map))} · ${map.ammoCost} патр.</small></span><button class="button small" data-action="dispatch" data-id="${scav.id}" ${!weapon || scav.health < 25 ? "disabled" : ""}>В рейд ${icon("arrow", 14)}</button></div>${scav.health < 100 ? `<button style="width:100%;margin-top:10px" class="button ghost small" data-action="heal" data-id="${scav.id}">Лечить медикаментами</button>` : ""}`
-	}</article>`;
+					)}</select></label><label class="field-label">${raid ? "Тактика следующего выхода" : "Тактика"}<select data-tactic="${scav.id}" aria-label="Тактика для ${e(scav.name)}">${(Object.keys(TACTICS) as RaidTactic[]).map((tactic) => `<option value="${tactic}" ${scav.tactic === tactic ? "selected" : ""}>${TACTICS[tactic].label}</option>`).join("")}</select></label><p class="tactic-note">${e(TACTICS[scav.tactic].description)}</p><div class="gear-grid">${gearCard(scav, "armor")}${gearCard(scav, "backpack")}</div>${raid ? `<div class="active-raid"><div class="active-raid-heading">${icon("raids", 15)}<strong>${e(MAP_BY_ID[raid.mapId]!.name)}</strong><span>${raid.isAuto ? "АВТО" : "РАЗОВЫЙ"}</span></div><div class="raid-time"><span data-raid-phase="${raid.id}">${e(getRaidPhase(raid, Date.now()).label)}</span><strong data-raid-time="${raid.id}">${seconds((raid.endsAt - Date.now()) / 1000)}</strong></div><div class="progress"><i data-raid-progress="${raid.id}"></i></div><p>Шанс на выходе: ${Math.round(raid.chance * 100)}% · ${e(TACTICS[raid.tactic].label)}<br>Отчёт по этапам появится после возвращения.</p></div>` : `<div class="scav-action"><span class="chance" title="Вероятность успешного возвращения"><span data-chance="${scav.id}">${Math.round(getRaidChance(state, scav, map) * 100)}% успеха</span><br><small class="muted">${seconds(getRaidDuration(state, scav, map))} · ${getRaidAmmoCost(scav, map)} патр.</small></span><button class="button small" data-action="dispatch" data-id="${scav.id}" ${dispatchBlock(scav) ? "disabled" : ""}>В рейд ${icon("arrow", 14)}</button></div><p class="dispatch-note" data-dispatch-note="${scav.id}">${e(dispatchBlock(scav) ?? "Готов к разовому выходу")}</p><button class="button ghost small heal-button" data-action="heal" data-id="${scav.id}" ${scav.health >= 100 || state.supplies.medicine < 1 ? "disabled" : ""}>${icon("medicine", 14)} Лечить медикаментами</button>`}${autoRaidCard(scav)}</article>`;
 }
 function contractCard(contract: Contract) {
 	const progress = getContractProgress(state, contract),
 		claimed = state.claimedContracts.includes(contract.id),
-		available = state.level >= contract.level,
+		lockReason = getContractLockReason(state, contract),
+		available = !lockReason,
 		ready = available && progress >= contract.target;
-	return `<article class="contract"><div class="contract-mark">${icon(claimed ? "check" : "contracts", 21)}</div><div class="contract-copy"><h3>${e(contract.name)}</h3><p>${e(contract.description)}</p><div class="progress"><i style="width:${Math.min(100, (progress / contract.target) * 100)}%"></i></div><small>${Math.min(contract.target, progress)} / ${contract.target}${!available ? ` · Нужен уровень ${contract.level}` : ""}</small></div><div class="contract-reward"><span>+${n(contract.reward.money)} ₽</span><span class="muted">+${contract.reward.xp} опыта</span><button class="button secondary small" data-action="claim" data-id="${contract.id}" ${!ready || claimed ? "disabled" : ""}>${claimed ? "Выполнено" : ready ? "Забрать" : "В работе"}</button></div></article>`;
+	const supplies = Object.entries(contract.reward.supplies).map(([key, amount]) => `<span title="${({ ammo: "Патроны", medicine: "Медикаменты", scrap: "Детали", intel: "Разведданные" } as Record<string, string>)[key]}">${icon(key, 12)} +${amount}</span>`).join("");
+	return `<article class="contract ${lockReason && !claimed ? "contract-locked" : ""}"><div class="contract-mark">${icon(claimed ? "check" : lockReason ? "lock" : "contracts", 21)}</div><div class="contract-copy"><h3>${e(contract.name)}</h3><p>${e(contract.description)}</p><div class="progress"><i style="width:${Math.min(100, (progress / contract.target) * 100)}%"></i></div><small>${n(Math.min(contract.target, progress))} / ${n(contract.target)}</small>${lockReason && !claimed ? `<div class="contract-lock">${icon("lock", 11)} ${e(lockReason)}</div>` : ""}<div class="reward-supplies">${supplies}</div></div><div class="contract-reward"><span>+${n(contract.reward.money)} ₽</span><span class="muted">+${contract.reward.xp} опыта</span><button class="button secondary small" data-action="claim" data-id="${contract.id}" ${!ready || claimed ? "disabled" : ""}>${claimed ? "Выполнено" : lockReason ? "Закрыт" : ready ? "Забрать" : "В работе"}</button></div></article>`;
+}
+function journalCard(report: RaidReport) {
+	return `<details class="journal-entry" data-report="${report.id}"><summary><time>${new Date(report.at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</time><div class="journal-copy"><strong>${e(report.scavName)} · ${e(MAP_BY_ID[report.mapId]!.name)}</strong><p>${e(report.description)}</p><div class="journal-meta"><span>${report.isAuto ? "АВТОВЫХОД" : "РАЗОВЫЙ"} · ${e(TACTICS[report.tactic].label)}</span><span>${report.money ? `+${n(report.money)} ₽ · ` : ""}Детали +${report.supplies.scrap} · патроны +${report.supplies.ammo}</span></div></div><b class="tag report-result ${report.success ? "success" : "failure"}">${report.success ? "ВЕРНУЛСЯ" : report.lostScav ? "ПОТЕРЯН" : "ПРОВАЛ"}</b><span class="journal-expand">${icon("arrow", 14)}</span></summary><div class="journal-detail">${report.weaponId ? `<div class="report-trophy" style="--rarity:${RARITY_COLORS[WEAPON_BY_ID[report.weaponId]!.rarity]}">${icon("arsenal", 21)}<div><strong>${e(WEAPON_BY_ID[report.weaponId]!.name)}</strong><span>${report.weaponAutoSold ? "Продано: арсенал заполнен" : "Найдено и отправлено в арсенал"}</span></div></div>` : ""}<ol class="route-timeline">${report.events.map((event, i) => `<li class="event-${event.kind}"><div class="timeline-marker">0${i + 1}</div><div><div class="timeline-label"><strong>${e(event.label)}</strong><time>${new Date(event.at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time></div><p>${e(event.text)}</p></div></li>`).join("")}</ol><div class="report-bottom"><span>Разведданные +${report.supplies.intel} · медикаменты +${report.supplies.medicine}</span><span>${report.lostScav ? "Боец потерян" : report.lostWeapon ? "Оружие потеряно" : "Отчёт закрыт"}</span></div></div></details>`;
+}
+function renderOfflineSummary() {
+	const node = document.querySelector<HTMLElement>("#offline-summary")!;
+	if (!offlineSummary) { node.innerHTML = ""; return; }
+	const minutes = Math.floor(offlineSummary.elapsedMs / 60_000);
+	const elapsed = minutes ? `${minutes} мин` : `${Math.floor(offlineSummary.elapsedMs / 1000)} с`;
+	node.innerHTML = `<aside class="offline-summary"><div class="offline-icon">${icon("time", 26)}</div><div><span class="eyebrow">С возвращением на базу</span><h3>База отработала ${elapsed}${offlineSummary.capped ? " · учтены 8 часов" : ""}.</h3><p>Заработано <strong>+${n(offlineSummary.money)} ₽</strong> · завершено выходов <strong>${n(offlineSummary.completedCount)}</strong>. Мастерская пополнила припасы, медблок восстановил диких.</p></div><button class="button ghost small" data-page="journal">Отчёты ${icon("arrow", 13)}</button><button class="dismiss-button" data-action="dismiss-offline" aria-label="Закрыть сводку">×</button></aside>`;
+}
+function operationsBar() {
+	const enabled = state.scavs.filter((scav) => scav.autoRaid.enabled).length;
+	return `<div class="operations-bar"><div>${icon("repeat", 25)}<div><span class="eyebrow">Постоянные приказы</span><strong><span id="auto-order-count">${enabled}</span> диких на автовыходах</strong><p>Медблок лечит, мастерская снабжает. Маршруты и пороги здоровья — у каждого бойца свои.</p></div></div>${enabled ? '<button class="button danger small" data-action="auto-stop-all">Остановить все автовыходы</button>' : '<button class="button secondary small" data-page="raids">Настроить отряд</button>'}</div>`;
 }
 function render() {
+	deferredRender = false;
+	const expandedReports = Array.from(panel.querySelectorAll<HTMLDetailsElement>("details[data-report][open]")).map((node) => node.dataset.report);
 	document
 		.querySelectorAll<HTMLButtonElement>(".nav button")
 		.forEach((button) =>
@@ -259,6 +355,9 @@ function render() {
 		`<div><div class="eyebrow"><span class="page-number">0${Object.keys(names).indexOf(page) + 1} /</span> ${page === "home" ? "УБЕЖИЩЕ ПРАПОРА" : names[page]}</div><h1>${page === "home" ? "Хозяйство под контролем." : names[page]}</h1><p>${captions[page]}</p></div><span class="tag">${icon("time", 13)} +${getIncomePerMinute(state)} ₽ / МИН</span>`;
 	(document.querySelector("#hero") as HTMLElement).style.display =
 		page === "home" || page === "raids" ? "" : "none";
+	document.querySelector("#briefing-title")!.innerHTML = state.scavs.some((scav) => scav.autoRaid.enabled) ? "Люди знают<br>своё дело, брат." : "Каждому — ствол.<br>Каждому — маршрут.";
+	document.querySelector("#briefing-copy")!.textContent = state.scavs.some((scav) => scav.autoRaid.enabled) ? "Твои приказы работают даже без тебя. Следи за бронёй и стволами: после каждой вылазки медблок готовит бойца к следующей, а радиорубка держит связь." : "Выдай дикому оружие, подбери тактику, броню и рюкзак. Автовыходы повторят выбранный маршрут, когда боец восстановится — даже если ты закроешь игру.";
+	renderOfflineSummary();
 	if (page === "home")
 		panel.innerHTML = `<div class="stats-strip">${[
 			[
@@ -292,16 +391,16 @@ function render() {
 			)
 			.join(
 				""
-			)}</div><div class="section-head"><h2>Твои люди <span class="muted">/ ${state.scavs.length}</span></h2><button class="link-button" data-page="raids">Управлять отрядом →</button></div><div class="card-grid">${state.scavs.slice(0, 3).map(scavCard).join("") || '<div class="empty">Отряд пуст. Найми дикого в разделе «Рейды» — первый после потери отряда приходит бесплатно.</div>'}</div><div class="section-head"><h2>Прапор поручил</h2><button class="link-button" data-page="contracts">Все контракты →</button></div><div class="quick-contracts">${
-			CONTRACTS.filter((c) => !state.claimedContracts.includes(c.id))
+			)}</div>${operationsBar()}<div class="section-head"><h2>Твои люди <span class="muted">/ ${state.scavs.length}</span></h2><button class="link-button" data-page="raids">Управлять отрядом →</button></div><div class="card-grid scav-grid">${state.scavs.slice(0, 3).map(scavCard).join("") || '<div class="empty">Отряд пуст. Найми дикого в разделе «Рейды» — первый после потери отряда приходит бесплатно.</div>'}</div><div class="section-head"><h2>Прапор поручил</h2><button class="link-button" data-page="contracts">Все контракты →</button></div><div class="quick-contracts">${
+			CONTRACTS.filter((c) => !state.claimedContracts.includes(c.id) && !getContractLockReason(state, c))
 				.slice(0, 2)
 				.map(contractCard)
 				.join("") ||
-			'<div class="empty">Все контракты закрыты. База работает, рейды продолжаются.</div>'
+			'<div class="empty">Все контракты закрыты. Развивай репутацию — Прапор откроет следующие поручения.</div>'
 		}</div>`;
 	if (page === "raids") {
 		const map = MAP_BY_ID[selectedMap]!;
-		panel.innerHTML = `<div class="section-head"><h2>Выбери сектор</h2><span class="muted">${MAPS.filter((m) => state.level >= m.level).length} / ${MAPS.length} открыто</span></div><div class="maps">${MAPS.map((m, i) => `<button class="map-card ${m.id === selectedMap ? "selected" : ""} ${state.level < m.level ? "locked" : ""}" data-map="${m.id}" ${state.level < m.level ? "disabled" : ""}><span class="map-graphic">${icon("raids", 100)}</span><span class="map-index">СЕКТОР 0${i + 1}${state.level < m.level ? ` · ${icon("lock", 10)} УР. ${m.level}` : ""}</span><h3>${e(m.name)}</h3><p>${e(m.subtitle)}</p><div class="map-meta"><span>${seconds(m.duration)} · ${m.ammoCost} патр.${m.intelCost ? ` · ${m.intelCost} разв.` : ""}</span><span>${m.reward[0]}–${m.reward[1]} ₽</span></div></button>`).join("")}</div><div class="raid-instruction">${icon("raids", 24)}<div><strong>${e(map.name)}</strong> · ${e(map.description)}<br><span class="muted">При провале теряются припасы, возможна потеря снаряжения и бойца. Шанс зависит от здоровья, оружия, навыков и радиорубки.</span></div></div><div class="section-head"><h2>Снаряжение отряда</h2><button class="button secondary small" data-action="recruit" ${state.scavs.length >= getScavCapacity(state) ? "disabled" : ""}>${icon("people", 15)} Нанять · ${recruitCost(state)} ₽</button></div><div class="card-grid">${state.scavs.map(scavCard).join("") || '<div class="empty">Отряд потерян. Найми нового дикого бесплатно и начни снова.</div>'}</div><p class="muted" style="font-size:11px;margin-top:15px">Отряд: ${state.scavs.length} / ${getScavCapacity(state)} · Улучшай радиорубку, чтобы нанимать больше диких. Медблок восстанавливает здоровье со временем.</p>`;
+		panel.innerHTML = `${operationsBar()}<div class="section-head"><h2>Выбери сектор</h2><span class="muted">${MAPS.filter((m) => state.level >= m.level).length} / ${MAPS.length} открыто</span></div><div class="maps">${MAPS.map((m, i) => `<button class="map-card ${m.id === selectedMap ? "selected" : ""} ${state.level < m.level ? "locked" : ""}" data-map="${m.id}" ${state.level < m.level ? "disabled" : ""}><span class="map-graphic">${icon("raids", 100)}</span><span class="map-index">СЕКТОР 0${i + 1}${state.level < m.level ? ` · ${icon("lock", 10)} УР. ${m.level}` : ""}</span><h3>${e(m.name)}</h3><p>${e(m.subtitle)}</p><div class="map-meta"><span>${seconds(m.duration)} · ${m.ammoCost} патр.${m.intelCost ? ` · ${m.intelCost} разв.` : ""}</span><span>${m.reward[0]}–${m.reward[1]} ₽</span></div></button>`).join("")}</div><div class="raid-instruction">${icon("raids", 24)}<div><strong>${e(map.name)}</strong> · ${e(map.description)}<br><span class="muted">При провале возможна потеря оружия и бойца. На шанс влияют здоровье, тактика, броня, ствол и радиорубка. Выбор сектора меняет разовый выход; постоянный приказ хранит собственный маршрут.</span></div></div><div class="section-head"><h2>Снаряжение отряда</h2><button class="button secondary small" data-action="recruit" ${state.scavs.length >= getScavCapacity(state) ? "disabled" : ""}>${icon("people", 15)} Нанять · ${recruitCost(state)} ₽</button></div><div class="card-grid scav-grid">${state.scavs.map(scavCard).join("") || '<div class="empty">Отряд потерян. Найми нового дикого бесплатно и начни снова.</div>'}</div><p class="muted" style="font-size:11px;margin-top:15px">Отряд: ${state.scavs.length} / ${getScavCapacity(state)} · Улучшай радиорубку, чтобы нанимать больше диких. Медблок восстанавливает здоровье со временем.</p>`;
 	}
 	if (page === "arsenal") renderArsenal();
 	if (page === "base") {
@@ -321,14 +420,17 @@ function render() {
 			})
 			.join(
 				""
-			)}</div><div class="raid-instruction">${icon("time", 24)}<div>Работа не останавливается, когда ты уходишь.<br><span class="muted">При возвращении начисляется до 8 часов дохода, производства и лечения. Рейды завершаются автоматически один раз. Повторные рейды запускай сам.</span></div></div>`;
+			)}</div><div class="raid-instruction">${icon("time", 24)}<div>Работа не останавливается, когда ты уходишь.<br><span class="muted">При возвращении начисляется до 8 часов дохода, производства, лечения и автовыходов. Бойцы с постоянным приказом повторяют рейды, пока есть здоровье, патроны, разведданные и исправное оружие. Медблок и мастерская помогают продолжать маршрут; каждый выход остаётся риском.</span></div></div>`;
 	}
-	if (page === "contracts")
-		panel.innerHTML = CONTRACTS.map(contractCard).join("");
+	if (page === "contracts") {
+		const contracts = CONTRACTS.filter((contract) => contractFilter === "all" || (contractFilter === "done") === state.claimedContracts.includes(contract.id));
+		panel.innerHTML = `<div class="arsenal-toolbar"><div class="filters">${(["open", "done", "all"] as const).map((filter) => `<button data-contract-filter="${filter}" class="${contractFilter === filter ? "active" : ""}">${filter === "open" ? "Поручения" : filter === "done" ? "Выполнены" : "Все"}</button>`).join("")}</div><span class="tag">${state.claimedContracts.length} / ${CONTRACTS.length} ЗАКРЫТО</span></div><div class="contract-brief">${icon("contracts", 22)}<p>Поручения дают рубли, опыт и припасы для следующего выхода. Завершай цепочку: награды открывают новые задания, а репутация — новые сектора.</p></div>${contracts.map(contractCard).join("") || '<div class="empty">Здесь пока нет поручений. Заверши первый контракт и возвращайся.</div>'}`;
+	}
 	if (page === "journal")
 		panel.innerHTML = state.history.length
-			? `<div class="section-head"><h2>Последние ${state.history.length} выходов</h2><span class="muted">Всего: ${state.stats.raidsCompleted}</span></div>${state.history.map((report) => `<article class="journal-row"><time>${new Date(report.at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</time><span><strong>${e(report.scavName)} · ${e(MAP_BY_ID[report.mapId]!.name)}</strong><br>${e(report.description)}${report.weaponId ? `<br><span style="color:${RARITY_COLORS[WEAPON_BY_ID[report.weaponId]!.rarity]}">${e(WEAPON_BY_ID[report.weaponId]!.name)}${report.weaponAutoSold ? " · продано: арсенал заполнен" : ""}</span>` : ""}<br><small class="muted">${report.money ? `+${report.money} ₽ · ` : ""}Патроны +${report.supplies.ammo} · детали +${report.supplies.scrap} · разведданные +${report.supplies.intel}</small></span><b class="tag" style="color:${report.success ? "var(--green)" : "var(--red)"}">${report.success ? "ВЕРНУЛСЯ" : "ПРОВАЛ"}</b></article>`).join("")}`
+			? `<div class="section-head"><h2>Последние ${state.history.length} выходов</h2><span class="muted">Всего: ${n(state.stats.raidsCompleted)} · нажми отчёт, чтобы открыть маршрут</span></div>${state.history.map(journalCard).join("")}`
 			: '<div class="empty">Радио пока молчит.<br>Отправь дикого в первый рейд — здесь появится его отчёт.</div>';
+	panel.querySelectorAll<HTMLDetailsElement>("details[data-report]").forEach((node) => { node.open = expandedReports.includes(node.dataset.report); });
 	hud();
 }
 function renderArsenal() {
@@ -369,10 +471,17 @@ function weaponDetail(weapon: WeaponInstance) {
 }
 function showSettings() {
 	document.querySelector("#modal-root")!.innerHTML =
-		`<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title"><h2 id="settings-title">Твоё дело — при тебе.</h2><p>Прогресс хранится в этом браузере. Перед сменой устройства экспортируй сохранение. При возвращении база начисляет до 8 часов дохода и завершает отправленные рейды.</p><p>Начни с «Дворов»: выбери дикого и оружие, отправь в рейд. Забери награду контракта «Первый выход», затем развивай мастерскую и радиорубку.</p><div class="detail-actions"><button class="button secondary" data-action="export">Экспорт</button><button class="button ghost" data-action="import">Импорт</button></div><input type="file" accept="application/json,.json" id="save-file" hidden><div class="save-note">Один рейд — один результат. Сохранение восстанавливает отряд, оружие, улучшения и рейды. Импорт заменит текущий прогресс после проверки файла.</div><button class="button ghost" style="width:100%;margin-top:20px" data-action="close-modal">Продолжить</button></section></div>`;
+		`<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title"><h2 id="settings-title">Твоё дело — при тебе.</h2><p>Прогресс хранится в этом браузере. Перед сменой устройства экспортируй сохранение. При возвращении база начисляет до 8 часов дохода, производства, лечения и рейдов по постоянным приказам.</p><p>Автовыходы продолжаются офлайн до нехватки ресурсов, здоровья или исправного оружия. Они несут риск потери бойца и ствола. Останови постоянный приказ в карточке дикого, чтобы отменить будущие выходы.</p>${protectedSave ? '<p class="order-risk">Исходный файл не удалось прочитать. Он остаётся в браузере без изменений; автоматическое сохранение временной сессии отключено. Скачай исходный файл и импортируй корректное сохранение.</p>' : ""}<p>Начни с «Дворов»: выбери дикого и оружие, отправь в рейд. Забери награду контракта «Первый выход», затем развивай мастерскую и радиорубку.</p><div class="detail-actions"><button class="button secondary" data-action="export">${protectedSave ? "Скачать исходный файл" : "Экспорт"}</button><button class="button ghost" data-action="import">Импорт</button></div><input type="file" accept="application/json,.json" id="save-file" hidden><div class="save-note">Один рейд — один результат. Сохранение восстанавливает отряд, оружие, броню, рюкзаки, тактику, приказы и рейды. Импорт заменит текущий прогресс после проверки файла.</div><button class="button ghost" style="width:100%;margin-top:20px" data-action="close-modal">Продолжить</button></section></div>`;
 	(
 		document.querySelector('[data-action="export"]') as HTMLButtonElement
 	).focus();
+}
+function showAutoRaidOrder(scavId: string) {
+	const scav = state.scavs.find((item) => item.id === scavId);
+	if (!scav) return;
+	const map = MAP_BY_ID[selectedMap]!;
+	document.querySelector("#modal-root")!.innerHTML = `<div class="modal-backdrop"><section class="modal auto-raid-modal" role="dialog" aria-modal="true" aria-labelledby="auto-title"><span class="eyebrow">Постоянный приказ · ${e(scav.name)}</span><h2 id="auto-title">Автовыходы: ${e(map.name)}</h2><div class="order-brief"><span>${icon("repeat", 19)} Повторять выбранный маршрут</span><span>${icon("medicine", 19)} Выходить при ${scav.autoRaid.minHealth} / 100 здоровья</span><span>${icon("time", 19)} Работать и офлайн · до 8 часов</span></div><p>Дикий будет снова уходить в рейды, как только вернётся и восстановится. Приказ действует, пока хватает патронов и разведданных и оружие пригодно к бою. Мастерская и медблок могут подготовить следующий выход.</p><p class="order-risk">Каждый повтор несёт риск: можно потерять дикого и его оружие. Броня снижает потери, но не гарантирует возвращение.</p><p>Кнопка «Остановить автовыходы» отменяет будущие выходы. Текущий рейд боец завершит.</p><div class="detail-actions"><button class="button" data-action="confirm-auto" data-id="${scav.id}" data-route="${map.id}" data-min-health="${scav.autoRaid.minHealth}">${scav.autoRaid.enabled ? "Изменить приказ" : "Включить автовыходы"}</button><button class="button ghost" data-action="close-modal">Назад к бойцу</button></div></section></div>`;
+	document.querySelector<HTMLButtonElement>('[data-action="confirm-auto"]')!.focus();
 }
 document.addEventListener("click", (event) => {
 	const target = (event.target as HTMLElement).closest<HTMLButtonElement>(
@@ -406,8 +515,35 @@ document.addEventListener("click", (event) => {
 		render();
 		return;
 	}
+	if (target.dataset.contractFilter) {
+		contractFilter = target.dataset.contractFilter as typeof contractFilter;
+		render();
+		return;
+	}
 	const id = target.dataset.id ?? "";
 	switch (target.dataset.action) {
+		case "gear":
+			act(upgradeScavGear(state, id, target.dataset.slot as GearSlot));
+			break;
+		case "auto-enable":
+		case "auto-route":
+			showAutoRaidOrder(id);
+			break;
+		case "confirm-auto":
+			document.querySelector("#modal-root")!.innerHTML = "";
+			act(setAutoRaid(state, id, target.dataset.route!, Number(target.dataset.minHealth)));
+			break;
+		case "auto-stop":
+			act(setAutoRaid(state, id, null, state.scavs.find((scav) => scav.id === id)?.autoRaid.minHealth ?? 70));
+			break;
+		case "auto-stop-all": {
+			act(stopAllAutoRaids(state));
+			break;
+		}
+		case "dismiss-offline":
+			offlineSummary = null;
+			renderOfflineSummary();
+			break;
 		case "dispatch":
 			act(dispatchRaid(state, id, selectedMap));
 			break;
@@ -453,14 +589,14 @@ document.addEventListener("click", (event) => {
 		case "export": {
 			persist();
 			const url = URL.createObjectURL(
-				new Blob([saveGame(state)], { type: "application/json" })
+				new Blob([protectedSave && raw ? raw : saveGame(state)], { type: "application/json" })
 			);
 			const a = document.createElement("a");
 			a.href = url;
 			a.download = "prapor-save.json";
 			a.click();
 			setTimeout(() => URL.revokeObjectURL(url), 1000);
-			toast("Сохранение экспортировано.");
+			toast(protectedSave ? "Исходный файл скачан без изменений." : "Сохранение экспортировано.");
 			break;
 		}
 		case "import":
@@ -472,6 +608,12 @@ document.addEventListener("change", async (event) => {
 	const target = event.target as HTMLInputElement | HTMLSelectElement;
 	if (target.dataset.equip)
 		act(equipWeapon(state, target.dataset.equip, target.value || null));
+	if (target.dataset.tactic)
+		act(setRaidTactic(state, target.dataset.tactic, target.value as RaidTactic));
+	if (target.dataset.autoHealth) {
+		const scav = state.scavs.find((item) => item.id === target.dataset.autoHealth);
+		if (scav) act(setAutoRaid(state, scav.id, scav.autoRaid.enabled ? scav.autoRaid.mapId : null, Number(target.value)));
+	}
 	if (target.id === "save-file") {
 		const file = (target as HTMLInputElement).files?.[0];
 		if (!file) return;
@@ -480,19 +622,23 @@ document.addEventListener("change", async (event) => {
 			return;
 		}
 		try {
-			const next = loadGame(await file.text());
-			if (!next) {
+			const imported = loadGameWithSummary(await file.text());
+			if (!imported) {
 				toast("Сохранение повреждено или имеет другую версию.", false);
 				return;
 			}
 			const old = state;
-			state = next;
+			const oldProtected = protectedSave;
+			state = imported.state;
+			protectedSave = false;
 			if (!persist()) {
 				state = old;
+				protectedSave = oldProtected;
 				toast("Импорт отменён: браузер не смог записать сохранение.", false);
 				return;
 			}
 			document.querySelector("#modal-root")!.innerHTML = "";
+			offlineSummary = imported.summary.elapsedMs >= 60_000 || imported.summary.completedCount ? imported.summary : null;
 			selectedWeapon = state.weapons[0]?.id ?? "";
 			selectedMap = MAPS[0]!.id;
 			render();
@@ -536,53 +682,63 @@ const readyContracts = () =>
 	CONTRACTS.filter(
 		(contract) =>
 			!state.claimedContracts.includes(contract.id) &&
-			state.level >= contract.level &&
+			!getContractLockReason(state, contract) &&
 			getContractProgress(state, contract) >= contract.target
 	).length;
-const rosterHealth = () =>
-	state.scavs
-		.map((scav) => `${scav.id}:${scav.status}:${scav.health === 100}`)
-		.join(";");
-setInterval(() => {
+const rosterStatus = () => `${state.scavs.map((scav) => `${scav.id}:${scav.status}:${scav.autoRaid.enabled}`).join(";")}|${state.raids.map((raid) => raid.id).join(";")}`;
+function interacting() {
+	return document.activeElement?.tagName === "SELECT" || Boolean(document.querySelector("#modal-root .modal"));
+}
+function refreshAfterAdvance() {
+	if (interacting()) deferredRender = true;
+	else render();
+}
+function notifyCompleted(summary: AdvanceSummary) {
+	if (summary.completedCount > 1) toast(`Завершено выходов: ${n(summary.completedCount)}. Добыча в арсенале, подробности в журнале.`);
+	else if (summary.completedCount === 1) {
+		const report = summary.completed[0];
+		if (report) toast(`${report.scavName}: ${report.description}`, report.success);
+	}
+}
+const simulationTimer = setInterval(() => {
+	if (document.hidden) return;
 	const beforeLevel = state.level,
-		beforeHealth = rosterHealth(),
+		beforeStatus = rosterStatus(),
 		beforeContracts = readyContracts();
 	const summary = advance(state);
 	hud();
 	if (
-		summary.completed.length ||
+		summary.completedCount ||
 		state.level !== beforeLevel ||
-		rosterHealth() !== beforeHealth ||
+		rosterStatus() !== beforeStatus ||
 		readyContracts() !== beforeContracts
 	) {
-		render();
-		for (const report of summary.completed)
-			toast(`${report.scavName}: ${report.description}`, report.success);
+		refreshAfterAdvance();
+		notifyCompleted(summary);
 	}
+	if (deferredRender && !interacting()) render();
 	if (++ticks % 5 === 0) persist();
 }, 1000);
 document.addEventListener("visibilitychange", () => {
 	if (document.hidden) persist();
 	else {
 		const summary = advance(state);
-		render();
-		if (summary.completed.length)
-			toast(
-				`Пока тебя не было, завершено рейдов: ${summary.completed.length}. Отчёты в журнале.`
-			);
+		if (summary.elapsedMs >= 60_000 || summary.completedCount) offlineSummary = summary;
+		refreshAfterAdvance();
+		persist();
 	}
 });
 window.addEventListener("pagehide", persist);
-if (raw && !loadGame(raw)) {
+window.addEventListener("beforeunload", persist);
+import.meta.hot?.dispose(() => {
+	persist();
+	clearInterval(simulationTimer);
+	clearTimeout(toastTimer);
+	world?.game.destroy(true);
+});
+if (protectedSave) {
 	toast(
-		"Сохранение не удалось прочитать. Исходный файл остаётся в браузере до первого нового сохранения.",
+		"Исходный прогресс не перезаписан. Скачай его в настройках и импортируй корректный файл.",
 		false
 	);
-} else if (raw) {
-	const previous = JSON.parse(raw) as { lastUpdated: number };
-	const elapsed = (Date.now() - previous.lastUpdated) / 60000;
-	if (elapsed >= 1)
-		toast(
-			`С возвращением. База отработала ${Math.min(480, Math.floor(elapsed))} мин. Проверь арсенал и журнал.`
-		);
 }

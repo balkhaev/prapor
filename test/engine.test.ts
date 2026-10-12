@@ -7,18 +7,28 @@ import {
 	dispatchRaid,
 	equipWeapon,
 	getRaidChance,
+	getRaidDuration,
+	getRaidAmmoCost,
+	getGearCost,
+	getContractProgress,
+	getContractLockReason,
+	getRaidPhase,
 	getWeaponPower,
 	healScav,
 	loadGame,
+	loadGameWithSummary,
 	modWeapon,
 	parseSave,
 	recruitScav,
 	repairWeapon,
 	saveGame,
 	sellWeapon,
+	setAutoRaid,
+	setRaidTactic,
+	upgradeScavGear,
 	upgradeBase,
 } from "../src/game/engine";
-import { MAPS } from "../src/game/data";
+import { CONTRACTS, MAPS } from "../src/game/data";
 
 const NOW = 1_792_000_000_000;
 
@@ -341,5 +351,141 @@ describe("save boundaries", () => {
 		expect(state.stats.raidsCompleted).toBe(2);
 		expect(state.raids).toHaveLength(0);
 		expect(parseSave(saveGame(state))).not.toBeNull();
+	});
+
+	test("automatic ticks rebase a live clock rollback without freezing routes or granting retroactive income", () => {
+		const state = createGame(NOW);
+		const scav = state.scavs[0]!;
+		setAutoRaid(state, scav.id, "courtyard", 70, NOW);
+		advance(state, NOW + 10_000);
+		const raidId = state.raids[0]!.id;
+		const remaining = state.raids[0]!.endsAt - state.lastUpdated;
+		const money = state.money;
+		const rollback = NOW - 60_000;
+		const summary = advance(state, rollback);
+		expect(summary.elapsedMs).toBe(0);
+		expect(summary.money).toBe(0);
+		expect(state.money).toBe(money);
+		expect(state.lastUpdated).toBe(rollback);
+		expect(state.raids[0]!.id).toBe(raidId);
+		expect(state.raids[0]!.endsAt - rollback).toBe(remaining);
+		expect(parseSave(saveGame(state))).not.toBeNull();
+		const reloaded = loadGame(saveGame(state), rollback)!;
+		const finished = advance(state, rollback + remaining);
+		expect(finished.completedCount).toBe(1);
+		expect(state.history[0]!.raidId).toBe(raidId);
+		expect(state.raids).toHaveLength(1);
+		expect(state.raids[0]!.id).not.toBe(raidId);
+		advance(reloaded, rollback + remaining);
+		expect(reloaded).toEqual(state);
+		expect(parseSave(saveGame(state))).not.toBeNull();
+	});
+});
+
+describe("tactics, loadout and contract chains", () => {
+	test("tactics trade travel time, success, loot and ammunition instead of creating a free bonus", () => {
+		const state = createGame(NOW);
+		const scav = state.scavs[0]!;
+		const map = MAPS[1]!;
+		const ordinary = { chance: getRaidChance(state, scav, map), duration: getRaidDuration(state, scav, map), ammo: getRaidAmmoCost(scav, map) };
+		expect(setRaidTactic(state, scav.id, "cautious").ok).toBe(true);
+		expect(getRaidChance(state, scav, map)).toBeGreaterThan(ordinary.chance);
+		expect(getRaidDuration(state, scav, map)).toBeGreaterThan(ordinary.duration);
+		expect(getRaidAmmoCost(scav, map)).toBeLessThanOrEqual(ordinary.ammo);
+		expect(setRaidTactic(state, scav.id, "bold").ok).toBe(true);
+		expect(getRaidChance(state, scav, map)).toBeLessThan(ordinary.chance);
+		expect(getRaidDuration(state, scav, map)).toBeLessThan(ordinary.duration);
+		expect(getRaidAmmoCost(scav, map)).toBeGreaterThan(ordinary.ammo);
+	});
+
+	test("personal gear pays atomically, stops at level three and snapshots its effects for the raid", () => {
+		const state = createGame(NOW);
+		const scav = state.scavs[0]!;
+		const original = getRaidChance(state, scav, MAPS[0]!);
+		const cost = getGearCost(scav, "armor");
+		state.supplies.scrap = cost.scrap - 1;
+		const before = saveGame(state);
+		expect(upgradeScavGear(state, scav.id, "armor").ok).toBe(false);
+		expect(saveGame(state)).toBe(before);
+		state.money = 10_000;
+		state.supplies.scrap = 100;
+		for (let level = 0; level < 3; level++) expect(upgradeScavGear(state, scav.id, "armor").ok).toBe(true);
+		expect(getRaidChance(state, scav, MAPS[0]!)).toBeGreaterThan(original);
+		expect(upgradeScavGear(state, scav.id, "armor").ok).toBe(false);
+		expect(upgradeScavGear(state, scav.id, "backpack").ok).toBe(true);
+		expect(dispatchRaid(state, scav.id, "courtyard", NOW).ok).toBe(true);
+		expect(state.raids[0]!.armorLevel).toBe(3);
+		expect(state.raids[0]!.backpackLevel).toBe(1);
+		const lootBonus = state.raids[0]!.lootBonus;
+		expect(setRaidTactic(state, scav.id, "bold").ok).toBe(true);
+		expect(state.raids[0]!.tactic).toBe("balanced");
+		expect(state.raids[0]!.lootBonus).toBe(lootBonus);
+		expect(upgradeScavGear(state, scav.id, "backpack").ok).toBe(false);
+	});
+
+	test("raid phases reveal travel progress and completed stories agree with the actual outcome", () => {
+		for (const success of [true, false]) {
+			const state = createGame(NOW);
+			dispatchRaid(state, state.scavs[0]!.id, "courtyard", NOW);
+			const raid = state.raids[0]!;
+			raid.chance = success ? 1 : 0;
+			expect(getRaidPhase(raid, NOW - 1).progress).toBe(0);
+			expect(getRaidPhase(raid, raid.endsAt + 1).progress).toBe(1);
+			expect(getRaidPhase(raid, raid.startedAt + (raid.endsAt - raid.startedAt) * 0.55).label).toBe("Опасный участок");
+			advance(state, raid.endsAt);
+			const report = state.history[0]!;
+			expect(report.events).toHaveLength(4);
+			expect(report.events[0]!.at).toBe(raid.startedAt);
+			expect(report.events[3]!.at).toBe(raid.endsAt);
+			expect(report.events[3]!.text).toContain(report.description);
+			expect(report.events[3]!.kind).toBe(success ? "success" : "danger");
+			expect(parseSave(saveGame(state))).not.toBeNull();
+		}
+	});
+
+	test("a contract may have enough progress but waits for its predecessor's claimed reward", () => {
+		const state = createGame(NOW);
+		const gear = CONTRACTS.find((contract) => contract.id === "gear-ready")!;
+		state.scavs[0]!.gear.armor = 2;
+		expect(getContractProgress(state, gear)).toBe(2);
+		expect(getContractLockReason(state, gear)).toContain("Первый выход");
+		const before = saveGame(state);
+		expect(claimContract(state, gear.id).ok).toBe(false);
+		expect(saveGame(state)).toBe(before);
+		state.stats.raidsWon = 1;
+		state.stats.raidsCompleted = 1;
+		expect(claimContract(state, "first-return").ok).toBe(true);
+		expect(getContractLockReason(state, gear)).toBeNull();
+		expect(claimContract(state, gear.id).ok).toBe(true);
+		expect(claimContract(state, gear.id).ok).toBe(false);
+	});
+
+	test("a disabled policy retains its health threshold, and a repaired weapon resumes a waiting route", () => {
+		const state = createGame(NOW);
+		const scav = state.scavs[0]!;
+		expect(setAutoRaid(state, scav.id, null, 95, NOW).ok).toBe(true);
+		expect(scav.autoRaid.minHealth).toBe(95);
+		const weapon = state.weapons.find((item) => item.id === scav.weaponInstanceId)!;
+		weapon.durability = 0;
+		expect(setAutoRaid(state, scav.id, "courtyard", 95, NOW).ok).toBe(true);
+		expect(state.raids).toHaveLength(0);
+		expect(scav.autoRaid.waitingReason).toContain("ремонт");
+		expect(repairWeapon(state, weapon.id).ok).toBe(true);
+		advance(state, NOW);
+		expect(state.raids).toHaveLength(1);
+		expect(state.raids[0]!.isAuto).toBe(true);
+	});
+
+	test("loading exposes the actual offline result once, without replaying rewards", () => {
+		const state = createGame(NOW);
+		setAutoRaid(state, state.scavs[0]!.id, "courtyard", 70, NOW);
+		const loaded = loadGameWithSummary(saveGame(state), NOW + 60_000)!;
+		expect(loaded.summary.elapsedMs).toBe(60_000);
+		expect(loaded.summary.completedCount).toBeGreaterThan(0);
+		expect(loaded.state.stats.raidsCompleted).toBe(loaded.summary.completedCount);
+		const twice = loadGameWithSummary(saveGame(loaded.state), NOW + 60_000)!;
+		expect(twice.summary.completedCount).toBe(0);
+		expect(twice.summary.money).toBe(0);
+		expect(twice.state).toEqual(loaded.state);
 	});
 });
