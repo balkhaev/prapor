@@ -16,6 +16,7 @@ export interface WorldSnapshot {
 	selectedScavId?: string | null;
 	selectedMapId?: string | null;
 	selectedRoomId?: string | null;
+	selectedSite?: { column: number; row: number } | null;
 	shelter?: { rooms: RoomInstance[] };
 	roomProduction?: Record<string, { progress: number; remainingSeconds: number | null; rate: number; status: string; reason: string | null }>;
 	scavs?: {
@@ -47,6 +48,7 @@ type ScavActor = {
 	anchor: Point;
 	working: boolean;
 	walking: boolean;
+	walkSpan: number;
 	phase: number;
 };
 export interface WorldInteractions {
@@ -86,13 +88,17 @@ const ROOM_WIDTH = 172;
 const ROOM_HEIGHT = 100;
 const cellPosition = (column: number, row: number): Point => ({ x: [40, 220, 448, 628][column] ?? 40, y: 148 + row * 111 });
 const ROOM_STYLE: Record<string, { label: string; color: number; light: number; wall: number }> = {
-	workshop: { label: "МАСТЕРСКАЯ", color: 0xc1a16b, light: 0xffca79, wall: 0x343b2c },
-	ammo: { label: "ПАТРОННЫЙ ЦЕХ", color: 0xd1ae5b, light: 0xffc75d, wall: 0x443b24 },
-	recycler: { label: "РАЗБОРКА", color: 0xc8835f, light: 0xeeb58b, wall: 0x3f3227 },
-	medbay: { label: "МЕДБЛОК", color: 0x94bbaa, light: 0xd2ead3, wall: 0x2d423b },
-	radio: { label: "РАДИОУЗЕЛ", color: 0x83afaa, light: 0xbcdac0, wall: 0x253d38 },
-	storage: { label: "СКЛАД", color: 0xa8b38a, light: 0xe2d9a3, wall: 0x343d31 },
-	dormitory: { label: "ЖИЛОЙ БЛОК", color: 0xb69ba5, light: 0xe5c1a1, wall: 0x3c3534 },
+	workshop: { label: "МАСТЕРСКАЯ", color: 0xd7a368, light: 0xffcc88, wall: 0x594438 },
+	ammo: { label: "ПАТРОННЫЙ ЦЕХ", color: 0xc6ca78, light: 0xf1e4a5, wall: 0x515038 },
+	recycler: { label: "РАЗБОРКА", color: 0xdd9373, light: 0xffbd99, wall: 0x613e34 },
+	medbay: { label: "МЕДБЛОК", color: 0x89d6d0, light: 0xc7f8ef, wall: 0x355c5c },
+	radio: { label: "РАДИОУЗЕЛ", color: 0x77bfc0, light: 0xace9d7, wall: 0x294b50 },
+	storage: { label: "СКЛАД", color: 0xb6c694, light: 0xe6e9b3, wall: 0x465546 },
+	dormitory: { label: "ЖИЛОЙ БЛОК", color: 0xc1a8da, light: 0xf1d9f4, wall: 0x55495b },
+};
+const blend = (a: number, b: number, amount: number): number => {
+	const channel = (shift: number) => Math.round(((a >> shift) & 255) * (1 - amount) + ((b >> shift) & 255) * amount);
+	return (channel(16) << 16) | (channel(8) << 8) | channel(0);
 };
 const FONT = '"IBM Plex Mono", "Courier New", monospace';
 const C = {
@@ -213,6 +219,7 @@ export function createWorld(
 		private cells = new Map<string, ShelterCell>();
 		private elevator!: Phaser.GameObjects.Container;
 		private shelterCaption!: Phaser.GameObjects.Text;
+		private ambient!: Phaser.GameObjects.Graphics;
 		private places = new Map<
 			string,
 			{
@@ -284,10 +291,10 @@ export function createWorld(
 			if (!texture) return;
 			const context = texture.getContext();
 			const gradient = context.createRadialGradient(128, 128, 0, 128, 128, 128);
-			gradient.addColorStop(0, "rgba(255,201,123,.55)");
-			gradient.addColorStop(0.2, "rgba(255,181,83,.26)");
-			gradient.addColorStop(0.6, "rgba(213,133,51,.07)");
-			gradient.addColorStop(1, "rgba(213,133,51,0)");
+			gradient.addColorStop(0, "rgba(255,255,255,.65)");
+			gradient.addColorStop(0.2, "rgba(255,255,255,.33)");
+			gradient.addColorStop(0.6, "rgba(255,255,255,.09)");
+			gradient.addColorStop(1, "rgba(255,255,255,0)");
 			context.fillStyle = gradient;
 			context.fillRect(0, 0, 256, 256);
 			texture.refresh();
@@ -297,15 +304,19 @@ export function createWorld(
 			const g = this.add.graphics();
 			this.baseLayer.add(g);
 			const rng = random(90312);
-			g.fillStyle(0x202920).fillRect(0, 0, WIDTH, 128);
-			g.fillStyle(0x192218).fillRect(0, 71, WIDTH, 56);
+			for (let y = 0; y < 128; y += 4) g.fillStyle(blend(0x263946, 0x26372e, y / 128)).fillRect(0, y, WIDTH, 4);
+			g.fillStyle(0x879890, .13).fillEllipse(481, 40, 24, 24);
+			g.fillStyle(0xb2c0ac, .38).fillCircle(481, 40, 4);
+			g.fillStyle(0x1a2927, .8).fillRect(0, 78, WIDTH, 49);
 			for (const building of [{ x: 530, w: 78, h: 38 }, { x: 615, w: 57, h: 51 }, { x: 711, w: 97, h: 36 }]) {
-				g.fillStyle(0x111d15).fillRect(building.x, 81 - building.h, building.w, building.h);
+				g.fillStyle(0x162526).fillRect(building.x, 81 - building.h, building.w, building.h);
+				g.fillStyle(0x668077, .12).fillRect(building.x, 81 - building.h, building.w, 2);
 				for (let x = building.x + 9; x < building.x + building.w - 5; x += 15)
 					g.fillStyle(0x7f8861, .09).fillRect(x, 51, 5, 10);
 			}
 			line(g, [{ x: 729, y: 84 }, { x: 729, y: 21 }, { x: 743, y: 21 }], 0x5a684d, 3);
 			line(g, [{ x: 650, y: 75 }, { x: 650, y: 28 }, { x: 651, y: 27 }], 0x4a5d46, 2);
+			g.fillStyle(0x6c8c82, .07).fillRect(0, 76, WIDTH, 8);
 			g.fillStyle(0x30312a).fillRect(0, 126, WIDTH, HEIGHT - 126);
 			for (const stratum of [{ y: 155, h: 67, c: 0x332f26 }, { y: 275, h: 57, c: 0x2d2b24 }, { y: 402, h: 69, c: 0x292c24 }]) {
 				polygon(g, [{ x: 0, y: stratum.y }, { x: 186, y: stratum.y - 8 }, { x: 394, y: stratum.y + 7 }, { x: 840, y: stratum.y - 11 }, { x: 840, y: stratum.y + stratum.h }, { x: 0, y: stratum.y + stratum.h + 13 }], stratum.c);
@@ -327,14 +338,18 @@ export function createWorld(
 				for (let x = 40; x < 796; x += 32) g.fillStyle(0x151e15, .35).fillRect(x, y + 4, 17, 1);
 			}
 			// The entrance is a shared place for free workers, separated from production rooms.
-			g.fillStyle(0x3b4533).fillRect(42, 73, 143, 60);
-			g.fillStyle(0x616b51).fillRect(35, 68, 157, 9);
+			g.fillStyle(0x4b5147).fillRect(42, 73, 143, 60);
+			g.fillStyle(0x717966).fillRect(35, 68, 157, 9);
+			g.fillStyle(0xb0b49c, .45).fillRect(35, 68, 157, 2);
+			g.fillStyle(0x111d19, .45).fillRect(42, 77, 143, 3);
 			g.fillStyle(0x131f16).fillRoundedRect(91, 80, 54, 53, 3);
 			g.lineStyle(3, 0x7a8165).strokeRoundedRect(91, 80, 54, 53, 3);
-			g.fillStyle(0x485b43).fillRect(98, 86, 39, 20);
+			g.fillStyle(0x98aa79).fillRect(98, 86, 39, 20);
+			g.fillStyle(0xd4d9a4, .23).fillRect(99, 87, 37, 4);
 			line(g, [{ x: 117, y: 87 }, { x: 117, y: 107 }], 0x1b2c1b, 2);
 			g.fillStyle(C.gold).fillRect(132, 113, 3, 3);
-			g.fillStyle(0x253326).fillRect(181, 86, 620, 47);
+			g.fillStyle(0x2c3c32).fillRect(181, 86, 620, 47);
+			g.fillStyle(0x657766, .13).fillRect(182, 89, 617, 26);
 			g.fillStyle(0x859070, .22).fillRect(181, 86, 620, 2);
 			g.fillStyle(0x5b6550).fillRect(181, 130, 620, 4);
 			for (let x = 194; x < 786; x += 26) line(g, [{ x, y: 130 }, { x: x + 12, y: 130 }], C.gold, 2, .21);
@@ -342,6 +357,15 @@ export function createWorld(
 			g.fillStyle(0x777b5e).fillRect(203, 94, 17, 17).fillRect(224, 94, 17, 8).fillRect(247, 94, 16, 15);
 			g.fillStyle(0x202d20).fillRect(693, 109, 67, 5).fillRect(701, 114, 3, 15).fillRect(749, 114, 3, 15);
 			g.fillStyle(0x5b5e41).fillRect(704, 102, 15, 7).fillRect(735, 104, 17, 5);
+			for (const x of [324, 568, 768]) {
+				line(g, [{ x, y: 87 }, { x, y: 96 }], 0x101d18, 1.3);
+				g.fillStyle(0x738778).fillRect(x - 11, 95, 22, 4);
+				g.fillStyle(0xdcdcb6).fillRect(x - 8, 98, 16, 2);
+				polygon(g, [{ x: x - 8, y: 100 }, { x: x + 8, y: 100 }, { x: x + 27, y: 130 }, { x: x - 27, y: 130 }], 0xe1d4aa, .06);
+			}
+			g.fillStyle(0x263a30).fillRect(772, 111, 14, 17);
+			g.fillStyle(0x728269).fillEllipse(779, 110, 14, 4);
+			g.fillStyle(0xd0ae77).fillRect(776, 116, 5, 6);
 			for (let x = 181; x < 780; x += 85) {
 				g.fillStyle(0x17241a).fillRect(x, 126, 2, 10);
 				g.fillStyle(0x7a8a5a).fillRect(x - 3, 124, 7, 2);
@@ -366,6 +390,11 @@ export function createWorld(
 			lift.fillStyle(C.gold).fillRect(4, 54, 24, 3);
 			this.elevator = this.add.container(404, 179, [lift]).setDepth(20);
 			this.baseLayer.add(this.elevator);
+			for (const light of [{ x: 119, y: 108, tint: 0xffd7a0 }, { x: 324, y: 111, tint: 0xece1b4 }, { x: 568, y: 111, tint: 0xc6e5cc }]) {
+				this.baseLayer.add(this.add.image(light.x, light.y, "prapor-light").setTint(light.tint).setScale(.43, .25).setAlpha(.18).setBlendMode(Phaser.BlendModes.ADD));
+			}
+			this.ambient = this.add.graphics().setDepth(10);
+			this.baseLayer.add(this.ambient);
 			this.baseCaption = this.text(31, 25, "УБЕЖИЩЕ · СВОИ ЛЮДИ", 15, "#ded2ae");
 			this.baseLayer.add(this.baseCaption);
 			this.baseLayer.add(this.text(99, 75, "07", 10, "#e4c994"));
@@ -404,86 +433,175 @@ export function createWorld(
 		}
 
 		private paintCellFrame(cell: ShelterCell): void {
-			const selected = Boolean(cell.room && snapshot().selectedRoomId === cell.room.id);
+			const state = snapshot();
+			const selected = Boolean(cell.room ? state.selectedRoomId === cell.room.id : state.selectedSite?.column === cell.column && state.selectedSite.row === cell.row);
 			const building = cell.room && cell.room.status !== "ready";
-			const color = selected || cell.hovered ? C.light : building ? C.gold : cell.working ? 0x93ad78 : 0x65735a;
-			cell.frame.clear().lineStyle(selected ? 2.5 : 1, color, selected || cell.hovered ? 1 : .42).strokeRect(1, 1, ROOM_WIDTH - 2, ROOM_HEIGHT - 2);
+			const color = selected || cell.hovered ? C.light : building ? C.gold : cell.room ? ROOM_STYLE[cell.room.type]?.color ?? 0x899a7c : 0x788b71;
+			cell.frame.clear();
+			if (selected || cell.hovered) cell.frame.fillStyle(selected ? 0xffd99e : color, selected ? .055 : .025).fillRect(2, 24, ROOM_WIDTH - 4, ROOM_HEIGHT - 27);
+			cell.frame.lineStyle(selected ? 2.5 : 1, color, selected || cell.hovered ? 1 : cell.room ? .64 : .28).strokeRect(1, 1, ROOM_WIDTH - 2, ROOM_HEIGHT - 2);
 			if (selected || cell.hovered) {
 				for (const x of [1, ROOM_WIDTH - 9]) for (const y of [1, ROOM_HEIGHT - 9]) cell.frame.fillStyle(C.gold, .85).fillRect(x, y, 8, 2).fillRect(x, y, 2, 8);
 			}
 		}
 
 		private paintRoom(cell: ShelterCell): void {
-			const g = cell.art;
-			const room = cell.room;
+			const g = cell.art, room = cell.room;
 			g.clear();
 			if (!room) {
-				g.fillStyle(0x252e23).fillRect(0, 0, ROOM_WIDTH, ROOM_HEIGHT);
+				g.fillStyle(0x2d342b).fillRect(0, 0, ROOM_WIDTH, ROOM_HEIGHT);
 				const rng = random(cell.column * 829 + cell.row * 127 + 416);
-				for (let n = 0; n < 45; n++) g.fillStyle(n % 2 ? 0x6d7055 : 0x0a150c, .23).fillRect(rng() * 170, rng() * 98, 3 + rng() * 10, 2 + rng() * 5);
-				line(g, [{ x: 5, y: 82 }, { x: 27, y: 67 }, { x: 54, y: 78 }, { x: 102, y: 58 }, { x: 127, y: 75 }, { x: 170, y: 68 }], 0x111d13, 5);
-				g.lineStyle(1, 0x76856b, .32).strokeRoundedRect(68, 38, 36, 28, 2);
-				line(g, [{ x: 76, y: 52 }, { x: 96, y: 52 }], 0xa5ad89, 2, .66);
-				line(g, [{ x: 86, y: 42 }, { x: 86, y: 62 }], 0xa5ad89, 2, .66);
-				cell.label.setText("НОВЫЙ УЧАСТОК").setColor("#949f82");
-				cell.status.setText("+ ПОСТРОИТЬ КОМНАТУ").setColor("#a8b496");
+				for (let n = 0; n < 15; n++) {
+					const x = rng() * 176 - 7, y = 25 + rng() * 66, w = 12 + rng() * 33, h = 8 + rng() * 12;
+					polygon(g, [{ x, y }, { x: x + w * .62, y: y - h * .4 }, { x: x + w, y: y + 2 }, { x: x + w * .7, y: y + h }, { x: x + 2, y: y + h * .85 }], n % 2 ? 0x444536 : 0x222c23);
+					line(g, [{ x: x + 1, y: y + 1 }, { x: x + w * .62, y: y - h * .3 }, { x: x + w - 1, y: y + 3 }], 0x75816a, 1, .16);
+				}
+				g.fillStyle(0x151f18, .64).fillRect(0, 0, ROOM_WIDTH, 24).fillRect(0, 84, ROOM_WIDTH, 16);
+				g.lineStyle(1, 0x99aa8c, .18).strokeRect(8, 31, 156, 46);
+				for (let x = 21; x < 158; x += 18) for (let y = 38; y < 77; y += 18) g.fillStyle(0xa5b995, .18).fillCircle(x, y, .7);
+				g.fillStyle(0x273c2c, .95).fillRoundedRect(66, 36, 40, 34, 4);
+				g.lineStyle(1, 0xa6b99a, .66).strokeRoundedRect(66, 36, 40, 34, 4);
+				line(g, [{ x: 77, y: 53 }, { x: 95, y: 53 }], 0xc6d6b9, 2.3, .9);
+				line(g, [{ x: 86, y: 44 }, { x: 86, y: 62 }], 0xc6d6b9, 2.3, .9);
+				cell.label.setText("НОВЫЙ УЧАСТОК").setColor("#aab69d");
+				cell.status.setText("+ ПОСТРОИТЬ КОМНАТУ").setColor("#b4c5a7");
 				cell.lamp.setVisible(false);
 				return;
 			}
 			const style = ROOM_STYLE[room.type] ?? ROOM_STYLE.workshop!;
-			g.fillStyle(style.wall).fillRect(0, 0, ROOM_WIDTH, ROOM_HEIGHT);
-			g.fillStyle(0x142018, .3).fillRect(0, 25, ROOM_WIDTH, 65);
-			g.fillStyle(0x7f8a6a, .14).fillRect(1, 1, ROOM_WIDTH - 2, 23);
-			for (let y = 35; y < 83; y += 15) line(g, [{ x: 2, y }, { x: 170, y }], 0x829173, 1, .09);
-			for (let x = 25; x < 170; x += 37) line(g, [{ x, y: 26 }, { x, y: 83 }], 0x0b1d11, 1, .3);
-			g.fillStyle(0x626b51).fillRect(0, 81, ROOM_WIDTH, 7);
-			g.fillStyle(0x142117).fillRect(0, 88, ROOM_WIDTH, 12);
-			line(g, [{ x: 4, y: 30 }, { x: 162, y: 30 }, { x: 162, y: 76 }], 0x748563, 2, .55);
-			for (const x of [11, 49, 87, 125]) g.fillStyle(0xa0aa89).fillRect(x, 27, 3, 5);
-			g.fillStyle(0x19271b).fillRect(65, 22, 43, 6);
-			g.fillStyle(style.light, .9).fillRect(68, 25, 37, 2);
-			polygon(g, [{ x: 67, y: 28 }, { x: 28, y: 81 }, { x: 146, y: 81 }, { x: 106, y: 28 }], style.light, .038);
-			cell.label.setText(`${style.label} · ${room.level || 1}`).setColor("#d8d5bb");
+			g.fillStyle(0x101919).fillRect(0, 0, ROOM_WIDTH, ROOM_HEIGHT);
+			for (let y = 24; y < 82; y += 3) g.fillStyle(blend(style.wall, 0x0d191c, (y - 24) / 96)).fillRect(6, y, 160, 3);
+			polygon(g, [{ x: 0, y: 22 }, { x: 8, y: 30 }, { x: 8, y: 74 }, { x: 0, y: 83 }], blend(style.wall, 0x0b1314, .46));
+			polygon(g, [{ x: 164, y: 30 }, { x: 172, y: 22 }, { x: 172, y: 83 }, { x: 164, y: 74 }], blend(style.wall, 0x030d0f, .58));
+			polygon(g, [{ x: 8, y: 75 }, { x: 164, y: 75 }, { x: 172, y: 86 }, { x: 0, y: 86 }], blend(style.wall, 0x919686, .23));
+			for (const x of [12, 39, 66, 93, 120, 147]) line(g, [{ x, y: 76 }, { x: (x - 86) * 1.16 + 86, y: 86 }], 0x111d1c, 1, .55);
+			line(g, [{ x: 3, y: 80 }, { x: 168, y: 80 }], 0xc9c9b1, .8, .15);
+			g.fillStyle(0x0c1819).fillRect(0, 85, ROOM_WIDTH, 15);
+			g.fillStyle(blend(style.wall, style.color, .12)).fillRect(1, 1, ROOM_WIDTH - 2, 22);
+			g.fillStyle(style.color, .7).fillRect(1, 23, ROOM_WIDTH - 2, 1);
+			g.fillStyle(style.color, .6).fillRect(2, 2, 3, 19);
+			for (let y = 35; y < 76; y += 15) line(g, [{ x: 9, y }, { x: 164, y }], style.color, .7, .15);
+			for (let x = 25; x < 164; x += 37) line(g, [{ x, y: 31 }, { x, y: 74 }], 0x071518, 1, .28);
+			line(g, [{ x: 10, y: 30 }, { x: 161, y: 30 }, { x: 161, y: 76 }], 0x12221f, 4);
+			line(g, [{ x: 10, y: 29 }, { x: 161, y: 29 }, { x: 161, y: 73 }], blend(style.color, 0x4f6257, .48), 1.5);
+			for (const x of [13, 49, 87, 124]) g.fillStyle(0xc1c7ad, .7).fillRect(x, 27, 2, 5);
+			g.fillStyle(0x081315).fillRoundedRect(60, 23, 52, 8, 2);
+			g.fillStyle(0xc6cab4, .55).fillRect(63, 25, 46, 2);
+			g.fillStyle(style.light).fillRect(66, 27, 40, 2);
+			polygon(g, [{ x: 66, y: 29 }, { x: 35, y: 79 }, { x: 144, y: 79 }, { x: 106, y: 29 }], style.light, .075);
+			cell.label.setText(style.label).setColor("#eee7d2");
 			cell.lamp.setVisible(true).setTint(style.light);
 			this.paintFurniture(g, room.type, room.level);
+			this.paintRoomDetails(g, room.type, style.color);
 			if (room.status !== "ready") {
-				g.fillStyle(0x101b11, .47).fillRect(1, 25, 170, 59);
-				for (const x of [21, 87, 150]) line(g, [{ x, y: 28 }, { x, y: 80 }], 0x9b8c5e, 3);
-				for (const y of [43, 65]) line(g, [{ x: 16, y }, { x: 154, y }], 0x8b8157, 3);
-				line(g, [{ x: 21, y: 78 }, { x: 87, y: 31 }, { x: 150, y: 78 }], 0xd0ad69, 2, .65);
-				g.fillStyle(0xb4a05d).fillRect(17, 77, 18, 5).fillRect(141, 77, 18, 5);
+				g.fillStyle(0x091115, .47).fillRect(1, 25, 170, 59);
+				for (const x of [21, 87, 150]) {
+					line(g, [{ x: x + 1, y: 30 }, { x: x + 1, y: 81 }], 0x101b1b, 5);
+					line(g, [{ x, y: 28 }, { x, y: 80 }], 0xd6b776, 2.5);
+				}
+				for (const y of [43, 65]) { line(g, [{ x: 16, y: y + 2 }, { x: 154, y: y + 2 }], 0x192422, 5); line(g, [{ x: 16, y }, { x: 154, y }], 0xb59c6b, 2.5); }
+				line(g, [{ x: 21, y: 78 }, { x: 87, y: 31 }, { x: 150, y: 78 }], 0xd0ad69, 1.5, .9);
+				g.fillStyle(0xe0c385).fillRect(17, 78, 18, 4).fillRect(141, 78, 18, 4);
 				for (let x = 12; x < 166; x += 12) line(g, [{ x, y: 83 }, { x: x + 5, y: 79 }], x % 24 ? 0x141e14 : 0xe2b667, 3);
-				cell.label.setText(`${room.status === "building" ? "СТРОИТСЯ" : "УЛУЧШЕНИЕ"} · ${room.construction?.targetLevel ?? room.level + 1}`).setColor("#e8c28c");
+				g.fillStyle(0xd5b374).fillRect(136, 29, 15, 10);
+				g.fillStyle(0x2d3328).fillRect(141, 31, 3, 5).fillRect(141, 37, 3, 1);
+				cell.label.setText(`${room.status === "building" ? "СТРОИТСЯ" : "УЛУЧШЕНИЕ"} · ${room.construction?.targetLevel ?? room.level + 1}`).setColor("#ffce8a");
 			}
 		}
 
+		private paintRoomDetails(g: Phaser.GameObjects.Graphics, type: string, accent: number): void {
+			// Fine material details are painted once, independently of production animation.
+			const screw = (x: number, y: number) => { g.fillStyle(0xc3c6b0, .72).fillCircle(x, y, 1.1); line(g, [{ x: x - .6, y: y + .6 }, { x: x + .6, y: y - .6 }], 0x142321, .7); };
+			for (const p of [{ x: 8, y: 25 }, { x: 164, y: 25 }, { x: 8, y: 81 }, { x: 164, y: 81 }]) screw(p.x, p.y);
+			if (type === "workshop") {
+				line(g, [{ x: 22, y: 72 }, { x: 61, y: 72 }], 0xdbc08d, 1.3, .65);
+				for (let x = 28; x < 58; x += 7) { g.fillStyle(0xbca574).fillRect(x, 69, 2, 3); g.fillStyle(0x353d35).fillRect(x, 68, 2, 1); }
+				line(g, [{ x: 104, y: 37 }, { x: 99, y: 47 }, { x: 104, y: 61 }], 0x191e1e, 2);
+				g.fillStyle(0xbaa782).fillRect(109, 35, 44, 16);
+				g.fillStyle(0x8c8069).fillRect(112, 38, 37, 10);
+				rifle(g, 130, 42, .56, true);
+				g.fillStyle(0xba9b70).fillCircle(81, 64, 2);
+				line(g, [{ x: 109, y: 68 }, { x: 149, y: 68 }], 0xd2b07c, .7, .55);
+				for (const x of [14, 63, 115, 156]) screw(x, 76);
+			} else if (type === "ammo") {
+				g.fillStyle(0x24341f).fillRect(10, 42, 9, 27);
+				for (let y = 45; y < 68; y += 4) line(g, [{ x: 12, y }, { x: 17, y }], 0xb9b977, 1);
+				line(g, [{ x: 71, y: 52 }, { x: 78, y: 52 }, { x: 78, y: 70 }], 0xabaf75, 2);
+				g.fillStyle(0x172522).fillCircle(69, 60, 5);
+				g.lineStyle(1, 0xd2cea2).strokeCircle(69, 60, 4);
+				line(g, [{ x: 69, y: 60 }, { x: 71, y: 57 }], 0xe2b468, 1);
+				for (let x = 83; x < 146; x += 8) g.fillStyle(0x212e23).fillCircle(x, 77, 2);
+			} else if (type === "recycler") {
+				for (let x = 22; x < 81; x += 10) line(g, [{ x, y: 78 }, { x: x + 4, y: 73 }], x % 20 ? 0x1c2521 : 0xdda66c, 3);
+				g.lineStyle(1.3, 0xa2765b).strokeCircle(78, 55, 10);
+				g.fillStyle(0x333a2f).fillCircle(78, 55, 7);
+				line(g, [{ x: 10, y: 40 }, { x: 10, y: 32 }, { x: 51, y: 32 }], 0x8e6b51, 3);
+				g.fillStyle(0xb4a083).fillRect(97, 41, 13, 9);
+				line(g, [{ x: 103, y: 43 }, { x: 99, y: 47 }, { x: 107, y: 47 }], 0x526350, 1.5);
+			} else if (type === "medbay") {
+				g.fillStyle(0x82c2c0, .18).fillEllipse(38, 58, 64, 22);
+				g.fillStyle(0xd7e6db).fillRect(77, 51, 19, 23);
+				line(g, [{ x: 81, y: 52 }, { x: 87, y: 52 }, { x: 87, y: 72 }], 0x7ea5a1, 1);
+				g.fillStyle(0xa9d0c3).fillCircle(92, 65, 2);
+				for (let x = 104; x < 138; x += 8) { g.fillStyle(0xd8e3d0).fillRect(x, 73, 4, 6); g.fillStyle(0x9ec2bb).fillRect(x, 72, 4, 2); }
+				line(g, [{ x: 78, y: 36 }, { x: 90, y: 36 }, { x: 90, y: 43 }], 0xbfdbcf, 2);
+				g.fillStyle(0xb9dcce).fillEllipse(90, 44, 13, 4);
+			} else if (type === "radio") {
+				g.fillStyle(0x70d4bb, .13).fillEllipse(40, 67, 67, 25);
+				for (let x = 24; x < 58; x += 4) for (let y = 47; y < 67; y += 4) g.fillStyle(0x86baa7, .08).fillRect(x, y, 1, 1);
+				line(g, [{ x: 28, y: 69 }, { x: 29, y: 74 }, { x: 69, y: 74 }, { x: 72, y: 68 }], 0x132c2c, 2);
+				g.fillStyle(0x8eaaa0).fillRect(29, 71, 29, 3);
+				for (let x = 31; x < 58; x += 4) line(g, [{ x, y: 71 }, { x, y: 74 }], 0x314b48, .8);
+				for (const x of [113, 117]) line(g, [{ x, y: 36 }, { x, y: 75 }], 0x15272a, 1.5);
+				g.fillStyle(0xa5b48f).fillRect(99, 35, 10, 6);
+			} else if (type === "storage") {
+				g.fillStyle(0x222f28).fillRect(79, 34, 5, 49);
+				g.fillStyle(0xd8c286).fillRect(19, 43, 10, 4).fillRect(102, 76, 11, 3);
+				line(g, [{ x: 9, y: 33 }, { x: 154, y: 33 }], 0x89a187, 1.5);
+				g.fillStyle(0xbfa57a).fillRect(149, 56, 12, 19);
+				g.fillStyle(0x726c4f).fillRect(152, 59, 6, 12);
+				for (const x of [16, 79, 89, 152]) screw(x, 80);
+			} else if (type === "dormitory") {
+				g.fillStyle(0xc1abc9).fillRect(31, 46, 41, 4).fillRect(115, 68, 40, 4);
+				g.fillStyle(0x9082a1).fillRect(31, 48, 41, 2).fillRect(115, 70, 40, 2);
+				g.fillStyle(0xc9a779).fillRoundedRect(76, 41, 18, 9, 2);
+				g.fillStyle(0xf2d6a1).fillRect(78, 43, 14, 3);
+				line(g, [{ x: 85, y: 49 }, { x: 85, y: 65 }], 0x9e8c75, 1.5);
+				g.fillStyle(0x9f879b).fillRect(9, 34, 22, 9);
+				g.fillStyle(0xc1b2bd).fillRect(12, 36, 16, 5);
+			}
+			g.fillStyle(accent, .12).fillRect(7, 82, 157, 1);
+		}
 		private paintFurniture(g: Phaser.GameObjects.Graphics, type: string, level: number): void {
 			const panel = (x: number, y: number, w: number, h: number, color: number) => {
-				g.fillStyle(0x0d1a11).fillRect(x + 2, y + 2, w, h);
+				g.fillStyle(0x061013, .8).fillRect(x + 2, y + 3, w, h);
 				g.fillStyle(color).fillRect(x, y, w, h);
-				line(g, [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }], 0xb2b79b, 1, .28);
+				g.fillStyle(blend(color, 0x030c10, .22)).fillRect(x, y + h * .7, w, h * .3);
+				line(g, [{ x, y: y + h }, { x, y }, { x: x + w, y }], blend(color, 0xe0dfc5, .4), 1, .75);
+				line(g, [{ x: x + w, y: y + 1 }, { x: x + w, y: y + h }], 0x061215, 1, .75);
 			};
-			const chest = (x: number, y: number, w: number, h: number, color = 0x6e7953) => {
+			const chest = (x: number, y: number, w: number, h: number, color = 0x8c855d) => {
 				panel(x, y, w, h, color);
-				line(g, [{ x: x + 5, y }, { x: x + 5, y: y + h }, { x: x + w - 5, y: y + h }, { x: x + w - 5, y }], 0x263a26, 2);
-				g.fillStyle(0xc6bd82).fillRect(x + w / 2 - 4, y + 4, 8, 3);
+				line(g, [{ x: x + 5, y }, { x: x + 5, y: y + h }, { x: x + w - 5, y: y + h }, { x: x + w - 5, y }], 0x30453a, 2);
+				g.fillStyle(0xe0c995).fillRect(x + w / 2 - 4, y + 4, 8, 3);
+				line(g, [{ x: x + w / 2 - 2, y: y + 5 }, { x: x + w / 2 + 2, y: y + 5 }], 0x817b5b, .5);
 			};
 			switch (type) {
 				case "workshop":
-					panel(12, 37, 53, 33, 0x475a44);
+					panel(12, 37, 53, 33, 0x8c704e);
 					for (let x = 18; x < 58; x += 10) { line(g, [{ x, y: 42 }, { x: x + 3, y: 54 }], 0xbcb79a, 2); g.fillStyle(0x222c21).fillRect(x - 1, 55, 5, 5); }
-					panel(11, 72, 78, 7, 0x87724f);
+					panel(11, 72, 78, 7, 0x9e8059);
 					g.fillStyle(0x44503a).fillRect(16, 79, 4, 4).fillRect(80, 79, 4, 4);
-					panel(75, 57, 22, 19, 0x5c6b50);
+					panel(75, 57, 22, 19, 0x75867c);
 					g.fillStyle(0x9aab80).fillRect(74, 60, 24, 3);
 					line(g, [{ x: 68, y: 69 }, { x: 104, y: 69 }], 0xadb796, 2);
 					g.fillStyle(0x293d2b).fillCircle(79, 64, 6);
-					panel(113, 60, 46, 20, 0x685d43);
+					panel(113, 60, 46, 20, 0x8b7250);
 					rifle(g, 131, 60, .5);
 					chest(120, 75, 24, 9);
 					break;
 				case "ammo":
-					panel(23, 37, 49, 43, 0x81754b);
+					panel(23, 37, 49, 43, 0x929267);
 					panel(30, 45, 33, 25, 0x253829);
 					g.fillStyle(0xa49b6a).fillRect(42, 43, 9, 27).fillRect(33, 68, 27, 5);
 					g.fillStyle(0x9b8c5b).fillEllipse(47, 36, 33, 8);
@@ -493,7 +611,7 @@ export function createWorld(
 					g.fillStyle(0x576b47).fillRect(152, 58, 9, 23);
 					break;
 				case "recycler":
-					panel(17, 48, 65, 34, 0x665442);
+					panel(17, 48, 65, 34, 0x92624f);
 					polygon(g, [{ x: 18, y: 48 }, { x: 28, y: 36 }, { x: 68, y: 36 }, { x: 81, y: 48 }], 0x8b7450);
 					g.fillStyle(0x192e21).fillRect(28, 48, 44, 19);
 					for (let x = 30; x < 70; x += 7) g.fillStyle(0xb49d72).fillRect(x, 51, 3, 10);
@@ -503,29 +621,29 @@ export function createWorld(
 					g.fillStyle(0x82543c).fillRect(5, 68, 8, 13);
 					break;
 				case "medbay":
-					panel(11, 35, 49, 24, 0x5d7965);
-					panel(14, 38, 43, 18, 0x233c30);
+					panel(11, 35, 49, 24, 0x7aa7a4);
+					panel(14, 38, 43, 18, 0x163d43);
 					line(g, [{ x: 17, y: 48 }, { x: 24, y: 48 }, { x: 29, y: 43 }, { x: 34, y: 53 }, { x: 39, y: 43 }, { x: 44, y: 48 }, { x: 52, y: 48 }], 0xb5d0a5, 1.2);
-					panel(12, 68, 62, 8, 0x9cac97);
-					g.fillStyle(0xc4c8ac).fillRoundedRect(16, 63, 52, 7, 2);
+					panel(12, 68, 62, 8, 0xa9cbc3);
+					g.fillStyle(0xd2e5d6).fillRoundedRect(16, 63, 52, 7, 2);
 					g.fillStyle(0xe0d8ba).fillRect(16, 61, 12, 8);
 					line(g, [{ x: 15, y: 76 }, { x: 15, y: 82 }, { x: 69, y: 82 }, { x: 69, y: 76 }], 0x6d8368, 2);
-					panel(101, 38, 38, 42, 0x78896f);
+					panel(101, 38, 38, 42, 0xa5c9c2);
 					g.fillStyle(0xd4d6b5).fillRect(116, 44, 7, 18).fillRect(110, 50, 19, 6);
 					line(g, [{ x: 104, y: 68 }, { x: 136, y: 68 }], 0x344d38, 2);
 					g.fillStyle(0xd7d0af).fillRect(142, 70, 17, 4);
 					line(g, [{ x: 154, y: 68 }, { x: 154, y: 63 }, { x: 147, y: 63 }], 0x97b49a, 2);
 					break;
 				case "radio":
-					panel(12, 68, 96, 12, 0x4b6555);
-					panel(20, 44, 43, 26, 0x678372);
-					panel(24, 47, 35, 19, 0x153326);
+					panel(12, 68, 96, 12, 0x497a78);
+					panel(20, 44, 43, 26, 0x629d99);
+					panel(24, 47, 35, 19, 0x0f383a);
 					g.lineStyle(1, 0x9dbb87, .65).strokeCircle(42, 57, 7);
 					line(g, [{ x: 28, y: 57 }, { x: 56, y: 57 }], 0x6b8e65, 1);
 					panel(73, 53, 26, 16, 0x253f30);
 					g.fillStyle(0xd1ba79).fillCircle(92, 62, 3);
 					for (let x = 78; x < 91; x += 4) g.fillStyle(0x8eb176).fillRect(x, 57, 2, 3);
-					panel(125, 34, 31, 47, 0x3e5b48);
+					panel(125, 34, 31, 47, 0x466b74);
 					for (let y = 39; y < 78; y += 8) { panel(128, y, 25, 5, 0x183222); g.fillStyle(0x90b079).fillRect(148, y + 1, 2, 2); }
 					line(g, [{ x: 82, y: 52 }, { x: 85, y: 32 }], 0x93a07f, 1.5);
 					break;
@@ -542,11 +660,11 @@ export function createWorld(
 					break;
 				case "dormitory":
 					for (const x of [12, 96]) {
-						g.fillStyle(0x586854).fillRect(x, 46, 3, 36).fillRect(x + 60, 46, 3, 36);
+						g.fillStyle(0x9a91a4).fillRect(x, 46, 3, 36).fillRect(x + 60, 46, 3, 36);
 						for (const y of [49, 71]) {
-							panel(x, y, 63, 5, 0x849178);
+							panel(x, y, 63, 5, 0x938b9e);
 							g.fillStyle(0xc2bba5).fillRect(x + 5, y - 4, 13, 5);
-							g.fillStyle(0x6c7569).fillRect(x + 20, y - 4, 37, 5);
+							g.fillStyle(0x9d8eaf).fillRect(x + 20, y - 4, 37, 5);
 						}
 						line(g, [{ x: x + 52, y: 50 }, { x: x + 52, y: 82 }], 0x859575, 2);
 						for (let y = 56; y < 80; y += 7) line(g, [{ x: x + 48, y }, { x: x + 57, y }], 0x859575, 1.5);
@@ -554,7 +672,7 @@ export function createWorld(
 					chest(77, 70, 16, 11, 0x76654d);
 					break;
 			}
-			for (let n = 0; n < Math.min(5, level); n++) g.fillStyle(0xdcc894, .65).fillRect(152 - n * 5, 12, 3, 3);
+			for (let n = 0; n < Math.min(5, level); n++) g.fillStyle(0xe3d4a9, .8).fillRect(152 - n * 5, 19, 3, 2);
 		}
 
 		private clickFeedback(at: Point, layer: Phaser.GameObjects.Container): void {
@@ -585,7 +703,7 @@ export function createWorld(
 			const label = this.text(0, -51, "", 12, "#f0dbac").setOrigin(.5).setBackgroundColor("#162219").setPadding(5, 3).setVisible(false);
 			const order = this.add.circle(-10, -32, 3, C.sage).setStrokeStyle(1, 0x19261a).setVisible(false);
 			const hit = this.add.zone(0, -21, 32, 46).setInteractive({ useHandCursor: true });
-			const slot: ScavActor = { actor, body, legA, legB, hand, gear, label, order, selection, hovered: false, gearSignature: "", anchor: { x: 220, y: 128 }, working: false, walking: false, phase: index * 1.71 };
+			const slot: ScavActor = { actor, body, legA, legB, hand, gear, label, order, selection, hovered: false, gearSignature: "", anchor: { x: 220, y: 128 }, working: false, walking: false, walkSpan: 0, phase: index * 1.71 };
 			hit.on("pointerover", () => { if (requestedView === "base") { slot.hovered = true; selection.setVisible(true); label.setVisible(true); actor.setDepth(80); } });
 			hit.on("pointerout", () => { slot.hovered = false; const selected = snapshot().selectedScavId === scavId; selection.setVisible(selected); label.setVisible(selected); actor.setDepth(30); });
 			hit.on("pointerdown", () => { if (requestedView === "base") { this.clickFeedback({ x: actor.x, y: actor.y - 19 }, this.baseLayer); interactions.onScav?.(scavId); } });
@@ -614,13 +732,17 @@ export function createWorld(
 					const color = construction ? C.gold : 0x95b37b;
 					cell.progress.fillStyle(0x08190d).fillRect(1, 97, 170, 3);
 					cell.progress.fillStyle(color, .9).fillRect(1, 97, Phaser.Math.Clamp(progress, 0, 1) * 170, 3);
+					for (let worker = 0; worker < Math.min(3, room.workerIds.length); worker++) {
+						const x = 162 - worker * 8;
+						cell.progress.fillStyle(cell.working ? 0xc7dcaa : 0x9eb7ad, .85).fillCircle(x, 7, 1.7).fillRoundedRect(x - 2.4, 9, 4.8, 4, 1);
+					}
 					const seconds = production?.remainingSeconds;
 					const remaining = Math.ceil(seconds ?? 0);
 					const time = seconds === null || seconds === undefined ? "" : `${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, "0")}`;
 					const status = construction ? `${Math.floor(progress * 100)}% · РАБОТЫ` : room.type === "storage" ? "ЗАПАСЫ БАЗЫ" : room.type === "dormitory" ? "МЕСТА ДЛЯ ОТРЯДА" : !room.workerIds.length ? "НУЖЕН РАБОТНИК" : production?.reason ? production.reason : `${production?.status ?? "РАБОТА"} ${time}`;
 					const clippedStatus = `${status.toLocaleUpperCase("ru-RU").slice(0, 22)}${status.length > 22 ? "…" : ""}`;
 					cell.status.setText(clippedStatus).setColor(construction ? "#e8c18a" : cell.working ? "#b1c89a" : "#a4b096");
-					cell.lamp.setAlpha(construction ? .08 : cell.working ? .18 : .11);
+					cell.lamp.setAlpha(construction ? .1 : cell.working ? .27 : .19);
 				}
 			}
 			this.baseCaption.setText(`УБЕЖИЩЕ · УРОВЕНЬ ${state.level}`);
@@ -628,6 +750,9 @@ export function createWorld(
 			const people = state.scavs ?? [];
 			const alive = new Set(people.map((scav) => scav.id));
 			for (const [id, actor] of this.scavs) if (!alive.has(id)) { actor.actor.destroy(true); this.scavs.delete(id); }
+			const freeCount = people.filter((scav) => scav.status !== "raiding" && !rooms.some((room) => room.id === scav.assignment && room.workerIds.includes(scav.id))).length;
+			const leftCount = Math.min(4, freeCount);
+			const rightCount = Math.max(0, freeCount - leftCount);
 			let freeIndex = 0;
 			people.forEach((scav, index) => {
 				const slot = this.scavs.get(scav.id) ?? this.createScav(scav.id, index);
@@ -636,8 +761,20 @@ export function createWorld(
 				const workerRank = room?.workerIds.indexOf(scav.id) ?? 0;
 				slot.working = Boolean(room && room.queue.length && scav.status === "ready" && room.status === "ready" && production?.rate && !production.reason);
 				slot.walking = !room && scav.status === "ready";
-				if (room) { const p = cellPosition(room.column, room.row); slot.anchor = { x: p.x + 68 + Math.max(0, workerRank) * 32, y: p.y + 80 }; }
-				else { slot.anchor = { x: 307 + freeIndex % 7 * 55, y: 129 }; freeIndex++; }
+				if (room) { const p = cellPosition(room.column, room.row); slot.anchor = { x: p.x + 68 + Math.max(0, workerRank) * 32, y: p.y + 80 }; slot.actor.setScale(1); slot.walkSpan = 0; }
+				else if (scav.status !== "raiding") {
+					const onLeft = freeIndex < leftCount;
+					const rank = onLeft ? freeIndex : freeIndex - leftCount;
+					const count = onLeft ? leftCount : rightCount;
+					const span = onLeft ? 95 : 306;
+					const spacing = count > 1 ? span / (count - 1) : 40;
+					slot.anchor = { x: (onLeft ? 282 : 465) + (count > 1 ? rank * spacing : span / 2), y: 129 };
+					const scale = Math.min(1, Math.max(.55, spacing / 34));
+					slot.actor.setScale(scale);
+					slot.walkSpan = count === 1 ? 12 : Math.max(0, Math.min(14, (spacing - 32 * scale) / 2 - 1));
+					slot.walking = scav.status === "ready" && slot.walkSpan > 1;
+					freeIndex++;
+				}
 				slot.actor.setVisible(scav.status !== "raiding").setAlpha(scav.status === "wounded" ? .6 : .75 + Math.min(100, scav.health) / 400);
 				const selected = state.selectedScavId === scav.id;
 				slot.selection.setVisible(selected || slot.hovered).setStrokeStyle(1.5, selected ? C.light : C.gold);
@@ -656,14 +793,25 @@ export function createWorld(
 
 		private animateShelter(time: number): void {
 			this.elevator.setY(reducedMotion ? 179 : 179 + (1 - Math.cos(time / 5100)) * 111);
+			this.ambient.clear();
+			if (!reducedMotion) {
+				for (let n = 0; n < 5; n++) {
+					const cycle = (time / 11000 + n / 5) % 1;
+					this.ambient.fillStyle(0xb1c2b8, .07 * (1 - cycle)).fillEllipse(651 - cycle * 24, 26 - cycle * 21, 3 + cycle * 17, 3 + cycle * 9);
+				}
+				for (let n = 0; n < 7; n++) {
+					const cycle = (time / 17000 + n / 7) % 1;
+					this.ambient.fillStyle(0xdac99c, .1 * Math.sin(cycle * Math.PI)).fillRect(227 + n * 74 + cycle * 11, 126 - cycle * 35, 1, 1);
+				}
+			}
 			for (const slot of this.scavs.values()) {
 				const phase = time / 340 + slot.phase;
 				const animated = !reducedMotion && slot.actor.visible;
 				const walk = animated && slot.walking;
 				const work = animated && slot.working;
-				const sway = walk ? Math.sin(time / 2200 + slot.phase) * 17 : 0;
+				const sway = walk ? Math.sin(time / 2200 + slot.phase) * slot.walkSpan : 0;
 				slot.actor.setPosition(slot.anchor.x + sway, slot.anchor.y);
-				slot.body.setY(work ? Math.sin(phase) * .8 : walk ? Math.abs(Math.sin(phase)) * -.9 : 0);
+				slot.body.setY(work ? Math.sin(phase) * .8 : walk ? Math.abs(Math.sin(phase)) * -.9 : animated ? Math.sin(time / 1600 + slot.phase) * .3 : 0);
 				slot.legA.setY(-5 + (walk ? Math.sin(phase) * 2 : 0));
 				slot.legB.setY(-5 - (walk ? Math.sin(phase) * 2 : 0));
 				slot.hand.setAngle(work ? -48 + Math.sin(phase) * 28 : walk ? Math.sin(phase) * 16 : 0);
@@ -678,6 +826,10 @@ export function createWorld(
 					g.fillStyle(C.gold, .9).fillCircle(115, 62, 3);
 					line(g, [{ x: 115, y: 65 }, { x: 115, y: 79 }], 0x938063, 7);
 					line(g, [{ x: 117, y: 68 }, { x: 127, y: 62 + (reducedMotion ? 0 : Math.sin(time / 180) * 4) }], 0xccb287, 2);
+					if (!reducedMotion) for (let n = 0; n < 3; n++) {
+						const cycle = (time / 520 + n * .3) % 1;
+						line(g, [{ x: 128, y: 62 }, { x: 128 + cycle * (7 + n * 3), y: 62 + cycle * 13 }], 0xffd07c, 1, 1 - cycle);
+					}
 					continue;
 				}
 				if (cell.room.type === "radio") {
@@ -940,7 +1092,7 @@ export function createWorld(
 		private syncSnapshot(): void {
 			if (!this.baseCaption) return;
 			const state = snapshot();
-			this.lastSelection = `${state.selectedScavId ?? ""}:${state.selectedMapId ?? ""}:${state.selectedRoomId ?? ""}`;
+			this.lastSelection = `${state.selectedScavId ?? ""}:${state.selectedMapId ?? ""}:${state.selectedRoomId ?? ""}:${state.selectedSite?.column ?? ""}:${state.selectedSite?.row ?? ""}`;
 			this.syncShelter(state);
 			this.operationsCaption.setText(`В РЕЙДЕ: ${state.raids.length}  ·  ЖДУТ ПРИКАЗ: ${state.raids.filter((raid) => raid.expedition?.status === "choice").length}`);
 			this.selectedRoute.clear();
@@ -1086,7 +1238,7 @@ export function createWorld(
 
 		update(time: number): void {
 			const selection = snapshot();
-			if (time - this.lastSync > 1000 || `${selection.selectedScavId ?? ""}:${selection.selectedMapId ?? ""}:${selection.selectedRoomId ?? ""}` !== this.lastSelection) {
+			if (time - this.lastSync > 1000 || `${selection.selectedScavId ?? ""}:${selection.selectedMapId ?? ""}:${selection.selectedRoomId ?? ""}:${selection.selectedSite?.column ?? ""}:${selection.selectedSite?.row ?? ""}` !== this.lastSelection) {
 				this.lastSync = time;
 				this.syncSnapshot();
 			}
