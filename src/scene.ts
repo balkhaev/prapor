@@ -91,6 +91,7 @@ type ShelterCell = {
 	hovered: boolean;
 	room: RoomInstance | null;
 	working: boolean;
+	operational: "empty" | "building" | "working" | "blocked" | "idle" | "passive";
 	feedback: Phaser.GameObjects.Text;
 	lastCycles: number | null;
 	completedAt: number;
@@ -111,12 +112,12 @@ const ROOM_HEIGHT = 100;
 const cellPosition = (column: number, row: number): Point => ({ x: [40, 220, 448, 628][column] ?? 40, y: 148 + row * 111 });
 const ROOM_STYLE: Record<string, { label: string; color: number; light: number; wall: number }> = {
 	workshop: { label: "МАСТЕРСКАЯ", color: 0xd7a368, light: 0xffcc88, wall: 0x594438 },
-	ammo: { label: "ПАТРОННЫЙ ЦЕХ", color: 0xc6ca78, light: 0xf1e4a5, wall: 0x515038 },
+	ammo: { label: "ПАТРОНЫ", color: 0xd4d889, light: 0xf1e4a5, wall: 0x515038 },
 	recycler: { label: "РАЗБОРКА", color: 0xdd9373, light: 0xffbd99, wall: 0x613e34 },
 	medbay: { label: "МЕДБЛОК", color: 0x89d6d0, light: 0xc7f8ef, wall: 0x355c5c },
-	radio: { label: "РАДИОУЗЕЛ", color: 0x77bfc0, light: 0xace9d7, wall: 0x294b50 },
+	radio: { label: "РАДИО", color: 0x8cd4d5, light: 0xace9d7, wall: 0x294b50 },
 	storage: { label: "СКЛАД", color: 0xb6c694, light: 0xe6e9b3, wall: 0x465546 },
-	dormitory: { label: "ЖИЛОЙ БЛОК", color: 0xc1a8da, light: 0xf1d9f4, wall: 0x55495b },
+	dormitory: { label: "ЖИЛЬЁ", color: 0xd0b8ea, light: 0xf1d9f4, wall: 0x55495b },
 };
 const blend = (a: number, b: number, amount: number): number => {
 	const channel = (shift: number) => Math.round(((a >> shift) & 255) * (1 - amount) + ((b >> shift) & 255) * amount);
@@ -564,14 +565,14 @@ export function createWorld(
 			const frame = this.add.graphics();
 			const progress = this.add.graphics();
 			const animation = this.add.graphics();
-			const label = this.text(10, 8, "", 12, "#d5c8aa");
-			const status = this.text(10, 87, "", 9, "#a3b29a");
-			const feedback = this.text(86, 43, "", 12, "#d6efb6").setOrigin(.5).setBackgroundColor("#163023").setPadding(6, 3).setVisible(false);
+			const label = this.text(10, 2, "", 18, "#fff0d6").setFontFamily("Manrope, sans-serif").setFontStyle("bold").setLetterSpacing(0).setShadow(0, 1, "#081416", 0, true, true);
+			const status = this.text(22, 82, "", 14, "#c1d8bd").setFontFamily("Manrope, sans-serif").setFontStyle("bold").setLetterSpacing(0).setShadow(0, 1, "#051010", 0, true, true);
+			const feedback = this.text(86, 43, "", 16, "#e6ffce").setOrigin(.5).setFontFamily("Manrope, sans-serif").setFontStyle("bold").setLetterSpacing(0).setBackgroundColor("#163023").setPadding(6, 3).setVisible(false);
 			const lamp = this.add.image(85, 43, "prapor-light").setScale(.66, .38).setAlpha(.12).setBlendMode(Phaser.BlendModes.ADD);
 			const zone = this.add.zone(86, 50, ROOM_WIDTH, ROOM_HEIGHT).setInteractive({ useHandCursor: true });
 			const root = this.add.container(p.x, p.y, [art, lamp, animation, frame, label, status, progress, feedback, zone]);
 			this.baseLayer.add(root);
-			const cell: ShelterCell = { root, art, frame, progress, animation, label, status, lamp, zone, signature: "", column, row, hovered: false, room: null, working: false, feedback, lastCycles: null, completedAt: -10000 };
+			const cell: ShelterCell = { root, art, frame, progress, animation, label, status, lamp, zone, signature: "", column, row, hovered: false, room: null, working: false, operational: "empty", feedback, lastCycles: null, completedAt: -10000 };
 			this.cells.set(`${column}:${row}`, cell);
 			zone.on("pointerover", (pointer: Phaser.Input.Pointer) => { if (this.acceptsPointer(pointer, "base")) { cell.hovered = true; this.paintCellFrame(cell); } });
 			zone.on("pointerout", () => { cell.hovered = false; this.paintCellFrame(cell); });
@@ -606,6 +607,8 @@ export function createWorld(
 			if (selected || cell.hovered) {
 				for (const x of [1, ROOM_WIDTH - 9]) for (const y of [1, ROOM_HEIGHT - 9]) cell.frame.fillStyle(C.gold, .85).fillRect(x, y, 8, 2).fillRect(x, y, 2, 8);
 			}
+			if (cell.operational === "working") cell.frame.fillStyle(0xc1e4a6, .78).fillRect(2, 78, 4, 14);
+			else if (cell.operational === "blocked") cell.frame.fillStyle(0xf0b37e, .9).fillRect(2, 80, 4, 12);
 		}
 
 		private paintRoom(cell: ShelterCell): void {
@@ -626,21 +629,21 @@ export function createWorld(
 				g.lineStyle(1, 0xa6b99a, .66).strokeRoundedRect(66, 36, 40, 34, 4);
 				line(g, [{ x: 77, y: 53 }, { x: 95, y: 53 }], 0xc6d6b9, 2.3, .9);
 				line(g, [{ x: 86, y: 44 }, { x: 86, y: 62 }], 0xc6d6b9, 2.3, .9);
-				cell.label.setText("НОВЫЙ УЧАСТОК").setColor("#aab69d");
-				cell.status.setText("+ ПОСТРОИТЬ КОМНАТУ").setColor("#b4c5a7");
+				cell.label.setText("УЧАСТОК +").setColor("#c2d1b6");
+				cell.status.setText("ПОСТРОИТЬ").setColor("#bdcea9");
 				cell.lamp.setVisible(false);
 				return;
 			}
 			const style = ROOM_STYLE[room.type] ?? ROOM_STYLE.workshop!;
 			g.fillStyle(0x101919).fillRect(0, 0, ROOM_WIDTH, ROOM_HEIGHT);
-			for (let y = 24; y < 82; y += 3) g.fillStyle(blend(style.wall, 0x0d191c, (y - 24) / 96)).fillRect(6, y, 160, 3);
+			for (let y = 24; y < 82; y += 3) g.fillStyle(blend(style.wall, 0x101e25, (y - 24) / 170)).fillRect(6, y, 160, 3);
 			polygon(g, [{ x: 0, y: 22 }, { x: 8, y: 30 }, { x: 8, y: 74 }, { x: 0, y: 83 }], blend(style.wall, 0x0b1314, .46));
 			polygon(g, [{ x: 164, y: 30 }, { x: 172, y: 22 }, { x: 172, y: 83 }, { x: 164, y: 74 }], blend(style.wall, 0x030d0f, .58));
-			polygon(g, [{ x: 8, y: 75 }, { x: 164, y: 75 }, { x: 172, y: 86 }, { x: 0, y: 86 }], blend(style.wall, 0x919686, .23));
+			polygon(g, [{ x: 8, y: 75 }, { x: 164, y: 75 }, { x: 172, y: 86 }, { x: 0, y: 86 }], blend(style.wall, 0x9ba7a3, .27));
 			for (const x of [12, 39, 66, 93, 120, 147]) line(g, [{ x, y: 76 }, { x: (x - 86) * 1.16 + 86, y: 86 }], 0x111d1c, 1, .55);
 			line(g, [{ x: 3, y: 80 }, { x: 168, y: 80 }], 0xc9c9b1, .8, .15);
-			g.fillStyle(0x0c1819).fillRect(0, 85, ROOM_WIDTH, 15);
-			g.fillStyle(blend(style.wall, style.color, .12)).fillRect(1, 1, ROOM_WIDTH - 2, 22);
+			g.fillStyle(0x091416).fillRect(0, 84, ROOM_WIDTH, 16);
+			g.fillStyle(blend(style.wall, 0x09151a, .42)).fillRect(1, 1, ROOM_WIDTH - 2, 22);
 			g.fillStyle(style.color, .7).fillRect(1, 23, ROOM_WIDTH - 2, 1);
 			g.fillStyle(style.color, .6).fillRect(2, 2, 3, 19);
 			for (let y = 35; y < 76; y += 15) line(g, [{ x: 9, y }, { x: 164, y }], style.color, .7, .15);
@@ -652,7 +655,7 @@ export function createWorld(
 			g.fillStyle(0xc6cab4, .55).fillRect(63, 25, 46, 2);
 			g.fillStyle(style.light).fillRect(66, 27, 40, 2);
 			polygon(g, [{ x: 66, y: 29 }, { x: 35, y: 79 }, { x: 144, y: 79 }, { x: 106, y: 29 }], style.light, .075);
-			cell.label.setText(style.label).setColor("#eee7d2");
+			cell.label.setText(style.label).setColor("#fff1dc");
 			cell.lamp.setVisible(true).setTint(style.light);
 			this.paintFurniture(g, room.type, room.level);
 			this.paintRoomDetails(g, room.type, style.color);
@@ -847,25 +850,29 @@ export function createWorld(
 		private createScav(scavId: string, index: number, at: Point): ScavActor {
 			const actor = this.add.container(at.x, at.y).setDepth(30);
 			const body = this.add.container(0, 0);
-			const shadow = this.add.ellipse(0, 1, 18, 5, 0x06110a, .45);
+			const shadow = this.add.ellipse(0, 1, 20, 5, 0x041014, .6);
 			const selection = this.add.ellipse(0, 1, 27, 9).setStrokeStyle(1.5, C.gold).setVisible(false);
-			const legA = this.add.rectangle(-3, -5, 4, 10, 0x1b2b1e);
-			const legB = this.add.rectangle(3, -5, 4, 10, 0x273727);
-			const hand = this.add.rectangle(6, -21, 4, 13, 0xa18e65).setOrigin(.5, .15);
+			const legA = this.add.rectangle(-3, -5, 4, 10, 0x526359).setStrokeStyle(.8, 0x07141b);
+			const legB = this.add.rectangle(3, -5, 4, 10, 0x354f4a).setStrokeStyle(.8, 0x07141b);
+			const hand = this.add.rectangle(6, -21, 4, 13, 0xc7ac86).setStrokeStyle(.7, 0x183433).setOrigin(.5, .15);
 			const graphic = this.add.graphics();
-			const coats = [0x839273, 0xa28c60, 0x6f8b77, 0x8b7a65];
+			const coats = [0xbec49a, 0xd1ac78, 0x88c3bd, 0xba9ab7, 0xd08f77];
 			const coat = coats[index % coats.length]!;
+			graphic.fillStyle(0x0a1720).fillRoundedRect(-7, -29, 14, 19, 2);
 			graphic.fillStyle(coat).fillRect(-6, -27, 12, 16);
-			graphic.fillStyle(0x344b33).fillRect(-4, -24, 8, 10);
-			graphic.fillStyle(0xa7a77c).fillRect(-3, -22, 2, 5).fillRect(1, -22, 2, 5);
-			graphic.fillStyle(0xbfa57b).fillRect(-4, -36, 8, 9);
-			graphic.fillStyle(0x344c35).fillRect(-5, -38, 10, 5);
-			graphic.fillStyle(0x172a1c).fillRect(1, -33, 2, 2);
+			graphic.fillStyle(blend(coat, 0x163337, .45)).fillRect(-4, -24, 8, 10);
+			graphic.fillStyle(0xe5c895).fillRect(-3, -22, 2, 5).fillRect(1, -22, 2, 5);
+			graphic.fillStyle(blend(coat, 0xffeed6, .45)).fillRect(-6, -27, 11, 2);
+			graphic.fillStyle(0x08161b).fillRect(-5, -41, 10, 14);
+			graphic.fillStyle(index % 3 ? 0xd8b790 : 0xe4c7a2).fillRect(-4, -39, 8, 11);
+			graphic.fillStyle(index % 2 ? 0x876e4e : 0x608b83).fillRoundedRect(-6, -43, 12, 6, 2);
+			graphic.fillStyle(index % 2 ? 0xc7ab77 : 0xb5cfb9).fillRect(-5, -42, 9, 1);
+			graphic.fillStyle(0x15252b).fillRect(1, -35, 2, 2).fillRect(0, -30, 3, 1);
 			const gear = this.add.graphics();
 			const tool = this.add.graphics().setPosition(6, -21);
 			body.add([legA, legB, graphic, gear, hand, tool]);
-			const label = this.text(0, -51, "", 12, "#f0dbac").setOrigin(.5).setBackgroundColor("#162219").setPadding(5, 3).setVisible(false);
-			const order = this.add.circle(-10, -32, 3, C.sage).setStrokeStyle(1, 0x19261a).setVisible(false);
+			const label = this.text(0, -64, "", 16, "#ffedc7").setOrigin(.5).setFontFamily("Manrope, sans-serif").setFontStyle("bold").setLetterSpacing(0).setBackgroundColor("#0b1b20").setPadding(7, 4).setVisible(false);
+			const order = this.add.circle(-10, -34, 3.5, C.sage).setStrokeStyle(1, 0x10242b).setVisible(false);
 			const hit = this.add.zone(0, -21, 32, 46).setInteractive({ useHandCursor: true });
 			const slot: ScavActor = { actor, body, legA, legB, hand, gear, tool, label, order, selection, hovered: false, gearSignature: "", anchor: { ...at }, route: [], goal: "", assignment: null, role: "idle", dwellUntil: this.time.now + 2000 + index * 800, visit: 0, facing: 1, climbing: false, status: "ready", health: 100, working: false, walking: false, walkSpan: 0, phase: index * 1.71 };
 			hit.on("pointerover", (pointer: Phaser.Input.Pointer) => { if (this.acceptsPointer(pointer, "base")) { slot.hovered = true; selection.setVisible(true); label.setVisible(true); actor.setDepth(80); } });
@@ -893,6 +900,7 @@ export function createWorld(
 				cell.room = room;
 				const production = room ? state.roomProduction?.[room.id] : undefined;
 				cell.working = Boolean(room?.status === "ready" && room.queue.length && room.workerIds.length && production?.rate && !production.reason);
+				cell.operational = !room ? "empty" : room.status !== "ready" ? "building" : room.type === "storage" || room.type === "dormitory" ? "passive" : cell.working ? "working" : production?.reason || room.queue.length ? "blocked" : "idle";
 				if (cell.working) workingRooms++;
 				const signature = room ? `${room.id}:${room.type}:${room.level}:${room.status}` : "empty";
 				if (cell.signature !== signature) { cell.signature = signature; this.paintRoom(cell); }
@@ -906,9 +914,10 @@ export function createWorld(
 					cell.lastCycles = room.cycles;
 					const construction = room.construction;
 					const progress = construction ? construction.workDone / Math.max(1, construction.workRequired) : production?.progress ?? 0;
-					const color = construction ? C.gold : 0x95b37b;
-					cell.progress.fillStyle(0x08190d).fillRect(1, 97, 170, 3);
-					cell.progress.fillStyle(color, .9).fillRect(1, 97, Phaser.Math.Clamp(progress, 0, 1) * 170, 3);
+					const color = construction ? 0xf6c58b : cell.operational === "blocked" ? 0xe9ad7f : 0xb2d692;
+					cell.progress.fillStyle(0x030e11).fillRect(1, 96, 170, 4);
+					cell.progress.fillStyle(color, .95).fillRect(1, 96, Phaser.Math.Clamp(progress, 0, 1) * 170, 4);
+					cell.progress.fillStyle(0xecf2d5, .24).fillRect(1, 96, Phaser.Math.Clamp(progress, 0, 1) * 170, 1);
 					for (let worker = 0; worker < Math.min(3, room.workerIds.length); worker++) {
 						const x = 162 - worker * 8;
 						cell.progress.fillStyle(cell.working ? 0xc7dcaa : 0x9eb7ad, .85).fillCircle(x, 7, 1.7).fillRoundedRect(x - 2.4, 9, 4.8, 4, 1);
@@ -916,10 +925,18 @@ export function createWorld(
 					const seconds = production?.remainingSeconds;
 					const remaining = Math.ceil(seconds ?? 0);
 					const time = seconds === null || seconds === undefined ? "" : `${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, "0")}`;
-					const status = construction ? `${Math.floor(progress * 100)}% · РАБОТЫ` : room.type === "storage" ? "ЗАПАСЫ БАЗЫ" : room.type === "dormitory" ? "МЕСТА ДЛЯ ОТРЯДА" : !room.workerIds.length ? "НУЖЕН РАБОТНИК" : production?.reason ? production.reason : `${production?.status ?? "РАБОТА"} ${time}`;
-					const clippedStatus = `${status.toLocaleUpperCase("ru-RU").slice(0, 22)}${status.length > 22 ? "…" : ""}`;
-					cell.status.setText(clippedStatus).setColor(construction ? "#e8c18a" : cell.working ? "#b1c89a" : "#a4b096");
-					cell.lamp.setAlpha(construction ? .1 : cell.working ? .27 : .19);
+					const reason = production?.reason?.toLocaleLowerCase("ru-RU") ?? "";
+					const briefReason = reason.includes("склад") || reason.includes("мест") ? "СКЛАД ПОЛОН" : reason.includes("рабоч") ? "НУЖЕН РАБОЧИЙ" : reason.includes("нужно") ? "НУЖНЫ РЕСУРСЫ" : production?.reason ?? "";
+					const status = construction ? `СТРОЙКА ${Math.floor(progress * 100)}%` : room.type === "storage" ? "ЗАПАСЫ" : room.type === "dormitory" ? "МЕСТА ОТРЯДА" : cell.working ? `РАБОТА ${time}` : production?.reason ? briefReason : !room.workerIds.length ? "НУЖЕН РАБОЧИЙ" : production?.status === "Нет заказа" ? "БЕЗ ЗАКАЗА" : "ЖДЁТ ПАРТИЮ";
+					const clippedStatus = `${status.toLocaleUpperCase("ru-RU").slice(0, 17)}${status.length > 17 ? "…" : ""}`;
+					cell.status.setText(clippedStatus).setColor(construction ? "#ffd399" : cell.working ? "#d1efb0" : cell.operational === "blocked" ? "#edc294" : "#c1cbbc");
+					if (cell.working) {
+						cell.progress.fillStyle(0x0d2219).fillCircle(11, 90, 5);
+						polygon(cell.progress, [{ x: 9, y: 86 }, { x: 15, y: 90 }, { x: 9, y: 94 }], 0xc6e8a4);
+					} else if (cell.operational === "blocked") cell.progress.fillStyle(0xf0bd8f).fillRect(7, 86, 3, 8).fillRect(12, 86, 3, 8);
+					else if (construction) { line(cell.progress, [{ x: 7, y: 94 }, { x: 14, y: 87 }], 0xf4c687, 2.3); cell.progress.fillStyle(0xf4c687).fillRect(12, 85, 6, 3); }
+					else cell.progress.lineStyle(1.5, 0xb5c2b1, .85).strokeCircle(11, 90, 4);
+					cell.lamp.setAlpha(construction ? .12 : cell.working ? .3 : .2);
 				}
 			}
 			this.baseCaption.setText(`УБЕЖИЩЕ · УРОВЕНЬ ${state.level}`);
@@ -1019,6 +1036,12 @@ export function createWorld(
 					this.ambient.fillStyle(0xdac99c, .1 * Math.sin(cycle * Math.PI)).fillRect(227 + n * 74 + cycle * 11, 126 - cycle * 35, 1, 1);
 				}
 			}
+			const focusedRoom = this.viewState?.shelter?.rooms.find((room) => room.id === this.viewState?.selectedRoomId);
+			if (focusedRoom) {
+				const y = cellPosition(focusedRoom.column, focusedRoom.row).y + 83;
+				line(this.ambient, [{ x: 38, y }, { x: 802, y }], ROOM_STYLE[focusedRoom.type]?.light ?? C.gold, 1.3, .12);
+				this.ambient.fillStyle(C.light, .48).fillRect(414, y - 1, 12, 2);
+			}
 			for (const [id, slot] of this.scavs) {
 				const phase = time / 340 + slot.phase;
 				const animated = !reducedMotion && slot.actor.visible;
@@ -1054,6 +1077,17 @@ export function createWorld(
 				if (work) angle = slot.role === "radio" ? -125 + Math.sin(time / 900 + slot.phase) * 4 : slot.role === "medbay" ? -38 + Math.sin(time / 700 + slot.phase) * 10 : slot.role === "ammo" ? -53 + Math.sin(time / 350 + slot.phase) * 16 : slot.role === "recycler" ? -35 + Math.sin(time / 280 + slot.phase) * 40 : -45 + Math.sin(time / 320 + slot.phase) * 27;
 				slot.hand.setAngle(angle); slot.tool.setAngle(angle).setVisible(slot.working);
 				slot.body.setScale(slot.facing, 1);
+				if (slot.actor.visible) {
+					this.ambient.fillStyle(slot.working ? 0xc4d3a4 : 0x9bbebb, slot.working ? .2 : .12).fillEllipse(slot.actor.x, slot.actor.y + 1, 19, 3);
+					if (slot.label.visible) {
+						const halfWidth = slot.label.width / 2, scale = slot.actor.scaleX;
+						slot.label.setX(Phaser.Math.Clamp(0, (10 - slot.actor.x) / scale + halfWidth, (WIDTH - 10 - slot.actor.x) / scale - halfWidth));
+					}
+					if ((slot.hovered || this.viewState?.selectedScavId === id) && slot.route.length) {
+						line(this.ambient, [{ x: slot.actor.x, y: slot.actor.y }, ...slot.route], 0xe8c99d, 2, .26);
+						this.ambient.lineStyle(1.2, 0xe8c99d, .55).strokeEllipse(slot.anchor.x, slot.anchor.y, 17, 6);
+					}
+				}
 			}
 			this.elevator.setY(this.liftFeet - 49);
 			for (const cell of this.cells.values()) {
