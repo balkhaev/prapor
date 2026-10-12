@@ -20,6 +20,7 @@ import { FACTORY_KITS, MODULE_BY_ID, MODULE_MODELS, MODULE_SLOTS, MODULE_SLOT_LA
 export * from "./modules";
 import { initialShelter, ROOM_DEFINITIONS, RESOURCE_RECIPE_BY_ID, type ProductionJob, type RoomInstance, type ShelterCost, type ShelterRoomType } from "./shelter";
 export * from "./shelter";
+import { getRaidFieldFrame, getRaidFieldOutcome, getRaidFieldPlan, type RaidFieldPlan } from "../raid-field";
 
 export const SAVE_KEY = "prapor.save.v1";
 export const SAVE_VERSION = 5;
@@ -1016,8 +1017,16 @@ export function getAutoRaidStatus(state: GameState, scav: Scav): string {
 	return map ? raidBlockReason(state, scav, map, scav.autoRaid.minHealth) ?? "Готов к следующему выходу" : "Сектор не найден.";
 }
 
+const raidPhasePlans = new WeakMap<Raid, { signature: string; plan: RaidFieldPlan }>();
 export function getRaidPhase(raid: Raid, now: number): { label: string; progress: number } {
 	if (raid.expedition?.status === "choice") return { label: "Ожидает приказа", progress: 1 };
+	if (raid.expedition && !raid.expedition.legacyLoot) {
+		const signature = `${raid.mapId}:${raid.seed}:${raid.expedition.stage}:${raid.expedition.branch}:${raid.tactic}`;
+		let cached = raidPhasePlans.get(raid);
+		if (cached?.signature !== signature) { cached = { signature, plan: getRaidFieldPlan(raid) }; raidPhasePlans.set(raid, cached); }
+		const frame = getRaidFieldFrame(raid, now, cached.plan);
+		return { label: `Этап ${raid.expedition.stage} · ${frame.label}`, progress: frame.progress };
+	}
 	const progress = clamp((now - raid.startedAt) / (raid.endsAt - raid.startedAt), 0, 1);
 	const label = progress < 0.18 ? "Выход на маршрут" : progress < 0.52 ? "Поиск тайников"
 		: progress < 0.8 ? "Опасный участок" : progress < 1 ? "К точке выхода" : "Возвращение";
@@ -1429,6 +1438,10 @@ function reachCheckpoint(state: GameState, raid: Raid, now: number): RaidReport 
 	const map = ownValue(MAP_BY_ID, raid.mapId)!;
 	const scav = state.scavs.find((item) => item.id === raid.scavId)!;
 	const weapon = state.weapons.find((item) => item.id === raid.weaponInstanceId)!;
+	// Street observations change bounded rewards only here; previews never roll,
+	// credit loot, touch damage, or consume the existing settlement RNG streams.
+	const field = expedition.legacyLoot ? null : getRaidFieldOutcome(raid);
+	const streetText = field ? ` ${field.narrative}` : "";
 	const random = generator((raid.seed ^ Math.imul(expedition.stage, 0x45d9f3b)) >>> 0);
 	const success = random() < raid.chance;
 	const discoveriesBefore = expedition.discoveries.length;
@@ -1448,7 +1461,7 @@ function reachCheckpoint(state: GameState, raid: Raid, now: number): RaidReport 
 	if (!expedition.legacyLoot) for (const [slot, part] of Object.entries(weapon.modules)) if (slot !== "receiver") part.durability = Math.max(0, part.durability - (expedition.perks.includes("gunsmith") ? 1 : 2 + expedition.stage));
 	wearEquippedGear(state, scav, expedition.stage, !success);
 	if (!success) {
-		expedition.trail.push({ at: now, label: `Засада · этап ${expedition.stage}`, text: `Маршрут «${EXPEDITION_BRANCHES[expedition.branch].label}» сорван. Невынесенный груз потерян.${discoveriesText ? ` По рации передано: ${discoveriesText}.` : ""}`, kind: "danger" });
+		expedition.trail.push({ at: now, label: `Засада · этап ${expedition.stage}`, text: (`Маршрут «${EXPEDITION_BRANCHES[expedition.branch].label}» сорван. Невынесенный груз потерян.${discoveriesText ? ` По рации передано: ${discoveriesText}.` : ""}${streetText}`).slice(0, 400), kind: "danger" });
 		scav.health = Math.max(0, scav.health - Math.ceil((32 + random() * 35 + expedition.stage * 4) * injury));
 		state.raids = state.raids.filter((item) => item.id !== raid.id);
 		return finishExpedition(state, raid, false, now);
@@ -1458,11 +1471,12 @@ function reachCheckpoint(state: GameState, raid: Raid, now: number): RaidReport 
 	const lootMultiplier = Math.max(0.3, (0.5 + expedition.stage * 0.25) * (1 + raid.lootBonus + branch.lootBonus)
 		* (expedition.perks.includes("careful") ? 0.9 : 1));
 	expedition.cargo.money += Math.round((map.reward[0] + random() * (map.reward[1] - map.reward[0])) * lootMultiplier
-		* (expedition.perks.includes("haggler") ? 1.2 : 1));
+		* (expedition.perks.includes("haggler") ? 1.2 : 1) * (field?.moneyMultiplier ?? 1));
 	expedition.cargo.supplies.ammo += 2 + Math.floor(random() * (4 + map.level));
 	expedition.cargo.supplies.medicine += random() < 0.45 ? 1 : 0;
 	expedition.cargo.supplies.scrap += 2 + Math.floor(random() * (expedition.branch === "scavenge" ? 7 + map.level : 4 + map.level));
 	expedition.cargo.supplies.intel += expedition.branch === "recon" ? 2 + Math.floor(random() * 2) : random() < 0.4 ? 1 : 0;
+	if (field) for (const key of Object.keys(field.resourceBonus) as (keyof Supplies)[]) expedition.cargo.supplies[key] += field.resourceBonus[key];
 	const weaponChance = map.weaponChance * (expedition.branch === "combat" ? 1.15 : 0.7) * (expedition.legacyLoot ? 1 : 0.24) + (expedition.perks.includes("gunsmith") ? 0.1 : 0);
 	if (random() < weaponChance) {
 		const weaponId = map.weapons[Math.min(map.weapons.length - 1, Math.floor(random() ** (1.5 - expedition.stage * 0.16) * map.weapons.length))]!;
@@ -1479,13 +1493,14 @@ function reachCheckpoint(state: GameState, raid: Raid, now: number): RaidReport 
 			const pool = MODULE_MODELS.filter((model) => receiverRoll ? model.id === `receiver-${weaponId}`
 				: model.slot !== "receiver" && model.lootTier <= expedition.stage + (expedition.perks.includes("gunsmith") ? 1 : 0)
 					&& (model.platforms.includes("*") || model.platforms.includes(info.platform)) && (model.calibers.includes("*") || model.calibers.includes(info.caliber)));
-			const model = pool[Math.floor(partsRandom() * pool.length)]!;
+			const weightedPool = !receiverRoll && field?.preferredSlots.length ? pool.flatMap((model) => field.preferredSlots.includes(model.slot) ? [model, model] : [model]) : pool;
+			const model = weightedPool[Math.floor(partsRandom() * weightedPool.length)]!;
 			expedition.cargo.modules.push(createModule(state, model.id, now, Math.min(100, 45 + Math.floor(partsRandom() * 46) + (expedition.perks.includes("gunsmith") ? 10 : 0))));
 			if (model.slot === "receiver" && !state.discoveredWeapons.includes(model.weaponId!)) state.discoveredWeapons.push(model.weaponId!);
 		}
 	}
 	fitCargo(expedition.cargo, expedition.capacity);
-	expedition.trail.push({ at: now, label: `Контрольная точка ${expedition.stage}`, text: `Маршрут «${EXPEDITION_BRANCHES[expedition.branch].label}» пройден. В рюкзаке ${expedition.cargo.money} ₽, ${getCargoWeight(expedition.cargo)} ед. груза и ${expedition.cargo.weaponIds.length} ед. оружия.${discoveriesText ? ` Передано: ${discoveriesText}.` : ""}`, kind: "loot" });
+	expedition.trail.push({ at: now, label: `Контрольная точка ${expedition.stage}`, text: (`Маршрут «${EXPEDITION_BRANCHES[expedition.branch].label}» пройден. В рюкзаке ${expedition.cargo.money} ₽, ${getCargoWeight(expedition.cargo)} ед. груза и ${expedition.cargo.weaponIds.length} ед. оружия.${discoveriesText ? ` Передано: ${discoveriesText}.` : ""}${streetText}`).slice(0, 400), kind: "loot" });
 	expedition.status = "choice";
 	const candidates = (Object.keys(RUN_PERKS) as RunPerk[]).filter((perk) => !expedition.perks.includes(perk));
 	expedition.offers = [];
