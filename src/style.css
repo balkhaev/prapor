@@ -1,6 +1,94 @@
 @font-face{font-family:Manrope;src:url("/fonts/manrope.ttf") format("truetype");font-weight:200 800;font-display:swap}
 @font-face{font-family:"IBM Plex Mono";src:url("/fonts/ibm-plex-mono.ttf") format("truetype");font-weight:400;font-display:swap}
 :root{font-family:Manrope,system-ui,sans-serif;color:#eeeede;background:#131813;font-synthesis:none;--muted:#b0b7a3;--line:#3b4636;--panel:#20291f;--amber:#f0c783;--green:#bed299;--red:#f0a594;--radius:12px;color-scheme:dark}
+/* Expedition decisions and logistics share the same readable visual language. */
+.section-tabs{display:flex;gap:7px;padding:5px;background:#161f18;border:1px solid var(--line);border-radius:10px;margin-bottom:20px}
+.section-tabs button{display:flex;align-items:center;justify-content:center;gap:8px;flex:1;min-height:46px;border:1px solid transparent;border-radius:7px;background:transparent;color:var(--muted);font-weight:700}
+.section-tabs button.active{background:#3c4330;border-color:#807751;color:var(--amber)}
+.expedition-queue{display:grid;gap:14px;margin:0 0 24px}
+.decision-card{border:1px solid #b38b4d;border-radius:12px;background:linear-gradient(120deg,#3d3926,#232c21);overflow:hidden;box-shadow:0 8px 28px #0003}
+.decision-head{display:flex;align-items:center;gap:13px;padding:18px 20px;border-bottom:1px solid #6e6040}
+.decision-head>div{flex:1;min-width:0}
+.decision-head h3{margin:3px 0;color:#ffe0a6}
+.decision-head p{font-size:12px}
+.decision-head .scav-avatar{width:44px;height:48px}
+.decision-content{padding:18px 20px}
+.expedition-stage{display:flex;gap:6px;align-items:center;margin-bottom:16px}
+.expedition-stage span{flex:1;padding:8px;text-align:center;border:1px solid #48513d;border-radius:5px;background:#20281e;color:#a7b398;font-size:11px}
+.expedition-stage .done{border-color:#798d58;color:#d0e4ae;background:#30412a}
+.expedition-stage .current{border-color:#c59c56;color:#ffe0a6;background:#4a412a}
+.cargo-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:14px 0}
+.cargo-summary>div{border:1px solid #48533c;border-radius:8px;padding:12px;background:#1c251d}
+.cargo-summary span{display:block;font-size:11px;color:var(--muted)}
+.cargo-summary strong{display:block;margin:3px 0;font-size:18px;color:#f8d797;font-variant-numeric:tabular-nums}
+.cargo-summary small{color:var(--muted);font-size:10px}
+.cargo-items{display:flex;flex-wrap:wrap;gap:7px;margin:12px 0}
+.cargo-items>span{display:inline-flex;gap:6px;align-items:center;background:#20291e;border:1px solid #566247;border-radius:5px;padding:6px 9px;color:#d3dfc0;font-size:12px}
+.risk-note{padding:11px 13px;border-left:3px solid var(--red);border-radius:0 5px 5px 0;background:#392b23;color:#edc1a8;font-size:12px;margin:13px 0}
+.decision-branches{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:14px 0}
+.branch-choice{display:flex;flex-direction:column;align-items:flex-start;text-align:left;padding:15px;border:1px solid #68744f;border-radius:8px;background:#2b3725;min-height:120px}
+.branch-choice:hover:not(:disabled){background:#3a4630;border-color:var(--amber)}
+.branch-choice strong{font-size:15px;color:#f1dfb5;margin-bottom:6px}
+.branch-choice p{font-size:12px;line-height:1.6;margin-bottom:10px}
+.branch-choice small{font-size:11px;color:var(--green);margin-top:auto}
+.branch-choice.active{border-color:var(--amber);background:#44462f;box-shadow:inset 3px 0 var(--amber)}
+.extract-row{display:flex;gap:15px;align-items:center;justify-content:space-between;margin-top:18px;border-top:1px solid #5a6348;padding-top:16px}
+.extract-row p{font-size:12px}
+.extract-row .button{flex-shrink:0}
+.decision-pill{display:inline-flex;align-items:center;gap:6px;color:#ffe0a6;font-size:11px;font-weight:700}
+.scav-state.decision{color:#ffe0a6;border-color:#c69449;background:#4b3e23}
+.logistics-intro{display:flex;gap:15px;align-items:flex-start;border:1px solid #536442;border-radius:10px;background:#273322;padding:18px;margin-bottom:20px}
+.logistics-intro>svg{color:var(--green);flex-shrink:0;margin-top:4px}
+.logistics-intro p{font-size:13px;margin-top:5px}
+.logistics-grid,.research-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.logistics-card,.research-card{min-width:0;border:1px solid #536044;border-radius:10px;padding:20px;background:linear-gradient(130deg,#2a3425,#20291e)}
+.logistics-card .eyebrow,.research-card .eyebrow{color:var(--green)}
+.logistics-card h3,.research-card h3{margin:6px 0 8px}
+.logistics-card p,.research-card p{font-size:13px;line-height:1.75}
+.logistics-card .button,.research-card .button{margin-top:14px;width:100%}
+.quote-note{display:block;margin-top:7px;color:var(--muted);font-size:11px}
+.loadout-stats{display:flex;flex-wrap:wrap;gap:8px;margin:13px 0}
+.loadout-stats>span{border:1px solid #516046;border-radius:5px;padding:5px 8px;background:#1d281e;color:#c9d8b4;font-size:11px}
+.loadout-section .field-label{margin-top:15px}
+.loadout-item-note{border:1px solid #526344;border-radius:7px;padding:12px;margin-top:9px;background:#243021}
+.loadout-item-note p{font-size:12px;line-height:1.7}
+.loadout-item-note small{font-size:11px;color:var(--muted);display:block;margin-top:5px}
+.loadout-item-note .button{margin-top:10px}
+.loadout-check{display:flex;align-items:center;gap:11px;padding:13px;border:1px solid #60724e;border-radius:7px;background:#263522;margin:17px 0;cursor:pointer}
+.loadout-check input{width:20px;height:20px;flex-shrink:0;accent-color:var(--amber)}
+.loadout-check>span{font-size:13px;font-weight:700;color:#dce7c7}
+.loadout-check small{display:block;font-size:11px;font-weight:400;color:var(--muted);line-height:1.65;margin-top:3px}
+.training-section{border:1px solid #4e6141;border-radius:7px;margin-top:18px;background:#202c1f}
+.training-section summary{cursor:pointer;padding:12px;font-size:12px;color:#c9dab0;min-height:44px}
+.training-section>.field-hint{padding:0 12px}
+.training-section .gear-grid{padding:0 10px 12px;margin-top:7px}
+.weapon-role{margin:15px 0;border-left:3px solid #82955f;padding:12px 14px;background:#263523;border-radius:0 6px 6px 0}
+.weapon-role strong{font-size:13px;color:#d4e3b8}
+.weapon-role p{font-size:12px;margin-top:4px;line-height:1.75}
+.logistics-card h3 svg{vertical-align:-4px;margin-right:5px;color:var(--green)}
+.logistics-card.locked{border-style:dashed}
+.logistics-card .field-label{margin-top:16px}
+.decision-card .section-head{margin-top:0}
+.run-perk-pick>p{font-size:12px;margin-top:7px}
+.inspector .decision-card{margin-bottom:20px}
+.inspector .decision-head{padding:13px}
+.inspector .decision-content{padding:13px}
+.inspector .decision-branches{grid-template-columns:1fr}
+.inspector .decision-card h3{font-size:15px}
+.inspector .cargo-summary{grid-template-columns:1fr 1fr}
+.inspector .cargo-summary>div:last-child{grid-column:1/-1}
+.inspector .cargo-summary strong{font-size:17px}
+.inspector .branch-choice{min-height:100px;padding:13px}
+.inspector .extract-row{flex-direction:column;align-items:stretch}
+.inspector .decision-card .scav-avatar{display:none}
+.research-currency{display:flex;align-items:center;gap:10px;border:1px solid #6d7550;border-radius:8px;padding:14px 18px;background:#2f3525;color:#e7dfb9;margin:15px 0}
+.research-currency strong{font-size:24px;color:var(--amber)}
+.research-card.unlocked{border-color:#718859;background:#273422}
+.report-memory{display:flex;align-items:center;gap:8px;border:1px solid #6a8050;background:#293922;border-radius:7px;padding:11px 13px;color:#d2e2b8;font-size:12px;margin-bottom:13px}
+.economy-balance{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:16px 0}
+.economy-balance>div{padding:14px;background:#1d271e;border:1px solid #4d5e42;border-radius:8px;font-size:11px;color:var(--muted)}
+.economy-balance strong{display:block;font-size:18px;color:var(--amber);margin-top:5px}
+@media(max-width:640px){.decision-head,.decision-content{padding:15px}.decision-head{align-items:flex-start}.decision-head>.tag{display:none}.cargo-summary{grid-template-columns:1fr 1fr}.cargo-summary>div:last-child{grid-column:1/-1}.decision-branches{grid-template-columns:1fr}.branch-choice{min-height:108px}.extract-row{flex-direction:column;align-items:stretch}.extract-row .button{width:100%}.logistics-grid,.research-grid{grid-template-columns:1fr}.section-tabs{gap:3px}.section-tabs button{font-size:12px;gap:5px}.logistics-card,.research-card{padding:16px}.economy-balance{grid-template-columns:1fr 1fr}.economy-balance>div:last-child{grid-column:1/-1}}
 *{box-sizing:border-box}
 body{margin:0;font-size:14px;line-height:1.6}
 body.overlay-open{overflow:hidden}

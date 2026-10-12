@@ -13,6 +13,9 @@ import {
 	getContractProgress,
 	getContractLockReason,
 	getRaidPhase,
+	getRaidQuote,
+	getRecoveryAllowance,
+	getSupplyCapacity,
 	getWeaponPower,
 	healScav,
 	loadGame,
@@ -27,10 +30,19 @@ import {
 	setRaidTactic,
 	upgradeScavGear,
 	upgradeBase,
+	type GameState,
 } from "../src/game/engine";
 import { CONTRACTS, MAPS } from "../src/game/data";
 
 const NOW = 1_792_000_000_000;
+
+// These original one-return regressions cover migrated v1/v2 sorties. New
+// dispatches use checkpoint expeditions, covered independently in roguelite.test.
+function dispatchLegacyRaid(state: GameState, scavId: string, mapId: string, now: number) {
+	const result = dispatchRaid(state, scavId, mapId, now);
+	if (result.ok) state.raids.find((raid) => raid.id === result.raidId)!.expedition = null;
+	return result;
+}
 
 describe("the Prapor game loop", () => {
 	test("starts with a playable roster, equipment, supplies and a safe short raid", () => {
@@ -43,18 +55,20 @@ describe("the Prapor game loop", () => {
 		expect(getRaidChance(state, state.scavs[0]!, MAPS[0]!)).toBeGreaterThan(
 			0.8
 		);
-		const result = dispatchRaid(state, state.scavs[0]!.id, "courtyard", NOW);
+		const quote = getRaidQuote(state, state.scavs[0]!, MAPS[0]!);
+		const result = dispatchLegacyRaid(state, state.scavs[0]!.id, "courtyard", NOW);
 		expect(result.ok).toBe(true);
-		expect(state.raids[0]!.endsAt - NOW).toBeLessThanOrEqual(35_000);
-		expect(state.supplies.ammo).toBe(22);
+		expect(state.raids[0]!.endsAt - NOW).toBe(quote.duration * 1000);
+		expect(state.raids[0]!.endsAt - NOW).toBeLessThanOrEqual(40_000);
+		expect(state.supplies.ammo).toBe(24 - quote.ammo);
 	});
 
 	test("settles a raid once and rejects duplicate dispatch or changing its loadout", () => {
 		const state = createGame(NOW);
 		const scav = state.scavs[0]!;
-		const raid = dispatchRaid(state, scav.id, "courtyard", NOW);
+		const raid = dispatchLegacyRaid(state, scav.id, "courtyard", NOW);
 		expect(raid.ok).toBe(true);
-		expect(dispatchRaid(state, scav.id, "courtyard", NOW).ok).toBe(false);
+		expect(dispatchLegacyRaid(state, scav.id, "courtyard", NOW).ok).toBe(false);
 		expect(equipWeapon(state, scav.id, state.weapons[3]!.id).ok).toBe(false);
 		expect(repairWeapon(state, scav.weaponInstanceId!).ok).toBe(false);
 		const summary = advance(state, NOW + 40_000);
@@ -70,8 +84,8 @@ describe("the Prapor game loop", () => {
 
 	test("a save resumed mid-raid has the same outcome as the uninterrupted game", () => {
 		const state = createGame(NOW);
-		dispatchRaid(state, state.scavs[0]!.id, "courtyard", NOW);
-		dispatchRaid(state, state.scavs[1]!.id, "courtyard", NOW);
+		dispatchLegacyRaid(state, state.scavs[0]!.id, "courtyard", NOW);
+		dispatchLegacyRaid(state, state.scavs[1]!.id, "courtyard", NOW);
 		advance(state, NOW + 10_000);
 		const resumed = loadGame(saveGame(state), NOW + 10_000)!;
 		expect(resumed).not.toBeNull();
@@ -82,8 +96,8 @@ describe("the Prapor game loop", () => {
 
 	test("a long advance agrees with small advances across simultaneous raid events", () => {
 		const long = createGame(NOW);
-		dispatchRaid(long, long.scavs[0]!.id, "courtyard", NOW);
-		dispatchRaid(long, long.scavs[1]!.id, "courtyard", NOW);
+		dispatchLegacyRaid(long, long.scavs[0]!.id, "courtyard", NOW);
+		dispatchLegacyRaid(long, long.scavs[1]!.id, "courtyard", NOW);
 		const short = parseSave(saveGame(long))!;
 		advance(long, NOW + 120_000);
 		for (let seconds = 1; seconds <= 120; seconds++)
@@ -99,15 +113,16 @@ describe("the Prapor game loop", () => {
 
 	test("offline income is capped at eight hours and cannot be replayed", () => {
 		const state = createGame(NOW);
+		state.money = 0;
 		const before = state.money;
 		const summary = advance(state, NOW + MAX_OFFLINE_MS * 3);
 		expect(summary.capped).toBe(true);
 		expect(summary.elapsedMs).toBe(MAX_OFFLINE_MS);
-		expect(state.money - before).toBe(8 * 60 * 24);
+		expect(state.money - before).toBe(getRecoveryAllowance(state));
 		const earned = state.money;
 		advance(state, NOW + MAX_OFFLINE_MS * 3);
 		expect(state.money).toBe(earned);
-		expect(state.supplies.ammo).toBe(500);
+		expect(state.supplies.ammo).toBe(getSupplyCapacity(state).ammo);
 	});
 
 	test("locked sectors and paid actions never produce negative resources", () => {
@@ -115,7 +130,7 @@ describe("the Prapor game loop", () => {
 		state.money = 0;
 		state.supplies.scrap = 0;
 		const initial = saveGame(state);
-		expect(dispatchRaid(state, state.scavs[0]!.id, "bunker", NOW).ok).toBe(
+		expect(dispatchLegacyRaid(state, state.scavs[0]!.id, "bunker", NOW).ok).toBe(
 			false
 		);
 		expect(upgradeBase(state, "workshop").ok).toBe(false);
@@ -127,7 +142,7 @@ describe("the Prapor game loop", () => {
 		const state = createGame(NOW);
 		const before = saveGame(state);
 		for (const mapId of ["__proto__", "constructor", "toString"]) {
-			expect(dispatchRaid(state, state.scavs[0]!.id, mapId, NOW).ok).toBe(
+			expect(dispatchLegacyRaid(state, state.scavs[0]!.id, mapId, NOW).ok).toBe(
 				false
 			);
 		}
@@ -174,7 +189,7 @@ describe("the Prapor game loop", () => {
 		expect(recruitScav(state).ok).toBe(true);
 		expect(state.scavs).toHaveLength(1);
 		expect(state.scavs[0]!.weaponInstanceId).toBe(state.weapons[0]!.id);
-		expect(dispatchRaid(state, state.scavs[0]!.id, "courtyard", NOW).ok).toBe(
+		expect(dispatchLegacyRaid(state, state.scavs[0]!.id, "courtyard", NOW).ok).toBe(
 			true
 		);
 	});
@@ -186,7 +201,7 @@ describe("the Prapor game loop", () => {
 		scav.status = "wounded";
 		state.supplies.medicine = 0;
 		expect(healScav(state, scav.id).ok).toBe(false);
-		expect(dispatchRaid(state, scav.id, "courtyard", NOW).ok).toBe(false);
+		expect(dispatchLegacyRaid(state, scav.id, "courtyard", NOW).ok).toBe(false);
 		advance(state, NOW + 400_000);
 		expect(scav.health).toBeGreaterThanOrEqual(25);
 		expect(String(scav.status)).toBe("ready");
@@ -222,7 +237,7 @@ describe("the Prapor game loop", () => {
 			const state = createGame(NOW);
 			const scavId = state.scavs[0]!.id;
 			const gunId = state.scavs[0]!.weaponInstanceId;
-			dispatchRaid(state, scavId, "courtyard", NOW);
+			dispatchLegacyRaid(state, scavId, "courtyard", NOW);
 			state.raids[0]!.chance = 0;
 			state.raids[0]!.seed = seed;
 			advance(state, NOW + 40_000);
@@ -253,7 +268,7 @@ describe("the Prapor game loop", () => {
 				id: `gun-${state.nextId++}`,
 			});
 		}
-		dispatchRaid(state, state.scavs[0]!.id, "courtyard", NOW);
+		dispatchLegacyRaid(state, state.scavs[0]!.id, "courtyard", NOW);
 		state.raids[0]!.chance = 1;
 		state.raids[0]!.seed = 1;
 		advance(state, NOW + 40_000);
@@ -292,7 +307,7 @@ describe("save boundaries", () => {
 
 	test("a raid with missing owner, duplicated settlement, or impossible timeline is rejected", () => {
 		const state = createGame(NOW);
-		dispatchRaid(state, state.scavs[0]!.id, "courtyard", NOW);
+		dispatchLegacyRaid(state, state.scavs[0]!.id, "courtyard", NOW);
 		const raid = state.raids[0]!;
 		expect(parseSave(saveGame(state))).not.toBeNull();
 		expect(
@@ -326,7 +341,7 @@ describe("save boundaries", () => {
 
 	test("moving the local clock backwards preserves remaining raid time", () => {
 		const state = createGame(NOW);
-		dispatchRaid(state, state.scavs[0]!.id, "courtyard", NOW);
+		dispatchLegacyRaid(state, state.scavs[0]!.id, "courtyard", NOW);
 		advance(state, NOW + 10_000);
 		const remaining = state.raids[0]!.endsAt - state.lastUpdated;
 		const loaded = loadGame(saveGame(state), NOW - 5000)!;
@@ -336,12 +351,12 @@ describe("save boundaries", () => {
 
 	test("dispatch after a live clock rollback preserves existing raids and a valid save", () => {
 		const state = createGame(NOW);
-		dispatchRaid(state, state.scavs[0]!.id, "courtyard", NOW);
+		dispatchLegacyRaid(state, state.scavs[0]!.id, "courtyard", NOW);
 		advance(state, NOW + 10_000);
 		const remaining = state.raids[0]!.endsAt - state.lastUpdated;
 		const rolledBackNow = NOW - 60_000;
 		expect(
-			dispatchRaid(state, state.scavs[1]!.id, "courtyard", rolledBackNow).ok
+			dispatchLegacyRaid(state, state.scavs[1]!.id, "courtyard", rolledBackNow).ok
 		).toBe(true);
 		expect(state.raids[0]!.endsAt - state.lastUpdated).toBe(remaining);
 		expect(state.raids[1]!.startedAt).toBe(rolledBackNow);
@@ -357,6 +372,9 @@ describe("save boundaries", () => {
 		const state = createGame(NOW);
 		const scav = state.scavs[0]!;
 		setAutoRaid(state, scav.id, "courtyard", 70, NOW);
+		// This regression isolates repeat scheduling across clock rollback.
+		// The new expedition seed stream differs from the legacy sortie stream.
+		state.raids[0]!.chance = 1;
 		advance(state, NOW + 10_000);
 		const raidId = state.raids[0]!.id;
 		const remaining = state.raids[0]!.endsAt - state.lastUpdated;
@@ -413,7 +431,7 @@ describe("tactics, loadout and contract chains", () => {
 		expect(getRaidChance(state, scav, MAPS[0]!)).toBeGreaterThan(original);
 		expect(upgradeScavGear(state, scav.id, "armor").ok).toBe(false);
 		expect(upgradeScavGear(state, scav.id, "backpack").ok).toBe(true);
-		expect(dispatchRaid(state, scav.id, "courtyard", NOW).ok).toBe(true);
+		expect(dispatchLegacyRaid(state, scav.id, "courtyard", NOW).ok).toBe(true);
 		expect(state.raids[0]!.armorLevel).toBe(3);
 		expect(state.raids[0]!.backpackLevel).toBe(1);
 		const lootBonus = state.raids[0]!.lootBonus;
@@ -426,7 +444,7 @@ describe("tactics, loadout and contract chains", () => {
 	test("raid phases reveal travel progress and completed stories agree with the actual outcome", () => {
 		for (const success of [true, false]) {
 			const state = createGame(NOW);
-			dispatchRaid(state, state.scavs[0]!.id, "courtyard", NOW);
+			dispatchLegacyRaid(state, state.scavs[0]!.id, "courtyard", NOW);
 			const raid = state.raids[0]!;
 			raid.chance = success ? 1 : 0;
 			expect(getRaidPhase(raid, NOW - 1).progress).toBe(0);
