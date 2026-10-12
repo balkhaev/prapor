@@ -251,8 +251,9 @@ const names: Record<Page, string> = {
 	contracts: "Контракты",
 	journal: "Журнал",
 };
-app.innerHTML = `<div class="shell command-shell"><header class="topbar command-hud"><div class="command-brand"><span class="brand-mark">П</span><div><strong>ПРАПОР</strong><small>УБЕЖИЩЕ 07</small></div></div><div class="level"><span class="eyebrow">Репутация</span><strong id="level-label"></strong><div class="xp-track"><i id="xp-fill"></i></div></div><div class="resources">${[["money", "Рубли"], ["ammo", "Патроны"], ["medicine", "Медикаменты"], ["scrap", "Материалы"], ["intel", "Разведданные"]].map(([key, label]) => `<div class="resource" title="${label}">${icon(key!,18)}<div><label>${label}</label><strong id="res-${key}"></strong></div><i class="resource-cap" id="cap-${key}"></i></div>`).join("")}</div><button class="settings" data-action="settings" aria-label="Сохранение и помощь">${icon("settings",18)}</button></header><main class="main command-main"><div class="command-toolbar"><div class="command-heading"><h1>Свои люди. Своё убежище.</h1><span><i class="status-dot"></i><span id="passive-note">База на связи</span></span></div><nav class="nav command-tools" aria-label="Инструменты штаба">${(Object.keys(names) as Page[]).map((id) => `<button data-page="${id}" aria-label="${names[id]}" title="${names[id]}">${icon(id,17)}<span>${names[id]}</span>${id === "raids" ? '<b class="badge" id="raid-badge">0</b>' : ""}</button>`).join("")}</nav></div><div class="command-stage-layout"><section id="hero" class="hero-grid"><section class="world-card"><div class="world-head"><div class="view-switch" aria-label="Вид сцены"><button class="active" data-view="base" aria-pressed="true">${icon("home",14)} Убежище</button><button data-view="map" aria-pressed="false">${icon("raids",14)} Сектора</button></div><button class="text-button room-index-button" data-page="base">${icon("base",14)} Комнаты</button><span class="world-coordinate mono">БАЗА 07 · СЕВЕР</span></div><div id="world" aria-label="Графический штаб: комнаты, рабочие и стройка"></div><div class="world-bottom"><span><i class="status-dot"></i><span id="scene-hint">Нажми на комнату или бойца</span></span><span id="world-raid-note">ОТРЯД НА БАЗЕ</span></div><div class="room-shortcuts" hidden></div></section></section><aside id="command-dock" class="command-dock" aria-label="Сводка и управление выбранным объектом"></aside></div><section id="command-crew" class="command-crew" aria-label="Отряд и рабочие"></section><section id="command-routes" class="command-routes" aria-label="Рейды и сектора"></section><div id="offline-summary"></div><footer class="footer-line command-footer"><span id="save-status">ПРОГРЕСС НА ЭТОМ УСТРОЙСТВЕ</span><span>ПРАПОР · 0.8</span></footer></main></div><div id="tool-root" class="tool-backdrop" hidden><section class="tool-window" role="dialog" aria-modal="true" aria-labelledby="tool-title"><header class="tool-head"><div id="page-head" class="page-head"></div><button class="icon-button" data-action="close-tools" aria-label="Закрыть инструмент и вернуться в штаб">×</button></header><div class="tool-scroll"><div id="expedition-alerts"></div><div id="panel"></div></div></section></div><div id="context-shade" class="context-shade" hidden></div><div id="toast" role="status" aria-live="polite" hidden></div><div id="inspector-root"></div><div id="modal-root"></div>`;
+app.innerHTML = `<div class="shell command-shell"><header class="topbar command-hud"><div class="command-brand"><span class="brand-mark">П</span><div><strong>ПРАПОР</strong><small>УБЕЖИЩЕ 07</small></div></div><div class="level"><span class="eyebrow">Репутация</span><strong id="level-label"></strong><div class="xp-track"><i id="xp-fill"></i></div></div><div class="resources">${[["money", "Рубли"], ["ammo", "Патроны"], ["medicine", "Медикаменты"], ["scrap", "Материалы"], ["intel", "Разведданные"]].map(([key, label]) => `<div class="resource" title="${label}">${icon(key!,18)}<div><label>${label}</label><strong id="res-${key}"></strong></div><i class="resource-cap" id="cap-${key}"></i></div>`).join("")}</div><button class="settings" data-action="settings" aria-label="Сохранение и помощь">${icon("settings",18)}</button></header><main class="main command-main"><div class="command-toolbar"><div class="command-heading"><h1>Свои люди. Своё убежище.</h1><span><i class="status-dot"></i><span id="passive-note">База на связи</span></span></div><nav class="nav command-tools" aria-label="Инструменты штаба">${(Object.keys(names) as Page[]).map((id) => `<button data-page="${id}" aria-label="${names[id]}" title="${names[id]}">${icon(id,17)}<span>${names[id]}</span>${id === "raids" ? '<b class="badge" id="raid-badge">0</b>' : ""}</button>`).join("")}</nav></div><div class="command-stage-layout"><section id="hero" class="hero-grid"><section class="world-card"><div class="world-head"><div class="view-switch" aria-label="Вид сцены"><button class="active" data-view="base" aria-pressed="true">${icon("home",14)} Убежище</button><button data-view="map" aria-pressed="false">${icon("raids",14)} Сектора</button></div><button class="text-button room-index-button" data-page="base">${icon("base",14)} Комнаты</button><span class="world-coordinate mono">БАЗА 07 · СЕВЕР</span></div><div id="world" aria-label="Графический штаб: комнаты, рабочие и стройка"></div><div class="world-bottom"><span><i class="status-dot"></i><span id="scene-hint">Нажми на комнату или бойца</span></span><span id="world-raid-note">ОТРЯД НА БАЗЕ</span></div><div class="room-shortcuts" hidden></div></section></section><aside id="command-dock" class="command-dock" aria-label="Сводка и управление выбранным объектом"></aside></div><section id="command-crew" class="command-crew" aria-label="Отряд и рабочие"></section><section id="command-routes" class="command-routes" aria-label="Рейды и сектора"></section><div id="offline-summary"></div><footer class="footer-line command-footer"><span id="save-status">ПРОГРЕСС НА ЭТОМ УСТРОЙСТВЕ</span><span>ПРАПОР · 0.8.1</span></footer></main></div><div id="tool-root" class="tool-backdrop" hidden><section class="tool-window" role="dialog" aria-modal="true" aria-labelledby="tool-title"><header class="tool-head"><div id="page-head" class="page-head"></div><button class="icon-button" data-action="close-tools" aria-label="Закрыть инструмент и вернуться в штаб">×</button></header><div class="tool-scroll"><div id="expedition-alerts"></div><div id="panel"></div></div></section></div><div id="context-shade" class="context-shade" hidden></div><div id="toast" role="status" aria-live="polite" hidden></div><div id="inspector-root"></div><div id="modal-root"></div>`;
 const panel = document.querySelector<HTMLDivElement>("#panel")!;
+document.querySelector(".command-footer")!.prepend(document.querySelector("#offline-summary")!);
 document.querySelector(".world-card")!.insertAdjacentHTML("beforeend", '<div id="worker-room-targets" class="worker-room-targets" role="group" aria-label="Выбери рабочую комнату" hidden></div><div id="worker-placement" class="worker-placement" hidden><div><strong id="worker-placement-title"></strong><span id="worker-placement-hint"></span></div><button class="icon-button" data-worker-cancel aria-label="Отменить назначение">×</button></div>');
 app.insertAdjacentHTML("beforeend", '<div id="worker-drag-ghost" class="worker-drag-ghost" aria-hidden="true" hidden></div><div id="worker-drop-status" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>');
 const costLabel = (cost: { money: number; scrap: number }) =>
@@ -321,7 +322,15 @@ function clearWorkerPlacement() {
 	queueDeferredWorkerRefresh();
 }
 function focusWorkerHandle(id: string) {
-	document.querySelector<HTMLButtonElement>(`#command-crew [data-worker-handle="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
+	const handle = document.querySelector<HTMLButtonElement>(`#command-crew [data-worker-handle="${CSS.escape(id)}"]`);
+	handle?.focus({ preventScroll: true });
+	if (handle) revealAssignmentControl(handle);
+}
+function revealAssignmentControl(control: HTMLElement) {
+	const main = document.querySelector<HTMLElement>(".command-main");
+	if (!main || main.scrollHeight <= main.clientHeight + 1 || getComputedStyle(main).overflowY !== "auto") return;
+	const viewport = main.getBoundingClientRect(), target = control.getBoundingClientRect();
+	if (target.top < viewport.top || target.bottom > viewport.bottom) control.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
 }
 function cancelWorkerPlacement(restoreFocus = false, announce = false) {
 	const id = workerPlacement?.scavId ?? crewPointer?.scavId;
@@ -406,7 +415,9 @@ function beginKeyboardAssignment(id: string) {
 	cancelWorkerPlacement();
 	workerPlacement = { scavId: id, mode: "keyboard", roomId: null, reason: null };
 	paintWorkerPlacement(); renderWorkerRoomTargets();
-	(document.querySelector<HTMLButtonElement>('#worker-room-targets [aria-disabled="false"]') ?? document.querySelector<HTMLButtonElement>("#worker-room-targets button") ?? document.querySelector<HTMLButtonElement>("[data-worker-cancel]"))?.focus({ preventScroll: true });
+	const target = document.querySelector<HTMLButtonElement>('#worker-room-targets [aria-disabled="false"]') ?? document.querySelector<HTMLButtonElement>("#worker-room-targets button") ?? document.querySelector<HTMLButtonElement>("[data-worker-cancel]");
+	target?.focus({ preventScroll: true });
+	if (target) revealAssignmentControl(target);
 }
 function assignPlacedWorker(scavId: string, roomId: string) {
 	if (!canWorldDrag()) { cancelWorkerPlacement(false, true); return; }
@@ -477,21 +488,24 @@ document.addEventListener("focusin", workerTargetFocus);
 window.addEventListener("blur", cancelPlacementForBlur);
 function act(result: ActionResult) {
 	const origin = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+	const focusKey = origin?.dataset.focusKey;
+	const scope = origin?.closest("#command-dock") ? "#command-dock" : origin?.closest("#tool-root") ? "#tool-root" : "#app";
 	const actionSelector = origin?.dataset.action
-		? ["action", "id", "mod", "slot"].filter((key) => origin.dataset[key] != null)
-			.map((key) => `[data-${key}="${CSS.escape(origin.dataset[key]!)}"]`).join("")
+		? ["action", "id", "mod", "slot", "jobId", "recipeId", "modelId", "moduleId"].filter((key) => origin.dataset[key] != null)
+			.map((key) => `[data-${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}="${CSS.escape(origin.dataset[key]!)}"]`).join("")
 		: null;
 	toast(result.message, result.ok);
 	persist();
 	render();
-	if (!selectedScav && actionSelector) {
-		const replacement = document.querySelector<HTMLButtonElement>(actionSelector);
-		if (replacement && !replacement.disabled) replacement.focus({ preventScroll: true });
+	if (!selectedScav && (actionSelector || focusKey)) {
+		const replacement = (focusKey ? document.querySelector<HTMLElement>(`${scope} [data-focus-key="${CSS.escape(focusKey)}"]`) : null) ?? (actionSelector ? document.querySelector<HTMLElement>(`${scope} ${actionSelector}`) : null);
+		if (replacement && !replacement.matches(":disabled")) replacement.focus({ preventScroll: true });
 		else {
 			const context = replacement?.closest<HTMLElement>(".card, .weapon-detail, .contract");
 			if (context) { context.tabIndex = -1; context.focus({ preventScroll: true }); }
 			else if (page === "arsenal" && arsenalTab === "bench") document.querySelector<HTMLButtonElement>(`[data-bench-slot="${selectedModuleSlot}"]`)?.focus({ preventScroll: true });
 			else if (page === "arsenal") document.querySelector<HTMLButtonElement>(`[data-arsenal-tab="${arsenalTab}"]`)?.focus({ preventScroll: true });
+			else if (origin?.dataset.action === "cancel-production") document.querySelector<HTMLButtonElement>(`${scope} [data-room-context-tab="production"]`)?.focus({ preventScroll: true });
 			else if (contextMode !== "overview") document.querySelector<HTMLButtonElement>('[data-action="close-context"]')?.focus({ preventScroll: true });
 		}
 	}
@@ -1053,7 +1067,7 @@ function roomQueuePanel(room: RoomInstance) {
 }
 function roomResourcesPanel(room: RoomInstance) {
 	const recipes = RESOURCE_RECIPES.filter((recipe) => recipe.roomType === room.type);
-	return `<label class="loadout-check"><input type="checkbox" data-room-repeat="${room.id}" ${room.recipeId ? room.repeat ? "checked" : "" : roomRepeatPreferences.get(room.id) === false ? "" : "checked"} ${room.status !== "ready" ? "disabled" : ""}><span>Повторять выбранный рецепт<small>Новая партия оплачивается только при запуске. При нехватке ресурсов работа ждёт пополнения.</small></span></label>${room.recipeId ? `<button class="button ghost small" data-action="stop-room-recipe" data-id="${room.id}">Остановить будущие партии</button><small class="quote-note">Оплаченные заказы продолжатся. Их можно отменить в очереди отдельно.</small>` : ""}<div class="resource-recipe-list">${recipes.map((recipe) => {
+	return `<label class="loadout-check"><input type="checkbox" data-room-repeat="${room.id}" data-focus-key="room-repeat-${room.id}" ${room.recipeId ? room.repeat ? "checked" : "" : roomRepeatPreferences.get(room.id) === false ? "" : "checked"} ${room.status !== "ready" ? "disabled" : ""}><span>Повторять выбранный рецепт<small>Новая партия оплачивается только при запуске. При нехватке ресурсов работа ждёт пополнения.</small></span></label>${room.recipeId ? `<button class="button ghost small" data-action="stop-room-recipe" data-id="${room.id}">Остановить будущие партии</button><small class="quote-note">Оплаченные заказы продолжатся. Их можно отменить в очереди отдельно.</small>` : ""}<div class="resource-recipe-list">${recipes.map((recipe) => {
 		const quote = getResourceProductionQuote(state, room.id, recipe.id), selected = room.recipeId === recipe.id;
 		return `<article class="resource-recipe ${selected ? "selected" : ""}"><div class="resource-recipe-head">${icon(roomIcon(room.type), 21)}<strong>${e(recipe.label)}</strong></div><p>${e(recipe.description)}</p>${productionOutput(recipe.output)}<div class="loadout-stats"><span>Партия: ${productionCost(recipe.cost)}</span><span>Базовая работа ${seconds(quote.duration)}</span></div><button class="button secondary" data-action="set-room-recipe" data-id="${room.id}" data-recipe-id="${recipe.id}" data-focus-key="recipe-${recipe.id}" ${room.status !== "ready" ? "disabled" : ""}>${selected ? "Подтвердить рецепт и режим" : "Выбрать рецепт"}</button><small class="quote-note" data-resource-recipe-note="${recipe.id}">${e(quote.reason ?? "Бойцы запустят партию; результат поступит на склад")}</small></article>`;
 	}).join("")}</div>`;
@@ -1084,9 +1098,11 @@ function renderOfflineSummary() {
 	if (!offlineSummary) { node.innerHTML = ""; return; }
 	const minutes = Math.floor(offlineSummary.elapsedMs / 60_000);
 	const elapsed = minutes ? `${minutes} мин` : `${Math.floor(offlineSummary.elapsedMs / 1000)} с`;
-	const expanded=node.querySelector<HTMLDetailsElement>(".offline-recap")?.open??window.innerWidth>640;
-	const moneyChange=`${offlineSummary.money>=0?"+":"−"}${n(Math.abs(offlineSummary.money))} ₽`;
-	node.innerHTML = `<aside class="offline-summary"><details class="offline-recap" ${expanded?"open":""}><summary>${icon("time",17)}<span>База на связи ${elapsed}<b>Чистое изменение: ${moneyChange}</b></span><i aria-hidden="true">+</i></summary><div><p>Завершено выходов: <strong>${n(offlineSummary.completedCount)}</strong>${offlineSummary.capped ? " · учтены 8 часов" : ""}. Назначенные бойцы продолжили очереди, медблок восстановил здоровье. Изменение рублей учитывает доход и оплату производства.</p><button class="button ghost small" data-page="journal">Отчёты ${icon("arrow",13)}</button></div></details><button class="dismiss-button" data-action="dismiss-offline" aria-label="Закрыть сводку">×</button></aside>`;
+	const expanded = node.querySelector<HTMLDetailsElement>(".offline-recap")?.open ?? false;
+	const focused = document.activeElement instanceof HTMLElement && node.contains(document.activeElement) ? document.activeElement.dataset.offlineFocus : null;
+	const moneyChange = offlineSummary.money === 0 ? "Рубли без изменений" : `Изменение: ${offlineSummary.money > 0 ? "+" : "−"}${n(Math.abs(offlineSummary.money))} ₽`;
+	node.innerHTML = `<aside class="offline-summary"><details class="offline-recap" ${expanded ? "open" : ""}><summary data-offline-focus="summary">${icon("time",15)}<span>За ${elapsed}</span><b>${moneyChange}</b><i aria-hidden="true">${icon("arrow",12)}</i></summary><div><p>Завершено выходов: <strong>${n(offlineSummary.completedCount)}</strong>${offlineSummary.capped ? " · учтены 8 часов" : ""}. Стройка, работа назначенных бойцов и лечение рассчитаны за время отсутствия. Рубли учитывают доход и оплату производства.</p><button class="button ghost small" data-page="journal" data-offline-focus="journal">Открыть отчёты ${icon("arrow",13)}</button></div></details><button class="dismiss-button" data-action="dismiss-offline" data-offline-focus="dismiss" aria-label="Убрать сводку отсутствия" title="Убрать сводку">Ок</button></aside>`;
+	if (focused) node.querySelector<HTMLElement>(`[data-offline-focus="${focused}"]`)?.focus({ preventScroll: true });
 }
 function renderExpeditionAlerts() {
 	const waiting = state.raids.filter((raid) => raid.expedition?.status === "choice");
@@ -1701,7 +1717,8 @@ document.addEventListener("click", (event) => {
 		}
 		case "dismiss-offline":
 			offlineSummary = null;
-		renderOfflineSummary();
+			renderOfflineSummary();
+			document.querySelector<HTMLButtonElement>('.command-tools [data-page="journal"]')?.focus({ preventScroll: true });
 			break;
 		case "dispatch":
 			act(dispatchRaid(state, id, selectedMap));
@@ -1898,7 +1915,7 @@ document.addEventListener("keydown", (event) => {
 		if (document.querySelector("#modal-root .modal")) closeModal(); else if (selectedScav) closeInspector(); else if (page !== "home") closeTools(); else closeCommandContext();
 	}
 	if (event.key === "Tab") {
-		const controls = Array.from(dialog.querySelectorAll<HTMLElement>('button:not(:disabled), select:not(:disabled), input:not([hidden]), a[href], summary, [tabindex="0"]')).filter((node) => node.getClientRects().length > 0);
+		const controls = Array.from(dialog.querySelectorAll<HTMLElement>('button:not(:disabled), select:not(:disabled), input:not([hidden]):not(:disabled), a[href], summary, [tabindex="0"]')).filter((node) => node.getClientRects().length > 0);
 		const first = controls[0], last = controls.at(-1);
 		if (first && last && event.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) { event.preventDefault(); last.focus(); }
 		else if (first && last && !event.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) { event.preventDefault(); first.focus(); }
