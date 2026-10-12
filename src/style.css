@@ -95,6 +95,17 @@
 .shelter-first-steps{border:1px solid #8b9760;border-radius:9px;background:#35432b;padding:16px 19px;margin:18px 0}
 .shelter-first-steps strong{display:block;font-size:15px;color:#e7dfb8;margin-bottom:5px}
 .shelter-first-steps p{font-size:12px;line-height:1.85;color:#beceab}
+.discoveries-disclosure{border:1px solid #65764d;border-radius:9px;background:#243020;margin:25px 0;scroll-margin-top:18px;overflow:hidden}
+.discoveries-disclosure>summary{display:flex;align-items:center;gap:10px;min-height:62px;padding:15px 19px;cursor:pointer;list-style:none;color:#e0dfbb;font-size:15px;font-weight:700}
+.discoveries-disclosure>summary::-webkit-details-marker{display:none}
+.discoveries-disclosure>summary>svg{color:#b9cf93;flex-shrink:0}
+.discoveries-disclosure>summary>span{flex:1;line-height:1.7}
+.discoveries-disclosure>summary b{font-size:12px;font-weight:500;white-space:nowrap}
+.discoveries-disclosure>summary>i{font-style:normal;font-size:21px;color:var(--amber);transition:transform .15s}
+.discoveries-disclosure[open]>summary{border-bottom:1px solid #5a6e43}
+.discoveries-disclosure[open]>summary>i{transform:rotate(45deg)}
+.discoveries-content{padding:18px}
+@media(max-width:640px){.discoveries-disclosure>summary{padding:14px 16px;font-size:14px}.discoveries-disclosure>summary b{display:block;font-size:11px}.discoveries-content{padding:14px}}
 .room-management .cost-reason,.shelter-build-option .quote-note{font-size:11px;line-height:1.8;display:block;margin-top:8px}
 .room-management .button.secondary{border-color:#8b9c65}
 .production-workshop-picker{margin:17px 0;padding:15px;border:1px solid #6b8051;border-radius:8px;background:#2a3b24}
