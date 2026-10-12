@@ -1,6 +1,7 @@
 import Phaser from "phaser";
 import { getRaidPhase, type Raid, type RoomInstance } from "./game/engine";
 import { type BaseRoom } from "./game/data";
+import { advanceShelterRoute, clientToShelterPoint, getShelterCell, planShelterRoute, SHELTER_SHAFT_X } from "./shelter-motion";
 
 export interface WorldSnapshot {
 	base: Record<string, number>;
@@ -40,12 +41,23 @@ type ScavActor = {
 	legB: Phaser.GameObjects.Rectangle;
 	hand: Phaser.GameObjects.Rectangle;
 	gear: Phaser.GameObjects.Graphics;
+	tool: Phaser.GameObjects.Graphics;
 	label: Phaser.GameObjects.Text;
 	order: Phaser.GameObjects.Arc;
 	selection: Phaser.GameObjects.Ellipse;
 	hovered: boolean;
 	gearSignature: string;
 	anchor: Point;
+	route: Point[];
+	goal: string;
+	assignment: string | null;
+	role: string;
+	dwellUntil: number;
+	visit: number;
+	facing: -1 | 1;
+	climbing: boolean;
+	status: "ready" | "raiding" | "wounded";
+	health: number;
 	working: boolean;
 	walking: boolean;
 	walkSpan: number;
@@ -53,6 +65,10 @@ type ScavActor = {
 };
 export interface WorldInteractions {
 	canInteract?: () => boolean;
+	canDrag?: () => boolean;
+	getAssignmentReason?: (scavId: string, roomId: string) => string | null;
+	onAssignScav?: (scavId: string, roomId: string) => void;
+	onDragState?: (state: { scavId: string; roomId: string | null; reason: string | null } | null) => void;
 	onRoom?: (room: BaseRoom) => void;
 	onScav?: (id: string) => void;
 	onShelterRoom?: (roomId: string) => void;
@@ -75,7 +91,12 @@ type ShelterCell = {
 	hovered: boolean;
 	room: RoomInstance | null;
 	working: boolean;
+	feedback: Phaser.GameObjects.Text;
+	lastCycles: number | null;
+	completedAt: number;
 };
+type DragSession = { scavId: string; roomId: string | null; reason: string | null; cellKey: string | null; point: Point | null; canvas: boolean; shelter: WorldSnapshot["shelter"]; scav: NonNullable<WorldSnapshot["scavs"]>[number] };
+type CanvasGesture = { scavId: string; pointerId: number; clientX: number; clientY: number; active: boolean };
 type RaidMarker = {
 	actor: Phaser.GameObjects.Container;
 	ring: Phaser.GameObjects.Ellipse;
@@ -207,7 +228,7 @@ export function createWorld(
 	snapshot: () => WorldSnapshot,
 	onMap: (id: string) => void,
 	interactions: WorldInteractions = {}
-): { game: Phaser.Game; setView: (view: View) => void } {
+): { game: Phaser.Game; setView: (view: View) => void; beginScavDrag: (id: string) => boolean; moveScavDrag: (clientX: number, clientY: number) => void; endScavDrag: () => void; cancelScavDrag: () => void } {
 	let requestedView: View = "base";
 	const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -221,6 +242,13 @@ export function createWorld(
 		private elevator!: Phaser.GameObjects.Container;
 		private shelterCaption!: Phaser.GameObjects.Text;
 		private ambient!: Phaser.GameObjects.Graphics;
+		private dragGhost!: Phaser.GameObjects.Graphics;
+		private drag: DragSession | null = null;
+		private gesture: CanvasGesture | null = null;
+		private nativeEvents = new AbortController();
+		private viewState: WorldSnapshot | null = null;
+		private shaftUser: string | null = null;
+		private liftFeet = 228;
 		private places = new Map<
 			string,
 			{
@@ -249,10 +277,13 @@ export function createWorld(
 			this.mapLayer = this.add.container(0, 30);
 			this.paintBunker();
 			this.paintMap();
+			this.installDragListeners();
 			this.syncSnapshot();
 			this.show(requestedView);
 			this.game.canvas.setAttribute("aria-hidden", "true");
 			this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+				this.cancelScavDrag();
+				this.nativeEvents.abort();
 				this.raidActors.clear();
 				this.places.clear();
 				this.cells.clear();
@@ -261,6 +292,7 @@ export function createWorld(
 		}
 
 		show(view: View): void {
+			if (view !== requestedView) this.cancelScavDrag();
 			requestedView = view;
 			if (!this.baseLayer) return;
 			this.baseLayer.setVisible(view === "base");
@@ -289,8 +321,121 @@ export function createWorld(
 
 		private acceptsPointer(pointer: Phaser.Input.Pointer, view: View): boolean {
 			return requestedView === view
+				&& !this.drag
 				&& interactions.canInteract?.() !== false
 				&& pointer.event?.target === this.game.canvas;
+		}
+
+		private assignmentReason(scavId: string, roomId: string): string | null {
+			if (interactions.getAssignmentReason) return interactions.getAssignmentReason(scavId, roomId);
+			const state = snapshot(), scav = state.scavs?.find((candidate) => candidate.id === scavId), room = state.shelter?.rooms.find((candidate) => candidate.id === roomId);
+			if (!scav) return "Бойца больше нет в отряде";
+			if (scav.status === "raiding" || scav.health < 25) return scav.status === "raiding" ? "Боец в рейде" : "Сначала вылечи бойца";
+			if (!room) return "Комната недоступна";
+			if (room.status !== "ready") return "Дождись окончания работ";
+			if (room.type === "storage" || room.type === "dormitory") return "Здесь нет рабочих мест";
+			return "Назначение недоступно";
+		}
+
+		beginScavDrag(scavId: string): boolean {
+			if (!this.baseLayer || !this.scene.isActive() || requestedView !== "base" || document.hidden || this.drag || interactions.canDrag?.() === false || !interactions.onAssignScav) return false;
+			const state = snapshot(), scav = state.scavs?.find((candidate) => candidate.id === scavId);
+			if (!scav || scav.status === "raiding" || scav.health < 25) return false;
+			this.drag = { scavId, roomId: null, reason: null, cellKey: null, point: null, canvas: false, shelter: state.shelter, scav };
+			this.scavs.get(scavId)?.actor.setAlpha(.45);
+			for (const cell of this.cells.values()) this.paintCellFrame(cell);
+			interactions.onDragState?.({ scavId, roomId: null, reason: null });
+			return true;
+		}
+
+		moveScavDrag(clientX: number, clientY: number): void {
+			const drag = this.drag;
+			if (!drag) return;
+			const state = snapshot();
+			if (requestedView !== "base" || document.hidden || interactions.canDrag?.() === false || state.shelter !== drag.shelter || state.scavs?.find((scav) => scav.id === drag.scavId) !== drag.scav || drag.scav.status === "raiding" || drag.scav.health < 25) { this.cancelScavDrag(); return; }
+			const point = clientToShelterPoint(clientX, clientY, this.game.canvas.getBoundingClientRect(), WIDTH, HEIGHT);
+			const site = point ? getShelterCell(point) : null;
+			const room = site ? state.shelter?.rooms.find((candidate) => candidate.column === site.column && candidate.row === site.row) : undefined;
+			const roomId = room?.id ?? null;
+			const reason = roomId ? this.assignmentReason(drag.scavId, roomId) : site ? "Сначала построй комнату" : point ? "Перенеси бойца в производственную комнату" : "Отпусти над комнатой убежища";
+			const changed = drag.roomId !== roomId || drag.reason !== reason;
+			drag.point = point; drag.cellKey = site ? `${site.column}:${site.row}` : null; drag.roomId = roomId; drag.reason = reason;
+			this.dragGhost.clear();
+			if (drag.canvas && point) {
+				this.dragGhost.fillStyle(0x0a1915, .45).fillEllipse(point.x, point.y + 20, 24, 8);
+				this.dragGhost.fillStyle(0xb2c68e).fillRect(point.x - 7, point.y - 13, 14, 18).fillStyle(0xcab18b).fillRect(point.x - 5, point.y - 24, 10, 10);
+				this.dragGhost.fillStyle(0x557663).fillRect(point.x - 6, point.y - 26, 12, 5).fillStyle(0x365341).fillRect(point.x - 5, point.y + 5, 4, 12).fillRect(point.x + 2, point.y + 5, 4, 12);
+				this.dragGhost.lineStyle(2, reason ? 0xd49a7e : 0xb7dfa0, .9).strokeRoundedRect(point.x - 12, point.y - 30, 25, 51, 4);
+			}
+			for (const cell of this.cells.values()) this.paintCellFrame(cell);
+			if (changed) interactions.onDragState?.({ scavId: drag.scavId, roomId, reason });
+		}
+
+		endScavDrag(): void {
+			const drag = this.drag;
+			if (!drag) { this.clearGesture(); return; }
+			const state = snapshot();
+			const site = drag.point ? getShelterCell(drag.point) : null;
+			const room = site ? state.shelter?.rooms.find((candidate) => candidate.column === site.column && candidate.row === site.row) : undefined;
+			const allowed = requestedView === "base" && !document.hidden && interactions.canDrag?.() !== false && state.shelter === drag.shelter && state.scavs?.find((scav) => scav.id === drag.scavId) === drag.scav && room?.id === drag.roomId && this.assignmentReason(drag.scavId, room.id) === null;
+			this.cancelScavDrag();
+			if (allowed && room) interactions.onAssignScav?.(drag.scavId, room.id);
+		}
+
+		cancelScavDrag(): void {
+			const drag = this.drag;
+			this.drag = null;
+			this.clearGesture();
+			this.dragGhost?.clear();
+			if (!drag) return;
+			const scav = snapshot().scavs?.find((candidate) => candidate.id === drag.scavId);
+			this.scavs.get(drag.scavId)?.actor.setAlpha(scav?.status === "wounded" ? .7 : 1);
+			for (const cell of this.cells.values()) this.paintCellFrame(cell);
+			interactions.onDragState?.(null);
+		}
+
+		private clearGesture(): void {
+			const gesture = this.gesture;
+			this.gesture = null;
+			if (gesture && this.game.canvas.hasPointerCapture?.(gesture.pointerId)) this.game.canvas.releasePointerCapture(gesture.pointerId);
+		}
+
+		private installDragListeners(): void {
+			const canvas = this.game.canvas, options = { signal: this.nativeEvents.signal };
+			canvas.style.touchAction = "none";
+			canvas.addEventListener("pointerdown", (event) => {
+				if (event.button !== 0 || event.target !== canvas || requestedView !== "base" || this.gesture || this.drag || interactions.canInteract?.() === false) return;
+				const point = clientToShelterPoint(event.clientX, event.clientY, canvas.getBoundingClientRect(), WIDTH, HEIGHT);
+				if (!point) return;
+				const hit = [...this.scavs].filter(([, slot]) => slot.actor.visible && Math.abs(slot.actor.x - point.x) <= 16 * slot.actor.scaleX && point.y >= slot.actor.y - 44 * slot.actor.scaleY && point.y <= slot.actor.y + 2).sort((a, b) => Math.hypot(a[1].actor.x - point.x, a[1].actor.y - 21 - point.y) - Math.hypot(b[1].actor.x - point.x, b[1].actor.y - 21 - point.y))[0];
+				if (!hit) return;
+				this.gesture = { scavId: hit[0], pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, active: false };
+				canvas.setPointerCapture(event.pointerId);
+			}, options);
+			canvas.addEventListener("pointermove", (event) => {
+				const gesture = this.gesture;
+				if (!gesture || event.pointerId !== gesture.pointerId) return;
+				if (!gesture.active && Math.hypot(event.clientX - gesture.clientX, event.clientY - gesture.clientY) >= 8) {
+					if (!this.beginScavDrag(gesture.scavId)) { this.clearGesture(); return; }
+					gesture.active = true;
+					if (this.drag) this.drag.canvas = true;
+				}
+				if (gesture.active) { event.preventDefault(); this.moveScavDrag(event.clientX, event.clientY); }
+			}, options);
+			canvas.addEventListener("pointerup", (event) => {
+				const gesture = this.gesture;
+				if (!gesture || event.pointerId !== gesture.pointerId) return;
+				if (gesture.active) { this.moveScavDrag(event.clientX, event.clientY); this.endScavDrag(); return; }
+				const tapped = Math.hypot(event.clientX - gesture.clientX, event.clientY - gesture.clientY) < 8;
+				this.clearGesture();
+				if (tapped && requestedView === "base" && interactions.canInteract?.() !== false && clientToShelterPoint(event.clientX, event.clientY, canvas.getBoundingClientRect())) interactions.onScav?.(gesture.scavId);
+			}, options);
+			canvas.addEventListener("pointercancel", () => this.cancelScavDrag(), options);
+			canvas.addEventListener("lostpointercapture", () => { if (this.gesture) this.cancelScavDrag(); }, options);
+			window.addEventListener("keydown", (event) => { if (event.key === "Escape" && (this.drag || this.gesture)) { event.preventDefault(); this.cancelScavDrag(); } }, options);
+			window.addEventListener("blur", () => this.cancelScavDrag(), options);
+			window.addEventListener("resize", () => this.cancelScavDrag(), options);
+			document.addEventListener("visibilitychange", () => { if (document.hidden) this.cancelScavDrag(); }, options);
 		}
 
 		private makeGlow(): void {
@@ -402,6 +547,8 @@ export function createWorld(
 			}
 			this.ambient = this.add.graphics().setDepth(10);
 			this.baseLayer.add(this.ambient);
+			this.dragGhost = this.add.graphics().setDepth(1200);
+			this.baseLayer.add(this.dragGhost);
 			this.baseCaption = this.text(31, 25, "УБЕЖИЩЕ · СВОИ ЛЮДИ", 15, "#ded2ae").setVisible(false);
 			this.baseLayer.add(this.baseCaption);
 			this.baseLayer.add(this.text(99, 75, "07", 10, "#e4c994"));
@@ -419,11 +566,12 @@ export function createWorld(
 			const animation = this.add.graphics();
 			const label = this.text(10, 8, "", 12, "#d5c8aa");
 			const status = this.text(10, 87, "", 9, "#a3b29a");
+			const feedback = this.text(86, 43, "", 12, "#d6efb6").setOrigin(.5).setBackgroundColor("#163023").setPadding(6, 3).setVisible(false);
 			const lamp = this.add.image(85, 43, "prapor-light").setScale(.66, .38).setAlpha(.12).setBlendMode(Phaser.BlendModes.ADD);
 			const zone = this.add.zone(86, 50, ROOM_WIDTH, ROOM_HEIGHT).setInteractive({ useHandCursor: true });
-			const root = this.add.container(p.x, p.y, [art, lamp, animation, frame, label, status, progress, zone]);
+			const root = this.add.container(p.x, p.y, [art, lamp, animation, frame, label, status, progress, feedback, zone]);
 			this.baseLayer.add(root);
-			const cell: ShelterCell = { root, art, frame, progress, animation, label, status, lamp, zone, signature: "", column, row, hovered: false, room: null, working: false };
+			const cell: ShelterCell = { root, art, frame, progress, animation, label, status, lamp, zone, signature: "", column, row, hovered: false, room: null, working: false, feedback, lastCycles: null, completedAt: -10000 };
 			this.cells.set(`${column}:${row}`, cell);
 			zone.on("pointerover", (pointer: Phaser.Input.Pointer) => { if (this.acceptsPointer(pointer, "base")) { cell.hovered = true; this.paintCellFrame(cell); } });
 			zone.on("pointerout", () => { cell.hovered = false; this.paintCellFrame(cell); });
@@ -445,6 +593,14 @@ export function createWorld(
 			const building = cell.room && cell.room.status !== "ready";
 			const color = selected || cell.hovered ? C.light : building ? C.gold : cell.room ? ROOM_STYLE[cell.room.type]?.color ?? 0x899a7c : 0x788b71;
 			cell.frame.clear();
+			if (this.drag) {
+				const reason = cell.room ? this.assignmentReason(this.drag.scavId, cell.room.id) : "Сначала построй комнату";
+				const target = this.drag.cellKey === `${cell.column}:${cell.row}`;
+				const color = reason ? 0xcc7f6d : 0xa6d193;
+				cell.frame.fillStyle(color, target ? .17 : .045).fillRect(2, 24, ROOM_WIDTH - 4, ROOM_HEIGHT - 27);
+				cell.frame.lineStyle(target ? 3 : 1.4, color, target ? 1 : .58).strokeRect(1, 1, ROOM_WIDTH - 2, ROOM_HEIGHT - 2);
+				return;
+			}
 			if (selected || cell.hovered) cell.frame.fillStyle(selected ? 0xffd99e : color, selected ? .055 : .025).fillRect(2, 24, ROOM_WIDTH - 4, ROOM_HEIGHT - 27);
 			cell.frame.lineStyle(selected ? 2.5 : 1, color, selected || cell.hovered ? 1 : cell.room ? .64 : .28).strokeRect(1, 1, ROOM_WIDTH - 2, ROOM_HEIGHT - 2);
 			if (selected || cell.hovered) {
@@ -688,8 +844,8 @@ export function createWorld(
 			this.tweens.add({ targets: ring, scale: reducedMotion ? 1 : 2.2, alpha: 0, duration: reducedMotion ? 80 : 320, onComplete: () => ring.destroy() });
 		}
 
-		private createScav(scavId: string, index: number): ScavActor {
-			const actor = this.add.container(220, 128).setDepth(30);
+		private createScav(scavId: string, index: number, at: Point): ScavActor {
+			const actor = this.add.container(at.x, at.y).setDepth(30);
 			const body = this.add.container(0, 0);
 			const shadow = this.add.ellipse(0, 1, 18, 5, 0x06110a, .45);
 			const selection = this.add.ellipse(0, 1, 27, 9).setStrokeStyle(1.5, C.gold).setVisible(false);
@@ -706,14 +862,15 @@ export function createWorld(
 			graphic.fillStyle(0x344c35).fillRect(-5, -38, 10, 5);
 			graphic.fillStyle(0x172a1c).fillRect(1, -33, 2, 2);
 			const gear = this.add.graphics();
-			body.add([legA, legB, graphic, gear, hand]);
+			const tool = this.add.graphics().setPosition(6, -21);
+			body.add([legA, legB, graphic, gear, hand, tool]);
 			const label = this.text(0, -51, "", 12, "#f0dbac").setOrigin(.5).setBackgroundColor("#162219").setPadding(5, 3).setVisible(false);
 			const order = this.add.circle(-10, -32, 3, C.sage).setStrokeStyle(1, 0x19261a).setVisible(false);
 			const hit = this.add.zone(0, -21, 32, 46).setInteractive({ useHandCursor: true });
-			const slot: ScavActor = { actor, body, legA, legB, hand, gear, label, order, selection, hovered: false, gearSignature: "", anchor: { x: 220, y: 128 }, working: false, walking: false, walkSpan: 0, phase: index * 1.71 };
+			const slot: ScavActor = { actor, body, legA, legB, hand, gear, tool, label, order, selection, hovered: false, gearSignature: "", anchor: { ...at }, route: [], goal: "", assignment: null, role: "idle", dwellUntil: this.time.now + 2000 + index * 800, visit: 0, facing: 1, climbing: false, status: "ready", health: 100, working: false, walking: false, walkSpan: 0, phase: index * 1.71 };
 			hit.on("pointerover", (pointer: Phaser.Input.Pointer) => { if (this.acceptsPointer(pointer, "base")) { slot.hovered = true; selection.setVisible(true); label.setVisible(true); actor.setDepth(80); } });
 			hit.on("pointerout", () => { slot.hovered = false; const selected = snapshot().selectedScavId === scavId; selection.setVisible(selected); label.setVisible(selected); actor.setDepth(30); });
-			hit.on("pointerdown", (pointer: Phaser.Input.Pointer) => { if (this.acceptsPointer(pointer, "base")) { this.clickFeedback({ x: actor.x, y: actor.y - 19 }, this.baseLayer); interactions.onScav?.(scavId); } });
+			// Native pointer-up distinguishes a deliberate tap from a drag before opening the inspector.
 			actor.add([shadow, selection, body, label, order, hit]);
 			this.baseLayer.add(actor);
 			this.scavs.set(scavId, slot);
@@ -721,10 +878,18 @@ export function createWorld(
 		}
 
 		private syncShelter(state: WorldSnapshot): void {
+			if (this.viewState && state.shelter !== this.viewState.shelter) {
+				this.cancelScavDrag(); this.shaftUser = null; this.liftFeet = 228;
+				for (const slot of this.scavs.values()) slot.actor.destroy(true);
+				this.scavs.clear();
+				for (const cell of this.cells.values()) { cell.lastCycles = null; cell.completedAt = -10000; cell.feedback.setVisible(false); }
+			}
+			this.viewState = state;
 			const rooms = state.shelter?.rooms ?? [];
 			let workingRooms = 0;
 			for (const cell of this.cells.values()) {
 				const room = rooms.find((candidate) => candidate.column === cell.column && candidate.row === cell.row) ?? null;
+				if (cell.room?.id !== room?.id) { cell.lastCycles = null; cell.completedAt = -10000; cell.feedback.setVisible(false); }
 				cell.room = room;
 				const production = room ? state.roomProduction?.[room.id] : undefined;
 				cell.working = Boolean(room?.status === "ready" && room.queue.length && room.workerIds.length && production?.rate && !production.reason);
@@ -734,6 +899,11 @@ export function createWorld(
 				this.paintCellFrame(cell);
 				cell.progress.clear();
 				if (room) {
+					if (cell.lastCycles !== null && room.cycles > cell.lastCycles) {
+						cell.completedAt = this.time.now;
+						cell.feedback.setText(`+${room.cycles - cell.lastCycles} ГОТОВО`).setVisible(true).setAlpha(1).setY(43);
+					}
+					cell.lastCycles = room.cycles;
 					const construction = room.construction;
 					const progress = construction ? construction.workDone / Math.max(1, construction.workRequired) : production?.progress ?? 0;
 					const color = construction ? C.gold : 0x95b37b;
@@ -754,52 +924,90 @@ export function createWorld(
 			}
 			this.baseCaption.setText(`УБЕЖИЩЕ · УРОВЕНЬ ${state.level}`);
 			this.shelterCaption.setText(`${rooms.length} КОМНАТ · ${workingRooms} ПРОИЗВОДЯТ · ${rooms.filter((room) => room.status !== "ready").length} СТРОЯТСЯ`);
-			const people = state.scavs ?? [];
-			const alive = new Set(people.map((scav) => scav.id));
-			for (const [id, actor] of this.scavs) if (!alive.has(id)) { actor.actor.destroy(true); this.scavs.delete(id); }
-			const freeCount = people.filter((scav) => scav.status !== "raiding" && !rooms.some((room) => room.id === scav.assignment && room.workerIds.includes(scav.id))).length;
-			const leftCount = Math.min(4, freeCount);
-			const rightCount = Math.max(0, freeCount - leftCount);
-			let freeIndex = 0;
-			people.forEach((scav, index) => {
-				const slot = this.scavs.get(scav.id) ?? this.createScav(scav.id, index);
-				const room = rooms.find((candidate) => candidate.id === scav.assignment && candidate.workerIds.includes(scav.id));
-				const production = room ? state.roomProduction?.[room.id] : undefined;
-				const workerRank = room?.workerIds.indexOf(scav.id) ?? 0;
-				slot.working = Boolean(room && room.queue.length && scav.status === "ready" && room.status === "ready" && production?.rate && !production.reason);
-				slot.walking = !room && scav.status === "ready";
-				if (room) { const p = cellPosition(room.column, room.row); slot.anchor = { x: p.x + 68 + Math.max(0, workerRank) * 32, y: p.y + 80 }; slot.actor.setScale(1); slot.walkSpan = 0; }
-				else if (scav.status !== "raiding") {
-					const onLeft = freeIndex < leftCount;
-					const rank = onLeft ? freeIndex : freeIndex - leftCount;
-					const count = onLeft ? leftCount : rightCount;
-					const span = onLeft ? 95 : 306;
-					const spacing = count > 1 ? span / (count - 1) : 40;
-					slot.anchor = { x: (onLeft ? 282 : 465) + (count > 1 ? rank * spacing : span / 2), y: 129 };
-					const scale = Math.min(1, Math.max(.55, spacing / 34));
-					slot.actor.setScale(scale);
-					slot.walkSpan = count === 1 ? 12 : Math.max(0, Math.min(14, (spacing - 32 * scale) / 2 - 1));
-					slot.walking = scav.status === "ready" && slot.walkSpan > 1;
-					freeIndex++;
-				}
-				slot.actor.setVisible(scav.status !== "raiding").setAlpha(scav.status === "wounded" ? .6 : .75 + Math.min(100, scav.health) / 400);
-				const selected = state.selectedScavId === scav.id;
-				slot.selection.setVisible(selected || slot.hovered).setStrokeStyle(1.5, selected ? C.light : C.gold);
-				slot.label.setText(`${scav.name?.toLocaleUpperCase("ru-RU") ?? ""}${scav.status === "wounded" ? " · РАНЕН" : ""}`).setVisible(selected || slot.hovered);
-				slot.order.setVisible(Boolean(scav.autoRaid?.enabled)).setFillStyle(scav.autoRaid?.waitingReason ? C.gold : C.sage);
-				const gearSignature = `${scav.gear?.armor ?? 0}:${scav.gear?.backpack ?? 0}:${Boolean(room)}`;
-				if (slot.gearSignature !== gearSignature) {
-					slot.gearSignature = gearSignature;
-					slot.gear.clear();
-					if (!room && scav.gear?.backpack) slot.gear.fillStyle(0x8c7650).fillRect(-10, -26, 5, 16).lineStyle(1, 0xbca16b).strokeRect(-10, -26, 5, 16);
-					if (scav.gear?.armor) slot.gear.fillStyle(0x708060).fillRect(-4, -25, 8, 9).fillStyle(0xc4bc80).fillRect(-3, -23, 2, 2);
-				}
-			});
+			this.syncPeople(state);
 			this.baseLayer.sort("depth");
 		}
 
-		private animateShelter(time: number): void {
-			this.elevator.setY(reducedMotion ? 179 : 179 + (1 - Math.cos(time / 5100)) * 111);
+		private homePosition(rank: number, count: number): Point {
+			const left = Math.min(4, count), onLeft = rank < left;
+			const total = onLeft ? left : Math.max(1, count - left);
+			const start = onLeft ? 282 : 465, span = onLeft ? 95 : 306;
+			return { x: start + (total > 1 ? (onLeft ? rank : rank - left) * span / (total - 1) : span / 2), y: 129 };
+		}
+
+		private sendActor(slot: ScavActor, goal: string, at: Point): void {
+			if (slot.goal === goal && Math.hypot(slot.anchor.x - at.x, slot.anchor.y - at.y) < 1) return;
+			slot.goal = goal; slot.anchor = { ...at };
+			slot.route = reducedMotion ? [] : planShelterRoute({ x: slot.actor.x, y: slot.actor.y }, at);
+			if (reducedMotion) slot.actor.setPosition(at.x, at.y);
+			slot.working = false;
+		}
+
+		private syncPeople(state: WorldSnapshot): void {
+			const people = state.scavs ?? [], rooms = state.shelter?.rooms ?? [];
+			const alive = new Set(people.map((scav) => scav.id));
+			for (const [id, slot] of this.scavs) if (!alive.has(id)) { if (this.drag?.scavId === id) this.cancelScavDrag(); slot.actor.destroy(true); this.scavs.delete(id); }
+			const free = people.filter((scav) => scav.status !== "raiding" && !rooms.some((room) => room.id === scav.assignment && room.workerIds.includes(scav.id)));
+			people.forEach((scav, index) => {
+				const room = rooms.find((candidate) => candidate.id === scav.assignment && candidate.workerIds.includes(scav.id));
+				const rank = Math.max(0, room?.workerIds.indexOf(scav.id) ?? 0), roomPoint = room ? cellPosition(room.column, room.row) : null;
+				const at = roomPoint ? { x: roomPoint.x + 68 + rank * 32, y: roomPoint.y + 80 } : this.homePosition(Math.max(0, free.indexOf(scav)), free.length);
+				const slot = this.scavs.get(scav.id) ?? this.createScav(scav.id, index, at);
+				const previousStatus = slot.status, previousAssignment = slot.assignment;
+				slot.assignment = room?.id ?? null; slot.status = scav.status; slot.health = scav.health;
+				if (this.drag?.scavId === scav.id && (scav.status === "raiding" || scav.health < 25 || this.drag.shelter !== state.shelter || this.drag.scav !== scav)) this.cancelScavDrag();
+				if (scav.status === "raiding") { slot.actor.setVisible(false); slot.route = []; slot.goal = "raiding"; slot.working = false; return; }
+				if (previousStatus === "raiding") slot.actor.setPosition(112, 129);
+				slot.actor.setVisible(true).setScale(1.05).setAlpha(this.drag?.scavId === scav.id ? .45 : scav.status === "wounded" ? .78 : 1);
+				if (scav.status === "wounded" && (!room || scav.health < 25)) {
+					const rest = rooms.find((candidate) => candidate.type === "medbay" && candidate.status === "ready") ?? rooms.find((candidate) => candidate.type === "dormitory" && candidate.status === "ready");
+					const p = rest ? cellPosition(rest.column, rest.row) : null;
+					this.sendActor(slot, `rest:${rest?.id ?? "entrance"}`, p ? { x: p.x + 35 + index % 3 * 20, y: p.y + 80 } : at);
+					slot.role = "rest";
+				} else if (room) {
+					this.sendActor(slot, `work:${room.id}:${rank}`, at);
+					slot.role = room.type;
+				} else if (!slot.goal || previousAssignment !== null || previousStatus !== "ready") {
+					this.sendActor(slot, `idle-home:${index}`, at); slot.role = "idle";
+				}
+				const production = room ? state.roomProduction?.[room.id] : undefined;
+				slot.working = Boolean(room && !slot.route.length && scav.health >= 25 && room.status === "ready" && room.queue.length && production?.rate && !production.reason);
+				const selected = state.selectedScavId === scav.id;
+				slot.selection.setVisible(selected || slot.hovered || this.drag?.scavId === scav.id).setStrokeStyle(1.5, selected ? C.light : C.gold);
+				const activities: Record<string, string> = { workshop: "СОБИРАЕТ ДЕТАЛИ", ammo: "СНАРЯЖАЕТ ПАТРОНЫ", recycler: "СОРТИРУЕТ УТИЛЬ", medbay: "ГОТОВИТ МЕДИКАМЕНТЫ", radio: "РАБОТАЕТ В ЭФИРЕ" };
+				const activity = slot.role === "rest" ? slot.route.length ? "ИДЁТ ОТДЫХАТЬ" : "ВОССТАНАВЛИВАЕТСЯ" : slot.route.length ? room ? `ИДЁТ: ${ROOM_STYLE[room.type]?.label ?? "КОМНАТА"}` : "ОСМАТРИВАЕТ БАЗУ" : slot.working ? activities[slot.role] ?? "РАБОТАЕТ" : room ? production?.reason?.toLocaleUpperCase("ru-RU").slice(0, 24) ?? "ЖДЁТ ЗАКАЗ" : "НА БАЗЕ";
+				slot.label.setText(`${scav.name?.toLocaleUpperCase("ru-RU") ?? ""}\n${activity}`).setVisible(selected || slot.hovered);
+				slot.order.setVisible(Boolean(scav.autoRaid?.enabled)).setFillStyle(scav.autoRaid?.waitingReason ? C.gold : C.sage);
+				const gearSignature = `${scav.gear?.armor ?? 0}:${scav.gear?.backpack ?? 0}:${slot.role}`;
+				if (slot.gearSignature !== gearSignature) {
+					slot.gearSignature = gearSignature; slot.gear.clear(); slot.tool.clear();
+					if (!room && scav.gear?.backpack) slot.gear.fillStyle(0x8c7650).fillRect(-10, -26, 5, 16).lineStyle(1, 0xbca16b).strokeRect(-10, -26, 5, 16);
+					if (scav.gear?.armor) slot.gear.fillStyle(0x708060).fillRect(-4, -25, 8, 9).fillStyle(0xc4bc80).fillRect(-3, -23, 2, 2);
+					if (slot.role === "workshop") { line(slot.tool, [{ x: 1, y: 6 }, { x: 3, y: 16 }], 0xc6cbb6, 2); slot.tool.lineStyle(1.3, 0xd4d5ba).strokeCircle(3, 17, 2.5); }
+					if (slot.role === "ammo") slot.tool.fillStyle(0xe7c577).fillRect(1, 8, 3, 8);
+					if (slot.role === "recycler") { line(slot.tool, [{ x: 1, y: 8 }, { x: 2, y: 17 }], 0xd5bb92, 2); slot.tool.fillStyle(0x9dac9b).fillRect(-2, 16, 8, 3); }
+					if (slot.role === "medbay") slot.tool.fillStyle(0xd8ebe0).fillRect(0, 9, 5, 7).fillStyle(0x98cabc).fillRect(1, 7, 3, 2);
+					if (slot.role === "radio") slot.tool.fillStyle(0xbdc9a6).fillRect(-1, 8, 6, 7).fillStyle(0x659789).fillRect(0, 9, 4, 3);
+				}
+			});
+		}
+
+		private patrolActor(slot: ScavActor, id: string, time: number): void {
+			if (slot.assignment || slot.status !== "ready" || slot.route.length || time < slot.dwellUntil || reducedMotion) return;
+			const state = this.viewState, ready = state?.shelter?.rooms.filter((room) => room.status === "ready") ?? [];
+			slot.visit++;
+			const people = state?.scavs?.filter((scav) => scav.status !== "raiding" && !scav.assignment) ?? [];
+			if (!ready.length || slot.visit % 3 === 0) this.sendActor(slot, `idle-home:${slot.visit}`, this.homePosition(Math.max(0, people.findIndex((scav) => scav.id === id)), people.length));
+			else {
+				const room = ready[(Math.floor(slot.phase * 7) + slot.visit * 3) % ready.length]!, p = cellPosition(room.column, room.row);
+				this.sendActor(slot, `visit:${slot.visit}:${room.id}`, { x: p.x + (slot.visit % 2 ? 27 : 146), y: p.y + 80 });
+			}
+			slot.role = "idle"; slot.dwellUntil = time + 9000 + slot.phase * 400;
+		}
+
+		private animateShelter(time: number, delta: number): void {
+			const step = Math.min(Math.max(delta, 0), 100) / 1000;
+			if (this.shaftUser && (!this.scavs.get(this.shaftUser)?.actor.visible || !this.scavs.get(this.shaftUser)?.route.length)) this.shaftUser = null;
 			this.ambient.clear();
 			if (!reducedMotion) {
 				for (let n = 0; n < 5; n++) {
@@ -811,24 +1019,50 @@ export function createWorld(
 					this.ambient.fillStyle(0xdac99c, .1 * Math.sin(cycle * Math.PI)).fillRect(227 + n * 74 + cycle * 11, 126 - cycle * 35, 1, 1);
 				}
 			}
-			for (const slot of this.scavs.values()) {
+			for (const [id, slot] of this.scavs) {
 				const phase = time / 340 + slot.phase;
 				const animated = !reducedMotion && slot.actor.visible;
-				const walk = animated && slot.walking;
-				const work = animated && slot.working;
-				const sway = walk ? Math.sin(time / 2200 + slot.phase) * slot.walkSpan : 0;
-				slot.actor.setPosition(slot.anchor.x + sway, slot.anchor.y);
+				if (slot.actor.visible && this.drag?.scavId !== id) {
+					this.patrolActor(slot, id, time);
+					let speed = slot.status === "wounded" ? 27 : 58;
+					const next = slot.route[0], vertical = Boolean(next && Math.abs(slot.actor.x - SHELTER_SHAFT_X) < 1 && Math.abs(next.y - slot.actor.y) > 1);
+					if (vertical) {
+						if (!this.shaftUser) this.shaftUser = id;
+						if (this.shaftUser !== id) speed = 0;
+						else if (Math.abs(this.liftFeet - slot.actor.y) > .5) {
+							this.liftFeet += Math.sign(slot.actor.y - this.liftFeet) * Math.min(Math.abs(slot.actor.y - this.liftFeet), 78 * step); speed = 0;
+						} else speed = 45;
+					}
+					const hadRoute = slot.route.length > 0;
+					const motion = advanceShelterRoute({ x: slot.actor.x, y: slot.actor.y }, slot.route, speed * step);
+					slot.route = motion.route;
+					if (hadRoute) slot.actor.setPosition(motion.point.x, motion.point.y);
+					slot.walking = hadRoute && speed > 0; slot.climbing = vertical && speed > 0;
+					if (slot.walking && !vertical) slot.facing = motion.facing;
+					if (vertical && this.shaftUser === id && speed > 0) this.liftFeet = slot.actor.y;
+					if (vertical && this.shaftUser === id && (!slot.route.length || Math.abs(slot.route[0]!.y - slot.actor.y) < 1)) this.shaftUser = null;
+					if (hadRoute && motion.arrived) { slot.dwellUntil = time + 6500 + (slot.phase % 4) * 1700; slot.walking = false; slot.climbing = false; }
+				} else { slot.walking = false; slot.climbing = false; }
+				const room = this.viewState?.shelter?.rooms.find((candidate) => candidate.id === slot.assignment);
+				const production = room ? this.viewState?.roomProduction?.[room.id] : undefined;
+				slot.working = Boolean(slot.status !== "raiding" && slot.health >= 25 && !slot.route.length && this.drag?.scavId !== id && room?.status === "ready" && room.queue.length && production?.rate && !production.reason);
+				const walk = animated && slot.walking, work = animated && slot.working;
 				slot.body.setY(work ? Math.sin(phase) * .8 : walk ? Math.abs(Math.sin(phase)) * -.9 : animated ? Math.sin(time / 1600 + slot.phase) * .3 : 0);
 				slot.legA.setY(-5 + (walk ? Math.sin(phase) * 2 : 0));
 				slot.legB.setY(-5 - (walk ? Math.sin(phase) * 2 : 0));
-				slot.hand.setAngle(work ? -48 + Math.sin(phase) * 28 : walk ? Math.sin(phase) * 16 : 0);
-				slot.body.setScale(walk && Math.cos(time / 2200 + slot.phase) < 0 ? -1 : 1, 1);
+				let angle = walk ? slot.climbing ? -115 + Math.sin(phase) * 20 : Math.sin(phase) * 19 : 0;
+				if (work) angle = slot.role === "radio" ? -125 + Math.sin(time / 900 + slot.phase) * 4 : slot.role === "medbay" ? -38 + Math.sin(time / 700 + slot.phase) * 10 : slot.role === "ammo" ? -53 + Math.sin(time / 350 + slot.phase) * 16 : slot.role === "recycler" ? -35 + Math.sin(time / 280 + slot.phase) * 40 : -45 + Math.sin(time / 320 + slot.phase) * 27;
+				slot.hand.setAngle(angle); slot.tool.setAngle(angle).setVisible(slot.working);
+				slot.body.setScale(slot.facing, 1);
 			}
+			this.elevator.setY(this.liftFeet - 49);
 			for (const cell of this.cells.values()) {
 				const g = cell.animation;
 				g.clear();
 				if (!cell.room) continue;
 				const work = cell.working && !reducedMotion;
+				const elapsed = time - cell.completedAt;
+				cell.feedback.setVisible(elapsed >= 0 && elapsed < 1800).setAlpha(reducedMotion ? 1 : Phaser.Math.Clamp(1 - elapsed / 1800, 0, 1)).setY(43 - (reducedMotion ? 0 : Math.max(0, elapsed) / 120));
 				if (cell.room.status !== "ready") {
 					g.fillStyle(C.gold, .9).fillCircle(115, 62, 3);
 					line(g, [{ x: 115, y: 65 }, { x: 115, y: 79 }], 0x938063, 7);
@@ -1244,14 +1478,15 @@ export function createWorld(
 			this.mapLayer.sort("depth");
 		}
 
-		update(time: number): void {
+		update(time: number, delta: number): void {
+			if (this.drag && (document.hidden || interactions.canDrag?.() === false)) this.cancelScavDrag();
 			const selection = snapshot();
 			if (time - this.lastSync > 1000 || `${selection.selectedScavId ?? ""}:${selection.selectedMapId ?? ""}:${selection.selectedRoomId ?? ""}:${selection.selectedSite?.column ?? ""}:${selection.selectedSite?.row ?? ""}` !== this.lastSelection) {
 				this.lastSync = time;
 				this.syncSnapshot();
 			}
-			if (requestedView === "base") {
-				this.animateShelter(time);
+			if (requestedView === "base" && !document.hidden) {
+				this.animateShelter(time, delta);
 				this.baseLayer.sort("depth");
 			} else {
 				const state = snapshot(),
@@ -1316,5 +1551,11 @@ export function createWorld(
 		audio: { noAudio: true },
 		scene: [scene],
 	});
-	return { game, setView: (view) => scene.show(view) };
+	return {
+		game, setView: (view) => scene.show(view),
+		beginScavDrag: (id) => scene.beginScavDrag(id),
+		moveScavDrag: (clientX, clientY) => scene.moveScavDrag(clientX, clientY),
+		endScavDrag: () => scene.endScavDrag(),
+		cancelScavDrag: () => scene.cancelScavDrag(),
+	};
 }
