@@ -2,6 +2,8 @@ import Phaser from "phaser";
 import { getRaidPhase, type Raid, type RoomInstance } from "./game/engine";
 import { type BaseRoom } from "./game/data";
 import { advanceShelterRoute, clientToShelterPoint, getShelterCell, planShelterRoute, SHELTER_SHAFT_X } from "./shelter-motion";
+import { clampShelterCamera, focusShelterRect, panShelterCamera, projectShelterRect, viewportToShelter, zoomShelterCamera, type ShelterCamera, type ShelterRect, type ClientRect } from "./shelter-camera";
+import { advanceShelterLift, createShelterLift, type LiftRequest } from "./shelter-lift";
 
 export interface WorldSnapshot {
 	base: Record<string, number>;
@@ -40,6 +42,8 @@ type ScavActor = {
 	legA: Phaser.GameObjects.Rectangle;
 	legB: Phaser.GameObjects.Rectangle;
 	hand: Phaser.GameObjects.Rectangle;
+	sprite: Phaser.GameObjects.Image | null;
+	appearance: number;
 	gear: Phaser.GameObjects.Graphics;
 	tool: Phaser.GameObjects.Graphics;
 	label: Phaser.GameObjects.Text;
@@ -66,6 +70,8 @@ type ScavActor = {
 export interface WorldInteractions {
 	canInteract?: () => boolean;
 	canDrag?: () => boolean;
+	canCamera?: () => boolean;
+	onCameraChange?: (state: WorldCameraState) => void;
 	getAssignmentReason?: (scavId: string, roomId: string) => string | null;
 	onAssignScav?: (scavId: string, roomId: string) => void;
 	onDragState?: (state: { scavId: string; roomId: string | null; reason: string | null } | null) => void;
@@ -75,9 +81,27 @@ export interface WorldInteractions {
 	onBuildSite?: (site: { column: number; row: number }) => void;
 	onShelterSite?: (column: number, row: number) => void;
 }
+export interface WorldCameraState extends ShelterCamera { panMode: boolean }
+export interface WorldController {
+	game: Phaser.Game;
+	setView: (view: View) => void;
+	beginScavDrag: (id: string) => boolean;
+	moveScavDrag: (clientX: number, clientY: number) => void;
+	endScavDrag: () => void;
+	cancelScavDrag: () => void;
+	cancelCameraGesture: () => void;
+	getCameraState: () => WorldCameraState;
+	zoomBy: (factor: number, clientX?: number, clientY?: number) => void;
+	panBy: (dx: number, dy: number) => void;
+	resetCamera: () => void;
+	setPanMode: (enabled: boolean) => void;
+	focusRoom: (id: string) => boolean;
+	projectShelterRect: (rect: ShelterRect) => (ClientRect & { visible: boolean }) | null;
+}
 type ShelterCell = {
 	root: Phaser.GameObjects.Container;
 	art: Phaser.GameObjects.Graphics;
+	backdrop: Phaser.GameObjects.Image | null;
 	frame: Phaser.GameObjects.Graphics;
 	progress: Phaser.GameObjects.Graphics;
 	animation: Phaser.GameObjects.Graphics;
@@ -229,7 +253,7 @@ export function createWorld(
 	snapshot: () => WorldSnapshot,
 	onMap: (id: string) => void,
 	interactions: WorldInteractions = {}
-): { game: Phaser.Game; setView: (view: View) => void; beginScavDrag: (id: string) => boolean; moveScavDrag: (clientX: number, clientY: number) => void; endScavDrag: () => void; cancelScavDrag: () => void } {
+): WorldController {
 	let requestedView: View = "base";
 	const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -248,8 +272,14 @@ export function createWorld(
 		private gesture: CanvasGesture | null = null;
 		private nativeEvents = new AbortController();
 		private viewState: WorldSnapshot | null = null;
-		private shaftUser: string | null = null;
-		private liftFeet = 228;
+		private liftModel = createShelterLift();
+		private liftDoors!: Phaser.GameObjects.Graphics;
+		private viewCamera: ShelterCamera = { zoom: 1, x: 0, y: 0 };
+		private panMode = false;
+		private spacePressed = false;
+		private panGesture: { pointerId: number; clientX: number; clientY: number } | null = null;
+		private cameraTouches = new Map<number, Point>();
+		private pinchGesture: { ids: [number, number]; distance: number; midpoint: Point } | null = null;
 		private places = new Map<
 			string,
 			{
@@ -271,6 +301,11 @@ export function createWorld(
 			super("PraporWorld");
 		}
 
+		preload(): void {
+			this.load.spritesheet("shelter-room-atlas", "/art/shelter-rooms.png", { frameWidth: 768, frameHeight: 256 });
+			this.load.atlas("scav-workers", "/art/scav-workers.png", "/art/scav-workers.json");
+		}
+
 		create(): void {
 			this.cameras.main.setBackgroundColor(C.void);
 			this.makeGlow();
@@ -284,6 +319,7 @@ export function createWorld(
 			this.game.canvas.setAttribute("aria-hidden", "true");
 			this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
 				this.cancelScavDrag();
+				this.cancelCameraGesture();
 				this.nativeEvents.abort();
 				this.raidActors.clear();
 				this.places.clear();
@@ -293,7 +329,7 @@ export function createWorld(
 		}
 
 		show(view: View): void {
-			if (view !== requestedView) this.cancelScavDrag();
+			if (view !== requestedView) { this.cancelScavDrag(); this.cancelCameraGesture(); }
 			requestedView = view;
 			if (!this.baseLayer) return;
 			this.baseLayer.setVisible(view === "base");
@@ -302,7 +338,62 @@ export function createWorld(
 			this.scavs.forEach((actor) => { actor.hovered = false; });
 			this.places.forEach((place) => { place.hovered = false; });
 			this.syncSnapshot();
+			this.applyCamera();
 		}
+
+		getCameraState(): WorldCameraState { return { ...this.viewCamera, panMode: this.panMode }; }
+
+		private cameraAllowed(): boolean {
+			return Boolean(this.baseLayer && this.scene.isActive() && requestedView === "base" && !document.hidden && !this.drag && !this.gesture && interactions.canCamera?.() !== false);
+		}
+
+		private applyCamera(): void {
+			this.viewCamera = clampShelterCamera(this.viewCamera);
+			this.baseLayer?.setScale(this.viewCamera.zoom).setPosition(-this.viewCamera.x * this.viewCamera.zoom, -this.viewCamera.y * this.viewCamera.zoom);
+			this.input?.setDefaultCursor(this.panMode || this.spacePressed ? "grab" : "default");
+			interactions.onCameraChange?.(this.getCameraState());
+		}
+
+		zoomBy(factor: number, clientX?: number, clientY?: number): void {
+			if (!this.cameraAllowed() || !Number.isFinite(factor) || factor <= 0) return;
+			const anchor = clientX !== undefined && clientY !== undefined ? clientToShelterPoint(clientX, clientY, this.game.canvas.getBoundingClientRect(), WIDTH, HEIGHT) : { x: WIDTH / 2, y: HEIGHT / 2 };
+			if (!anchor) return;
+			this.viewCamera = zoomShelterCamera(this.viewCamera, this.viewCamera.zoom * factor, anchor); this.applyCamera();
+		}
+
+		panBy(dx: number, dy: number): void { if (this.cameraAllowed()) { this.viewCamera = panShelterCamera(this.viewCamera, dx, dy); this.applyCamera(); } }
+		resetCamera(): void { if (this.cameraAllowed()) { this.viewCamera = { zoom: 1, x: 0, y: 0 }; this.applyCamera(); } }
+		setPanMode(enabled: boolean): void { this.panMode = Boolean(enabled); this.cancelPan(); if (enabled) this.cancelScavDrag(); this.applyCamera(); }
+		focusRoom(id: string): boolean {
+			if (!this.baseLayer || requestedView !== "base" || document.hidden) return false;
+			const room = snapshot().shelter?.rooms.find((candidate) => candidate.id === id);
+			if (!room) return false;
+			const p = cellPosition(room.column, room.row);
+			this.viewCamera = focusShelterRect(this.viewCamera, { ...p, width: ROOM_WIDTH, height: ROOM_HEIGHT }, 2.5);
+			if (this.drag) {
+				this.drag.point = null; this.drag.roomId = null; this.drag.cellKey = null;
+				this.dragGhost.clear();
+				for (const cell of this.cells.values()) this.paintCellFrame(cell);
+			}
+			this.applyCamera(); return true;
+		}
+
+		projectShelterRect(rect: ShelterRect): (ClientRect & { visible: boolean }) | null {
+			return this.baseLayer && requestedView === "base" ? projectShelterRect(rect, this.viewCamera, this.game.canvas.getBoundingClientRect()) : null;
+		}
+
+		private clientWorld(clientX: number, clientY: number): Point | null {
+			const viewport = clientToShelterPoint(clientX, clientY, this.game.canvas.getBoundingClientRect(), WIDTH, HEIGHT);
+			return viewport ? viewportToShelter(viewport, this.viewCamera) : null;
+		}
+
+		private cancelPan(): void {
+			const ids = new Set([...(this.panGesture ? [this.panGesture.pointerId] : []), ...(this.pinchGesture?.ids ?? [])]);
+			this.panGesture = null; this.pinchGesture = null; this.cameraTouches.clear();
+			for (const id of ids) if (this.game.canvas.hasPointerCapture?.(id)) this.game.canvas.releasePointerCapture(id);
+		}
+
+		cancelCameraGesture(): void { this.cancelPan(); this.spacePressed = false; this.applyCamera(); }
 
 		private text(
 			x: number,
@@ -322,7 +413,9 @@ export function createWorld(
 
 		private acceptsPointer(pointer: Phaser.Input.Pointer, view: View): boolean {
 			return requestedView === view
-				&& !this.drag
+				&& !this.panGesture && !(view === "base" && (this.panMode || this.spacePressed))
+				&& (!pointer.event || !("button" in pointer.event) || pointer.event.button === 0)
+				&& !this.drag && !this.gesture
 				&& interactions.canInteract?.() !== false
 				&& pointer.event?.target === this.game.canvas;
 		}
@@ -339,7 +432,7 @@ export function createWorld(
 		}
 
 		beginScavDrag(scavId: string): boolean {
-			if (!this.baseLayer || !this.scene.isActive() || requestedView !== "base" || document.hidden || this.drag || interactions.canDrag?.() === false || !interactions.onAssignScav) return false;
+			if (!this.baseLayer || !this.scene.isActive() || requestedView !== "base" || document.hidden || this.drag || this.panGesture || this.panMode || this.spacePressed || interactions.canDrag?.() === false || !interactions.onAssignScav) return false;
 			const state = snapshot(), scav = state.scavs?.find((candidate) => candidate.id === scavId);
 			if (!scav || scav.status === "raiding" || scav.health < 25) return false;
 			this.drag = { scavId, roomId: null, reason: null, cellKey: null, point: null, canvas: false, shelter: state.shelter, scav };
@@ -354,7 +447,7 @@ export function createWorld(
 			if (!drag) return;
 			const state = snapshot();
 			if (requestedView !== "base" || document.hidden || interactions.canDrag?.() === false || state.shelter !== drag.shelter || state.scavs?.find((scav) => scav.id === drag.scavId) !== drag.scav || drag.scav.status === "raiding" || drag.scav.health < 25) { this.cancelScavDrag(); return; }
-			const point = clientToShelterPoint(clientX, clientY, this.game.canvas.getBoundingClientRect(), WIDTH, HEIGHT);
+			const point = this.clientWorld(clientX, clientY);
 			const site = point ? getShelterCell(point) : null;
 			const room = site ? state.shelter?.rooms.find((candidate) => candidate.column === site.column && candidate.row === site.row) : undefined;
 			const roomId = room?.id ?? null;
@@ -405,8 +498,24 @@ export function createWorld(
 			const canvas = this.game.canvas, options = { signal: this.nativeEvents.signal };
 			canvas.style.touchAction = "none";
 			canvas.addEventListener("pointerdown", (event) => {
-				if (event.button !== 0 || event.target !== canvas || requestedView !== "base" || this.gesture || this.drag || interactions.canInteract?.() === false) return;
-				const point = clientToShelterPoint(event.clientX, event.clientY, canvas.getBoundingClientRect(), WIDTH, HEIGHT);
+				if (event.target !== canvas || requestedView !== "base") return;
+				if (event.pointerType === "touch" && this.panMode && this.cameraAllowed()) {
+					this.cameraTouches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+					if (this.cameraTouches.size === 2 && this.cameraAllowed()) {
+						const entries = [...this.cameraTouches], a = entries[0]!, b = entries[1]!;
+						this.pinchGesture = { ids: [a[0], b[0]], distance: Math.max(1, Math.hypot(a[1].x - b[1].x, a[1].y - b[1].y)), midpoint: { x: (a[1].x + b[1].x) / 2, y: (a[1].y + b[1].y) / 2 } };
+						canvas.setPointerCapture(event.pointerId); event.preventDefault(); return;
+					}
+				}
+				if (event.button === 1 || this.panMode || this.spacePressed) {
+					if (this.panGesture || !this.cameraAllowed()) return;
+					event.preventDefault();
+					this.panGesture = { pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY };
+					canvas.setPointerCapture(event.pointerId); this.input.setDefaultCursor("grabbing");
+					return;
+				}
+				if (event.button !== 0 || this.gesture || this.drag || interactions.canInteract?.() === false) return;
+				const point = this.clientWorld(event.clientX, event.clientY);
 				if (!point) return;
 				const hit = [...this.scavs].filter(([, slot]) => slot.actor.visible && Math.abs(slot.actor.x - point.x) <= 16 * slot.actor.scaleX && point.y >= slot.actor.y - 44 * slot.actor.scaleY && point.y <= slot.actor.y + 2).sort((a, b) => Math.hypot(a[1].actor.x - point.x, a[1].actor.y - 21 - point.y) - Math.hypot(b[1].actor.x - point.x, b[1].actor.y - 21 - point.y))[0];
 				if (!hit) return;
@@ -414,6 +523,27 @@ export function createWorld(
 				canvas.setPointerCapture(event.pointerId);
 			}, options);
 			canvas.addEventListener("pointermove", (event) => {
+				if (this.cameraTouches.has(event.pointerId)) this.cameraTouches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+				const pinch = this.pinchGesture;
+				if (pinch && pinch.ids.includes(event.pointerId)) {
+					if (!this.cameraAllowed()) { this.cancelCameraGesture(); return; }
+					const a = this.cameraTouches.get(pinch.ids[0]), b = this.cameraTouches.get(pinch.ids[1]), rect = canvas.getBoundingClientRect();
+					if (!a || !b || rect.width <= 0 || rect.height <= 0) return;
+					const distance = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), midpoint = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+					const anchor = { x: (pinch.midpoint.x - rect.left) * WIDTH / rect.width, y: (pinch.midpoint.y - rect.top) * HEIGHT / rect.height };
+					this.viewCamera = zoomShelterCamera(this.viewCamera, this.viewCamera.zoom * distance / pinch.distance, anchor);
+					this.viewCamera = panShelterCamera(this.viewCamera, (pinch.midpoint.x - midpoint.x) * WIDTH / rect.width, (pinch.midpoint.y - midpoint.y) * HEIGHT / rect.height);
+					pinch.distance = distance; pinch.midpoint = midpoint; event.preventDefault(); this.applyCamera(); return;
+				}
+				const pan = this.panGesture;
+				if (pan && event.pointerId === pan.pointerId) {
+					if (!this.cameraAllowed()) { this.cancelCameraGesture(); return; }
+					event.preventDefault();
+					const rect = canvas.getBoundingClientRect();
+					if (rect.width > 0 && rect.height > 0) this.panBy(-(event.clientX - pan.clientX) * WIDTH / rect.width, -(event.clientY - pan.clientY) * HEIGHT / rect.height);
+					pan.clientX = event.clientX; pan.clientY = event.clientY;
+					this.input.setDefaultCursor("grabbing"); return;
+				}
 				const gesture = this.gesture;
 				if (!gesture || event.pointerId !== gesture.pointerId) return;
 				if (!gesture.active && Math.hypot(event.clientX - gesture.clientX, event.clientY - gesture.clientY) >= 8) {
@@ -424,19 +554,31 @@ export function createWorld(
 				if (gesture.active) { event.preventDefault(); this.moveScavDrag(event.clientX, event.clientY); }
 			}, options);
 			canvas.addEventListener("pointerup", (event) => {
+				if (this.pinchGesture?.ids.includes(event.pointerId)) { this.cancelPan(); this.applyCamera(); return; }
+				if (this.panGesture?.pointerId === event.pointerId) { this.cancelPan(); this.applyCamera(); return; }
 				const gesture = this.gesture;
 				if (!gesture || event.pointerId !== gesture.pointerId) return;
 				if (gesture.active) { this.moveScavDrag(event.clientX, event.clientY); this.endScavDrag(); return; }
 				const tapped = Math.hypot(event.clientX - gesture.clientX, event.clientY - gesture.clientY) < 8;
 				this.clearGesture();
-				if (tapped && requestedView === "base" && interactions.canInteract?.() !== false && clientToShelterPoint(event.clientX, event.clientY, canvas.getBoundingClientRect())) interactions.onScav?.(gesture.scavId);
+				if (tapped && requestedView === "base" && interactions.canInteract?.() !== false && this.clientWorld(event.clientX, event.clientY)) interactions.onScav?.(gesture.scavId);
 			}, options);
-			canvas.addEventListener("pointercancel", () => this.cancelScavDrag(), options);
-			canvas.addEventListener("lostpointercapture", () => { if (this.gesture) this.cancelScavDrag(); }, options);
-			window.addEventListener("keydown", (event) => { if (event.key === "Escape" && (this.drag || this.gesture)) { event.preventDefault(); this.cancelScavDrag(); } }, options);
-			window.addEventListener("blur", () => this.cancelScavDrag(), options);
-			window.addEventListener("resize", () => this.cancelScavDrag(), options);
-			document.addEventListener("visibilitychange", () => { if (document.hidden) this.cancelScavDrag(); }, options);
+			canvas.addEventListener("pointercancel", () => { this.cancelScavDrag(); this.cancelCameraGesture(); }, options);
+			canvas.addEventListener("lostpointercapture", () => { if (this.gesture) this.cancelScavDrag(); if (this.panGesture) this.cancelCameraGesture(); }, options);
+			canvas.addEventListener("wheel", (event) => {
+				if (!this.cameraAllowed() || event.target !== canvas) return;
+				event.preventDefault(); this.zoomBy(Math.exp(-Phaser.Math.Clamp(event.deltaY, -160, 160) * .0025), event.clientX, event.clientY);
+			}, { ...options, passive: false });
+			window.addEventListener("keydown", (event) => {
+				if (event.key === "Escape" && (this.drag || this.gesture || this.panGesture)) { event.preventDefault(); this.cancelScavDrag(); this.cancelCameraGesture(); }
+				if (event.code === "Space" && this.cameraAllowed() && (document.activeElement === canvas || parent.contains(document.activeElement)) && !(event.target instanceof Element && event.target.closest("input,textarea,select,[contenteditable=true],button"))) {
+					event.preventDefault(); this.spacePressed = true; this.applyCamera();
+				}
+			}, options);
+			window.addEventListener("keyup", (event) => { if (event.code === "Space" && this.spacePressed) { this.spacePressed = false; this.cancelPan(); this.applyCamera(); } }, options);
+			window.addEventListener("blur", () => { this.cancelScavDrag(); this.cancelCameraGesture(); }, options);
+			window.addEventListener("resize", () => { this.cancelScavDrag(); this.cancelCameraGesture(); }, options);
+			document.addEventListener("visibilitychange", () => { if (document.hidden) { this.cancelScavDrag(); this.cancelCameraGesture(); } }, options);
 		}
 
 		private makeGlow(): void {
@@ -594,7 +736,8 @@ export function createWorld(
 			for (let x = 7; x < 30; x += 6) line(lift, [{ x, y: 7 }, { x, y: 49 }], 0x606f54, 1);
 			line(lift, [{ x: 4, y: 30 }, { x: 28, y: 30 }], 0x879271, 2);
 			lift.fillStyle(C.gold).fillRect(4, 54, 24, 3);
-			this.elevator = this.add.container(404, 179, [lift]).setDepth(20);
+			this.liftDoors = this.add.graphics();
+			this.elevator = this.add.container(404, 179, [lift, this.liftDoors]).setDepth(20);
 			this.baseLayer.add(this.elevator);
 			for (const light of [{ x: 119, y: 108, tint: 0xffd7a0 }, { x: 324, y: 111, tint: 0xece1b4 }, { x: 568, y: 111, tint: 0xc6e5cc }]) {
 				this.baseLayer.add(this.add.image(light.x, light.y, "prapor-light").setTint(light.tint).setScale(.43, .25).setAlpha(.18).setBlendMode(Phaser.BlendModes.ADD));
@@ -614,6 +757,7 @@ export function createWorld(
 
 		private createCell(column: number, row: number): void {
 			const p = cellPosition(column, row);
+			const backdrop = this.textures.exists("shelter-room-atlas") ? this.add.image(2, 24, "shelter-room-atlas", 7).setOrigin(0).setDisplaySize(168, 60) : null;
 			const art = this.add.graphics();
 			const frame = this.add.graphics();
 			const progress = this.add.graphics();
@@ -623,9 +767,9 @@ export function createWorld(
 			const feedback = this.text(86, 43, "", 16, "#e6ffce").setOrigin(.5).setFontFamily("Manrope, sans-serif").setFontStyle("bold").setLetterSpacing(0).setBackgroundColor("#163023").setPadding(6, 3).setVisible(false);
 			const lamp = this.add.image(85, 43, "prapor-light").setScale(.66, .38).setAlpha(.12).setBlendMode(Phaser.BlendModes.ADD);
 			const zone = this.add.zone(86, 50, ROOM_WIDTH, ROOM_HEIGHT).setInteractive({ useHandCursor: true });
-			const root = this.add.container(p.x, p.y, [art, lamp, animation, frame, label, status, progress, feedback, zone]);
+			const root = this.add.container(p.x, p.y, [...(backdrop ? [backdrop] : []), art, lamp, animation, frame, label, status, progress, feedback, zone]);
 			this.baseLayer.add(root);
-			const cell: ShelterCell = { root, art, frame, progress, animation, label, status, lamp, zone, signature: "", column, row, hovered: false, room: null, working: false, operational: "empty", feedback, lastCycles: null, completedAt: -10000 };
+			const cell: ShelterCell = { root, art, backdrop, frame, progress, animation, label, status, lamp, zone, signature: "", column, row, hovered: false, room: null, working: false, operational: "empty", feedback, lastCycles: null, completedAt: -10000 };
 			this.cells.set(`${column}:${row}`, cell);
 			zone.on("pointerover", (pointer: Phaser.Input.Pointer) => { if (this.acceptsPointer(pointer, "base")) { cell.hovered = true; this.paintCellFrame(cell); } });
 			zone.on("pointerout", () => { cell.hovered = false; this.paintCellFrame(cell); });
@@ -669,6 +813,41 @@ export function createWorld(
 		private paintRoom(cell: ShelterCell): void {
 			const g = cell.art, room = cell.room;
 			g.clear();
+			if (cell.backdrop) {
+				// The atlas is a cached static interior. Operational lights, machines,
+				// workers and room chrome remain separate live layers above it.
+				const frames: Record<string, number> = { workshop: 0, medbay: 1, radio: 2, storage: 3, ammo: 4, recycler: 5, dormitory: 6 };
+				const style = ROOM_STYLE[room?.type ?? "workshop"]!;
+				cell.backdrop.setFrame(room ? frames[room.type] ?? 0 : 7).setAlpha(room ? 1 : .58).setTint(room ? 0xffffff : cell.row === 1 ? 0xadb79c : 0x92a5a5).setFlipX(!room && cell.column % 2 === 1);
+				cell.backdrop.setPosition(room ? 2 : 0, room ? 24 : 0).setDisplaySize(room ? 168 : ROOM_WIDTH, room ? 60 : ROOM_HEIGHT);
+				if (!room) {
+					g.fillStyle(0x0b1c1b, .7).fillRoundedRect(6, 3, 110, 21, 3);
+					g.fillStyle(0x0c201d, .64).fillCircle(86, 54, 16);
+					g.lineStyle(1.3, 0xb6c9a5, .45).strokeCircle(86, 54, 13);
+					line(g, [{ x: 79, y: 54 }, { x: 93, y: 54 }], 0xd3dfbd, 2, .75);
+					line(g, [{ x: 86, y: 47 }, { x: 86, y: 61 }], 0xd3dfbd, 2, .75);
+					g.fillStyle(0x0c201d, .68).fillRoundedRect(17, 82, 132, 16, 3);
+					cell.label.setText("Свободно").setFontSize(16).setColor("#afc0a4");
+					cell.status.setText("ПОСТРОИТЬ").setFontSize(12).setColor("#a3b398"); cell.lamp.setVisible(false); return;
+				}
+				g.fillStyle(blend(style.wall, 0x07151b, .52)).fillRect(0, 0, ROOM_WIDTH, 24);
+				g.fillStyle(0x091416).fillRect(0, 84, ROOM_WIDTH, 16);
+				g.fillStyle(style.color, .8).fillRect(2, 2, 3, 19).fillRect(1, 23, 170, 1);
+				line(g, [{ x: 1, y: 25 }, { x: 1, y: 84 }, { x: 171, y: 84 }, { x: 171, y: 25 }], 0x101d20, 3);
+				line(g, [{ x: 2, y: 83 }, { x: 170, y: 83 }], style.color, 1, .5);
+				for (const x of [4, 166]) g.fillStyle(0xbabbaa, .7).fillCircle(x, 28, 1).fillCircle(x, 79, 1);
+				for (let n = 0; n < Math.min(5, room.level); n++) g.fillStyle(0xe3d4a9, .85).fillRect(151 - n * 5, 18, 3, 2);
+				cell.label.setText(style.label).setFontSize(18).setColor("#fff1dc"); cell.status.setFontSize(14); cell.lamp.setVisible(true).setTint(style.light).setAlpha(.08);
+				if (room.status !== "ready") {
+					g.fillStyle(0x091115, .52).fillRect(2, 24, 168, 60);
+					for (const x of [21, 87, 150]) { line(g, [{ x, y: 28 }, { x, y: 81 }], 0x111d20, 5); line(g, [{ x, y: 28 }, { x, y: 80 }], 0xd6b776, 2.3); }
+					for (const y of [43, 65]) line(g, [{ x: 16, y }, { x: 154, y }], 0xb59c6b, 2.5);
+					line(g, [{ x: 21, y: 78 }, { x: 87, y: 31 }, { x: 150, y: 78 }], 0xd0ad69, 1.5, .9);
+					for (let x = 12; x < 166; x += 12) line(g, [{ x, y: 83 }, { x: x + 5, y: 79 }], x % 24 ? 0x141e14 : 0xe2b667, 3);
+					cell.label.setText(`${room.status === "building" ? "СТРОИТСЯ" : "УЛУЧШЕНИЕ"} · ${room.construction?.targetLevel ?? room.level + 1}`).setColor("#ffce8a");
+				}
+				return;
+			}
 			if (!room) {
 				const rng = random(cell.column * 829 + cell.row * 127 + 416);
 				const stone = cell.row === 1 ? [0x3e4138, 0x4e4e3d, 0x343c33] : [0x343e40, 0x414a43, 0x28383a];
@@ -962,11 +1141,14 @@ export function createWorld(
 			graphic.fillStyle(0x15252b).fillRect(1, -35, 2, 2).fillRect(0, -30, 3, 1);
 			const gear = this.add.graphics();
 			const tool = this.add.graphics().setPosition(6, -21);
-			body.add([legA, legB, graphic, gear, hand, tool]);
+			const appearance = index % 4;
+			const sprite = this.textures.exists("scav-workers") ? this.add.image(0, 0, "scav-workers", `idle-${appearance}`).setOrigin(.5, 332 / 340).setScale(44 / 319) : null;
+			if (sprite) { legA.setVisible(false); legB.setVisible(false); graphic.setVisible(false); hand.setVisible(false); tool.setPosition(13, -21); }
+			body.add([legA, legB, graphic, ...(sprite ? [sprite] : []), gear, hand, tool]);
 			const label = this.text(0, -64, "", 16, "#ffedc7").setOrigin(.5).setFontFamily("Manrope, sans-serif").setFontStyle("bold").setLetterSpacing(0).setBackgroundColor("#0b1b20").setPadding(7, 4).setVisible(false);
 			const order = this.add.circle(-10, -34, 3.5, C.sage).setStrokeStyle(1, 0x10242b).setVisible(false);
 			const hit = this.add.zone(0, -21, 32, 46).setInteractive({ useHandCursor: true });
-			const slot: ScavActor = { actor, body, legA, legB, hand, gear, tool, label, order, selection, hovered: false, gearSignature: "", anchor: { ...at }, route: [], goal: "", assignment: null, role: "idle", dwellUntil: this.time.now + 2000 + index * 800, visit: 0, facing: 1, climbing: false, status: "ready", health: 100, working: false, walking: false, walkSpan: 0, phase: index * 1.71 };
+			const slot: ScavActor = { actor, body, legA, legB, hand, sprite, appearance, gear, tool, label, order, selection, hovered: false, gearSignature: "", anchor: { ...at }, route: [], goal: "", assignment: null, role: "idle", dwellUntil: this.time.now + 2000 + index * 800, visit: 0, facing: 1, climbing: false, status: "ready", health: 100, working: false, walking: false, walkSpan: 0, phase: index * 1.71 };
 			hit.on("pointerover", (pointer: Phaser.Input.Pointer) => { if (this.acceptsPointer(pointer, "base")) { slot.hovered = true; selection.setVisible(true); label.setVisible(true); actor.setDepth(80); } });
 			hit.on("pointerout", () => { slot.hovered = false; const selected = snapshot().selectedScavId === scavId; selection.setVisible(selected); label.setVisible(selected); actor.setDepth(30); });
 			// Native pointer-up distinguishes a deliberate tap from a drag before opening the inspector.
@@ -978,7 +1160,7 @@ export function createWorld(
 
 		private syncShelter(state: WorldSnapshot): void {
 			if (this.viewState && state.shelter !== this.viewState.shelter) {
-				this.cancelScavDrag(); this.shaftUser = null; this.liftFeet = 228;
+				this.cancelScavDrag(); this.cancelCameraGesture(); this.liftModel = createShelterLift();
 				for (const slot of this.scavs.values()) slot.actor.destroy(true);
 				this.scavs.clear();
 				for (const cell of this.cells.values()) { cell.lastCycles = null; cell.completedAt = -10000; cell.feedback.setVisible(false); }
@@ -1028,7 +1210,7 @@ export function createWorld(
 					} else if (cell.operational === "blocked") cell.progress.fillStyle(0xf0bd8f).fillRect(7, 86, 3, 8).fillRect(12, 86, 3, 8);
 					else if (construction) { line(cell.progress, [{ x: 7, y: 94 }, { x: 14, y: 87 }], 0xf4c687, 2.3); cell.progress.fillStyle(0xf4c687).fillRect(12, 85, 6, 3); }
 					else cell.progress.lineStyle(1.5, 0xb5c2b1, .85).strokeCircle(11, 90, 4);
-					cell.lamp.setAlpha(construction ? .12 : cell.working ? .3 : .2);
+					cell.lamp.setAlpha(cell.backdrop ? construction ? .1 : cell.working ? .13 : .06 : construction ? .12 : cell.working ? .3 : .2);
 				}
 			}
 			this.baseCaption.setText(`УБЕЖИЩЕ · УРОВЕНЬ ${state.level}`);
@@ -1060,7 +1242,7 @@ export function createWorld(
 			people.forEach((scav, index) => {
 				const room = rooms.find((candidate) => candidate.id === scav.assignment && candidate.workerIds.includes(scav.id));
 				const rank = Math.max(0, room?.workerIds.indexOf(scav.id) ?? 0), roomPoint = room ? cellPosition(room.column, room.row) : null;
-				const at = roomPoint ? { x: roomPoint.x + 68 + rank * 32, y: roomPoint.y + 80 } : this.homePosition(Math.max(0, free.indexOf(scav)), free.length);
+				const at = roomPoint ? { x: roomPoint.x + 86 + rank * 28, y: roomPoint.y + 80 } : this.homePosition(Math.max(0, free.indexOf(scav)), free.length);
 				const slot = this.scavs.get(scav.id) ?? this.createScav(scav.id, index, at);
 				const previousStatus = slot.status, previousAssignment = slot.assignment;
 				slot.assignment = room?.id ?? null; slot.status = scav.status; slot.health = scav.health;
@@ -1090,8 +1272,8 @@ export function createWorld(
 				const gearSignature = `${scav.gear?.armor ?? 0}:${scav.gear?.backpack ?? 0}:${slot.role}`;
 				if (slot.gearSignature !== gearSignature) {
 					slot.gearSignature = gearSignature; slot.gear.clear(); slot.tool.clear();
-					if (!room && scav.gear?.backpack) slot.gear.fillStyle(0x8c7650).fillRect(-10, -26, 5, 16).lineStyle(1, 0xbca16b).strokeRect(-10, -26, 5, 16);
-					if (scav.gear?.armor) slot.gear.fillStyle(0x708060).fillRect(-4, -25, 8, 9).fillStyle(0xc4bc80).fillRect(-3, -23, 2, 2);
+					if (!slot.sprite && !room && scav.gear?.backpack) slot.gear.fillStyle(0x8c7650).fillRect(-10, -26, 5, 16).lineStyle(1, 0xbca16b).strokeRect(-10, -26, 5, 16);
+					if (!slot.sprite && scav.gear?.armor) slot.gear.fillStyle(0x708060).fillRect(-4, -25, 8, 9).fillStyle(0xc4bc80).fillRect(-3, -23, 2, 2);
 					if (slot.role === "workshop") { line(slot.tool, [{ x: 1, y: 6 }, { x: 3, y: 16 }], 0xc6cbb6, 2); slot.tool.lineStyle(1.3, 0xd4d5ba).strokeCircle(3, 17, 2.5); }
 					if (slot.role === "ammo") slot.tool.fillStyle(0xe7c577).fillRect(1, 8, 3, 8);
 					if (slot.role === "recycler") { line(slot.tool, [{ x: 1, y: 8 }, { x: 2, y: 17 }], 0xd5bb92, 2); slot.tool.fillStyle(0x9dac9b).fillRect(-2, 16, 8, 3); }
@@ -1116,7 +1298,23 @@ export function createWorld(
 
 		private animateShelter(time: number, delta: number): void {
 			const step = Math.min(Math.max(delta, 0), 100) / 1000;
-			if (this.shaftUser && (!this.scavs.get(this.shaftUser)?.actor.visible || !this.scavs.get(this.shaftUser)?.route.length)) this.shaftUser = null;
+			// A single car owns vertical travel. Walking actors never consume a
+			// vertical route leg; one shared delta advances pickup, doors and riders.
+			const liftRequests: LiftRequest[] = [];
+			for (const [id, slot] of this.scavs) {
+				const next = slot.route[0];
+				const passenger = this.liftModel.passengerId === id;
+				if (slot.actor.visible && next && Math.abs(slot.actor.x - SHELTER_SHAFT_X) < .01 && (passenger || Math.abs(next.y - slot.actor.y) > .01) && (this.drag?.scavId !== id || passenger)) liftRequests.push({ id, from: slot.actor.y, to: next.y });
+			}
+			const lift = advanceShelterLift(this.liftModel, liftRequests, step * 1000);
+			this.liftModel = lift.state;
+			if (lift.state.passengerId) this.scavs.get(lift.state.passengerId)?.actor.setPosition(SHELTER_SHAFT_X, lift.state.y);
+			for (const drop of lift.dropped) {
+				const slot = this.scavs.get(drop.id);
+				if (!slot?.actor.visible) continue;
+				slot.actor.setPosition(SHELTER_SHAFT_X, drop.to);
+				slot.route = planShelterRoute({ x: SHELTER_SHAFT_X, y: drop.to }, slot.anchor);
+			}
 			this.ambient.clear();
 			if (!reducedMotion) {
 				for (let n = 0; n < 5; n++) {
@@ -1139,29 +1337,27 @@ export function createWorld(
 				const animated = !reducedMotion && slot.actor.visible;
 				if (slot.actor.visible && this.drag?.scavId !== id) {
 					this.patrolActor(slot, id, time);
-					let speed = slot.status === "wounded" ? 27 : 58;
-					const next = slot.route[0], vertical = Boolean(next && Math.abs(slot.actor.x - SHELTER_SHAFT_X) < 1 && Math.abs(next.y - slot.actor.y) > 1);
-					if (vertical) {
-						if (!this.shaftUser) this.shaftUser = id;
-						if (this.shaftUser !== id) speed = 0;
-						else if (Math.abs(this.liftFeet - slot.actor.y) > .5) {
-							this.liftFeet += Math.sign(slot.actor.y - this.liftFeet) * Math.min(Math.abs(slot.actor.y - this.liftFeet), 78 * step); speed = 0;
-						} else speed = 45;
-					}
+					const speed = slot.status === "wounded" ? 27 : 58;
+					const next = slot.route[0], vertical = this.liftModel.passengerId === id || Boolean(next && Math.abs(next.y - slot.actor.y) > .01);
 					const hadRoute = slot.route.length > 0;
-					const motion = advanceShelterRoute({ x: slot.actor.x, y: slot.actor.y }, slot.route, speed * step);
+					const distance = next ? Math.hypot(next.x - slot.actor.x, next.y - slot.actor.y) : 0;
+					const motion = advanceShelterRoute({ x: slot.actor.x, y: slot.actor.y }, slot.route, vertical ? 0 : Math.min(speed * step, distance));
 					slot.route = motion.route;
 					if (hadRoute) slot.actor.setPosition(motion.point.x, motion.point.y);
-					slot.walking = hadRoute && speed > 0; slot.climbing = vertical && speed > 0;
+					slot.walking = hadRoute && !vertical; slot.climbing = this.liftModel.passengerId === id;
 					if (slot.walking && !vertical) slot.facing = motion.facing;
-					if (vertical && this.shaftUser === id && speed > 0) this.liftFeet = slot.actor.y;
-					if (vertical && this.shaftUser === id && (!slot.route.length || Math.abs(slot.route[0]!.y - slot.actor.y) < 1)) this.shaftUser = null;
 					if (hadRoute && motion.arrived) { slot.dwellUntil = time + 6500 + (slot.phase % 4) * 1700; slot.walking = false; slot.climbing = false; }
 				} else { slot.walking = false; slot.climbing = false; }
 				const room = this.viewState?.shelter?.rooms.find((candidate) => candidate.id === slot.assignment);
 				const production = room ? this.viewState?.roomProduction?.[room.id] : undefined;
 				slot.working = Boolean(slot.status !== "raiding" && slot.health >= 25 && !slot.route.length && this.drag?.scavId !== id && room?.status === "ready" && room.queue.length && production?.rate && !production.reason);
 				const walk = animated && slot.walking, work = animated && slot.working;
+				if (slot.sprite) {
+					const pose = slot.working ? "work" : walk ? Math.floor(time / 240 + slot.phase) % 2 ? "walk-a" : "walk-b" : "idle";
+					const frame = `${pose}-${slot.appearance}`;
+					if (slot.sprite.frame.name !== frame) slot.sprite.setFrame(frame);
+					if (slot.working) slot.facing = 1;
+				}
 				slot.body.setY(work ? Math.sin(phase) * .8 : walk ? Math.abs(Math.sin(phase)) * -.9 : animated ? Math.sin(time / 1600 + slot.phase) * .3 : 0);
 				slot.legA.setY(-5 + (walk ? Math.sin(phase) * 2 : 0));
 				slot.legB.setY(-5 - (walk ? Math.sin(phase) * 2 : 0));
@@ -1172,8 +1368,11 @@ export function createWorld(
 				if (slot.actor.visible) {
 					this.ambient.fillStyle(slot.working ? 0xc4d3a4 : 0x9bbebb, slot.working ? .2 : .12).fillEllipse(slot.actor.x, slot.actor.y + 1, 19, 3);
 					if (slot.label.visible) {
-						const halfWidth = slot.label.width / 2, scale = slot.actor.scaleX;
-						slot.label.setX(Phaser.Math.Clamp(0, (10 - slot.actor.x) / scale + halfWidth, (WIDTH - 10 - slot.actor.x) / scale - halfWidth));
+						slot.label.setScale(1 / Math.max(1, this.viewCamera.zoom / 1.5));
+						const halfWidth = slot.label.width * slot.label.scaleX / 2, scale = slot.actor.scaleX;
+						const left = this.viewCamera.x + 10 / this.viewCamera.zoom, right = this.viewCamera.x + (WIDTH - 10) / this.viewCamera.zoom;
+						slot.label.setX(Phaser.Math.Clamp(0, (left - slot.actor.x) / scale + halfWidth, (right - slot.actor.x) / scale - halfWidth));
+						slot.label.setY(Math.max(-64, (this.viewCamera.y + 8 / this.viewCamera.zoom - slot.actor.y) / scale + slot.label.height * slot.label.scaleY / 2));
 					}
 					if ((slot.hovered || this.viewState?.selectedScavId === id) && slot.route.length) {
 						line(this.ambient, [{ x: slot.actor.x, y: slot.actor.y }, ...slot.route], 0xe8c99d, 2, .26);
@@ -1181,7 +1380,13 @@ export function createWorld(
 					}
 				}
 			}
-			this.elevator.setY(this.liftFeet - 49);
+			this.elevator.setY(this.liftModel.y - 49);
+			this.liftDoors.clear();
+			if (!this.liftModel.doorOpen) {
+				this.liftDoors.fillStyle(0x647260, .5).fillRect(4, 7, 11, 42).fillRect(17, 7, 11, 42);
+				line(this.liftDoors, [{ x: 16, y: 7 }, { x: 16, y: 49 }], 0xb8b8a0, 1.4, .8);
+			} else this.liftDoors.fillStyle(0x607356).fillRect(2, 7, 3, 42).fillRect(27, 7, 3, 42);
+			this.liftDoors.fillStyle(this.liftModel.phase === "travel" ? 0xe0c17b : this.liftModel.doorOpen ? 0xb1d28a : 0x7f9384).fillCircle(27, 4, 1.5);
 			for (const cell of this.cells.values()) {
 				const g = cell.animation;
 				g.clear();
@@ -1201,17 +1406,25 @@ export function createWorld(
 				}
 				if (cell.room.type === "radio") {
 					const angle = work ? time / 700 : -.5;
-					line(g, [{ x: 42, y: 57 }, { x: 42 + Math.cos(angle) * 7, y: 57 + Math.sin(angle) * 7 }], 0xa8cd93, 1.2, work ? .8 : .3);
-					if (work) g.fillStyle(0xc5e2a4, .8).fillCircle(151, 39 + Math.floor(time / 400) % 5 * 8, 1.2);
+					const x = cell.backdrop ? 56 : 42, y = cell.backdrop ? 45 : 57;
+					if (work) {
+						line(g, [{ x, y }, { x: x + Math.cos(angle) * 8, y: y + Math.sin(angle) * 8 }], 0x9ed78b, 1.1, .85);
+						g.fillStyle(0xd3df9d, .9).fillCircle(cell.backdrop ? 92 : 151, 37 + Math.floor(time / 400) % 5 * 6, 1.1);
+					}
 				} else if (cell.room.type === "workshop" && work) {
-					for (let n = 0; n < 3; n++) { const phase = (time / 300 + n * .32) % 1; line(g, [{ x: 80, y: 63 }, { x: 80 + phase * (9 + n * 4), y: 63 + phase * 13 }], 0xffd080, 1, 1 - phase); }
+					const x = cell.backdrop ? 112 : 80, y = cell.backdrop ? 58 : 63;
+					g.lineStyle(.9, 0xd8d7be, .8).strokeEllipse(125, 58, 7, 7 + Math.sin(time / 100) * 2);
+					for (let n = 0; n < 3; n++) { const phase = (time / 300 + n * .32) % 1; line(g, [{ x, y }, { x: x + phase * (9 + n * 4), y: y + phase * 10 }], 0xffd080, 1, 1 - phase); }
 				} else if (cell.room.type === "ammo" && work) {
-					g.fillStyle(0xc0b37c).fillRect(42, 46 + (Math.sin(time / 330) + 1) * 6, 9, 16);
-					for (let n = 0; n < 5; n++) g.fillStyle(0xd9bb63).fillRect(84 + (time / 60 + n * 12) % 59, 65, 3, 8);
+					g.fillStyle(0xc0b37c).fillRect(cell.backdrop ? 31 : 42, 43 + (Math.sin(time / 330) + 1) * 4, 4, 10);
+					for (let n = 0; n < 5; n++) g.fillStyle(0xe2bf73).fillRect(60 + (time / 60 + n * 12) % 64, cell.backdrop ? 57 : 65, 1.7, 4);
 				} else if (cell.room.type === "recycler" && work) {
-					for (let n = 0; n < 4; n++) g.fillStyle(0xa3a783).fillRect(88 + (time / 75 + n * 15) % 64, 70, 5, 3);
+					for (let n = 0; n < 4; n++) g.fillStyle(0xa3a783).fillRect((cell.backdrop ? 38 : 88) + (time / 75 + n * 12) % 40, cell.backdrop ? 57 : 70, 2.4, 2);
 				} else if (cell.room.type === "medbay" && work) {
-					g.fillStyle(0xc0d9a6, .65).fillRect(17 + time / 90 % 34, 42, 1, 11);
+					if (cell.backdrop) {
+						const offset = time / 90 % 7;
+						line(g, [{ x: 63 + offset, y: 49 }, { x: 65 + offset, y: 49 }, { x: 66 + offset, y: 45 }, { x: 68 + offset, y: 51 }, { x: 70 + offset, y: 48 }], 0x91da8d, .8, .9);
+					} else g.fillStyle(0xc0d9a6, .65).fillRect(17 + time / 90 % 34, 42, 1, 11);
 				}
 			}
 		}
@@ -1606,6 +1819,7 @@ export function createWorld(
 
 		update(time: number, delta: number): void {
 			if (this.drag && (document.hidden || interactions.canDrag?.() === false)) this.cancelScavDrag();
+			if ((this.panGesture || this.spacePressed) && !this.cameraAllowed()) this.cancelCameraGesture();
 			const selection = snapshot();
 			if (time - this.lastSync > 1000 || `${selection.selectedScavId ?? ""}:${selection.selectedMapId ?? ""}:${selection.selectedRoomId ?? ""}:${selection.selectedSite?.column ?? ""}:${selection.selectedSite?.row ?? ""}` !== this.lastSelection) {
 				this.lastSync = time;
@@ -1673,7 +1887,7 @@ export function createWorld(
 			width: WIDTH,
 			height: HEIGHT,
 		},
-		fps: { target: 30 },
+		fps: { target: 60 },
 		audio: { noAudio: true },
 		scene: [scene],
 	});
@@ -1683,5 +1897,13 @@ export function createWorld(
 		moveScavDrag: (clientX, clientY) => scene.moveScavDrag(clientX, clientY),
 		endScavDrag: () => scene.endScavDrag(),
 		cancelScavDrag: () => scene.cancelScavDrag(),
+		cancelCameraGesture: () => scene.cancelCameraGesture(),
+		getCameraState: () => scene.getCameraState(),
+		zoomBy: (factor, clientX, clientY) => scene.zoomBy(factor, clientX, clientY),
+		panBy: (dx, dy) => scene.panBy(dx, dy),
+		resetCamera: () => scene.resetCamera(),
+		setPanMode: (enabled) => scene.setPanMode(enabled),
+		focusRoom: (id) => scene.focusRoom(id),
+		projectShelterRect: (rect) => scene.projectShelterRect(rect),
 	};
 }

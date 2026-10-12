@@ -1119,3 +1119,20 @@ body{font-size:13px}.content{padding:20px 16px}.topbar{padding:13px 16px}.resour
 .command-dock.context-open{background:radial-gradient(ellipse at 100% 0,#78806044,transparent 60%),linear-gradient(135deg,#455b3d,#223f30)}
 }
 @media(max-width:640px){.command-dock:not(.context-open){grid-template-columns:139px minmax(0,1fr);gap:6px;padding:5px}.command-priority-counts{font-size:9px;top:7px;left:8px}.command-priority-band .command-next-action{padding:23px 8px 7px}.command-next-copy strong{font-size:9px;line-height:1.55}.command-next-copy small{font-size:10px;line-height:1.55}.command-dock:not(.context-open) .command-system{flex-basis:124px;padding:12px 9px}.command-dock:not(.context-open) .command-system strong{font-size:11px}.command-dock:not(.context-open) .command-system b{font-size:9px}.command-flow-status{padding:24px 8px 7px}.command-flow-status strong{font-size:10px}.command-flow-status small{font-size:9px}.command-room-meta{font-size:10px;gap:6px 12px}.command-dock .worker-row .icon-button{width:38px;min-width:38px;height:38px}}
+/* View tools stay with the scene; assignment targets share its projection. */
+.camera-controls{display:flex;align-items:center;gap:2px;padding:3px;border:1px solid #879271;border-radius:7px;background:linear-gradient(#384b3ce8,#162c21ed);box-shadow:inset 0 1px #d9d8a831,0 3px 9px #0005;pointer-events:auto}
+.camera-controls button{display:flex;align-items:center;justify-content:center;gap:5px;width:31px;min-width:31px;height:30px;padding:3px;border:1px solid transparent;border-radius:4px;background:#304833;color:#f0e3bf;font-size:20px;line-height:1}
+.camera-controls button:hover:not(:disabled),.camera-controls button:focus-visible{background:#687752;border-color:#d5c590;color:#fff0c8}
+.camera-controls button:disabled{opacity:.45;cursor:default}
+.camera-controls .camera-fit{width:auto;padding:3px 7px;font-size:10px}
+.camera-controls button.active{background:linear-gradient(#8b7951,#626b46);border-color:#ddc695;color:#fff0bb;box-shadow:inset 0 1px #fff1b72c}
+.camera-scale{display:block;min-width:33px;text-align:center;font:9px "IBM Plex Mono",monospace;color:#d9deb8;padding:0 1px;white-space:nowrap}
+.world-card:has(#world:focus-visible){outline:2px solid #e9d6a0;outline-offset:2px}
+.command-main #world:focus-visible{outline:none}
+.camera-hand-mode #world canvas{cursor:grab!important}
+.camera-hand-mode #world canvas:active{cursor:grabbing!important}
+.worker-room-targets{overflow:hidden}
+.room-view-action{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:6px;padding:5px 8px;min-height:30px;width:100%;border:1px solid #a7ad75;border-radius:5px;background:linear-gradient(#596c45,#3a5537);color:#f0dfb1;font-size:10px}
+.room-view-action:hover,.room-view-action:focus-visible{border-color:#e0c78b;background:#6a754d;color:#fff0c8}
+@media(max-width:850px){.command-main .world-head{gap:7px}.camera-controls .camera-fit{font-size:9px}.camera-controls button{width:30px;min-width:30px;height:29px}.command-dock.context-open .room-view-action{min-height:35px;font-size:11px}}
+@media(max-width:640px){.command-main .world-head{left:6px;right:6px;gap:4px}.command-main .world-head .world-coordinate{display:none}.command-main .view-switch{padding:2px}.command-main .view-switch button{font-size:8px;padding:5px 6px;gap:3px}.camera-controls{gap:1px;padding:2px}.camera-controls button{width:29px;min-width:29px;height:28px;padding:2px}.camera-controls .camera-fit{width:29px;padding:2px}.camera-fit>span{display:none}.camera-scale{min-width:29px;font-size:8px}.worker-placement{top:43px}}
