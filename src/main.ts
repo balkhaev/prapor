@@ -135,6 +135,7 @@ import { gunArt, scavPortrait } from "./art";
 import { weaponBuildArt, moduleArt } from "./armory-art";
 import { sectorArt, roomMiniArt } from "./command-art";
 import { getCommandSummary, type CommandSummary, type CommandRoomTab, type RoomCommandStatus } from "./command-summary";
+import { MIN_SHELTER_ZOOM, MAX_SHELTER_ZOOM } from "./shelter-camera";
 
 type Page = "home" | "raids" | "arsenal" | "base" | "contracts" | "journal";
 const e = (value: unknown) =>
@@ -232,10 +233,13 @@ let workerPlacement: WorkerPlacement | null = null;
 let crewPointer: CrewPointer | null = null;
 let suppressWorkerClickUntil = 0;
 let workerRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+type CameraViewState = { zoom: number; x: number; y: number; panMode: boolean };
+let cameraView: CameraViewState = { zoom: 1, x: 0, y: 0, panMode: false };
 function holdWorldInput() { worldInputBlockedUntil = Date.now() + 350; }
 function canWorldDrag() {
 	return worldView === "base" && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal") && !(window.innerWidth <= 850 && contextMode !== "overview");
 }
+function canWorldCamera() { return canWorldDrag() && !workerPlacement && !crewPointer; }
 function canWorldInteract() {
 	return !workerPlacement && !crewPointer?.started && Date.now() >= worldInputBlockedUntil && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal") && !(window.innerWidth <= 850 && contextMode !== "overview");
 }
@@ -253,13 +257,58 @@ const names: Record<Page, string> = {
 	contracts: "Контракты",
 	journal: "Журнал",
 };
-app.innerHTML = `<div class="shell command-shell"><header class="topbar command-hud"><div class="command-brand"><span class="brand-mark">П</span><div><strong>ПРАПОР</strong><small>УБЕЖИЩЕ 07</small></div></div><div class="level"><span class="eyebrow">Репутация</span><strong id="level-label"></strong><div class="xp-track"><i id="xp-fill"></i></div></div><div class="resources">${[["money", "Рубли"], ["ammo", "Патроны"], ["medicine", "Медикаменты"], ["scrap", "Материалы"], ["intel", "Разведданные"]].map(([key, label]) => `<div class="resource" title="${label}">${icon(key!,18)}<div><label>${label}</label><strong id="res-${key}"></strong></div><i class="resource-cap" id="cap-${key}"></i></div>`).join("")}</div><button class="settings" data-action="settings" aria-label="Сохранение и помощь">${icon("settings",18)}</button></header><main class="main command-main"><div class="command-toolbar"><div class="command-heading"><h1>Свои люди. Своё убежище.</h1><span><i class="status-dot"></i><span id="passive-note">База на связи</span></span></div><nav class="nav command-tools" aria-label="Инструменты штаба">${(Object.keys(names) as Page[]).map((id) => `<button data-page="${id}" aria-label="${names[id]}" title="${names[id]}">${icon(id,17)}<span>${names[id]}</span>${id === "raids" ? '<b class="badge" id="raid-badge">0</b>' : ""}</button>`).join("")}</nav></div><div class="command-stage-layout"><section id="hero" class="hero-grid"><section class="world-card"><div class="world-head"><div class="view-switch" aria-label="Вид сцены"><button class="active" data-view="base" aria-pressed="true">${icon("home",14)} Убежище</button><button data-view="map" aria-pressed="false">${icon("raids",14)} Сектора</button></div><button class="text-button room-index-button" data-page="base">${icon("base",14)} Комнаты</button><span class="world-coordinate mono">БАЗА 07 · СЕВЕР</span></div><div id="world" aria-label="Графический штаб: комнаты, рабочие и стройка"></div><div class="world-bottom"><span><i class="status-dot"></i><span id="scene-hint">Нажми на комнату или бойца</span></span><span id="world-raid-note">ОТРЯД НА БАЗЕ</span></div><div class="room-shortcuts" hidden></div></section></section><aside id="command-dock" class="command-dock" aria-label="Сводка и управление выбранным объектом"></aside></div><section id="command-crew" class="command-crew" aria-label="Отряд и рабочие"></section><section id="command-routes" class="command-routes" aria-label="Рейды и сектора"></section><div id="offline-summary"></div><footer class="footer-line command-footer"><span id="save-status">ПРОГРЕСС НА ЭТОМ УСТРОЙСТВЕ</span><span>ПРАПОР · 0.8.2</span></footer></main></div><div id="tool-root" class="tool-backdrop" hidden><section class="tool-window" role="dialog" aria-modal="true" aria-labelledby="tool-title"><header class="tool-head"><div id="page-head" class="page-head"></div><button class="icon-button" data-action="close-tools" aria-label="Закрыть инструмент и вернуться в штаб">×</button></header><div class="tool-scroll"><div id="expedition-alerts"></div><div id="panel"></div></div></section></div><div id="context-shade" class="context-shade" hidden></div><div id="toast" role="status" aria-live="polite" hidden></div><div id="inspector-root"></div><div id="modal-root"></div>`;
+app.innerHTML = `<div class="shell command-shell"><header class="topbar command-hud"><div class="command-brand"><span class="brand-mark">П</span><div><strong>ПРАПОР</strong><small>УБЕЖИЩЕ 07</small></div></div><div class="level"><span class="eyebrow">Репутация</span><strong id="level-label"></strong><div class="xp-track"><i id="xp-fill"></i></div></div><div class="resources">${[["money", "Рубли"], ["ammo", "Патроны"], ["medicine", "Медикаменты"], ["scrap", "Материалы"], ["intel", "Разведданные"]].map(([key, label]) => `<div class="resource" title="${label}">${icon(key!,18)}<div><label>${label}</label><strong id="res-${key}"></strong></div><i class="resource-cap" id="cap-${key}"></i></div>`).join("")}</div><button class="settings" data-action="settings" aria-label="Сохранение и помощь">${icon("settings",18)}</button></header><main class="main command-main"><div class="command-toolbar"><div class="command-heading"><h1>Свои люди. Своё убежище.</h1><span><i class="status-dot"></i><span id="passive-note">База на связи</span></span></div><nav class="nav command-tools" aria-label="Инструменты штаба">${(Object.keys(names) as Page[]).map((id) => `<button data-page="${id}" aria-label="${names[id]}" title="${names[id]}">${icon(id,17)}<span>${names[id]}</span>${id === "raids" ? '<b class="badge" id="raid-badge">0</b>' : ""}</button>`).join("")}</nav></div><div class="command-stage-layout"><section id="hero" class="hero-grid"><section class="world-card"><div class="world-head"><div class="view-switch" aria-label="Вид сцены"><button class="active" data-view="base" aria-pressed="true">${icon("home",14)} Убежище</button><button data-view="map" aria-pressed="false">${icon("raids",14)} Сектора</button></div><button class="text-button room-index-button" data-page="base">${icon("base",14)} Комнаты</button><span class="world-coordinate mono">БАЗА 07 · СЕВЕР</span></div><div id="world" aria-label="Графический штаб: комнаты, рабочие и стройка"></div><div class="world-bottom"><span><i class="status-dot"></i><span id="scene-hint">Нажми на комнату или бойца</span></span><span id="world-raid-note">ОТРЯД НА БАЗЕ</span></div><div class="room-shortcuts" hidden></div></section></section><aside id="command-dock" class="command-dock" aria-label="Сводка и управление выбранным объектом"></aside></div><section id="command-crew" class="command-crew" aria-label="Отряд и рабочие"></section><section id="command-routes" class="command-routes" aria-label="Рейды и сектора"></section><div id="offline-summary"></div><footer class="footer-line command-footer"><span id="save-status">ПРОГРЕСС НА ЭТОМ УСТРОЙСТВЕ</span><span>ПРАПОР · 0.9.0</span></footer></main></div><div id="tool-root" class="tool-backdrop" hidden><section class="tool-window" role="dialog" aria-modal="true" aria-labelledby="tool-title"><header class="tool-head"><div id="page-head" class="page-head"></div><button class="icon-button" data-action="close-tools" aria-label="Закрыть инструмент и вернуться в штаб">×</button></header><div class="tool-scroll"><div id="expedition-alerts"></div><div id="panel"></div></div></section></div><div id="context-shade" class="context-shade" hidden></div><div id="toast" role="status" aria-live="polite" hidden></div><div id="inspector-root"></div><div id="modal-root"></div>`;
 const panel = document.querySelector<HTMLDivElement>("#panel")!;
 document.querySelector(".command-footer")!.prepend(document.querySelector("#offline-summary")!);
+document.querySelector(".world-head .view-switch")!.insertAdjacentHTML("afterend", '<div class="camera-controls" role="group" aria-label="Вид убежища"><button data-camera="out" aria-label="Отдалить убежище" title="Отдалить (−)">−</button><span id="camera-scale" class="camera-scale" aria-label="Масштаб">100%</span><button data-camera="in" aria-label="Приблизить убежище" title="Приблизить (+)">+</button><button data-camera="fit" class="camera-fit" aria-label="Обзор всего убежища" title="Обзор всего убежища (0)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 9V3h6m6 0h6v6m0 6v6h-6M9 21H3v-6"/></svg><span>Обзор</span></button><button data-camera="pan" aria-label="Рука: перемещать вид" title="Рука: перетаскивать убежище" aria-pressed="false"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 12V5a2 2 0 0 1 4 0v7-8a2 2 0 0 1 4 0v8-5a2 2 0 0 1 4 0v8c0 4-3 7-7 7h-1c-2 0-4-1-5-3L3 12a2 2 0 0 1 3-2l2 2"/></svg></button></div>');
+const worldViewport = document.querySelector<HTMLElement>("#world")!;
+worldViewport.tabIndex = 0;
+worldViewport.setAttribute("role", "region");
+worldViewport.setAttribute("aria-describedby", "camera-help");
+worldViewport.insertAdjacentHTML("afterend", '<p id="camera-help" class="visually-hidden">Вид убежища: плюс и минус меняют масштаб, ноль возвращает обзор, стрелки сдвигают вид. Рука позволяет перетаскивать убежище. Чтобы назначить бойца, перетащи его портрет или выбери комнату с клавиатуры.</p>');
 document.querySelector(".world-card")!.insertAdjacentHTML("beforeend", '<div id="worker-room-targets" class="worker-room-targets" role="group" aria-label="Выбери рабочую комнату" hidden></div><div id="worker-placement" class="worker-placement" hidden><div><strong id="worker-placement-title"></strong><span id="worker-placement-hint"></span></div><button class="icon-button" data-worker-cancel aria-label="Отменить назначение">×</button></div>');
 app.insertAdjacentHTML("beforeend", '<div id="worker-drag-ghost" class="worker-drag-ghost" aria-hidden="true" hidden></div><div id="worker-drop-status" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>');
 const costLabel = (cost: { money: number; scrap: number }) =>
 	`${n(cost.money)} ₽ · ${cost.scrap} дет.`;
+function updateCameraControls() {
+	const controls = document.querySelector<HTMLElement>(".camera-controls"); if (!controls) return;
+	controls.hidden = worldView !== "base";
+	const available = canWorldCamera();
+	controls.querySelectorAll<HTMLButtonElement>("[data-camera]").forEach((button) => { button.disabled = !available; });
+	const farther = controls.querySelector<HTMLButtonElement>('[data-camera="out"]'), closer = controls.querySelector<HTMLButtonElement>('[data-camera="in"]');
+	if (farther) farther.disabled = !available || cameraView.zoom <= MIN_SHELTER_ZOOM + 0.001;
+	if (closer) closer.disabled = !available || cameraView.zoom >= MAX_SHELTER_ZOOM - 0.001;
+	controls.querySelector<HTMLButtonElement>('[data-camera="pan"]')?.setAttribute("aria-pressed", String(cameraView.panMode));
+	const panButton = controls.querySelector<HTMLButtonElement>('[data-camera="pan"]'); if (panButton) panButton.title = "Рука: перемещать вид. Можно удерживать пробел";
+	controls.querySelector<HTMLButtonElement>('[data-camera="pan"]')?.classList.toggle("active", cameraView.panMode);
+	document.querySelector(".world-card")?.classList.toggle("camera-hand-mode", cameraView.panMode);
+	document.querySelector("#camera-scale")!.textContent = `${Math.round(cameraView.zoom * 100)}%`;
+	document.querySelector("#scene-hint")!.textContent = worldView === "map" ? "Нажми на сектор, чтобы выбрать маршрут" : cameraView.panMode ? "Перетаскивай вид · Обзор — вся база" : cameraView.zoom > 1.05 ? "Осмотр · Рука — сдвиг · Обзор — вся база" : "Нажми на комнату или бойца · + приблизить";
+}
+function onWorldCameraChange(value: CameraViewState) {
+	cameraView = value;
+	updateCameraControls();
+	positionWorkerRoomTargets();
+}
+function cameraAction(action: string) {
+	if (!canWorldCamera() || !world) return;
+	if (action === "in") world.zoomBy(1.25);
+	else if (action === "out") world.zoomBy(0.8);
+	else if (action === "fit") { world.setPanMode(false); world.resetCamera(); }
+	else if (action === "pan") world.setPanMode(!cameraView.panMode);
+	holdWorldInput();
+}
+function inspectRoomView(id: string) {
+	if (!state.shelter.rooms.some((room) => room.id === id)) return;
+	cancelWorkerPlacement();
+	if (window.innerWidth <= 850) closeCommandContext();
+	setView("base");
+	world?.setPanMode(false);
+	world?.focusRoom(id);
+	worldViewport.focus({ preventScroll: true });
+	revealAssignmentControl(worldViewport);
+	holdWorldInput();
+}
 let protectedSave = Boolean(raw && !loaded);
 function persist(): boolean {
 	if (protectedSave) {
@@ -315,6 +364,7 @@ function releaseCrewPointer() {
 	crewPointer = null;
 	if (gesture?.source.hasPointerCapture(gesture.pointerId)) gesture.source.releasePointerCapture(gesture.pointerId);
 	queueDeferredWorkerRefresh();
+	updateCameraControls();
 }
 function clearWorkerPlacement() {
 	workerPlacement = null;
@@ -322,6 +372,7 @@ function clearWorkerPlacement() {
 	document.body.classList.remove("placing-worker");
 	document.querySelectorAll(".crew-chip.is-dragging").forEach((node) => node.classList.remove("is-dragging"));
 	queueDeferredWorkerRefresh();
+	updateCameraControls();
 }
 function focusWorkerHandle(id: string) {
 	const handle = document.querySelector<HTMLButtonElement>(`#command-crew [data-worker-handle="${CSS.escape(id)}"]`);
@@ -336,7 +387,7 @@ function revealAssignmentControl(control: HTMLElement) {
 }
 function cancelWorkerPlacement(restoreFocus = false, announce = false) {
 	const id = workerPlacement?.scavId ?? crewPointer?.scavId;
-	const active = Boolean(workerPlacement || crewPointer?.started);
+	const active = Boolean(workerPlacement || crewPointer);
 	releaseCrewPointer();
 	clearWorkerPlacement();
 	world?.cancelScavDrag();
@@ -358,6 +409,7 @@ function paintWorkerPlacement() {
 	document.body.classList.add("placing-worker");
 	document.querySelector<HTMLElement>(`#command-crew [data-worker-card="${CSS.escape(scav.id)}"]`)?.classList.add("is-dragging");
 	announceWorkerPlacement(`${title}. ${hint}`);
+	updateCameraControls();
 	const ghost = document.querySelector<HTMLElement>("#worker-drag-ghost")!;
 	ghost.hidden = !crewPointer?.started;
 	if (crewPointer?.started) {
@@ -384,16 +436,28 @@ function renderWorkerRoomTargets() {
 	const scav = state.scavs.find((item) => item.id === workerPlacement!.scavId); if (!scav) return;
 	const layer = document.querySelector<HTMLElement>("#worker-room-targets")!;
 	layer.hidden = false;
-	const canvas = document.querySelector<HTMLCanvasElement>("#world canvas"), card = document.querySelector<HTMLElement>(".world-card");
-	if (!canvas || !card) return;
+	layer.innerHTML = state.shelter.rooms.map((room) => {
+		const reason = getWorkerAssignmentReason(state, scav.id, room.id), definition = ROOM_DEFINITIONS[room.type];
+		return `<button class="worker-room-target ${reason ? "unavailable" : "available"}" data-worker-room="${room.id}" aria-disabled="${Boolean(reason)}" aria-describedby="worker-placement-hint" aria-label="${e(definition.label)}, этаж ${room.row + 1}, ${room.workerIds.length} из ${getRoomWorkerCapacity(room)} работников. ${e(reason ?? (scav.assignment === room.id ? "Уже работает здесь" : `Назначить ${scav.name}, подходит ${Math.round(getWorkerAffinity(scav, room.type))} из 100`))}" title="${e(reason ?? "Назначить бойца")}" style="--room-color:${definition.color}"><span>${icon(roomIcon(room.type),15)} ${e(definition.label)}</span><small>${reason ? "Недоступно" : scav.assignment === room.id ? "Уже работает" : `Назначить · ${room.workerIds.length}/${getRoomWorkerCapacity(room)}`}</small></button>`;
+	}).join("");
+	positionWorkerRoomTargets();
+}
+function positionWorkerRoomTargets() {
+	if (workerPlacement?.mode !== "keyboard" || !world) return;
+	const layer = document.querySelector<HTMLElement>("#worker-room-targets"), canvas = document.querySelector<HTMLCanvasElement>("#world canvas"), card = document.querySelector<HTMLElement>(".world-card");
+	if (!layer || !canvas || !card) return;
 	const canvasRect = canvas.getBoundingClientRect(), cardRect = card.getBoundingClientRect();
 	layer.style.left = `${canvasRect.left - cardRect.left}px`; layer.style.top = `${canvasRect.top - cardRect.top}px`;
 	layer.style.width = `${canvasRect.width}px`; layer.style.height = `${canvasRect.height}px`;
-	layer.innerHTML = state.shelter.rooms.map((room) => {
-		const reason = getWorkerAssignmentReason(state, scav.id, room.id), definition = ROOM_DEFINITIONS[room.type];
-		const x = [40, 220, 448, 628][room.column] ?? 40;
-		return `<button class="worker-room-target ${reason ? "unavailable" : "available"}" data-worker-room="${room.id}" aria-disabled="${Boolean(reason)}" aria-describedby="worker-placement-hint" aria-label="${e(definition.label)}, этаж ${room.row + 1}, ${room.workerIds.length} из ${getRoomWorkerCapacity(room)} работников. ${e(reason ?? (scav.assignment === room.id ? "Уже работает здесь" : `Назначить ${scav.name}, подходит ${Math.round(getWorkerAffinity(scav, room.type))} из 100`))}" title="${e(reason ?? "Назначить бойца")}" style="left:${x / 840 * 100}%;top:${(148 + room.row * 111) / 520 * 100}%;width:${172 / 840 * 100}%;height:${100 / 520 * 100}%;--room-color:${definition.color}"><span>${icon(roomIcon(room.type),15)} ${e(definition.label)}</span><small>${reason ? "Недоступно" : scav.assignment === room.id ? "Уже работает" : `Назначить · ${room.workerIds.length}/${getRoomWorkerCapacity(room)}`}</small></button>`;
-	}).join("");
+	layer.querySelectorAll<HTMLButtonElement>("[data-worker-room]").forEach((button) => {
+		const room = state.shelter.rooms.find((item) => item.id === button.dataset.workerRoom); if (!room) return;
+		const rect = world!.projectShelterRect({ x: [40, 220, 448, 628][room.column] ?? 40, y: 148 + room.row * 111, width: 172, height: 100 });
+		button.hidden = !rect;
+		if (!rect) return;
+		button.style.left = `${rect.left - canvasRect.left}px`; button.style.top = `${rect.top - canvasRect.top}px`;
+		button.style.width = `${rect.width}px`; button.style.height = `${rect.height}px`;
+		button.dataset.cameraVisible = String(rect.visible);
+	});
 }
 function refreshWorkerRoomTargets() {
 	if (workerPlacement?.mode !== "keyboard") return;
@@ -415,6 +479,7 @@ function beginKeyboardAssignment(id: string) {
 	const reason = workerPickReason(id); if (reason) { toast(reason, false); return; }
 	if (workerPlacement?.mode === "keyboard" && workerPlacement.scavId === id) { cancelWorkerPlacement(true, true); return; }
 	cancelWorkerPlacement();
+	world?.setPanMode(false);
 	workerPlacement = { scavId: id, mode: "keyboard", roomId: null, reason: null };
 	paintWorkerPlacement(); renderWorkerRoomTargets();
 	const target = document.querySelector<HTMLButtonElement>('#worker-room-targets [aria-disabled="false"]') ?? document.querySelector<HTMLButtonElement>("#worker-room-targets button") ?? document.querySelector<HTMLButtonElement>("[data-worker-cancel]");
@@ -440,8 +505,10 @@ function startCrewPointer(event: PointerEvent) {
 	const source = handle ?? portrait, id = handle?.dataset.workerHandle ?? portrait?.dataset.portraitScav;
 	if (!source || !id || !canWorldDrag() || workerPickReason(id)) return;
 	cancelWorkerPlacement();
+	world?.setPanMode(false);
 	crewPointer = { scavId: id, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, clientX: event.clientX, clientY: event.clientY, source, started: false };
 	source.setPointerCapture(event.pointerId);
+	updateCameraControls();
 }
 function moveCrewPointer(event: PointerEvent) {
 	const gesture = crewPointer;
@@ -476,10 +543,32 @@ function workerTargetFocus(event: FocusEvent) {
 	if (workerPlacement?.mode !== "keyboard") return;
 	const target = event.target instanceof Element ? event.target : null;
 	const roomId = target?.closest<HTMLElement>("[data-worker-room]")?.dataset.workerRoom;
-	if (roomId) { workerPlacement.roomId = roomId; workerPlacement.reason = getWorkerAssignmentReason(state, workerPlacement.scavId, roomId); paintWorkerPlacement(); }
+	if (roomId) {
+		const button = target?.closest<HTMLElement>("[data-worker-room]"), canvas = document.querySelector<HTMLCanvasElement>("#world canvas");
+		if (button && canvas) {
+			const rect = button.getBoundingClientRect(), viewport = canvas.getBoundingClientRect();
+			if (button.dataset.cameraVisible === "false" || rect.left < viewport.left - 1 || rect.right > viewport.right + 1 || rect.top < viewport.top - 1 || rect.bottom > viewport.bottom + 1) world?.focusRoom(roomId);
+		}
+		workerPlacement.roomId = roomId; workerPlacement.reason = getWorkerAssignmentReason(state, workerPlacement.scavId, roomId); paintWorkerPlacement();
+	}
 	else if (!target?.closest("[data-worker-handle], [data-worker-cancel]")) cancelWorkerPlacement(false, true);
 }
-function cancelPlacementForBlur() { cancelWorkerPlacement(false, true); }
+function cancelPlacementForBlur() { cancelWorkerPlacement(false, true); world?.cancelCameraGesture(); }
+function handleCameraKey(event: KeyboardEvent) {
+	const target = event.target instanceof Element ? event.target : null;
+	if (event.ctrlKey || event.metaKey || event.altKey || !canWorldCamera() || !world || (target !== worldViewport && !target?.closest(".camera-controls"))) return;
+	const moves: Record<string, [number, number]> = { ArrowLeft: [-48, 0], ArrowRight: [48, 0], ArrowUp: [0, -48], ArrowDown: [0, 48] };
+	if (event.key === "+" || event.key === "=") cameraAction("in");
+	else if (event.key === "-" || event.key === "_") cameraAction("out");
+	else if (event.key === "0" || event.key === "Home") cameraAction("fit");
+	else if (moves[event.key]) world.panBy(...moves[event.key]!);
+	else if (event.key === "Escape" && cameraView.panMode) world.setPanMode(false);
+	else return;
+	event.preventDefault(); event.stopImmediatePropagation();
+}
+function focusWorldViewport(event: PointerEvent) {
+	if (event.target instanceof HTMLCanvasElement && canWorldInteract()) worldViewport.focus({ preventScroll: true });
+}
 document.addEventListener("pointerdown", startCrewPointer);
 document.addEventListener("pointermove", moveCrewPointer, { passive: false });
 document.addEventListener("pointerup", finishCrewPointer);
@@ -488,6 +577,8 @@ document.addEventListener("lostpointercapture", cancelCrewPointer);
 document.addEventListener("click", suppressWorkerClick, true);
 document.addEventListener("focusin", workerTargetFocus);
 window.addEventListener("blur", cancelPlacementForBlur);
+document.addEventListener("keydown", handleCameraKey);
+worldViewport.addEventListener("pointerdown", focusWorldViewport);
 function act(result: ActionResult) {
 	const origin = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 	const focusKey = origin?.dataset.focusKey;
@@ -881,6 +972,8 @@ function setOverlayState() {
 	const toolsOpen = page !== "home";
 	const mobileContext = window.innerWidth <= 850 && contextMode !== "overview";
 	if (!canWorldDrag()) cancelWorkerPlacement(false, true);
+	if (!canWorldCamera()) world?.cancelCameraGesture();
+	updateCameraControls();
 	const contextIdentity = mobileContext ? `${contextMode}:${selectedRoomId ?? ""}:${selectedShelterSite?.column ?? ""}:${selectedShelterSite?.row ?? ""}` : "";
 	const signature = `${modalOpen}:${selectedScav ?? ""}:${page}:${contextIdentity}`;
 	if (signature !== worldOverlaySignature) {
@@ -1083,7 +1176,7 @@ function managedRoomPanel(room: RoomInstance) {
 	const tab = info.production ? roomContextTab : "upgrade";
 	const tabs = info.production ? [["staff","Люди"],["production","Производство"],["upgrade","Развитие"]] : [["upgrade","Развитие"]];
 	const content = tab === "staff" ? roomWorkersPanel(room) : tab === "production" ? `<section class="room-panel-section"><h3>Очередь · ${room.queue.length} / 5</h3>${roomQueuePanel(room)}</section><section class="room-panel-section"><h3>${room.type === "workshop" ? "Оружейные модули" : "Рецепты"}</h3>${room.type === "workshop" ? roomModulesPanel(room) : roomResourcesPanel(room)}</section>` : room.status === "building" ? '<div class="room-queue-empty">Строительство началось. Дождись готовности, затем назначь работников или развивай комнату.</div>' : `<section class="room-panel-section"><h3>Уровень ${room.level} → ${Math.min(5,room.level+1)}</h3><p>Улучшение расширяет возможности комнаты. Люди и оплаченная очередь сохранятся.</p><div class="loadout-stats"><span>Время ${seconds(upgrade.duration)}</span></div><button class="button secondary" data-action="upgrade-room" data-id="${room.id}" ${upgrade.reason ? "disabled" : ""}>Улучшить · ${costLabel(upgrade)}</button><small class="quote-note" data-room-upgrade-note="${room.id}">${e(upgrade.reason ?? "Оплата при начале улучшения")}</small></section>`;
-	return `<header class="command-context-head"><div><span class="eyebrow">Этаж ${room.row + 1} · секция ${room.column + 1} · ур. ${room.level || "—"}</span><h2>${e(info.label)}</h2></div><button class="icon-button" data-action="close-context" data-focus-key="context-close" aria-label="Закрыть комнату">×</button></header><div class="command-room-banner" data-room-summary="${room.id}" data-room-kind="${roomSummary.kind}" style="--room-accent:${info.color}">${roomMiniArt(room.type,`selected-${room.id}`).replace("<svg ", '<svg aria-hidden="true" ')}<div><strong data-room-status="${room.id}">${e(production.status)}</strong><small data-room-eta="${room.id}">${production.remainingSeconds == null ? "" : `${seconds(production.remainingSeconds)} до готовности`}</small><div class="command-room-meta"><span>${info.production ? `${icon("people",12)} ${room.workerIds.length}/${getRoomWorkerCapacity(room)}` : `${icon("check",12)} Без персонала`}</span>${info.production ? `<span>${icon("scrap",12)} Заказов: ${room.queue.length}</span>` : ""}</div><span class="progress"><i data-room-progress="${room.id}" style="width:${production.progress*100}%"></i></span></div></div><div class="context-tabs" role="group" aria-label="Управление комнатой">${tabs.map(([id,label]) => `<button data-room-context-tab="${id}" data-focus-key="context-tab-${id}" aria-pressed="${tab===id}" class="${tab===id?"active":""}">${label}</button>`).join("")}</div><div class="command-dock-scroll" id="room-management" tabindex="-1"><p class="command-room-reason" data-room-reason="${room.id}">${e(production.reason ?? (room.status !== "ready" ? "Работа приостановлена до готовности комнаты" : roomSummary.cta ? roomSummary.detail : ""))}</p>${content}${!info.production ? `<p class="field-hint">${e(info.description)} Работники не требуются.</p>` : ""}</div>`;
+	return `<header class="command-context-head"><div><span class="eyebrow">Этаж ${room.row + 1} · секция ${room.column + 1} · ур. ${room.level || "—"}</span><h2>${e(info.label)}</h2></div><button class="icon-button" data-action="close-context" data-focus-key="context-close" aria-label="Закрыть комнату">×</button></header><div class="command-room-banner" data-room-summary="${room.id}" data-room-kind="${roomSummary.kind}" style="--room-accent:${info.color}">${roomMiniArt(room.type,`selected-${room.id}`).replace("<svg ", '<svg aria-hidden="true" ')}<div><strong data-room-status="${room.id}">${e(production.status)}</strong><small data-room-eta="${room.id}">${production.remainingSeconds == null ? "" : `${seconds(production.remainingSeconds)} до готовности`}</small><div class="command-room-meta"><span>${info.production ? `${icon("people",12)} ${room.workerIds.length}/${getRoomWorkerCapacity(room)}` : `${icon("check",12)} Без персонала`}</span>${info.production ? `<span>${icon("scrap",12)} Заказов: ${room.queue.length}</span>` : ""}</div><span class="progress"><i data-room-progress="${room.id}" style="width:${production.progress*100}%"></i></span><button class="text-button room-view-action" data-camera-room="${room.id}" data-focus-key="camera-room-${room.id}">Осмотреть комнату ${icon("arrow",13)}</button></div></div><div class="context-tabs" role="group" aria-label="Управление комнатой">${tabs.map(([id,label]) => `<button data-room-context-tab="${id}" data-focus-key="context-tab-${id}" aria-pressed="${tab===id}" class="${tab===id?"active":""}">${label}</button>`).join("")}</div><div class="command-dock-scroll" id="room-management" tabindex="-1"><p class="command-room-reason" data-room-reason="${room.id}">${e(production.reason ?? (room.status !== "ready" ? "Работа приостановлена до готовности комнаты" : roomSummary.cta ? roomSummary.detail : ""))}</p>${content}${!info.production ? `<p class="field-hint">${e(info.description)} Работники не требуются.</p>` : ""}</div>`;
 }
 function roomWorkersPanel(room: RoomInstance) {
 	const capacity = getRoomWorkerCapacity(room), skill = ROOM_DEFINITIONS[room.type].workerSkill;
@@ -1484,6 +1577,8 @@ document.addEventListener("click", (event) => {
 		assignPlacedWorker(workerPlacement.scavId, target.dataset.workerRoom); return;
 	}
 	if (target.dataset.scav) { openInspector(target.dataset.scav); return; }
+	if (target.dataset.camera) { cameraAction(target.dataset.camera); return; }
+	if (target.dataset.cameraRoom) { inspectRoomView(target.dataset.cameraRoom); return; }
 	if (target.dataset.commandRoom) { openShelterRoom(target.dataset.commandRoom, target.dataset.commandTab as CommandRoomTab); return; }
 	if (target.dataset.shelterRoom) { openShelterRoom(target.dataset.shelterRoom); return; }
 	if (target.dataset.roomContextTab) { roomContextTab = target.dataset.roomContextTab as typeof roomContextTab; renderCommandBoard(); document.querySelector<HTMLButtonElement>(`[data-room-context-tab="${roomContextTab}"]`)?.focus({ preventScroll: true }); return; }
@@ -1912,6 +2007,7 @@ document.addEventListener("change", async (event) => {
 			selectedWeapon = state.weapons[0]?.id ?? "";
 			selectedMap = MAPS[0]!.id;
 			render();
+			setView("base"); world?.setPanMode(false); world?.resetCamera();
 			toast("Сохранение восстановлено.");
 		} catch {
 			toast("Не удалось прочитать сохранение.", false);
@@ -1946,9 +2042,12 @@ document.addEventListener("keydown", (event) => {
 	if ((workerPlacement || crewPointer) && event.key === "Escape") { event.preventDefault(); cancelWorkerPlacement(true, true); return; }
 	if (workerPlacement?.mode === "keyboard" && event.key === "Tab") {
 		const controls = Array.from(document.querySelectorAll<HTMLButtonElement>("#worker-room-targets button, #worker-placement button")).filter((node) => node.getClientRects().length > 0);
-		const first = controls[0], last = controls.at(-1);
-		if (first && last && event.shiftKey && (document.activeElement === first || !controls.includes(document.activeElement as HTMLButtonElement))) { event.preventDefault(); last.focus({ preventScroll: true }); }
-		else if (first && last && !event.shiftKey && (document.activeElement === last || !controls.includes(document.activeElement as HTMLButtonElement))) { event.preventDefault(); first.focus({ preventScroll: true }); }
+		const index = controls.indexOf(document.activeElement as HTMLButtonElement);
+		if (controls.length) {
+			event.preventDefault();
+			const next = index < 0 ? event.shiftKey ? controls.length - 1 : 0 : (index + (event.shiftKey ? -1 : 1) + controls.length) % controls.length;
+			controls[next]?.focus({ preventScroll: true });
+		}
 		return;
 	}
 	const dialog = document.querySelector<HTMLElement>("#modal-root .modal") ?? document.querySelector<HTMLElement>(".inspector") ?? (page !== "home" ? document.querySelector<HTMLElement>(".tool-window") : window.innerWidth <= 850 && contextMode !== "overview" ? document.querySelector<HTMLElement>("#command-dock") : null);
@@ -1967,6 +2066,7 @@ document.addEventListener("keydown", (event) => {
 });
 function setView(view: "base" | "map") {
 	if (worldView !== view) cancelWorkerPlacement(false, true);
+	world?.cancelCameraGesture();
 	worldView = view;
 	world?.setView(view);
 	document
@@ -1976,6 +2076,7 @@ function setView(view: "base" | "map") {
 		);
 	document.querySelector("#scene-hint")!.textContent = view === "base" ? "Нажми на комнату или бойца" : "Нажми на сектор, чтобы выбрать маршрут";
 	(document.querySelector(".room-shortcuts") as HTMLElement).hidden = view === "map";
+	updateCameraControls();
 }
 render();
 world = createWorld(
@@ -2001,6 +2102,8 @@ world = createWorld(
 		document.querySelector<HTMLButtonElement>('[data-action="close-tools"]')?.focus();
 	},
 	{ canInteract: canWorldInteract,
+		canCamera: canWorldCamera,
+		onCameraChange: onWorldCameraChange,
 		canDrag: canWorldDrag,
 		getAssignmentReason: (scavId, roomId) => getWorkerAssignmentReason(state, scavId, roomId),
 		onAssignScav: assignPlacedWorker,
@@ -2056,7 +2159,7 @@ const simulationTimer = setInterval(() => {
 	if (++ticks % 5 === 0) persist();
 }, 1000);
 document.addEventListener("visibilitychange", () => {
-	if (document.hidden) { cancelWorkerPlacement(false, true); persist(); }
+	if (document.hidden) { cancelWorkerPlacement(false, true); world?.cancelCameraGesture(); persist(); }
 	else {
 		const summary = advance(state);
 		if (summary.elapsedMs >= 60_000 || summary.completedCount) offlineSummary = summary;
@@ -2069,6 +2172,7 @@ window.addEventListener("beforeunload", persist);
 let contextIsMobile = window.innerWidth <= 850;
 const responsiveContext = () => {
 	cancelWorkerPlacement(false, true);
+	world?.cancelCameraGesture();
 	const mobile = window.innerWidth <= 850;
 	if (mobile === contextIsMobile) return;
 	contextIsMobile = mobile;
@@ -2092,6 +2196,8 @@ import.meta.hot?.dispose(() => {
 	document.removeEventListener("click", suppressWorkerClick, true);
 	document.removeEventListener("focusin", workerTargetFocus);
 	window.removeEventListener("blur", cancelPlacementForBlur);
+	document.removeEventListener("keydown", handleCameraKey);
+	worldViewport.removeEventListener("pointerdown", focusWorldViewport);
 });
 if (protectedSave) {
 	toast(
