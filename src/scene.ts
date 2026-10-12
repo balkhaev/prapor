@@ -1,5 +1,6 @@
 import Phaser from "phaser";
 import { getRaidPhase, type Raid } from "./game/engine";
+import { type BaseRoom } from "./game/data";
 
 export interface WorldSnapshot {
 	base: Record<string, number>;
@@ -12,6 +13,8 @@ export interface WorldSnapshot {
 		accent: string;
 	}[];
 	level: number;
+	selectedScavId?: string | null;
+	selectedMapId?: string | null;
 	scavs?: {
 		id: string;
 		name?: string;
@@ -31,23 +34,30 @@ type ScavActor = {
 	gear: Phaser.GameObjects.Graphics;
 	label: Phaser.GameObjects.Text;
 	order: Phaser.GameObjects.Arc;
+	selection: Phaser.GameObjects.Ellipse;
+	hovered: boolean;
 	gearSignature: string;
 };
+export interface WorldInteractions {
+	onRoom?: (room: BaseRoom) => void;
+	onScav?: (id: string) => void;
+}
 type RaidMarker = {
 	actor: Phaser.GameObjects.Container;
 	ring: Phaser.GameObjects.Ellipse;
 	label: Phaser.GameObjects.Text;
 	phase: Phaser.GameObjects.Text;
+	hovered: boolean;
 };
 const WIDTH = 840;
 const HEIGHT = 460;
 const FONT = '"IBM Plex Mono", "Courier New", monospace';
 const C = {
-	void: 0x10120f,
+	void: 0x111510,
 	ink: 0x111710,
 	wall: 0x353930,
 	edge: 0x59604b,
-	gold: 0xd5a35e,
+	gold: 0xe1b576,
 	light: 0xffd896,
 	sage: 0x879579,
 	red: 0x974f3c,
@@ -207,15 +217,19 @@ function position(place: MapPlace): Point {
 export function createWorld(
 	parent: HTMLElement,
 	snapshot: () => WorldSnapshot,
-	onMap: (id: string) => void
+	onMap: (id: string) => void,
+	interactions: WorldInteractions = {}
 ): { game: Phaser.Game; setView: (view: View) => void } {
 	let requestedView: View = "base";
+	const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 	class PraporWorld extends Phaser.Scene {
 		private baseLayer!: Phaser.GameObjects.Container;
 		private mapLayer!: Phaser.GameObjects.Container;
 		private baseCaption!: Phaser.GameObjects.Text;
 		private operationsCaption!: Phaser.GameObjects.Text;
+		private selectedRoute!: Phaser.GameObjects.Graphics;
+		private roomLabels = new Map<BaseRoom, Phaser.GameObjects.Text>();
 		private places = new Map<
 			string,
 			{
@@ -223,11 +237,14 @@ export function createWorld(
 				label: Phaser.GameObjects.Text;
 				detail: Phaser.GameObjects.Text;
 				active: boolean;
+				hovered: boolean;
+				zone: Phaser.GameObjects.Zone;
 			}
 		>();
 		private raidActors = new Map<string, RaidMarker>();
 		private scavs: ScavActor[] = [];
 		private lastSync = 0;
+		private lastSelection = "";
 		private hq: Point = { x: 110, y: 357 };
 
 		constructor() {
@@ -243,9 +260,11 @@ export function createWorld(
 			this.paintMap();
 			this.syncSnapshot();
 			this.show(requestedView);
+			this.game.canvas.setAttribute("aria-hidden", "true");
 			this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
 				this.raidActors.clear();
 				this.places.clear();
+				this.roomLabels.clear();
 				this.scavs = [];
 			});
 		}
@@ -256,6 +275,8 @@ export function createWorld(
 			this.baseLayer.setVisible(view === "base");
 			this.mapLayer.setVisible(view === "map");
 			this.input.setDefaultCursor("default");
+			this.scavs.forEach((actor) => { actor.hovered = false; });
+			this.places.forEach((place) => { place.hovered = false; });
 			this.syncSnapshot();
 		}
 
@@ -321,7 +342,7 @@ export function createWorld(
 				);
 				for (let u = 0; u < 12; u++) {
 					for (let v = 0; v < 12; v++) {
-						const colors = [0x41443a, 0x45473d, 0x3c4137, 0x494a3e, 0x3f4438];
+						const colors = [0x4b4e40, 0x4d5144, 0x434a3c, 0x535345, 0x464d3e];
 						polygon(
 							g,
 							[iso(u, v), iso(u + 1, v), iso(u + 1, v + 1), iso(u, v + 1)],
@@ -375,6 +396,18 @@ export function createWorld(
 					0.6
 				);
 			});
+			for (const pool of [
+				{ u: 3.4, v: 3.2, scale: 1.9, alpha: 0.24 },
+				{ u: 7.7, v: 9.4, scale: 2.3, alpha: 0.27 },
+				{ u: 9.8, v: 5.7, scale: 1.5, alpha: 0.2 },
+			]) {
+				const p = iso(pool.u, pool.v);
+				this.baseLayer.add(this.add.image(p.x, p.y, "prapor-light")
+					.setScale(pool.scale, pool.scale * 0.44)
+					.setAlpha(pool.alpha)
+					.setBlendMode(Phaser.BlendModes.ADD)
+					.setDepth(-15));
+			}
 
 			this.object(-10, (g) => {
 				polygon(
@@ -473,6 +506,14 @@ export function createWorld(
 						1
 					);
 				g.fillStyle(0x7b8065).fillCircle(fan.x, fan.y, 4);
+				// Warm service lights reveal the wall relief without flattening the room.
+				for (const span of [{ u: 0.1, v: 2.1, axis: "v" }, { u: 8, v: 0.1, axis: "u" }]) {
+					const start = iso(span.u, span.v, 58);
+					const end = iso(span.u + (span.axis === "u" ? 1.4 : 0), span.v + (span.axis === "v" ? 1.4 : 0), 58);
+					line(g, [start, end], 0x121c15, 8);
+					line(g, [start, end], 0xa28a5d, 5);
+					line(g, [start, end], 0xffd79a, 2);
+				}
 			});
 
 			// The rear ammunition shelves are real objects in the same depth-sorted world as the actors.
@@ -543,6 +584,25 @@ export function createWorld(
 						n === 2 ? 24 : 17
 					);
 				crate(g, 10.3, 3.3, 0.72, 27);
+			});
+
+			this.object(320, (g) => {
+				// A canvas cot, first-aid case and an IV stand give the medbay its own silhouette.
+				for (const u of [9.35, 10.45])
+					for (const v of [4.9, 6.85])
+						box(g, u, v, 0.14, 0.14, 15, 0x8c9480, 0x3b4434, 0x56634b);
+				box(g, 9.3, 4.8, 1.35, 2.25, 18, 0x74816a, 0x344735, 0x4c5c45);
+				polygon(g, [iso(9.4, 5.25, 19), iso(10.55, 5.25, 19), iso(10.55, 6.9, 19), iso(9.4, 6.9, 19)], 0xabb49a);
+				box(g, 9.47, 4.98, 0.97, 0.35, 23, 0xd1cfb2, 0x78866c, 0x929c7d);
+				const medical = iso(10.7, 5.2, 21);
+				g.fillStyle(0x9b9f82).fillRoundedRect(medical.x - 10, medical.y - 13, 23, 18, 2);
+				g.fillStyle(0x844735).fillRect(medical.x - 1, medical.y - 10, 4, 12);
+				g.fillStyle(0x844735).fillRect(medical.x - 5, medical.y - 6, 12, 4);
+				const stand = iso(10.9, 6.8);
+				line(g, [{ x: stand.x - 9, y: stand.y }, { x: stand.x + 9, y: stand.y }], 0x758772, 2);
+				line(g, [stand, { x: stand.x, y: stand.y - 58 }, { x: stand.x - 9, y: stand.y - 58 }], 0xaab398, 2);
+				g.fillStyle(0xbbc5a3, 0.7).fillRoundedRect(stand.x - 14, stand.y - 53, 10, 14, 2);
+				line(g, [{ x: stand.x - 9, y: stand.y - 39 }, { x: stand.x - 9, y: stand.y - 25 }, iso(10.3, 6.3, 23)], 0xb4bc96, 1, 0.6);
 			});
 
 			this.object(318, (g) => {
@@ -628,20 +688,10 @@ export function createWorld(
 				g.fillStyle(0xb7a372).fillRect(barrel.x - 5, barrel.y - 21, 8, 8);
 			});
 
-			// Stamped names are short enough to read at the normal canvas size.
-			for (const entry of [
-				{ u: 1.1, v: 3.2, h: 73, name: "БК / 7.62" },
-				{ u: 7.7, v: 0.05, h: 63, name: "АРСЕНАЛ" },
-				{ u: 3.5, v: 7.7, h: 58, name: "ШТАБ" },
-				{ u: 7.7, v: 10.3, h: 50, name: "ВЕРСТАК" },
-			]) {
-				const p = iso(entry.u, entry.v, entry.h);
-				this.baseLayer.add(
-					this.text(p.x, p.y, entry.name, 8, "#c4b486")
-						.setOrigin(0.5)
-						.setDepth(450)
-				);
-			}
+			this.roomHotspot("storage", "СКЛАД", { x: 191, y: 160 }, iso(1.8, 4.1, 29));
+			this.roomHotspot("radio", "РАДИОУЗЕЛ", { x: 211, y: 274 }, iso(3.4, 7.7, 28));
+			this.roomHotspot("medbay", "МЕДПУНКТ", { x: 683, y: 302 }, iso(10, 5.9, 20));
+			this.roomHotspot("workshop", "МАСТЕРСКАЯ", { x: 439, y: 397 }, iso(7.6, 9.5, 28));
 			this.createScav(5.3, 5.1, 0x748363, { u: 8.8, v: 5.2 }, 7000);
 			this.createScav(5, 8.6, 0x9b8356, { u: 3.2, v: 5.6 }, 9000);
 			this.createScav(8.3, 8, 0x606f62, { u: 7, v: 6.3 }, 6500);
@@ -669,7 +719,7 @@ export function createWorld(
 					)
 					.setDepth(950);
 				this.baseLayer.add(mote);
-				this.tweens.add({
+				if (!reducedMotion) this.tweens.add({
 					targets: mote,
 					x: mote.x + 12,
 					y: mote.y - 22,
@@ -701,21 +751,60 @@ export function createWorld(
 			this.baseCaption = this.text(
 				30,
 				31,
-				"УКРЫТИЕ / РЕПУТАЦИЯ 1",
-				9,
-				"#9d9e81"
+				"УБЕЖИЩЕ · УРОВЕНЬ 1",
+				14,
+				"#d3c6a2"
 			).setDepth(1100);
 			this.baseLayer.add(this.baseCaption);
 			this.baseLayer.add(
 				this.text(
 					30,
-					415,
-					"СЕКТОР 03 / СВЯЗЬ УСТОЙЧИВА",
-					8,
-					"#797d64"
+					436,
+					"ОБЪЕКТЫ И ДИКИЕ ДОСТУПНЫ ПО НАЖАТИЮ",
+					11,
+					"#a5ac8e"
 				).setDepth(1100)
 			);
 			this.baseLayer.sort("depth");
+		}
+
+		private roomHotspot(room: BaseRoom, name: string, at: Point, target: Point): void {
+			const leader = this.add.graphics().setDepth(1040);
+			line(leader, [target, { x: at.x, y: target.y }, at], 0xd0b07b, 1, 0.46);
+			leader.fillStyle(0xf0c985).fillCircle(target.x, target.y, 2.5);
+			this.baseLayer.add(leader);
+			const label = this.text(0, 0, `${name} · 1 ↗`, 15, "#ddd2af").setOrigin(0.5);
+			const width = label.width + 28;
+			const surface = this.add.graphics();
+			const draw = (hovered: boolean): void => {
+				surface.clear().fillStyle(0x090f0b, 0.4).fillRoundedRect(-width / 2 + 2, -17 + 4, width, 34, 5);
+				surface.fillStyle(hovered ? 0x3c4030 : 0x18231a, 0.97).fillRoundedRect(-width / 2, -17, width, 34, 5);
+				surface.lineStyle(hovered ? 2 : 1, hovered ? C.gold : 0x667153, hovered ? 1 : 0.8).strokeRoundedRect(-width / 2, -17, width, 34, 5);
+				label.setColor(hovered ? "#ffe3ae" : "#ddd2af");
+				leader.setAlpha(hovered ? 1 : 0.7);
+			};
+			draw(false);
+			const zone = this.add.zone(0, 0, width, 42).setInteractive({ useHandCursor: true });
+			zone.on("pointerover", () => { if (requestedView === "base") draw(true); });
+			zone.on("pointerout", () => draw(false));
+			zone.on("pointerdown", () => {
+				if (requestedView !== "base") return;
+				draw(true);
+				this.clickFeedback(at, this.baseLayer);
+				interactions.onRoom?.(room);
+			});
+			this.baseLayer.add(this.add.container(at.x, at.y, [surface, label, zone]).setDepth(1050));
+			this.roomLabels.set(room, label);
+		}
+
+		private clickFeedback(at: Point, layer: Phaser.GameObjects.Container): void {
+			const ring = this.add.circle(at.x, at.y, 15).setStrokeStyle(2, C.light, 0.85).setDepth(1500);
+			layer.add(ring);
+			this.tweens.add({
+				targets: ring, scale: reducedMotion ? 1 : 2.2, alpha: 0,
+				duration: reducedMotion ? 80 : 320,
+				onComplete: () => ring.destroy(),
+			});
 		}
 
 		private createScav(
@@ -730,6 +819,7 @@ export function createWorld(
 			const actor = this.add.container(p.x, p.y).setDepth(p.y + 3);
 			const body = this.add.container(0, 0);
 			const shadow = this.add.ellipse(0, 1, 21, 9, 0x070b07, 0.45);
+			const selection = this.add.ellipse(0, 1, 34, 15).setStrokeStyle(2, C.gold).setVisible(false);
 			const legA = this.add.rectangle(-4, -5, 5, 11, 0x242d22);
 			const legB = this.add.rectangle(4, -5, 5, 11, 0x293328);
 			const graphic = this.add.graphics();
@@ -746,9 +836,33 @@ export function createWorld(
 			rifle(graphic, 6, -16, 0.41, false);
 			const gear = this.add.graphics();
 			body.add([legA, legB, graphic, gear]);
-			const label = this.text(0, -51, "", 7, "#c9c5a8").setOrigin(0.5);
-			const order = this.add.circle(-14, -33, 2.5, C.sage).setVisible(false);
-			actor.add([shadow, body, label, order]);
+			const label = this.text(0, -57, "", 14, "#f0dbac").setOrigin(0.5)
+				.setBackgroundColor("#162219").setPadding(7, 4).setVisible(false);
+			const order = this.add.circle(-14, -33, 4, C.sage).setStrokeStyle(1, 0x19261a).setVisible(false);
+			const index = this.scavs.length;
+			const hit = this.add.zone(0, -24, 46, 64).setInteractive({ useHandCursor: true });
+			hit.on("pointerover", () => {
+				const slot = this.scavs[index];
+				if (requestedView !== "base" || !slot) return;
+				slot.hovered = true;
+				selection.setVisible(true);
+				label.setVisible(true);
+			});
+			hit.on("pointerout", () => {
+				const slot = this.scavs[index];
+				if (!slot) return;
+				slot.hovered = false;
+				const selected = snapshot().selectedScavId === snapshot().scavs?.[index]?.id;
+				selection.setVisible(Boolean(selected));
+				label.setVisible(Boolean(selected));
+			});
+			hit.on("pointerdown", () => {
+				const scav = snapshot().scavs?.[index];
+				if (requestedView !== "base" || !scav) return;
+				this.clickFeedback({ x: actor.x, y: actor.y - 20 }, this.baseLayer);
+				interactions.onScav?.(scav.id);
+			});
+			actor.add([shadow, selection, body, label, order, hit]);
 			this.baseLayer.add(actor);
 			const motion = [
 				this.tweens.add({
@@ -785,7 +899,7 @@ export function createWorld(
 					onRepeat: () => body.setScale(1, 1),
 				}),
 			];
-			this.scavs.push({ actor, motion, gear, label, order, gearSignature: "" });
+			this.scavs.push({ actor, motion, gear, label, order, selection, hovered: false, gearSignature: "" });
 		}
 
 		private lamp(u: number, v: number): void {
@@ -836,7 +950,7 @@ export function createWorld(
 				.setBlendMode(Phaser.BlendModes.ADD)
 				.setDepth(825);
 			this.baseLayer.add(halo);
-			this.tweens.add({
+			if (!reducedMotion) this.tweens.add({
 				targets: [glow, halo],
 				alpha: "+=0.07",
 				duration: 1700 + u * 97,
@@ -1015,29 +1129,31 @@ export function createWorld(
 				],
 				C.gold
 			);
-			this.mapLayer.add(this.text(777, 38, "С", 9, "#c8bd93").setOrigin(0.5));
+			this.mapLayer.add(this.text(777, 38, "С", 12, "#dacf9f").setOrigin(0.5));
 			this.mapLayer.add(
-				this.text(33, 32, "ОПЕРАТИВНАЯ КАРТА / РАЙОН ТАРКОВА", 9, "#b2b590")
+				this.text(33, 32, "ОПЕРАТИВНАЯ КАРТА", 15, "#ddd6b4")
 			);
-			this.operationsCaption = this.text(33, 48, "", 8, "#a7b18e");
+			this.operationsCaption = this.text(33, 58, "", 12, "#bdc5a4");
 			this.mapLayer.add(this.operationsCaption);
 			this.mapLayer.add(
 				this.text(
 					32,
-					416,
-					"1:25 000  ·  ВЫБЕРИ РАЙОН ДЛЯ ВЫЛАЗКИ",
-					8,
-					"#8f9777"
+					420,
+					"НАЖМИ НА РАЙОН, ЧТОБЫ ВЫБРАТЬ МАРШРУТ",
+					12,
+					"#b9bda0"
 				)
 			);
 			this.mapLayer.add(
-				this.text(774, 417, "СЕКРЕТНО", 8, "#9d7b59").setOrigin(1, 0)
+				this.text(774, 421, "1:25 000", 11, "#b4a783").setOrigin(1, 0)
 			);
 			this.mapLayer.add(
-				this.text(this.hq.x, this.hq.y + 19, "УКРЫТИЕ", 8, "#b1af8b").setOrigin(
+				this.text(this.hq.x, this.hq.y + 23, "БАЗА", 13, "#d4caa5").setOrigin(
 					0.5
 				)
 			);
+			this.selectedRoute = this.add.graphics();
+			this.mapLayer.add(this.selectedRoute);
 			for (const place of places) this.mapPlace(place);
 		}
 
@@ -1046,15 +1162,16 @@ export function createWorld(
 			const dot = this.add.graphics();
 			const label = this.text(
 				p.x,
-				p.y + 23,
+				p.y + 28,
 				place.name.toUpperCase(),
-				10,
-				"#d6ccb0"
+				16,
+				"#e1dbc0"
 			).setOrigin(0.5);
-			label.setBackgroundColor("#223024").setPadding(5, 3, 5, 3);
-			const detail = this.text(p.x, p.y + 45, "", 8, "#9fa582").setOrigin(0.5);
+			label.setBackgroundColor("#14251b").setPadding(9, 5);
+			const detail = this.text(p.x, p.y + 57, "", 12, "#c0c3a0").setOrigin(0.5)
+				.setBackgroundColor("#1b2b20").setPadding(5, 3);
 			const zone = this.add
-				.zone(p.x, p.y + 12, 110, 76)
+				.zone(p.x, p.y + 22, Math.max(label.width + 14, 136), 110)
 				.setInteractive({ useHandCursor: true });
 			zone.on("pointerdown", () => {
 				const current = snapshot();
@@ -1063,38 +1180,53 @@ export function createWorld(
 					requestedView === "map" &&
 					candidate &&
 					current.level >= candidate.level
-				)
+				) {
+					this.clickFeedback(p, this.mapLayer);
 					onMap(place.id);
+					this.syncSnapshot();
+				}
 			});
 			zone.on("pointerover", () => {
-				if (requestedView === "map") label.setColor("#f0d69f");
+				const item = this.places.get(place.id);
+				if (requestedView !== "map" || !item) return;
+				item.hovered = true;
+				this.syncSnapshot();
 			});
-			zone.on("pointerout", () =>
-				label.setColor(
-					this.places.get(place.id)?.active ? "#d6ccb0" : "#7a886e"
-				)
-			);
+			zone.on("pointerout", () => {
+				const item = this.places.get(place.id);
+				if (item) item.hovered = false;
+				this.syncSnapshot();
+			});
 			this.mapLayer.add([dot, label, detail, zone]);
-			this.places.set(place.id, { dot, label, detail, active: false });
+			this.places.set(place.id, { dot, label, detail, zone, active: false, hovered: false });
 		}
 
 		private syncSnapshot(): void {
 			if (!this.baseCaption) return;
 			const state = snapshot();
-			this.baseCaption.setText(`УКРЫТИЕ / РЕПУТАЦИЯ ${state.level}`);
+			this.lastSelection = `${state.selectedScavId ?? ""}:${state.selectedMapId ?? ""}`;
+			this.baseCaption.setText(`УБЕЖИЩЕ · УРОВЕНЬ ${state.level}`);
+			const names: Record<BaseRoom, string> = {
+				storage: "СКЛАД", radio: "РАДИОУЗЕЛ", medbay: "МЕДПУНКТ", workshop: "МАСТЕРСКАЯ",
+			};
+			for (const [room, label] of this.roomLabels)
+				label.setText(`${names[room]} · ${state.base[room] ?? 1} ↗`);
 			this.operationsCaption.setText(
-				`ГРУПП НА ВЫХОДЕ: ${state.raids.length} / ПОСТОЯННЫХ МАРШРУТОВ: ${state.scavs?.filter((scav) => scav.autoRaid?.enabled).length ?? 0}`
+				`В РЕЙДЕ: ${state.raids.length}  ·  АВТОМАРШРУТЫ: ${state.scavs?.filter((scav) => scav.autoRaid?.enabled).length ?? 0}`
 			);
 			this.scavs.forEach((slot, index) => {
-				const { actor, motion, gear, label, order } = slot;
+				const { actor, motion, gear, label, order, selection } = slot;
 				const scav = state.scavs?.[index];
 				const visible =
 					state.scavs === undefined
 						? index < 3
 						: Boolean(scav && scav.status !== "raiding");
-				const moving = visible && (!scav || scav.status === "ready");
+				const moving = !reducedMotion && visible && (!scav || scav.status === "ready");
 				actor.setVisible(visible);
-				label.setText(scav?.name?.toLocaleUpperCase("ru-RU") ?? "");
+				const selected = Boolean(scav && state.selectedScavId === scav.id);
+				selection.setVisible(selected || slot.hovered).setStrokeStyle(2, selected ? C.light : C.gold);
+				label.setText(`${scav?.name?.toLocaleUpperCase("ru-RU") ?? ""}${scav?.status === "wounded" ? " · РАНЕН" : ""}`)
+					.setVisible(selected || slot.hovered);
 				order.setVisible(Boolean(scav?.autoRaid?.enabled));
 				order.setFillStyle(scav?.autoRaid?.waitingReason ? C.gold : C.sage);
 				const armor = scav?.gear?.armor ?? 0;
@@ -1121,7 +1253,7 @@ export function createWorld(
 				}
 				actor.setAlpha(
 					scav?.status === "wounded"
-						? 0.45
+						? 0.7
 						: scav
 							? 0.65 + (Phaser.Math.Clamp(scav.health, 0, 100) / 100) * 0.35
 							: 1
@@ -1131,17 +1263,28 @@ export function createWorld(
 					else if (!moving && !tween.isPaused()) tween.pause();
 				}
 			});
+			this.selectedRoute.clear();
+			const selectedPlace = state.maps.find((place) => place.id === state.selectedMapId && state.level >= place.level);
+			if (selectedPlace) {
+				const selectedPoint = position(selectedPlace);
+				line(this.selectedRoute, [this.hq, selectedPoint], C.gold, 4, 0.12);
+				dashed(this.selectedRoute, this.hq, selectedPoint, C.light, 2, 0.7);
+			}
 			for (const place of state.maps) {
 				const item = this.places.get(place.id);
 				if (!item) continue;
 				const p = position(place),
 					active = state.level >= place.level;
-				const color = active ? tint(place.accent) : 0x67755c;
+				const selected = active && state.selectedMapId === place.id;
+				const highlighted = selected || (active && item.hovered);
+				const color = highlighted ? C.light : active ? tint(place.accent) : 0x899279;
 				item.active = active;
+				if (item.zone.input) item.zone.input.cursor = active ? "pointer" : "not-allowed";
 				item.dot.clear();
+				if (highlighted) item.dot.fillStyle(C.gold, 0.13).fillCircle(p.x, p.y, 27);
 				item.dot
-					.lineStyle(1, color, active ? 0.5 : 0.25)
-					.strokeCircle(p.x, p.y, 19);
+					.lineStyle(highlighted ? 2 : 1, color, active ? 0.75 : 0.35)
+					.strokeCircle(p.x, p.y, highlighted ? 24 : 20);
 				item.dot.fillStyle(0x14231a).fillCircle(p.x, p.y, 11);
 				item.dot
 					.lineStyle(2, color, active ? 1 : 0.55)
@@ -1169,16 +1312,18 @@ export function createWorld(
 						0.7
 					);
 				}
-				item.label.setColor(active ? "#d6ccb0" : "#7a886e");
+				item.label.setColor(highlighted ? "#ffdfa4" : active ? "#e1dbc0" : "#a2ae93")
+					.setBackgroundColor(highlighted ? "#3b3c2a" : "#14251b");
+				item.detail.setColor(active ? "#c0c3a0" : "#a2ae93");
 				const raiding = state.raids.filter(
 					(raid) => raid.mapId === place.id
 				).length;
 				item.detail.setText(
 					active
 						? raiding
-							? `${raiding} ГРУППА В РАЙОНЕ`
-							: "РАЗВЕДКА ДОСТУПНА"
-						: `ДОСТУП С УР. ${place.level}`
+							? `В РЕЙДЕ: ${raiding}`
+							: selected ? "МАРШРУТ ВЫБРАН" : "ВЫБРАТЬ ↗"
+						: `ЗАКРЫТО · УР. ${place.level}`
 				);
 			}
 			const live = new Set(state.raids.map((raid) => raid.id));
@@ -1193,17 +1338,17 @@ export function createWorld(
 					const marker = this.add.container(this.hq.x, this.hq.y);
 					const color = raid.isAuto ? 0xa8c986 : 0xe8bb76;
 					const ring = this.add
-						.ellipse(0, 0, 16, 16)
+						.ellipse(0, 0, 20, 20)
 						.setStrokeStyle(1, color, 0.6);
-					const dot = this.add.rectangle(0, 0, 5, 5, color).setAngle(45);
+					const dot = this.add.rectangle(0, 0, 8, 8, color).setAngle(45);
 					const label = this.text(
 						0,
-						-22,
+						-26,
 						raid.scavName.toLocaleUpperCase("ru-RU"),
-						7,
-						"#ddd6b4"
+						14,
+						"#f3dfb4"
 					).setOrigin(0.5);
-					const phase = this.text(0, 17, "", 7, "#d5ba83").setOrigin(0.5);
+					const phase = this.text(0, 22, "", 12, "#edcc91").setOrigin(0.5);
 					label
 						.setBackgroundColor("#17231b")
 						.setPadding(3, 2)
@@ -1212,19 +1357,30 @@ export function createWorld(
 						.setBackgroundColor("#17231b")
 						.setPadding(3, 2)
 						.setVisible(false);
-					marker.setSize(25, 25).setInteractive({ useHandCursor: true });
+					marker.setSize(44, 44).setInteractive({ useHandCursor: true });
 					marker.on("pointerover", () => {
+						const item = this.raidActors.get(raid.id);
+						if (requestedView !== "map" || !item) return;
+						item.hovered = true;
 						label.setVisible(true);
 						phase.setVisible(true);
 					});
 					marker.on("pointerout", () => {
-						label.setVisible(false);
-						phase.setVisible(false);
+						const item = this.raidActors.get(raid.id);
+						if (item) item.hovered = false;
+						const selected = snapshot().selectedScavId === raid.scavId;
+						label.setVisible(selected);
+						phase.setVisible(selected);
+					});
+					marker.on("pointerdown", () => {
+						if (requestedView !== "map") return;
+						this.clickFeedback({ x: marker.x, y: marker.y }, this.mapLayer);
+						interactions.onScav?.(raid.scavId);
 					});
 					marker.add([ring, dot, label, phase]);
 					this.mapLayer.add(marker);
-					this.raidActors.set(raid.id, { actor: marker, ring, label, phase });
-					this.tweens.add({
+					this.raidActors.set(raid.id, { actor: marker, ring, label, phase, hovered: false });
+					if (!reducedMotion) this.tweens.add({
 						targets: ring,
 						scale: 1.65,
 						alpha: 0.08,
@@ -1233,16 +1389,21 @@ export function createWorld(
 					});
 				}
 			for (const raid of state.raids) {
-				this.raidActors
-					.get(raid.id)
-					?.phase.setText(
-						`${raid.isAuto ? "↻ " : ""}${getRaidPhase(raid, Date.now()).label.toLocaleUpperCase("ru-RU")}`
-					);
+				const marker = this.raidActors.get(raid.id);
+				if (!marker) continue;
+				const selected = state.selectedScavId === raid.scavId;
+				marker.label.setVisible(selected || marker.hovered);
+				marker.phase.setVisible(selected || marker.hovered).setText(
+					`${raid.isAuto ? "↻ " : ""}${getRaidPhase(raid, Date.now()).label.toLocaleUpperCase("ru-RU")}`
+				);
+				marker.actor.setDepth(selected ? 2000 : 0);
 			}
+			this.mapLayer.sort("depth");
 		}
 
 		update(time: number): void {
-			if (time - this.lastSync > 1000) {
+			const selection = snapshot();
+			if (time - this.lastSync > 1000 || `${selection.selectedScavId ?? ""}:${selection.selectedMapId ?? ""}` !== this.lastSelection) {
 				this.lastSync = time;
 				this.syncSnapshot();
 			}
@@ -1298,8 +1459,8 @@ export function createWorld(
 		width: WIDTH,
 		height: HEIGHT,
 		backgroundColor: "#10120f",
-		antialias: false,
-		pixelArt: true,
+		antialias: true,
+		pixelArt: false,
 		roundPixels: true,
 		scale: {
 			mode: Phaser.Scale.FIT,
