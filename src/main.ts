@@ -220,6 +220,17 @@ let deferredRender = false;
 let world: ReturnType<typeof createWorld> | null = null;
 let toastTimer: ReturnType<typeof setTimeout>;
 let storageWarning = false;
+let worldInputBlockedUntil = 0;
+let worldOverlaySignature = "";
+function holdWorldInput() { worldInputBlockedUntil = Date.now() + 350; }
+function canWorldInteract() {
+	return Date.now() >= worldInputBlockedUntil && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal") && !(window.innerWidth <= 850 && contextMode !== "overview");
+}
+function captureInterfacePointer(event: PointerEvent) {
+	const target = event.target instanceof Element ? event.target : null;
+	if (target && (target.closest("#tool-root, #inspector-root, #modal-root, #command-dock, #context-shade, button, select, input, summary") || target.closest("#world") == null)) holdWorldInput();
+}
+document.addEventListener("pointerdown", captureInterfacePointer, true);
 const app = document.querySelector<HTMLDivElement>("#app")!;
 const names: Record<Page, string> = {
 	home: "Штаб",
@@ -643,6 +654,12 @@ function setOverlayState() {
 	const drawerOpen = Boolean(selectedScav);
 	const toolsOpen = page !== "home";
 	const mobileContext = window.innerWidth <= 850 && contextMode !== "overview";
+	const contextIdentity = mobileContext ? `${contextMode}:${selectedRoomId ?? ""}:${selectedShelterSite?.column ?? ""}:${selectedShelterSite?.row ?? ""}` : "";
+	const signature = `${modalOpen}:${selectedScav ?? ""}:${page}:${contextIdentity}`;
+	if (signature !== worldOverlaySignature) {
+		worldOverlaySignature = signature;
+		holdWorldInput();
+	}
 	const shell = document.querySelector<HTMLElement>(".shell")!;
 	shell.inert = modalOpen || drawerOpen || toolsOpen;
 	const tools = document.querySelector<HTMLElement>("#tool-root")!; tools.inert = modalOpen || drawerOpen;
@@ -1173,6 +1190,7 @@ function showAutoRaidOrder(scavId: string) {
 	focusModal();
 }
 document.addEventListener("click", (event) => {
+	if ((event.target as Element).closest("#tool-root, #inspector-root, #modal-root, #command-dock, #context-shade, button, select, input, summary")) holdWorldInput();
 	const artSlot = (event.target as Element).closest<SVGElement>('.workbench-stage [data-module-slot]');
 	if (artSlot?.dataset.moduleSlot) { selectBenchSlot(artSlot.dataset.moduleSlot as ModuleSlot); return; }
 	const target = (event.target as HTMLElement).closest<HTMLButtonElement>(
@@ -1683,12 +1701,17 @@ world = createWorld(
 		selectedMapId: selectedMap,
 	}),
 	(id) => {
+		if (!canWorldInteract()) return;
 		selectedMap = id;
 		page = "raids";
 		render();
 		document.querySelector<HTMLButtonElement>('[data-action="close-tools"]')?.focus();
 	},
-	{ onRoom: openRoom, onScav: openInspector, onShelterRoom: openShelterRoom, onBuildSite: ({ column, row }) => openShelterSite(column, row) }
+	{ canInteract: canWorldInteract,
+		onRoom: (room) => { if (canWorldInteract()) openRoom(room); },
+		onScav: (id) => { if (canWorldInteract()) openInspector(id); },
+		onShelterRoom: (id) => { if (canWorldInteract()) openShelterRoom(id); },
+		onBuildSite: ({ column, row }) => { if (canWorldInteract()) openShelterSite(column, row); } }
 );
 let ticks = 0;
 const readyContracts = () =>
@@ -1760,6 +1783,7 @@ import.meta.hot?.dispose(() => {
 	clearTimeout(toastTimer);
 	world?.game.destroy(true);
 	window.removeEventListener("resize", responsiveContext);
+	document.removeEventListener("pointerdown", captureInterfacePointer, true);
 });
 if (protectedSave) {
 	toast(

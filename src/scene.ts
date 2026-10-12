@@ -52,6 +52,7 @@ type ScavActor = {
 	phase: number;
 };
 export interface WorldInteractions {
+	canInteract?: () => boolean;
 	onRoom?: (room: BaseRoom) => void;
 	onScav?: (id: string) => void;
 	onShelterRoom?: (roomId: string) => void;
@@ -286,6 +287,12 @@ export function createWorld(
 			});
 		}
 
+		private acceptsPointer(pointer: Phaser.Input.Pointer, view: View): boolean {
+			return requestedView === view
+				&& interactions.canInteract?.() !== false
+				&& pointer.event?.target === this.game.canvas;
+		}
+
 		private makeGlow(): void {
 			const texture = this.textures.createCanvas("prapor-light", 256, 256);
 			if (!texture) return;
@@ -418,10 +425,10 @@ export function createWorld(
 			this.baseLayer.add(root);
 			const cell: ShelterCell = { root, art, frame, progress, animation, label, status, lamp, zone, signature: "", column, row, hovered: false, room: null, working: false };
 			this.cells.set(`${column}:${row}`, cell);
-			zone.on("pointerover", () => { if (requestedView === "base") { cell.hovered = true; this.paintCellFrame(cell); } });
+			zone.on("pointerover", (pointer: Phaser.Input.Pointer) => { if (this.acceptsPointer(pointer, "base")) { cell.hovered = true; this.paintCellFrame(cell); } });
 			zone.on("pointerout", () => { cell.hovered = false; this.paintCellFrame(cell); });
-			zone.on("pointerdown", () => {
-				if (requestedView !== "base") return;
+			zone.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+				if (!this.acceptsPointer(pointer, "base")) return;
 				this.clickFeedback({ x: p.x + 86, y: p.y + 49 }, this.baseLayer);
 				if (cell.room) {
 					if (interactions.onShelterRoom) interactions.onShelterRoom(cell.room.id);
@@ -704,9 +711,9 @@ export function createWorld(
 			const order = this.add.circle(-10, -32, 3, C.sage).setStrokeStyle(1, 0x19261a).setVisible(false);
 			const hit = this.add.zone(0, -21, 32, 46).setInteractive({ useHandCursor: true });
 			const slot: ScavActor = { actor, body, legA, legB, hand, gear, label, order, selection, hovered: false, gearSignature: "", anchor: { x: 220, y: 128 }, working: false, walking: false, walkSpan: 0, phase: index * 1.71 };
-			hit.on("pointerover", () => { if (requestedView === "base") { slot.hovered = true; selection.setVisible(true); label.setVisible(true); actor.setDepth(80); } });
+			hit.on("pointerover", (pointer: Phaser.Input.Pointer) => { if (this.acceptsPointer(pointer, "base")) { slot.hovered = true; selection.setVisible(true); label.setVisible(true); actor.setDepth(80); } });
 			hit.on("pointerout", () => { slot.hovered = false; const selected = snapshot().selectedScavId === scavId; selection.setVisible(selected); label.setVisible(selected); actor.setDepth(30); });
-			hit.on("pointerdown", () => { if (requestedView === "base") { this.clickFeedback({ x: actor.x, y: actor.y - 19 }, this.baseLayer); interactions.onScav?.(scavId); } });
+			hit.on("pointerdown", (pointer: Phaser.Input.Pointer) => { if (this.acceptsPointer(pointer, "base")) { this.clickFeedback({ x: actor.x, y: actor.y - 19 }, this.baseLayer); interactions.onScav?.(scavId); } });
 			actor.add([shadow, selection, body, label, order, hit]);
 			this.baseLayer.add(actor);
 			this.scavs.set(scavId, slot);
@@ -1061,7 +1068,8 @@ export function createWorld(
 			const zone = this.add
 				.zone(p.x, p.y + 22, Math.max(label.width + 14, 136), 110)
 				.setInteractive({ useHandCursor: true });
-			zone.on("pointerdown", () => {
+			zone.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+				if (!this.acceptsPointer(pointer, "map")) return;
 				const current = snapshot();
 				const candidate = current.maps.find((entry) => entry.id === place.id);
 				if (
@@ -1074,9 +1082,9 @@ export function createWorld(
 					this.syncSnapshot();
 				}
 			});
-			zone.on("pointerover", () => {
+			zone.on("pointerover", (pointer: Phaser.Input.Pointer) => {
 				const item = this.places.get(place.id);
-				if (requestedView !== "map" || !item) return;
+				if (!this.acceptsPointer(pointer, "map") || !item) return;
 				item.hovered = true;
 				this.syncSnapshot();
 			});
@@ -1190,9 +1198,9 @@ export function createWorld(
 						.setPadding(3, 2)
 						.setVisible(false);
 					marker.setSize(44, 44).setInteractive({ useHandCursor: true });
-					marker.on("pointerover", () => {
+					marker.on("pointerover", (pointer: Phaser.Input.Pointer) => {
 						const item = this.raidActors.get(raid.id);
-						if (requestedView !== "map" || !item) return;
+						if (!this.acceptsPointer(pointer, "map") || !item) return;
 						item.hovered = true;
 						label.setVisible(true);
 						phase.setVisible(true);
@@ -1205,8 +1213,8 @@ export function createWorld(
 						label.setVisible(selected);
 						phase.setVisible(selected || waiting);
 					});
-					marker.on("pointerdown", () => {
-						if (requestedView !== "map") return;
+					marker.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+						if (!this.acceptsPointer(pointer, "map")) return;
 						this.clickFeedback({ x: marker.x, y: marker.y }, this.mapLayer);
 						interactions.onScav?.(raid.scavId);
 					});
