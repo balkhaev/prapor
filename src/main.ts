@@ -936,6 +936,13 @@ function openShelterRoom(id: string, requestedTab?: CommandRoomTab) {
 function commandSummaryKey(summary: CommandSummary) {
 	return JSON.stringify([summary.counts, summary.queuedJobs, summary.freeWorkers, summary.rooms.map((room) => [room.roomId, room.kind, room.title, room.detail, room.cta])]);
 }
+function focusCommandControl(key: string) {
+	const dock = document.querySelector<HTMLElement>("#command-dock");
+	const keyed = dock?.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(key)}"]`);
+	const fallback = dock?.querySelector<HTMLElement>('[data-focus-key="command-production"]');
+	const target = [keyed, fallback].find((node) => node?.isConnected && node.getClientRects().length > 0 && !node.closest("[inert]"));
+	if (target) target.focus({ preventScroll: true });
+}
 function refreshCommandOverview(summary: CommandSummary) {
 	if (contextMode !== "overview" || interacting() || commandSummaryKey(summary) === commandSummarySignature) return;
 	const dock = document.querySelector<HTMLElement>("#command-dock"); if (!dock) return;
@@ -943,7 +950,7 @@ function refreshCommandOverview(summary: CommandSummary) {
 	const stripScroll = dock.querySelector<HTMLElement>(".command-system-grid")?.scrollLeft ?? 0;
 	dock.innerHTML = commandOverview(summary);
 	const strip = dock.querySelector<HTMLElement>(".command-system-grid"); if (strip) strip.scrollLeft = stripScroll;
-	if (activeKey) (dock.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(activeKey)}"]`) ?? dock.querySelector<HTMLElement>('[data-focus-key="command-production"]'))?.focus({ preventScroll: true });
+	if (activeKey) focusCommandControl(activeKey);
 }
 function openShelterSite(column: number, row: number) {
 	closeInspector();
@@ -961,8 +968,8 @@ function closeCommandContext() {
 	selectedShelterSite = null;
 	renderCommandBoard();
 	setOverlayState();
-	if (commandOrigin?.isConnected && commandOrigin.getClientRects().length) commandOrigin.focus({ preventScroll: true });
-	else if (commandOrigin?.dataset.focusKey) (document.querySelector<HTMLElement>(`#command-dock [data-focus-key="${CSS.escape(commandOrigin.dataset.focusKey)}"]`) ?? document.querySelector<HTMLElement>('#command-dock [data-focus-key="command-production"]'))?.focus({ preventScroll: true });
+	if (commandOrigin?.isConnected && commandOrigin.getClientRects().length && !commandOrigin.closest("[inert]")) commandOrigin.focus({ preventScroll: true });
+	else if (commandOrigin?.dataset.focusKey) focusCommandControl(commandOrigin.dataset.focusKey);
 	else document.querySelector<HTMLButtonElement>('[data-page="base"]')?.focus({ preventScroll: true });
 }
 function closeTools() {
@@ -1010,7 +1017,11 @@ function renderCommandBoard() {
 	else { dock.removeAttribute("aria-modal"); dock.setAttribute("aria-label", "Сводка и управление объектом"); }
 	dock.innerHTML = contextMode === "room" && room ? managedRoomPanel(room) : contextMode === "build" && selectedShelterSite ? `<header class="command-context-head"><span class="eyebrow">Новая комната</span><button class="icon-button" data-action="close-context" data-focus-key="context-close" aria-label="Закрыть строительство">×</button></header><div class="command-dock-scroll">${buildSitePanel(selectedShelterSite.column, selectedShelterSite.row)}</div>` : commandOverview();
 	const scroll = dock.querySelector<HTMLElement>(".command-dock-scroll"); if (scroll) scroll.scrollTop = oldScroll;
-	if (activeKey) dock.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(activeKey)}"]`)?.focus({ preventScroll: true });
+	if (activeKey) {
+		const replacement = dock.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(activeKey)}"]`);
+		if (replacement?.getClientRects().length && !replacement.closest("[inert]")) replacement.focus({ preventScroll: true });
+		else if (contextMode === "overview") focusCommandControl(activeKey);
+	}
 	document.querySelector<HTMLElement>("#context-shade")!.hidden = !mobileContext;
 	const crew = document.querySelector<HTMLElement>("#command-crew")!;
 	const crewScroll = crew.querySelector<HTMLElement>(".command-crew-strip")?.scrollLeft ?? 0;
