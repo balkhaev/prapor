@@ -382,6 +382,7 @@ document.addEventListener("click", (event) => {
 	if (target.dataset.page) {
 		page = target.dataset.page as Page;
 		render();
+		window.scrollTo(0, 0);
 		if (page === "raids") setView("map");
 		else if (page === "home") setView("base");
 		return;
