@@ -457,19 +457,47 @@ export function createWorld(
 			const g = this.add.graphics();
 			this.baseLayer.add(g);
 			const rng = random(90312);
-			for (let y = 0; y < 128; y += 4) g.fillStyle(blend(0x263946, 0x26372e, y / 128)).fillRect(0, y, WIDTH, 4);
-			g.fillStyle(0x879890, .13).fillEllipse(481, 40, 24, 24);
-			g.fillStyle(0xb2c0ac, .38).fillCircle(481, 40, 4);
-			g.fillStyle(0x1a2927, .8).fillRect(0, 78, WIDTH, 49);
-			for (const building of [{ x: 530, w: 78, h: 38 }, { x: 615, w: 57, h: 51 }, { x: 711, w: 97, h: 36 }]) {
-				g.fillStyle(0x162526).fillRect(building.x, 81 - building.h, building.w, building.h);
-				g.fillStyle(0x668077, .12).fillRect(building.x, 81 - building.h, building.w, 2);
-				for (let x = building.x + 9; x < building.x + building.w - 5; x += 15)
-					g.fillStyle(0x7f8861, .09).fillRect(x, 51, 5, 10);
+			for (let y = 0; y < 128; y += 3) g.fillStyle(blend(0x182d3f, 0x677268, y / 155)).fillRect(0, y, WIDTH, 3);
+			g.fillStyle(0xc0c5a8, .12).fillEllipse(480, 37, 44, 35);
+			g.fillStyle(0xd4d6b7, .38).fillCircle(480, 37, 5);
+			// Distant ruins, nearer tree lines and the lit entrance occupy separate depth planes.
+			for (const district of [{ x: 422, w: 78, h: 31 }, { x: 506, w: 90, h: 57 }, { x: 611, w: 58, h: 42 }, { x: 681, w: 112, h: 49 }]) {
+				g.fillStyle(0x294340, .66).fillRect(district.x, 83 - district.h, district.w, district.h);
+				g.fillStyle(0x9aae94, .16).fillRect(district.x, 83 - district.h, district.w, 2);
+				for (let x = district.x + 9; x < district.x + district.w - 8; x += 16) for (let y = 88 - district.h; y < 78; y += 15) {
+					g.fillStyle((x + y) % 3 ? 0x708d7b : 0xc6a76c, (x + y) % 3 ? .14 : .28).fillRect(x, y, 5, 7);
+				}
 			}
-			line(g, [{ x: 729, y: 84 }, { x: 729, y: 21 }, { x: 743, y: 21 }], 0x5a684d, 3);
-			line(g, [{ x: 650, y: 75 }, { x: 650, y: 28 }, { x: 651, y: 27 }], 0x4a5d46, 2);
-			g.fillStyle(0x6c8c82, .07).fillRect(0, 76, WIDTH, 8);
+			for (const plant of [{ x: 12, h: 41 }, { x: 25, h: 32 }, { x: 307, h: 21 }, { x: 461, h: 25 }, { x: 818, h: 45 }]) {
+				line(g, [{ x: plant.x, y: 90 }, { x: plant.x, y: 91 - plant.h }], 0x182e2b, 2);
+				for (let n = 0; n < 4; n++) {
+					const y = 84 - n * plant.h / 6, w = (4 - n) * 5;
+					polygon(g, [{ x: plant.x - w, y }, { x: plant.x, y: y - 15 }, { x: plant.x + w, y }], 0x203a30, .9);
+					line(g, [{ x: plant.x - w, y }, { x: plant.x - 1, y: y - 12 }], 0x8aab85, .6, .17);
+				}
+			}
+			g.fillStyle(0x8eaaa1, .05).fillRect(0, 71, WIDTH, 14);
+			polygon(g, [{ x: 0, y: 91 }, { x: 95, y: 78 }, { x: 196, y: 93 }, { x: 305, y: 87 }, { x: 493, y: 91 }, { x: 687, y: 82 }, { x: 840, y: 94 }, { x: 840, y: 134 }, { x: 0, y: 134 }], 0x24382e);
+			line(g, [{ x: 648, y: 85 }, { x: 648, y: 30 }, { x: 653, y: 27 }, { x: 657, y: 29 }], 0x587664, 4);
+			g.fillStyle(0x162b27).fillEllipse(653, 28, 13, 4);
+			line(g, [{ x: 732, y: 86 }, { x: 737, y: 18 }, { x: 747, y: 18 }, { x: 754, y: 86 }], 0x668270, 3);
+			g.fillStyle(0x41665d).fillRect(730, 14, 31, 20);
+			g.fillStyle(0x90aa89, .28).fillEllipse(745, 14, 32, 7);
+			line(g, [{ x: 731, y: 35 }, { x: 754, y: 67 }, { x: 736, y: 66 }, { x: 751, y: 38 }], 0x789880, 1.2, .6);
+			// Local power stays visible as physical poles and sagging cable, without a new simulation.
+			for (const pole of [282, 787]) {
+				line(g, [{ x: pole, y: 86 }, { x: pole, y: 25 }], 0x786c4e, 3);
+				line(g, [{ x: pole - 11, y: 32 }, { x: pole + 12, y: 32 }], 0xa4a98a, 2);
+				g.fillStyle(0xc0c8aa).fillRect(pole - 8, 27, 3, 7).fillRect(pole + 5, 27, 3, 7);
+			}
+			const cable: Point[] = [];
+			for (let n = 0; n <= 30; n++) cable.push({ x: 282 + n * 505 / 30, y: 28 + Math.sin(n / 30 * Math.PI) * 11 });
+			line(g, cable, 0x152827, 1.1, .82);
+			line(g, [{ x: 281, y: 35 }, { x: 231, y: 49 }, { x: 166, y: 64 }], 0x172b26, 1.2);
+			for (let n = 0; n < 90; n++) {
+				const x = rng() * 840, y = 84 + rng() * 47;
+				g.fillStyle(n % 2 ? 0x87a278 : 0x10231d, .25).fillRect(x, y, 2 + rng() * 6, 1);
+			}
 			g.fillStyle(0x30312a).fillRect(0, 126, WIDTH, HEIGHT - 126);
 			for (const stratum of [{ y: 155, h: 67, c: 0x332f26 }, { y: 275, h: 57, c: 0x2d2b24 }, { y: 402, h: 69, c: 0x292c24 }]) {
 				polygon(g, [{ x: 0, y: stratum.y }, { x: 186, y: stratum.y - 8 }, { x: 394, y: stratum.y + 7 }, { x: 840, y: stratum.y - 11 }, { x: 840, y: stratum.y + stratum.h }, { x: 0, y: stratum.y + stratum.h + 13 }], stratum.c);
@@ -534,6 +562,31 @@ export function createWorld(
 				this.baseLayer.add(this.text(10, 184 + row * 111, `−${row + 1}`, 13, "#9ba589"));
 				for (let column = 0; column < 4; column++) this.createCell(column, row);
 			}
+			const casing = this.add.graphics().setDepth(15);
+			for (const x of [29, 212, 620, 801]) {
+				casing.fillStyle(0x15221f).fillRect(x + 2, 146, 10, 336);
+				casing.fillStyle(0x657263).fillRect(x, 146, 7, 334);
+				casing.fillStyle(0xabb19a, .46).fillRect(x, 146, 1.5, 334);
+				casing.fillStyle(0x273a30).fillRect(x + 5, 146, 2, 334);
+				for (let y = 170; y < 470; y += 37) {
+					casing.fillStyle(0x26362b).fillRect(x + 1, y, 5, 8);
+					casing.fillStyle(0xb8bba1, .45).fillCircle(x + 3, y + 3, 1);
+				}
+			}
+			for (const y of [137, 248, 359, 470]) {
+				polygon(casing, [{ x: 29, y }, { x: 803, y }, { x: 811, y: y + 5 }, { x: 34, y: y + 5 }], 0x88927f);
+				casing.fillStyle(0x536352).fillRect(34, y + 5, 777, 6);
+				casing.fillStyle(0x13241e).fillRect(34, y + 10, 777, 2);
+				line(casing, [{ x: 35, y: y + 5 }, { x: 808, y: y + 5 }], 0xc5c5a8, 1, .45);
+				for (let x = 42; x < 800; x += 35) line(casing, [{ x, y: y + 8 }, { x: x + 12, y: y + 8 }], 0x9aa18c, 1, .18);
+				casing.fillStyle(0x0b1c18).fillRect(393, y, 54, 12);
+				line(casing, [{ x: 393, y: y + 5 }, { x: 401, y: y + 5 }], 0xd2b879, 2, .6);
+				line(casing, [{ x: 439, y: y + 5 }, { x: 447, y: y + 5 }], 0xd2b879, 2, .6);
+			}
+			line(casing, [{ x: 24, y: 154 }, { x: 24, y: 488 }, { x: 786, y: 488 }], 0x323f31, 5);
+			line(casing, [{ x: 24, y: 154 }, { x: 24, y: 488 }, { x: 786, y: 488 }], 0x8b947b, 1.7, .52);
+			for (const x of [56, 185, 337, 523, 687, 782]) casing.fillStyle(0x526649).fillRect(x, 484, 3, 9);
+			this.baseLayer.add(casing);
 			const lift = this.add.graphics();
 			lift.fillStyle(0x384a37).fillRect(0, 0, 32, 59);
 			lift.fillStyle(0x101e13).fillRect(4, 6, 24, 43);
@@ -593,6 +646,8 @@ export function createWorld(
 			const selected = Boolean(cell.room ? state.selectedRoomId === cell.room.id : state.selectedSite?.column === cell.column && state.selectedSite.row === cell.row);
 			const building = cell.room && cell.room.status !== "ready";
 			const color = selected || cell.hovered ? C.light : building ? C.gold : cell.room ? ROOM_STYLE[cell.room.type]?.color ?? 0x899a7c : 0x788b71;
+			cell.label.setAlpha(cell.room || selected || cell.hovered ? 1 : .68);
+			cell.status.setAlpha(cell.room || selected || cell.hovered ? 1 : .65);
 			cell.frame.clear();
 			if (this.drag) {
 				const reason = cell.room ? this.assignmentReason(this.drag.scavId, cell.room.id) : "Сначала построй комнату";
@@ -603,7 +658,7 @@ export function createWorld(
 				return;
 			}
 			if (selected || cell.hovered) cell.frame.fillStyle(selected ? 0xffd99e : color, selected ? .055 : .025).fillRect(2, 24, ROOM_WIDTH - 4, ROOM_HEIGHT - 27);
-			cell.frame.lineStyle(selected ? 2.5 : 1, color, selected || cell.hovered ? 1 : cell.room ? .64 : .28).strokeRect(1, 1, ROOM_WIDTH - 2, ROOM_HEIGHT - 2);
+			if (cell.room || selected || cell.hovered) cell.frame.lineStyle(selected ? 2.5 : 1, color, selected || cell.hovered ? 1 : .64).strokeRect(1, 1, ROOM_WIDTH - 2, ROOM_HEIGHT - 2);
 			if (selected || cell.hovered) {
 				for (const x of [1, ROOM_WIDTH - 9]) for (const y of [1, ROOM_HEIGHT - 9]) cell.frame.fillStyle(C.gold, .85).fillRect(x, y, 8, 2).fillRect(x, y, 2, 8);
 			}
@@ -615,39 +670,62 @@ export function createWorld(
 			const g = cell.art, room = cell.room;
 			g.clear();
 			if (!room) {
-				g.fillStyle(0x2d342b).fillRect(0, 0, ROOM_WIDTH, ROOM_HEIGHT);
 				const rng = random(cell.column * 829 + cell.row * 127 + 416);
-				for (let n = 0; n < 15; n++) {
-					const x = rng() * 176 - 7, y = 25 + rng() * 66, w = 12 + rng() * 33, h = 8 + rng() * 12;
-					polygon(g, [{ x, y }, { x: x + w * .62, y: y - h * .4 }, { x: x + w, y: y + 2 }, { x: x + w * .7, y: y + h }, { x: x + 2, y: y + h * .85 }], n % 2 ? 0x444536 : 0x222c23);
-					line(g, [{ x: x + 1, y: y + 1 }, { x: x + w * .62, y: y - h * .3 }, { x: x + w - 1, y: y + 3 }], 0x75816a, 1, .16);
+				const stone = cell.row === 1 ? [0x3e4138, 0x4e4e3d, 0x343c33] : [0x343e40, 0x414a43, 0x28383a];
+				g.fillStyle(stone[2]!).fillRect(0, 0, ROOM_WIDTH, ROOM_HEIGHT);
+				for (let n = 0; n < 11; n++) {
+					const x = rng() * 190 - 14, y = rng() * 100, w = 22 + rng() * 46, h = 9 + rng() * 17;
+					polygon(g, [{ x, y }, { x: x + w * .64, y: y - h * .5 }, { x: x + w, y: y + 2 }, { x: x + w * .72, y: y + h }, { x: x + 3, y: y + h * .83 }], stone[n % 3]!);
+					line(g, [{ x: x + 2, y: y + 2 }, { x: x + w * .64, y: y - h * .4 }, { x: x + w - 2, y: y + 3 }], 0xa7ae8c, 1, .15);
 				}
-				g.fillStyle(0x151f18, .64).fillRect(0, 0, ROOM_WIDTH, 24).fillRect(0, 84, ROOM_WIDTH, 16);
-				g.lineStyle(1, 0x99aa8c, .18).strokeRect(8, 31, 156, 46);
-				for (let x = 21; x < 158; x += 18) for (let y = 38; y < 77; y += 18) g.fillStyle(0xa5b995, .18).fillCircle(x, y, .7);
-				g.fillStyle(0x273c2c, .95).fillRoundedRect(66, 36, 40, 34, 4);
-				g.lineStyle(1, 0xa6b99a, .66).strokeRoundedRect(66, 36, 40, 34, 4);
-				line(g, [{ x: 77, y: 53 }, { x: 95, y: 53 }], 0xc6d6b9, 2.3, .9);
-				line(g, [{ x: 86, y: 44 }, { x: 86, y: 62 }], 0xc6d6b9, 2.3, .9);
-				cell.label.setText("УЧАСТОК +").setColor("#c2d1b6");
-				cell.status.setText("ПОСТРОИТЬ").setColor("#bdcea9");
+				const seam: Point[] = [];
+				for (let n = 0; n < 8; n++) seam.push({ x: n * 25, y: 55 + Math.sin(n * .8 + cell.column) * 13 });
+				line(g, seam, 0x11231e, 3, .52);
+				line(g, [{ x: 36 + cell.column * 9, y: 0 }, { x: 45 + cell.column * 7, y: 19 }, { x: 39 + cell.column * 8, y: 39 }], 0x826d43, 1.2, .37);
+				g.fillStyle(0x0d211c, .42).fillRoundedRect(7, 3, 107, 20, 4);
+				g.fillStyle(0x182b22, .34).fillEllipse(86, 55, 36, 33);
+				g.lineStyle(1.2, 0xadc1a1, .36).strokeCircle(86, 55, 13);
+				line(g, [{ x: 79, y: 55 }, { x: 93, y: 55 }], 0xd3dfbd, 2, .65);
+				line(g, [{ x: 86, y: 48 }, { x: 86, y: 62 }], 0xd3dfbd, 2, .65);
+				cell.label.setText("Свободно").setFontSize(16).setColor("#afc0a4");
+				cell.status.setText("ПОСТРОИТЬ").setFontSize(12).setColor("#a3b398");
 				cell.lamp.setVisible(false);
 				return;
 			}
 			const style = ROOM_STYLE[room.type] ?? ROOM_STYLE.workshop!;
 			g.fillStyle(0x101919).fillRect(0, 0, ROOM_WIDTH, ROOM_HEIGHT);
 			for (let y = 24; y < 82; y += 3) g.fillStyle(blend(style.wall, 0x101e25, (y - 24) / 170)).fillRect(6, y, 160, 3);
-			polygon(g, [{ x: 0, y: 22 }, { x: 8, y: 30 }, { x: 8, y: 74 }, { x: 0, y: 83 }], blend(style.wall, 0x0b1314, .46));
-			polygon(g, [{ x: 164, y: 30 }, { x: 172, y: 22 }, { x: 172, y: 83 }, { x: 164, y: 74 }], blend(style.wall, 0x030d0f, .58));
-			polygon(g, [{ x: 8, y: 75 }, { x: 164, y: 75 }, { x: 172, y: 86 }, { x: 0, y: 86 }], blend(style.wall, 0x9ba7a3, .27));
+			polygon(g, [{ x: 1, y: 23 }, { x: 15, y: 34 }, { x: 15, y: 73 }, { x: 1, y: 84 }], blend(style.wall, 0x172522, .31));
+			polygon(g, [{ x: 157, y: 34 }, { x: 171, y: 23 }, { x: 171, y: 84 }, { x: 157, y: 73 }], blend(style.wall, 0x081518, .48));
+			polygon(g, [{ x: 1, y: 23 }, { x: 171, y: 23 }, { x: 157, y: 34 }, { x: 15, y: 34 }], blend(style.wall, 0xa2ae9c, .22));
+			polygon(g, [{ x: 15, y: 73 }, { x: 157, y: 73 }, { x: 171, y: 86 }, { x: 1, y: 86 }], blend(style.wall, 0x9ba7a3, .32));
+			line(g, [{ x: 15, y: 35 }, { x: 15, y: 73 }, { x: 156, y: 73 }, { x: 156, y: 35 }], 0x0a1b19, 2, .68);
+			line(g, [{ x: 3, y: 25 }, { x: 15, y: 34 }, { x: 156, y: 34 }, { x: 169, y: 25 }], style.color, 1.2, .48);
 			for (const x of [12, 39, 66, 93, 120, 147]) line(g, [{ x, y: 76 }, { x: (x - 86) * 1.16 + 86, y: 86 }], 0x111d1c, 1, .55);
 			line(g, [{ x: 3, y: 80 }, { x: 168, y: 80 }], 0xc9c9b1, .8, .15);
 			g.fillStyle(0x091416).fillRect(0, 84, ROOM_WIDTH, 16);
 			g.fillStyle(blend(style.wall, 0x09151a, .42)).fillRect(1, 1, ROOM_WIDTH - 2, 22);
 			g.fillStyle(style.color, .7).fillRect(1, 23, ROOM_WIDTH - 2, 1);
 			g.fillStyle(style.color, .6).fillRect(2, 2, 3, 19);
-			for (let y = 35; y < 76; y += 15) line(g, [{ x: 9, y }, { x: 164, y }], style.color, .7, .15);
-			for (let x = 25; x < 164; x += 37) line(g, [{ x, y: 31 }, { x, y: 74 }], 0x071518, 1, .28);
+			if (room.type === "medbay") {
+				for (let x = 16; x < 155; x += 24) for (let y = 35; y < 72; y += 12) {
+					g.fillStyle((x + y) % 5 ? 0x769b93 : 0xabc4b3, .15).fillRect(x, y, 22, 10);
+					line(g, [{ x, y: y + 11 }, { x: x + 22, y: y + 11 }], 0xc5e0cd, .7, .18);
+				}
+			} else if (room.type === "radio") {
+				for (const x of [16, 64, 111]) {
+					g.fillStyle(0x0c2a2b, .34).fillRect(x, 36, 43, 34);
+					line(g, [{ x, y: 36 }, { x: x + 42, y: 36 }], 0x6ea99f, 1, .24);
+				}
+			} else if (room.type === "dormitory") {
+				g.fillStyle(0xc2a8bf, .12).fillRoundedRect(17, 36, 138, 36, 2);
+				line(g, [{ x: 17, y: 64 }, { x: 154, y: 64 }], 0xcbbaad, 1, .16);
+			} else {
+				for (const x of [17, 52, 87, 122]) {
+					g.fillStyle(0x0c211c, .2).fillRect(x, 35, 32, 38);
+					line(g, [{ x, y: 35 }, { x: x + 31, y: 35 }, { x: x + 31, y: 72 }], style.color, .8, .22);
+				}
+			}
 			line(g, [{ x: 10, y: 30 }, { x: 161, y: 30 }, { x: 161, y: 76 }], 0x12221f, 4);
 			line(g, [{ x: 10, y: 29 }, { x: 161, y: 29 }, { x: 161, y: 73 }], blend(style.color, 0x4f6257, .48), 1.5);
 			for (const x of [13, 49, 87, 124]) g.fillStyle(0xc1c7ad, .7).fillRect(x, 27, 2, 5);
@@ -655,7 +733,8 @@ export function createWorld(
 			g.fillStyle(0xc6cab4, .55).fillRect(63, 25, 46, 2);
 			g.fillStyle(style.light).fillRect(66, 27, 40, 2);
 			polygon(g, [{ x: 66, y: 29 }, { x: 35, y: 79 }, { x: 144, y: 79 }, { x: 106, y: 29 }], style.light, .075);
-			cell.label.setText(style.label).setColor("#fff1dc");
+			cell.label.setText(style.label).setFontSize(18).setColor("#fff1dc");
+			cell.status.setFontSize(14);
 			cell.lamp.setVisible(true).setTint(style.light);
 			this.paintFurniture(g, room.type, room.level);
 			this.paintRoomDetails(g, room.type, style.color);
@@ -740,11 +819,16 @@ export function createWorld(
 		}
 		private paintFurniture(g: Phaser.GameObjects.Graphics, type: string, level: number): void {
 			const panel = (x: number, y: number, w: number, h: number, color: number) => {
-				g.fillStyle(0x061013, .8).fillRect(x + 2, y + 3, w, h);
-				g.fillStyle(color).fillRect(x, y, w, h);
-				g.fillStyle(blend(color, 0x030c10, .22)).fillRect(x, y + h * .7, w, h * .3);
-				line(g, [{ x, y: y + h }, { x, y }, { x: x + w, y }], blend(color, 0xe0dfc5, .4), 1, .75);
-				line(g, [{ x: x + w, y: y + 1 }, { x: x + w, y: y + h }], 0x061215, 1, .75);
+				polygon(g, [{ x: x + 1, y: y + h }, { x: x + w + 4, y: y + h - 1 }, { x: x + w + 11, y: y + h + 5 }, { x: x + 7, y: y + h + 5 }], 0x031315, .5);
+				polygon(g, [{ x, y }, { x: x + 5, y: y - 4 }, { x: x + w + 5, y: y - 4 }, { x: x + w, y }], blend(color, 0xe1ddbd, .3));
+				polygon(g, [{ x: x + w, y }, { x: x + w + 5, y: y - 4 }, { x: x + w + 5, y: y + h - 4 }, { x: x + w, y: y + h }], blend(color, 0x112825, .4));
+				for (let band = 0; band < 5; band++) g.fillStyle(blend(color, 0x0b1d20, band / 20)).fillRect(x, y + h * band / 5, w, h / 5 + .2);
+				line(g, [{ x, y: y + h }, { x, y }, { x: x + w, y }], blend(color, 0xf1e2c4, .5), 1, .8);
+				line(g, [{ x: x + w, y: y + 1 }, { x: x + w, y: y + h }], 0x061215, .8, .78);
+				if (h > 15 && w > 16) {
+					g.fillStyle(0xd4d8ba, .55).fillCircle(x + 3, y + 3, .9).fillCircle(x + w - 3, y + h - 3, .9);
+					line(g, [{ x: x + 3, y: y + h - 3 }, { x: x + w - 3, y: y + h - 3 }], 0xb5bba1, .7, .18);
+				}
 			};
 			const chest = (x: number, y: number, w: number, h: number, color = 0x8c855d) => {
 				panel(x, y, w, h, color);
@@ -762,6 +846,9 @@ export function createWorld(
 					g.fillStyle(0x9aab80).fillRect(74, 60, 24, 3);
 					line(g, [{ x: 68, y: 69 }, { x: 104, y: 69 }], 0xadb796, 2);
 					g.fillStyle(0x293d2b).fillCircle(79, 64, 6);
+					g.lineStyle(1.4, 0xbdc6ac).strokeCircle(79, 64, 7);
+					g.fillStyle(0x8f9c86).fillCircle(79, 64, 2.7);
+					line(g, [{ x: 70, y: 57 }, { x: 94, y: 57 }], 0xe8d2a7, 1.2, .7);
 					panel(113, 60, 46, 20, 0x8b7250);
 					rifle(g, 131, 60, .5);
 					chest(120, 75, 24, 9);
@@ -770,6 +857,8 @@ export function createWorld(
 					panel(23, 37, 49, 43, 0x929267);
 					panel(30, 45, 33, 25, 0x253829);
 					g.fillStyle(0xa49b6a).fillRect(42, 43, 9, 27).fillRect(33, 68, 27, 5);
+					g.fillStyle(0xcfd3b0, .18).fillRect(31, 46, 9, 20);
+					line(g, [{ x: 38, y: 47 }, { x: 38, y: 65 }], 0xf3e4b2, .8, .28);
 					g.fillStyle(0x9b8c5b).fillEllipse(47, 36, 33, 8);
 					panel(78, 71, 74, 10, 0x53634a);
 					for (let x = 84; x < 145; x += 9) g.fillStyle(0xd5b967).fillRect(x, 66, 3, 8);
@@ -780,6 +869,7 @@ export function createWorld(
 					panel(17, 48, 65, 34, 0x92624f);
 					polygon(g, [{ x: 18, y: 48 }, { x: 28, y: 36 }, { x: 68, y: 36 }, { x: 81, y: 48 }], 0x8b7450);
 					g.fillStyle(0x192e21).fillRect(28, 48, 44, 19);
+					polygon(g, [{ x: 28, y: 48 }, { x: 33, y: 52 }, { x: 68, y: 52 }, { x: 72, y: 48 }], 0xc99f76, .7);
 					for (let x = 30; x < 70; x += 7) g.fillStyle(0xb49d72).fillRect(x, 51, 3, 10);
 					panel(86, 72, 67, 9, 0x4f6046);
 					line(g, [{ x: 96, y: 65 }, { x: 108, y: 68 }, { x: 116, y: 62 }, { x: 130, y: 68 }], 0xa2a98b, 4);
@@ -795,6 +885,7 @@ export function createWorld(
 					g.fillStyle(0xe0d8ba).fillRect(16, 61, 12, 8);
 					line(g, [{ x: 15, y: 76 }, { x: 15, y: 82 }, { x: 69, y: 82 }, { x: 69, y: 76 }], 0x6d8368, 2);
 					panel(101, 38, 38, 42, 0xa5c9c2);
+					g.fillStyle(0xf1ead3, .17).fillRect(104, 40, 9, 25);
 					g.fillStyle(0xd4d6b5).fillRect(116, 44, 7, 18).fillRect(110, 50, 19, 6);
 					line(g, [{ x: 104, y: 68 }, { x: 136, y: 68 }], 0x344d38, 2);
 					g.fillStyle(0xd7d0af).fillRect(142, 70, 17, 4);
@@ -804,6 +895,7 @@ export function createWorld(
 					panel(12, 68, 96, 12, 0x497a78);
 					panel(20, 44, 43, 26, 0x629d99);
 					panel(24, 47, 35, 19, 0x0f383a);
+					polygon(g, [{ x: 25, y: 48 }, { x: 39, y: 48 }, { x: 53, y: 65 }, { x: 47, y: 65 }], 0x77c5b2, .16);
 					g.lineStyle(1, 0x9dbb87, .65).strokeCircle(42, 57, 7);
 					line(g, [{ x: 28, y: 57 }, { x: 56, y: 57 }], 0x6b8e65, 1);
 					panel(73, 53, 26, 16, 0x253f30);

@@ -1064,3 +1064,58 @@ body{font-size:13px}.content{padding:20px 16px}.topbar{padding:13px 16px}.resour
 }
 @media(max-width:640px) and (max-height:720px){.command-main{grid-template-rows:36px auto 86px minmax(110px,1fr) max-content;gap:6px;overflow-y:auto;scrollbar-width:thin}.command-tools button{min-height:32px;padding:6px 9px}.command-stage-layout{grid-template-rows:minmax(0,max(130px,min(calc((100vw - 20px)*520/840),calc(100dvh - 440px)))) 72px;gap:6px}.command-dock:not(.context-open){height:72px}.command-dock:not(.context-open) .command-system{min-height:56px;padding:7px 10px}.command-crew .crew-chip,.crew-inspect,.crew-recruit{min-height:56px}.crew-portrait{height:42px}.command-strip-head{min-height:22px}.sector-chip-art{max-height:43px}.sector-chip{padding:6px}.sector-chip strong{font-size:11px}.sector-chip small{font-size:9px}}
 @media(min-width:641px) and (max-width:850px) and (max-height:480px){.command-main{grid-template-rows:36px minmax(260px,1fr) 79px max-content max-content;overflow-y:auto;scrollbar-width:thin}.command-main .offline-recap>div{max-height:70px}}
+/* The command summary keeps attention on real work, inside the existing dock. */
+.command-main .world-card{box-shadow:inset 0 0 0 3px #56604355,inset 0 1px #e0ddb344,0 9px 26px #0006;border-color:#a09b75}
+.command-main .world-head .view-switch{background:linear-gradient(#354538ed,#17291fed);box-shadow:inset 0 1px #d5d2a52a,0 3px 9px #0006}
+.command-main .world-head .view-switch button.active{background:linear-gradient(#8b774d,#65653f);border:1px solid #ddc48e;color:#fff0c5;box-shadow:inset 0 1px #ffeeab44}
+.command-tools button{box-shadow:inset 0 1px #e1dfbb33,inset 0 -2px #17281855,0 3px 6px #0004}
+.command-dock:not(.context-open){display:grid;grid-template-rows:max-content minmax(0,1fr) max-content;background:radial-gradient(ellipse at 100% 0,#65694a55,transparent 65%),linear-gradient(135deg,#44523a,#263c2c)}
+.command-overview-head{padding:9px 12px;border-bottom:1px solid #a2a47766;background:linear-gradient(130deg,#596346,#3e5135)}
+.command-overview-head>strong{font-size:12px;margin-top:1px;line-height:1.5;color:#f2e6c6}
+.command-overview-head>small{display:block;font-size:9px;line-height:1.6;color:#d4dfbb}
+.command-dock:not(.context-open) .command-system-grid{grid-template-rows:repeat(3,minmax(0,1fr));padding:8px;gap:6px}
+.command-dock:not(.context-open) .command-system{min-height:0;padding:7px 8px;background:linear-gradient(135deg,#4c5d3d,#2d4430);box-shadow:inset 0 1px #bcca9122,0 2px 4px #0003}
+.command-dock:not(.context-open) .command-system strong{font-size:10px}
+.command-dock:not(.context-open) .command-system b{font-size:9px;color:#e1d5ac}
+.command-dock:not(.context-open) .command-system small{font-size:8px;color:#c9d5b5}
+.command-priority-band{display:grid;gap:5px;padding:0 8px 8px;min-width:0}
+.command-priority-counts{display:none}
+.command-next-action{display:flex;align-items:center;gap:8px;width:100%;min-width:0;min-height:43px;padding:6px 8px;border:1px solid #a8ae78;border-radius:6px;text-align:left;background:linear-gradient(130deg,#5c6541,#394f34);color:#f0e1b9;box-shadow:inset 0 1px #e0dca433,0 2px 5px #0004}
+.command-next-action:hover,.command-next-action:focus-visible{border-color:#f0d5a0;background:linear-gradient(130deg,#7e7950,#516746)}
+.command-next-mark{flex:0 0 24px;width:24px;height:28px;display:grid;place-items:center;color:#d4d6a0}
+.command-next-copy{min-width:0;flex:1}
+.command-next-copy strong{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:9px;line-height:1.5;color:#e8e8cc;font-weight:550}
+.command-next-copy small{display:flex;align-items:center;justify-content:space-between;font-size:10px;line-height:1.5;color:#ffe0a4;font-weight:650}
+.command-next-action.next-capacity{border-color:#bd9671;background:linear-gradient(130deg,#6a5140,#45472f)}
+.command-next-action.next-resources{border-color:#b1a46e}
+.command-flow-status{display:flex;align-items:center;gap:9px;border:1px solid #839d70;border-radius:6px;padding:7px 9px;background:#334b34;color:#cadcad;min-height:44px}
+.command-flow-status strong{display:block;font-size:10px}.command-flow-status small{display:block;font-size:9px;color:#cad5b7}
+.command-context-head{background:linear-gradient(130deg,#626c49,#354c33);box-shadow:inset 0 1px #d0d39844}
+.command-context-head .icon-button{width:38px;min-width:38px;height:38px;background:#2c4430;border-color:#a8b282;color:#f3e6bf}
+.command-context-head .eyebrow{letter-spacing:.4px;color:#d8dfbb}
+.command-room-banner{background:radial-gradient(ellipse at 0 50%,#e3d09120,transparent 75%),linear-gradient(110deg,#4e6144,#2b4634);box-shadow:inset 4px 0 var(--room-accent),inset 0 -1px #132c2244}
+.command-room-banner[data-room-kind="capacity"],.command-room-banner[data-room-kind="resources"]{background:linear-gradient(110deg,#665440,#3f4c32)}
+.command-room-banner[data-room-kind="running"]{background:linear-gradient(110deg,#536b46,#2e5137)}
+.command-room-banner small:empty{display:none}
+.command-room-meta{display:flex;flex-wrap:wrap;gap:4px 9px;padding:3px 0 5px;color:#d3dfb9;font-size:9px;line-height:1.4}
+.command-room-meta>span{display:inline-flex;align-items:center;gap:4px}
+.command-dock .worker-row .icon-button{width:34px;min-width:34px;height:34px;border-color:#91a672;background:#355139;color:#e7e9c9}
+.command-dock .context-tabs button{min-height:40px;box-shadow:inset 0 1px #d6ddad11}
+.command-dock .context-tabs button.active{background:linear-gradient(#8b794d,#686b45);color:#fff0c0;border-color:#e0cb90;box-shadow:inset 0 1px #fff0b13a}
+.command-dock .loadout-check{border-color:#819b67;background:linear-gradient(120deg,#40583a,#2e4932)}
+.command-dock .loadout-check input{width:18px;height:18px;flex:0 0 18px;accent-color:#d8b87a}
+@media(max-width:850px){
+.command-dock:not(.context-open){grid-template-columns:minmax(155px,1.55fr) minmax(0,4fr);grid-template-rows:minmax(0,1fr);gap:5px;padding:4px;display:grid}
+.command-dock:not(.context-open) .command-overview-head{display:none}
+.command-priority-band{grid-column:1;grid-row:1;min-height:0;padding:0;gap:0;position:relative;display:block}
+.command-priority-counts{display:block;position:absolute;top:3px;left:7px;right:7px;z-index:1;font-size:8px;color:#d8dfbd;line-height:1.3;pointer-events:none}
+.command-priority-band .command-next-action{height:100%;min-height:44px;padding:15px 7px 3px;gap:4px}
+.command-priority-band .command-next-action:nth-of-type(n+2){display:none}
+.command-next-mark{display:none}.command-next-copy strong{font-size:8px;line-height:1.4}.command-next-copy small{font-size:9px;line-height:1.4}
+.command-flow-status{height:100%;min-height:44px;padding:16px 7px 3px;gap:4px}.command-flow-status>svg{display:none}.command-flow-status strong{font-size:9px}.command-flow-status small{font-size:8px}
+.command-dock:not(.context-open) .command-system-grid{grid-column:2;grid-row:1;display:flex;overflow-x:auto;padding:0;gap:5px;min-height:0;scrollbar-width:thin;grid-template-rows:none}
+.command-dock:not(.context-open) .command-system{flex:0 0 100px;min-height:0;height:100%;padding:6px 7px}
+.command-dock:not(.context-open) .command-system strong{font-size:9px}.command-dock:not(.context-open) .command-system b{font-size:8px}.command-dock:not(.context-open) .command-system small{display:none}
+.command-dock.context-open{background:radial-gradient(ellipse at 100% 0,#78806044,transparent 60%),linear-gradient(135deg,#455b3d,#223f30)}
+}
+@media(max-width:640px){.command-dock:not(.context-open){grid-template-columns:139px minmax(0,1fr);gap:6px;padding:5px}.command-priority-counts{font-size:9px;top:7px;left:8px}.command-priority-band .command-next-action{padding:23px 8px 7px}.command-next-copy strong{font-size:9px;line-height:1.55}.command-next-copy small{font-size:10px;line-height:1.55}.command-dock:not(.context-open) .command-system{flex-basis:124px;padding:12px 9px}.command-dock:not(.context-open) .command-system strong{font-size:11px}.command-dock:not(.context-open) .command-system b{font-size:9px}.command-flow-status{padding:24px 8px 7px}.command-flow-status strong{font-size:10px}.command-flow-status small{font-size:9px}.command-room-meta{font-size:10px;gap:6px 12px}.command-dock .worker-row .icon-button{width:38px;min-width:38px;height:38px}}
