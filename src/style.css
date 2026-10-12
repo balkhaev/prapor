@@ -1019,8 +1019,8 @@ body{font-size:13px}.content{padding:20px 16px}.topbar{padding:13px 16px}.resour
 .bench-slot.missing{border-color:#c08e65;background:#4c382b}
 .bench-stat{background:#293b29;border-color:#7d9062}
 .bench-stat>strong{color:#fbf0d0}
-.command-main{grid-template-rows:40px minmax(0,1fr) 83px auto auto}
-.command-footer{align-items:center;flex-wrap:wrap;gap:3px 12px;min-height:14px;overflow:visible;color:#b3c29d;white-space:normal}
+.command-main{grid-template-rows:40px minmax(0,1fr) 83px max-content max-content}
+.command-footer{align-self:start;align-items:center;flex-wrap:wrap;gap:3px 12px;height:max-content;min-height:min-content;overflow:visible;color:#b3c29d;white-space:normal}
 .command-footer>span{font-size:8px}
 .command-footer>span:last-child{margin-left:auto;white-space:nowrap}
 .command-main #offline-summary:not(:empty){position:static;flex:1 1 380px;max-width:none;margin:0;z-index:auto}
@@ -1035,7 +1035,7 @@ body{font-size:13px}.content{padding:20px 16px}.topbar{padding:13px 16px}.resour
 .command-main .offline-recap>div>p{margin:4px 0 8px;font-size:11px;line-height:1.6;color:#d2dfbb}
 .command-main .offline-summary .dismiss-button{width:30px;min-width:30px;min-height:26px;height:26px;padding:0;margin-top:2px;border:1px solid #899764;border-radius:4px;background:#4c5a38;color:#f0e0af;font-size:10px}
 .command-main .offline-summary .dismiss-button:hover{background:#6e7046;border-color:#d0c88e}
-@media(max-width:1100px){.command-main{grid-template-rows:36px minmax(0,1fr) 79px auto auto}}
+@media(max-width:1100px){.command-main{grid-template-rows:36px minmax(0,1fr) 79px max-content max-content}}
 @media(max-width:850px){.command-hud .resource label{font-size:8px}.command-system b{color:#e3e9cf}.command-footer>span{font-size:8px}.command-main #offline-summary:not(:empty){flex-basis:100%;order:-1}.command-main .offline-recap>summary{font-size:10px;min-height:29px}.command-main .offline-summary .dismiss-button{height:25px;min-height:25px}}
 @media(max-width:640px){
 .command-shell{grid-template-rows:88px minmax(0,1fr)}
@@ -1045,7 +1045,7 @@ body{font-size:13px}.content{padding:20px 16px}.topbar{padding:13px 16px}.resour
 .command-hud .resource>svg{display:block;width:12px;height:12px;flex:0 0 12px;margin-top:2px}
 .command-hud .resource label{font-size:7px;line-height:1.5;white-space:nowrap}
 .command-hud .resource strong{font-size:13px;line-height:1.65}
-.command-main{grid-template-rows:40px auto 100px minmax(0,1fr) auto;padding:7px 9px 5px;gap:8px}
+.command-main{grid-template-rows:40px auto 100px minmax(0,1fr) max-content;padding:7px 9px 5px;gap:8px}
 .command-tools{gap:6px}.command-tools button{min-height:36px;padding:7px 10px;font-size:10px}
 .command-stage-layout{height:auto;grid-template-rows:minmax(0,min(calc((100vw - 20px)*520/840),calc(100dvh - 500px))) 88px;gap:8px}
 .command-main #hero{height:100%}.command-main .world-bottom{font-size:8px;min-height:20px;padding:3px 7px}
@@ -1062,5 +1062,5 @@ body{font-size:13px}.content{padding:20px 16px}.topbar{padding:13px 16px}.resour
 .command-footer{gap:2px 7px}.command-footer>span{font-size:7px}.command-main .offline-recap>summary>b{font-size:9px}.command-main .offline-recap>div{max-height:52px}.command-main:has(.offline-recap[open]) .sector-chip-art{display:none}
 .tool-window .button,.command-dock .button{min-height:42px}.tool-window .bench-slot-label{font-size:12px}.tool-window .bench-slot>strong{font-size:12px}.tool-window .bench-slot>small{font-size:11px}.tool-window .bench-stat>span,.tool-window .bench-stat>small{font-size:11px}
 }
-@media(max-width:640px) and (max-height:720px){.command-main{grid-template-rows:36px auto 86px minmax(110px,1fr) auto;gap:6px;overflow-y:auto;scrollbar-width:thin}.command-tools button{min-height:32px;padding:6px 9px}.command-stage-layout{grid-template-rows:minmax(0,max(130px,min(calc((100vw - 20px)*520/840),calc(100dvh - 440px)))) 72px;gap:6px}.command-dock:not(.context-open){height:72px}.command-dock:not(.context-open) .command-system{min-height:56px;padding:7px 10px}.command-crew .crew-chip,.crew-inspect,.crew-recruit{min-height:56px}.crew-portrait{height:42px}.command-strip-head{min-height:22px}.sector-chip-art{max-height:43px}.sector-chip{padding:6px}.sector-chip strong{font-size:11px}.sector-chip small{font-size:9px}}
-@media(min-width:641px) and (max-width:850px) and (max-height:480px){.command-main{grid-template-rows:36px minmax(260px,1fr) 79px auto auto;overflow-y:auto;scrollbar-width:thin}.command-main .offline-recap>div{max-height:70px}}
+@media(max-width:640px) and (max-height:720px){.command-main{grid-template-rows:36px auto 86px minmax(110px,1fr) max-content;gap:6px;overflow-y:auto;scrollbar-width:thin}.command-tools button{min-height:32px;padding:6px 9px}.command-stage-layout{grid-template-rows:minmax(0,max(130px,min(calc((100vw - 20px)*520/840),calc(100dvh - 440px)))) 72px;gap:6px}.command-dock:not(.context-open){height:72px}.command-dock:not(.context-open) .command-system{min-height:56px;padding:7px 10px}.command-crew .crew-chip,.crew-inspect,.crew-recruit{min-height:56px}.crew-portrait{height:42px}.command-strip-head{min-height:22px}.sector-chip-art{max-height:43px}.sector-chip{padding:6px}.sector-chip strong{font-size:11px}.sector-chip small{font-size:9px}}
+@media(min-width:641px) and (max-width:850px) and (max-height:480px){.command-main{grid-template-rows:36px minmax(260px,1fr) 79px max-content max-content;overflow-y:auto;scrollbar-width:thin}.command-main .offline-recap>div{max-height:70px}}
