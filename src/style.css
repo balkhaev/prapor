@@ -8,10 +8,10 @@
 .expedition-queue{display:grid;gap:14px;margin:0 0 24px}
 .decision-card{border:1px solid #b38b4d;border-radius:12px;background:linear-gradient(120deg,#3d3926,#232c21);overflow:hidden;box-shadow:0 8px 28px #0003}
 .decision-head{display:flex;align-items:center;gap:13px;padding:18px 20px;border-bottom:1px solid #6e6040}
-.decision-head>div{flex:1;min-width:0}
+.decision-head>div:not(.scav-avatar){flex:1;min-width:0}
 .decision-head h3{margin:3px 0;color:#ffe0a6}
 .decision-head p{font-size:12px}
-.decision-head .scav-avatar{width:44px;height:48px}
+.decision-head .scav-avatar{flex:0 0 48px;width:48px;height:48px}
 .decision-content{padding:18px 20px}
 .expedition-stage{display:flex;gap:6px;align-items:center;margin-bottom:16px}
 .expedition-stage span{flex:1;padding:8px;text-align:center;border:1px solid #48513d;border-radius:5px;background:#20281e;color:#a7b398;font-size:11px}
@@ -88,7 +88,7 @@
 .economy-balance{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:16px 0}
 .economy-balance>div{padding:14px;background:#1d271e;border:1px solid #4d5e42;border-radius:8px;font-size:11px;color:var(--muted)}
 .economy-balance strong{display:block;font-size:18px;color:var(--amber);margin-top:5px}
-@media(max-width:640px){.decision-head,.decision-content{padding:15px}.decision-head{align-items:flex-start}.decision-head>.tag{display:none}.cargo-summary{grid-template-columns:1fr 1fr}.cargo-summary>div:last-child{grid-column:1/-1}.decision-branches{grid-template-columns:1fr}.branch-choice{min-height:108px}.extract-row{flex-direction:column;align-items:stretch}.extract-row .button{width:100%}.logistics-grid,.research-grid{grid-template-columns:1fr}.section-tabs{gap:3px}.section-tabs button{font-size:12px;gap:5px}.logistics-card,.research-card{padding:16px}.economy-balance{grid-template-columns:1fr 1fr}.economy-balance>div:last-child{grid-column:1/-1}}
+@media(max-width:640px){.decision-head,.decision-content{padding:15px}.decision-head{align-items:flex-start;flex-wrap:wrap;gap:10px}.decision-head>div:not(.scav-avatar){flex:1 1 calc(100% - 58px)}.decision-head>button{margin-left:58px;min-height:40px}.decision-head>.tag{display:none}.cargo-summary{grid-template-columns:1fr 1fr}.cargo-summary>div:last-child{grid-column:1/-1}.decision-branches{grid-template-columns:1fr}.branch-choice{min-height:108px}.extract-row{flex-direction:column;align-items:stretch}.extract-row .button{width:100%}.logistics-grid,.research-grid{grid-template-columns:1fr}.section-tabs{gap:3px}.section-tabs button{font-size:12px;gap:5px}.logistics-card,.research-card{padding:16px}.economy-balance{grid-template-columns:1fr 1fr}.economy-balance>div:last-child{grid-column:1/-1}}
 *{box-sizing:border-box}
 body{margin:0;font-size:14px;line-height:1.6}
 body.overlay-open{overflow:hidden}
