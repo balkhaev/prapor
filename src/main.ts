@@ -721,7 +721,8 @@ function roomWorkersPanel(room: RoomInstance) {
 	const capacity = getRoomWorkerCapacity(room), skill = ROOM_DEFINITIONS[room.type].workerSkill;
 	const required = skill === "combat" ? "Бой" : skill === "scouting" ? "Поиск" : "Бой и поиск";
 	const workers = room.workerIds.map((id) => state.scavs.find((scav) => scav.id === id)).filter((scav): scav is Scav => Boolean(scav));
-	const candidates = state.scavs.filter((scav) => scav.assignment !== room.id && scav.status !== "raiding" && scav.health >= 25).sort((a, b) => getWorkerAffinity(b, room.type) - getWorkerAffinity(a, room.type));
+	const candidates = state.scavs.filter((scav) => scav.assignment !== room.id && scav.status !== "raiding" && scav.health >= 25)
+		.sort((a, b) => Number(Boolean(a.assignment)) - Number(Boolean(b.assignment)) || getWorkerAffinity(b, room.type) - getWorkerAffinity(a, room.type));
 	const selected = chosenWorkers.get(room.id) ?? candidates[0]?.id ?? "";
 	chosenWorkers.set(room.id, candidates.some((scav) => scav.id === selected) ? selected : candidates[0]?.id ?? "");
 	const blocked = room.status !== "ready" ? "Комната ещё не готова" : workers.length >= capacity ? "Все рабочие места заняты" : !candidates.length ? "Нужен свободный боец с 25 здоровья" : null;
