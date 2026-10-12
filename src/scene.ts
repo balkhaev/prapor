@@ -2,7 +2,7 @@ import Phaser from "phaser";
 import { getRaidPhase, type Raid, type RoomInstance } from "./game/engine";
 import { type BaseRoom } from "./game/data";
 import { advanceShelterRoute, clientToShelterPoint, getShelterCell, planShelterRoute, SHELTER_SHAFT_X } from "./shelter-motion";
-import { clampShelterCamera, focusShelterRect, panShelterCamera, projectShelterRect, viewportToShelter, zoomShelterCamera, type ShelterCamera, type ShelterRect, type ClientRect } from "./shelter-camera";
+import { clampShelterCamera, focusShelterRect, panShelterCamera, projectShelterRect, resizeShelterCamera, shelterViewportForSize, viewportToShelter, zoomShelterCamera, type ShelterCamera, type ShelterRect, type ShelterViewport, type ClientRect } from "./shelter-camera";
 import { advanceShelterLift, createShelterLift, type LiftRequest } from "./shelter-lift";
 
 export interface WorldSnapshot {
@@ -256,6 +256,8 @@ export function createWorld(
 ): WorldController {
 	let requestedView: View = "base";
 	const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+	const stageRect = parent.getBoundingClientRect();
+	const initialViewport = shelterViewportForSize(stageRect.width, stageRect.height);
 
 	class PraporWorld extends Phaser.Scene {
 		private baseLayer!: Phaser.GameObjects.Container;
@@ -275,6 +277,10 @@ export function createWorld(
 		private liftModel = createShelterLift();
 		private liftDoors!: Phaser.GameObjects.Graphics;
 		private viewCamera: ShelterCamera = { zoom: 1, x: 0, y: 0 };
+		private viewport: ShelterViewport = { ...initialViewport };
+		private viewportObserver: ResizeObserver | null = null;
+		private viewportFrame = 0;
+		private stageSize = { width: 0, height: 0 };
 		private panMode = false;
 		private spacePressed = false;
 		private panGesture: { pointerId: number; clientX: number; clientY: number } | null = null;
@@ -314,12 +320,15 @@ export function createWorld(
 			this.paintBunker();
 			this.paintMap();
 			this.installDragListeners();
+			this.installViewportObserver();
 			this.syncSnapshot();
 			this.show(requestedView);
 			this.game.canvas.setAttribute("aria-hidden", "true");
 			this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
 				this.cancelScavDrag();
 				this.cancelCameraGesture();
+				this.viewportObserver?.disconnect();
+				if (this.viewportFrame) cancelAnimationFrame(this.viewportFrame);
 				this.nativeEvents.abort();
 				this.raidActors.clear();
 				this.places.clear();
@@ -348,20 +357,46 @@ export function createWorld(
 		}
 
 		private applyCamera(): void {
-			this.viewCamera = clampShelterCamera(this.viewCamera);
+			this.viewCamera = clampShelterCamera(this.viewCamera, this.viewport);
 			this.baseLayer?.setScale(this.viewCamera.zoom).setPosition(-this.viewCamera.x * this.viewCamera.zoom, -this.viewCamera.y * this.viewCamera.zoom);
+			this.mapLayer?.setPosition((this.viewport.width - WIDTH) / 2, (this.viewport.height - HEIGHT) / 2 + 30);
 			this.input?.setDefaultCursor(this.panMode || this.spacePressed ? "grab" : "default");
 			interactions.onCameraChange?.(this.getCameraState());
 		}
 
-		zoomBy(factor: number, clientX?: number, clientY?: number): void {
-			if (!this.cameraAllowed() || !Number.isFinite(factor) || factor <= 0) return;
-			const anchor = clientX !== undefined && clientY !== undefined ? clientToShelterPoint(clientX, clientY, this.game.canvas.getBoundingClientRect(), WIDTH, HEIGHT) : { x: WIDTH / 2, y: HEIGHT / 2 };
-			if (!anchor) return;
-			this.viewCamera = zoomShelterCamera(this.viewCamera, this.viewCamera.zoom * factor, anchor); this.applyCamera();
+		private installViewportObserver(): void {
+			this.resizeViewport();
+			this.viewportObserver = new ResizeObserver(() => {
+				if (!this.viewportFrame) this.viewportFrame = requestAnimationFrame(() => { this.viewportFrame = 0; this.resizeViewport(); });
+			});
+			this.viewportObserver.observe(parent);
 		}
 
-		panBy(dx: number, dy: number): void { if (this.cameraAllowed()) { this.viewCamera = panShelterCamera(this.viewCamera, dx, dy); this.applyCamera(); } }
+		private resizeViewport(): void {
+			const rect = parent.getBoundingClientRect();
+			if (rect.width <= 0 || rect.height <= 0 || Math.abs(rect.width - this.stageSize.width) < .01 && Math.abs(rect.height - this.stageSize.height) < .01) return;
+			this.stageSize = { width: rect.width, height: rect.height };
+			this.cancelScavDrag(); this.cancelPan(); this.spacePressed = false;
+			const next = shelterViewportForSize(rect.width, rect.height);
+			this.viewCamera = resizeShelterCamera(this.viewCamera, this.viewport, next);
+			const changed = Math.abs(next.width - this.viewport.width) > .001 || Math.abs(next.height - this.viewport.height) > .001;
+			this.viewport = next;
+			// FIT still scales uniformly, but its logical viewport now occupies the
+			// whole stage. Only the fully visible overview keeps centered margins.
+			this.scale.getParentBounds();
+			if (changed) this.scale.setGameSize(next.width, next.height);
+			else this.scale.refresh();
+			this.applyCamera();
+		}
+
+		zoomBy(factor: number, clientX?: number, clientY?: number): void {
+			if (!this.cameraAllowed() || !Number.isFinite(factor) || factor <= 0) return;
+			const anchor = clientX !== undefined && clientY !== undefined ? clientToShelterPoint(clientX, clientY, this.game.canvas.getBoundingClientRect(), this.viewport.width, this.viewport.height) : { x: this.viewport.width / 2, y: this.viewport.height / 2 };
+			if (!anchor) return;
+			this.viewCamera = zoomShelterCamera(this.viewCamera, this.viewCamera.zoom * factor, anchor, this.viewport); this.applyCamera();
+		}
+
+		panBy(dx: number, dy: number): void { if (this.cameraAllowed()) { this.viewCamera = panShelterCamera(this.viewCamera, dx, dy, this.viewport); this.applyCamera(); } }
 		resetCamera(): void { if (this.cameraAllowed()) { this.viewCamera = { zoom: 1, x: 0, y: 0 }; this.applyCamera(); } }
 		setPanMode(enabled: boolean): void { this.panMode = Boolean(enabled); this.cancelPan(); if (enabled) this.cancelScavDrag(); this.applyCamera(); }
 		focusRoom(id: string): boolean {
@@ -369,7 +404,7 @@ export function createWorld(
 			const room = snapshot().shelter?.rooms.find((candidate) => candidate.id === id);
 			if (!room) return false;
 			const p = cellPosition(room.column, room.row);
-			this.viewCamera = focusShelterRect(this.viewCamera, { ...p, width: ROOM_WIDTH, height: ROOM_HEIGHT }, 2.5);
+			this.viewCamera = focusShelterRect(this.viewCamera, { ...p, width: ROOM_WIDTH, height: ROOM_HEIGHT }, 2.5, this.viewport);
 			if (this.drag) {
 				this.drag.point = null; this.drag.roomId = null; this.drag.cellKey = null;
 				this.dragGhost.clear();
@@ -379,12 +414,12 @@ export function createWorld(
 		}
 
 		projectShelterRect(rect: ShelterRect): (ClientRect & { visible: boolean }) | null {
-			return this.baseLayer && requestedView === "base" ? projectShelterRect(rect, this.viewCamera, this.game.canvas.getBoundingClientRect()) : null;
+			return this.baseLayer && requestedView === "base" ? projectShelterRect(rect, this.viewCamera, this.game.canvas.getBoundingClientRect(), this.viewport) : null;
 		}
 
 		private clientWorld(clientX: number, clientY: number): Point | null {
-			const viewport = clientToShelterPoint(clientX, clientY, this.game.canvas.getBoundingClientRect(), WIDTH, HEIGHT);
-			return viewport ? viewportToShelter(viewport, this.viewCamera) : null;
+			const viewport = clientToShelterPoint(clientX, clientY, this.game.canvas.getBoundingClientRect(), this.viewport.width, this.viewport.height);
+			return viewport ? viewportToShelter(viewport, this.viewCamera, this.viewport) : null;
 		}
 
 		private cancelPan(): void {
@@ -530,9 +565,9 @@ export function createWorld(
 					const a = this.cameraTouches.get(pinch.ids[0]), b = this.cameraTouches.get(pinch.ids[1]), rect = canvas.getBoundingClientRect();
 					if (!a || !b || rect.width <= 0 || rect.height <= 0) return;
 					const distance = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), midpoint = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-					const anchor = { x: (pinch.midpoint.x - rect.left) * WIDTH / rect.width, y: (pinch.midpoint.y - rect.top) * HEIGHT / rect.height };
-					this.viewCamera = zoomShelterCamera(this.viewCamera, this.viewCamera.zoom * distance / pinch.distance, anchor);
-					this.viewCamera = panShelterCamera(this.viewCamera, (pinch.midpoint.x - midpoint.x) * WIDTH / rect.width, (pinch.midpoint.y - midpoint.y) * HEIGHT / rect.height);
+					const anchor = { x: (pinch.midpoint.x - rect.left) * this.viewport.width / rect.width, y: (pinch.midpoint.y - rect.top) * this.viewport.height / rect.height };
+					this.viewCamera = zoomShelterCamera(this.viewCamera, this.viewCamera.zoom * distance / pinch.distance, anchor, this.viewport);
+					this.viewCamera = panShelterCamera(this.viewCamera, (pinch.midpoint.x - midpoint.x) * this.viewport.width / rect.width, (pinch.midpoint.y - midpoint.y) * this.viewport.height / rect.height, this.viewport);
 					pinch.distance = distance; pinch.midpoint = midpoint; event.preventDefault(); this.applyCamera(); return;
 				}
 				const pan = this.panGesture;
@@ -540,7 +575,7 @@ export function createWorld(
 					if (!this.cameraAllowed()) { this.cancelCameraGesture(); return; }
 					event.preventDefault();
 					const rect = canvas.getBoundingClientRect();
-					if (rect.width > 0 && rect.height > 0) this.panBy(-(event.clientX - pan.clientX) * WIDTH / rect.width, -(event.clientY - pan.clientY) * HEIGHT / rect.height);
+					if (rect.width > 0 && rect.height > 0) this.panBy(-(event.clientX - pan.clientX) * this.viewport.width / rect.width, -(event.clientY - pan.clientY) * this.viewport.height / rect.height);
 					pan.clientX = event.clientX; pan.clientY = event.clientY;
 					this.input.setDefaultCursor("grabbing"); return;
 				}
@@ -1370,7 +1405,7 @@ export function createWorld(
 					if (slot.label.visible) {
 						slot.label.setScale(1 / Math.max(1, this.viewCamera.zoom / 1.5));
 						const halfWidth = slot.label.width * slot.label.scaleX / 2, scale = slot.actor.scaleX;
-						const left = this.viewCamera.x + 10 / this.viewCamera.zoom, right = this.viewCamera.x + (WIDTH - 10) / this.viewCamera.zoom;
+						const left = this.viewCamera.x + 10 / this.viewCamera.zoom, right = this.viewCamera.x + (this.viewport.width - 10) / this.viewCamera.zoom;
 						slot.label.setX(Phaser.Math.Clamp(0, (left - slot.actor.x) / scale + halfWidth, (right - slot.actor.x) / scale - halfWidth));
 						slot.label.setY(Math.max(-64, (this.viewCamera.y + 8 / this.viewCamera.zoom - slot.actor.y) / scale + slot.label.height * slot.label.scaleY / 2));
 					}
@@ -1875,8 +1910,8 @@ export function createWorld(
 	const game = new Phaser.Game({
 		type: Phaser.AUTO,
 		parent,
-		width: WIDTH,
-		height: HEIGHT,
+		width: initialViewport.width,
+		height: initialViewport.height,
 		backgroundColor: "#10120f",
 		antialias: true,
 		pixelArt: false,
@@ -1884,8 +1919,8 @@ export function createWorld(
 		scale: {
 			mode: Phaser.Scale.FIT,
 			autoCenter: Phaser.Scale.CENTER_BOTH,
-			width: WIDTH,
-			height: HEIGHT,
+			width: initialViewport.width,
+			height: initialViewport.height,
 		},
 		fps: { target: 60 },
 		audio: { noAudio: true },
