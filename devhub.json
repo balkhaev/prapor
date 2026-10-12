@@ -6,7 +6,7 @@
       "game"
     ]
   },
-  "name": "prapor",
+  "name": "Прапор",
   "services": [
     {
       "command": "bun x --no-install vite --host 127.0.0.1 --port 3020 --strictPort",
