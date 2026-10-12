@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import { getRaidPhase, type Raid, type RoomInstance } from "./game/engine";
+import { getRaidPhase, type Raid, type RaidReport, type RoomInstance, type WeaponInstance } from "./game/engine";
 import { type BaseRoom } from "./game/data";
 import { advanceShelterRoute, clientToShelterPoint, getShelterCell, planShelterRoute, SHELTER_SHAFT_X } from "./shelter-motion";
 import { clampShelterCamera, focusShelterRect, panShelterCamera, projectShelterRect, resizeShelterCamera, shelterViewportForSize, viewportToShelter, zoomShelterCamera, type ShelterCamera, type ShelterRect, type ShelterViewport, type ClientRect } from "./shelter-camera";
@@ -7,10 +7,14 @@ import { advanceShelterLift, createShelterLift, type LiftRequest } from "./shelt
 import { advanceScavAnimation, createScavAnimation, type ScavAnimationState } from "./shelter-animation";
 import { type ProductionPresentation } from "./shelter-production";
 import { createShelterStation, type ShelterStation } from "./shelter-stations";
+import { RaidStreetRenderer } from "./raid-scene";
 
 export interface WorldSnapshot {
 	base: Record<string, number>;
 	raids: Raid[];
+	selectedRaidId?: string | null;
+	history?: RaidReport[];
+	weapons?: WeaponInstance[];
 	maps: {
 		id: string;
 		name: string;
@@ -37,7 +41,8 @@ export interface WorldSnapshot {
 }
 
 type Point = { x: number; y: number };
-type View = "base" | "map";
+export type WorldView = "base" | "map" | "raid";
+type View = WorldView;
 type MapPlace = WorldSnapshot["maps"][number];
 type ScavActor = {
 	actor: Phaser.GameObjects.Container;
@@ -86,10 +91,12 @@ export interface WorldInteractions {
 	onBuildSite?: (site: { column: number; row: number }) => void;
 	onShelterSite?: (column: number, row: number) => void;
 }
-export interface WorldCameraState extends ShelterCamera { panMode: boolean }
+export interface WorldCameraState extends ShelterCamera { panMode: boolean; view: WorldView; following?: boolean; minZoom?: number; maxZoom?: number }
 export interface WorldController {
 	game: Phaser.Game;
 	setView: (view: View) => void;
+	selectRaid: (id: string | null) => void;
+	setRaidFollow: (enabled: boolean) => void;
 	beginScavDrag: (id: string) => boolean;
 	moveScavDrag: (clientX: number, clientY: number) => void;
 	endScavDrag: () => void;
@@ -263,6 +270,7 @@ export function createWorld(
 	interactions: WorldInteractions = {}
 ): WorldController {
 	let requestedView: View = "base";
+	let requestedRaidId: string | null = null;
 	const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 	const stageRect = parent.getBoundingClientRect();
 	const initialViewport = shelterViewportForSize(stageRect.width, stageRect.height);
@@ -270,6 +278,7 @@ export function createWorld(
 	class PraporWorld extends Phaser.Scene {
 		private baseLayer!: Phaser.GameObjects.Container;
 		private mapLayer!: Phaser.GameObjects.Container;
+		private raidStreet!: RaidStreetRenderer;
 		private baseCaption!: Phaser.GameObjects.Text;
 		private operationsCaption!: Phaser.GameObjects.Text;
 		private selectedRoute!: Phaser.GameObjects.Graphics;
@@ -318,6 +327,7 @@ export function createWorld(
 		preload(): void {
 			this.load.spritesheet("shelter-room-atlas", "/art/shelter-rooms.png", { frameWidth: 768, frameHeight: 256 });
 			this.load.atlas("scav-workers", "/art/scav-workers.png", "/art/scav-workers.json");
+			this.load.atlas("raid-props", "/art/raid-props.png", "/art/raid-props.json");
 		}
 
 		create(): void {
@@ -327,6 +337,8 @@ export function createWorld(
 			this.mapLayer = this.add.container(0, 30);
 			this.paintBunker();
 			this.paintMap();
+			this.raidStreet = new RaidStreetRenderer(this, this.viewport, reducedMotion);
+			this.raidStreet.selectRaid(requestedRaidId);
 			this.installDragListeners();
 			this.installViewportObserver();
 			this.syncSnapshot();
@@ -335,6 +347,7 @@ export function createWorld(
 			this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
 				this.cancelScavDrag();
 				this.cancelCameraGesture();
+				this.raidStreet.destroy();
 				this.viewportObserver?.disconnect();
 				if (this.viewportFrame) cancelAnimationFrame(this.viewportFrame);
 				this.nativeEvents.abort();
@@ -351,24 +364,28 @@ export function createWorld(
 			if (!this.baseLayer) return;
 			this.baseLayer.setVisible(view === "base");
 			this.mapLayer.setVisible(view === "map");
+			this.raidStreet.layer.setVisible(view === "raid");
 			this.input.setDefaultCursor("default");
 			this.scavs.forEach((actor) => { actor.hovered = false; });
 			this.places.forEach((place) => { place.hovered = false; });
 			this.syncSnapshot();
+			if (view === "raid") this.raidStreet.update(snapshot(), Date.now(), 0);
 			this.applyCamera();
 		}
 
-		getCameraState(): WorldCameraState { return { ...this.viewCamera, panMode: this.panMode }; }
+		getCameraState(): WorldCameraState { return { ...(requestedView === "raid" && this.raidStreet ? this.raidStreet.getCameraState() : this.viewCamera), panMode: this.panMode, view: requestedView, minZoom: requestedView === "raid" ? .7 : 1, maxZoom: 4 }; }
+		selectRaid(id: string | null): void { requestedRaidId = id; this.raidStreet?.selectRaid(id); if (requestedView === "raid" && this.raidStreet) this.raidStreet.update(snapshot(), Date.now(), 0); this.applyCamera(); }
+		setRaidFollow(enabled: boolean): void { this.raidStreet?.setFollow(enabled); this.applyCamera(); }
 
 		private cameraAllowed(): boolean {
-			return Boolean(this.baseLayer && this.scene.isActive() && requestedView === "base" && !document.hidden && !this.drag && !this.gesture && interactions.canCamera?.() !== false);
+			return Boolean(this.baseLayer && this.scene.isActive() && (requestedView === "base" || requestedView === "raid") && !document.hidden && !this.drag && !this.gesture && interactions.canCamera?.() !== false);
 		}
 
 		private applyCamera(): void {
 			this.viewCamera = clampShelterCamera(this.viewCamera, this.viewport);
 			this.baseLayer?.setScale(this.viewCamera.zoom).setPosition(-this.viewCamera.x * this.viewCamera.zoom, -this.viewCamera.y * this.viewCamera.zoom);
 			this.mapLayer?.setPosition((this.viewport.width - WIDTH) / 2, (this.viewport.height - HEIGHT) / 2 + 30);
-			this.input?.setDefaultCursor(this.panMode || this.spacePressed ? "grab" : "default");
+			this.input?.setDefaultCursor(this.panMode || this.spacePressed || requestedView === "raid" ? "grab" : "default");
 			interactions.onCameraChange?.(this.getCameraState());
 		}
 
@@ -389,6 +406,7 @@ export function createWorld(
 			this.viewCamera = resizeShelterCamera(this.viewCamera, this.viewport, next);
 			const changed = Math.abs(next.width - this.viewport.width) > .001 || Math.abs(next.height - this.viewport.height) > .001;
 			this.viewport = next;
+			this.raidStreet?.resize(next);
 			// FIT still scales uniformly, but its logical viewport now occupies the
 			// whole stage. Only the fully visible overview keeps centered margins.
 			this.scale.getParentBounds();
@@ -401,11 +419,12 @@ export function createWorld(
 			if (!this.cameraAllowed() || !Number.isFinite(factor) || factor <= 0) return;
 			const anchor = clientX !== undefined && clientY !== undefined ? clientToShelterPoint(clientX, clientY, this.game.canvas.getBoundingClientRect(), this.viewport.width, this.viewport.height) : { x: this.viewport.width / 2, y: this.viewport.height / 2 };
 			if (!anchor) return;
+			if (requestedView === "raid") { this.raidStreet.zoomBy(factor, clientX !== undefined && clientY !== undefined ? anchor : undefined); this.applyCamera(); return; }
 			this.viewCamera = zoomShelterCamera(this.viewCamera, this.viewCamera.zoom * factor, anchor, this.viewport); this.applyCamera();
 		}
 
-		panBy(dx: number, dy: number): void { if (this.cameraAllowed()) { this.viewCamera = panShelterCamera(this.viewCamera, dx, dy, this.viewport); this.applyCamera(); } }
-		resetCamera(): void { if (this.cameraAllowed()) { this.viewCamera = { zoom: 1, x: 0, y: 0 }; this.applyCamera(); } }
+		panBy(dx: number, dy: number): void { if (this.cameraAllowed()) { if (requestedView === "raid") this.raidStreet.panBy(dx, dy); else this.viewCamera = panShelterCamera(this.viewCamera, dx, dy, this.viewport); this.applyCamera(); } }
+		resetCamera(): void { if (this.cameraAllowed()) { if (requestedView === "raid") this.raidStreet.resetCamera(); else this.viewCamera = { zoom: 1, x: 0, y: 0 }; this.applyCamera(); } }
 		setPanMode(enabled: boolean): void { this.panMode = Boolean(enabled); this.cancelPan(); if (enabled) this.cancelScavDrag(); this.applyCamera(); }
 		focusRoom(id: string): boolean {
 			if (!this.baseLayer || requestedView !== "base" || document.hidden) return false;
@@ -541,8 +560,8 @@ export function createWorld(
 			const canvas = this.game.canvas, options = { signal: this.nativeEvents.signal };
 			canvas.style.touchAction = "none";
 			canvas.addEventListener("pointerdown", (event) => {
-				if (event.target !== canvas || requestedView !== "base") return;
-				if (event.pointerType === "touch" && this.panMode && this.cameraAllowed()) {
+				if (event.target !== canvas || requestedView !== "base" && requestedView !== "raid") return;
+				if (event.pointerType === "touch" && (this.panMode || requestedView === "raid") && this.cameraAllowed()) {
 					this.cameraTouches.set(event.pointerId, { x: event.clientX, y: event.clientY });
 					if (this.cameraTouches.size === 2 && this.cameraAllowed()) {
 						const entries = [...this.cameraTouches], a = entries[0]!, b = entries[1]!;
@@ -550,13 +569,14 @@ export function createWorld(
 						canvas.setPointerCapture(event.pointerId); event.preventDefault(); return;
 					}
 				}
-				if (event.button === 1 || this.panMode || this.spacePressed) {
+				if (event.button === 1 || this.panMode || this.spacePressed || requestedView === "raid" && event.button === 0) {
 					if (this.panGesture || !this.cameraAllowed()) return;
 					event.preventDefault();
 					this.panGesture = { pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY };
 					canvas.setPointerCapture(event.pointerId); this.input.setDefaultCursor("grabbing");
 					return;
 				}
+				if (requestedView !== "base") return;
 				if (event.button !== 0 || this.gesture || this.drag || interactions.canInteract?.() === false) return;
 				const point = this.clientWorld(event.clientX, event.clientY);
 				if (!point) return;
@@ -574,8 +594,8 @@ export function createWorld(
 					if (!a || !b || rect.width <= 0 || rect.height <= 0) return;
 					const distance = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), midpoint = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
 					const anchor = { x: (pinch.midpoint.x - rect.left) * this.viewport.width / rect.width, y: (pinch.midpoint.y - rect.top) * this.viewport.height / rect.height };
-					this.viewCamera = zoomShelterCamera(this.viewCamera, this.viewCamera.zoom * distance / pinch.distance, anchor, this.viewport);
-					this.viewCamera = panShelterCamera(this.viewCamera, (pinch.midpoint.x - midpoint.x) * this.viewport.width / rect.width, (pinch.midpoint.y - midpoint.y) * this.viewport.height / rect.height, this.viewport);
+					if (requestedView === "raid") { this.raidStreet.zoomBy(distance / pinch.distance, anchor); this.raidStreet.panBy((pinch.midpoint.x - midpoint.x) * this.viewport.width / rect.width, (pinch.midpoint.y - midpoint.y) * this.viewport.height / rect.height); }
+					else { this.viewCamera = zoomShelterCamera(this.viewCamera, this.viewCamera.zoom * distance / pinch.distance, anchor, this.viewport); this.viewCamera = panShelterCamera(this.viewCamera, (pinch.midpoint.x - midpoint.x) * this.viewport.width / rect.width, (pinch.midpoint.y - midpoint.y) * this.viewport.height / rect.height, this.viewport); }
 					pinch.distance = distance; pinch.midpoint = midpoint; event.preventDefault(); this.applyCamera(); return;
 				}
 				const pan = this.panGesture;
@@ -1209,6 +1229,7 @@ export function createWorld(
 		private syncShelter(state: WorldSnapshot): void {
 			if (this.viewState && state.shelter !== this.viewState.shelter) {
 				this.cancelScavDrag(); this.cancelCameraGesture(); this.liftModel = createShelterLift();
+				this.raidStreet?.reset();
 				for (const slot of this.scavs.values()) slot.actor.destroy(true);
 				this.scavs.clear();
 				for (const cell of this.cells.values()) { cell.lastCycles = null; cell.completedAt = -10000; cell.feedback.setVisible(false); }
@@ -1859,7 +1880,9 @@ export function createWorld(
 			if (requestedView === "base" && !document.hidden) {
 				this.animateShelter(time, delta);
 				this.baseLayer.sort("depth");
-			} else {
+			} else if (requestedView === "raid" && !document.hidden) {
+				this.raidStreet.update(selection, Date.now(), delta);
+			} else if (requestedView === "map" && !document.hidden) {
 				const state = snapshot(),
 					now = Date.now();
 				for (const raid of state.raids) {
@@ -1924,6 +1947,8 @@ export function createWorld(
 	});
 	return {
 		game, setView: (view) => scene.show(view),
+		selectRaid: (id) => scene.selectRaid(id),
+		setRaidFollow: (enabled) => scene.setRaidFollow(enabled),
 		beginScavDrag: (id) => scene.beginScavDrag(id),
 		moveScavDrag: (clientX, clientY) => scene.moveScavDrag(clientX, clientY),
 		endScavDrag: () => scene.endScavDrag(),

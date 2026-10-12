@@ -1,0 +1,204 @@
+{
+  "frames": {
+    "cottage": {
+      "frame": {
+        "x": 48,
+        "y": 33,
+        "w": 432,
+        "h": 458
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 432,
+        "h": 458
+      },
+      "sourceSize": {
+        "w": 432,
+        "h": 458
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 1
+      }
+    },
+    "shop": {
+      "frame": {
+        "x": 523,
+        "y": 76,
+        "w": 471,
+        "h": 404
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 471,
+        "h": 404
+      },
+      "sourceSize": {
+        "w": 471,
+        "h": 404
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 1
+      }
+    },
+    "garage": {
+      "frame": {
+        "x": 30,
+        "y": 536,
+        "w": 473,
+        "h": 400
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 473,
+        "h": 400
+      },
+      "sourceSize": {
+        "w": 473,
+        "h": 400
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 1
+      }
+    },
+    "factory": {
+      "frame": {
+        "x": 520,
+        "y": 500,
+        "w": 495,
+        "h": 438
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 495,
+        "h": 438
+      },
+      "sourceSize": {
+        "w": 495,
+        "h": 438
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 1
+      }
+    },
+    "car": {
+      "frame": {
+        "x": 90,
+        "y": 947,
+        "w": 367,
+        "h": 278
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 367,
+        "h": 278
+      },
+      "sourceSize": {
+        "w": 367,
+        "h": 278
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 1
+      }
+    },
+    "barrels": {
+      "frame": {
+        "x": 590,
+        "y": 994,
+        "w": 365,
+        "h": 212
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 365,
+        "h": 212
+      },
+      "sourceSize": {
+        "w": 365,
+        "h": 212
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 1
+      }
+    },
+    "crates": {
+      "frame": {
+        "x": 90,
+        "y": 1251,
+        "w": 357,
+        "h": 233
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 357,
+        "h": 233
+      },
+      "sourceSize": {
+        "w": 357,
+        "h": 233
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 1
+      }
+    },
+    "barricade": {
+      "frame": {
+        "x": 537,
+        "y": 1255,
+        "w": 430,
+        "h": 240
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 430,
+        "h": 240
+      },
+      "sourceSize": {
+        "w": 430,
+        "h": 240
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 1
+      }
+    }
+  },
+  "meta": {
+    "image": "raid-props.png",
+    "size": {
+      "w": 1024,
+      "h": 1536
+    },
+    "scale": "1"
+  }
+}

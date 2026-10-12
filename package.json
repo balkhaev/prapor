@@ -1,6 +1,6 @@
 {
   "name": "prapor",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "private": true,
   "type": "module",
   "description": "Прапор — 2D idle: коллекция пушек, убежище и рейды диких",

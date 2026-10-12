@@ -137,6 +137,7 @@ import { sectorArt, roomMiniArt } from "./command-art";
 import { getCommandSummary, type CommandSummary, type CommandRoomTab, type RoomCommandStatus } from "./command-summary";
 import { MIN_SHELTER_ZOOM, MAX_SHELTER_ZOOM } from "./shelter-camera";
 import { getShelterProductionPresentation, getShelterProductionStages, SHELTER_PRODUCTION_STAGES, type ProductionPresentation } from "./shelter-production";
+import { renderLiveRaidPanel, updateLiveRaidPanel, getWatchedReport } from "./raid-ui";
 
 type Page = "home" | "raids" | "arsenal" | "base" | "contracts" | "journal";
 const e = (value: unknown) =>
@@ -227,20 +228,22 @@ let toastTimer: ReturnType<typeof setTimeout>;
 let storageWarning = false;
 let worldInputBlockedUntil = 0;
 let worldOverlaySignature = "";
-let worldView: "base" | "map" = "base";
+let worldView: "base" | "map" | "raid" = "base";
+let selectedRaidId: string | null = state.raids[0]?.id ?? null;
+let lastWatchedRaid: Raid | null = null;
 type WorkerPlacement = { scavId: string; mode: "pointer" | "keyboard"; roomId: string | null; reason: string | null };
 type CrewPointer = { scavId: string; pointerId: number; startX: number; startY: number; clientX: number; clientY: number; source: HTMLElement; started: boolean };
 let workerPlacement: WorkerPlacement | null = null;
 let crewPointer: CrewPointer | null = null;
 let suppressWorkerClickUntil = 0;
 let workerRefreshTimer: ReturnType<typeof setTimeout> | null = null;
-type CameraViewState = { zoom: number; x: number; y: number; panMode: boolean };
+type CameraViewState = { zoom: number; x: number; y: number; panMode: boolean; view?: "base" | "map" | "raid"; following?: boolean; minZoom?: number; maxZoom?: number };
 let cameraView: CameraViewState = { zoom: 1, x: 0, y: 0, panMode: false };
 function holdWorldInput() { worldInputBlockedUntil = Date.now() + 350; }
 function canWorldDrag() {
 	return worldView === "base" && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal") && !(window.innerWidth <= 850 && contextMode !== "overview");
 }
-function canWorldCamera() { return canWorldDrag() && !workerPlacement && !crewPointer; }
+function canWorldCamera() { return (canWorldDrag() || (worldView === "raid" && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal"))) && !workerPlacement && !crewPointer; }
 function canWorldInteract() {
 	return !workerPlacement && !crewPointer?.started && Date.now() >= worldInputBlockedUntil && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal") && !(window.innerWidth <= 850 && contextMode !== "overview");
 }
@@ -258,7 +261,7 @@ const names: Record<Page, string> = {
 	contracts: "Контракты",
 	journal: "Журнал",
 };
-app.innerHTML = `<div class="shell command-shell"><header class="topbar command-hud"><div class="command-brand"><span class="brand-mark">П</span><div><strong>ПРАПОР</strong><small>УБЕЖИЩЕ 07</small></div></div><div class="level"><span class="eyebrow">Репутация</span><strong id="level-label"></strong><div class="xp-track"><i id="xp-fill"></i></div></div><div class="resources">${[["money", "Рубли"], ["ammo", "Патроны"], ["medicine", "Медикаменты"], ["scrap", "Материалы"], ["intel", "Разведданные"]].map(([key, label]) => `<div class="resource" title="${label}">${icon(key!,18)}<div><label>${label}</label><strong id="res-${key}"></strong></div><i class="resource-cap" id="cap-${key}"></i></div>`).join("")}</div><button class="settings" data-action="settings" aria-label="Сохранение и помощь">${icon("settings",18)}</button></header><main class="main command-main"><div class="command-toolbar"><div class="command-heading"><h1>Свои люди. Своё убежище.</h1><span><i class="status-dot"></i><span id="passive-note">База на связи</span></span></div><nav class="nav command-tools" aria-label="Инструменты штаба">${(Object.keys(names) as Page[]).map((id) => `<button data-page="${id}" aria-label="${names[id]}" title="${names[id]}">${icon(id,17)}<span>${names[id]}</span>${id === "raids" ? '<b class="badge" id="raid-badge">0</b>' : ""}</button>`).join("")}</nav></div><div class="command-stage-layout"><section id="hero" class="hero-grid"><section class="world-card"><div class="world-head"><div class="view-switch" aria-label="Вид сцены"><button class="active" data-view="base" aria-pressed="true">${icon("home",14)} Убежище</button><button data-view="map" aria-pressed="false">${icon("raids",14)} Сектора</button></div><button class="text-button room-index-button" data-page="base">${icon("base",14)} Комнаты</button><span class="world-coordinate mono">БАЗА 07 · СЕВЕР</span></div><div id="world" aria-label="Графический штаб: комнаты, рабочие и стройка"></div><div class="world-bottom"><span><i class="status-dot"></i><span id="scene-hint">Нажми на комнату или бойца</span></span><span id="world-raid-note">ОТРЯД НА БАЗЕ</span></div><div class="room-shortcuts" hidden></div></section></section><aside id="command-dock" class="command-dock" aria-label="Сводка и управление выбранным объектом"></aside></div><section id="command-crew" class="command-crew" aria-label="Отряд и рабочие"></section><section id="command-routes" class="command-routes" aria-label="Рейды и сектора"></section><div id="offline-summary"></div><footer class="footer-line command-footer"><span id="save-status">ПРОГРЕСС НА ЭТОМ УСТРОЙСТВЕ</span><span>ПРАПОР · 0.9.1</span></footer></main></div><div id="tool-root" class="tool-backdrop" hidden><section class="tool-window" role="dialog" aria-modal="true" aria-labelledby="tool-title"><header class="tool-head"><div id="page-head" class="page-head"></div><button class="icon-button" data-action="close-tools" aria-label="Закрыть инструмент и вернуться в штаб">×</button></header><div class="tool-scroll"><div id="expedition-alerts"></div><div id="panel"></div></div></section></div><div id="context-shade" class="context-shade" hidden></div><div id="toast" role="status" aria-live="polite" hidden></div><div id="inspector-root"></div><div id="modal-root"></div>`;
+app.innerHTML = `<div class="shell command-shell"><header class="topbar command-hud"><div class="command-brand"><span class="brand-mark">П</span><div><strong>ПРАПОР</strong><small>УБЕЖИЩЕ 07</small></div></div><div class="level"><span class="eyebrow">Репутация</span><strong id="level-label"></strong><div class="xp-track"><i id="xp-fill"></i></div></div><div class="resources">${[["money", "Рубли"], ["ammo", "Патроны"], ["medicine", "Медикаменты"], ["scrap", "Материалы"], ["intel", "Разведданные"]].map(([key, label]) => `<div class="resource" title="${label}">${icon(key!,18)}<div><label>${label}</label><strong id="res-${key}"></strong></div><i class="resource-cap" id="cap-${key}"></i></div>`).join("")}</div><button class="settings" data-action="settings" aria-label="Сохранение и помощь">${icon("settings",18)}</button></header><main class="main command-main"><div class="command-toolbar"><div class="command-heading"><h1>Свои люди. Своё убежище.</h1><span><i class="status-dot"></i><span id="passive-note">База на связи</span></span></div><nav class="nav command-tools" aria-label="Инструменты штаба">${(Object.keys(names) as Page[]).map((id) => `<button data-page="${id}" aria-label="${names[id]}" title="${names[id]}">${icon(id,17)}<span>${names[id]}</span>${id === "raids" ? '<b class="badge" id="raid-badge">0</b>' : ""}</button>`).join("")}</nav></div><div class="command-stage-layout"><section id="hero" class="hero-grid"><section class="world-card"><div class="world-head"><div class="view-switch" aria-label="Вид сцены"><button class="active" data-view="base" aria-label="Убежище" title="Убежище" aria-pressed="true">${icon("home",14)} Убежище</button><button data-view="map" aria-label="Сектора" title="Сектора" aria-pressed="false">${icon("raids",14)} Сектора</button><button data-view="raid" aria-label="Живой рейд" title="Живой рейд" aria-pressed="false" disabled>${icon("people",14)} Рейд</button></div><button class="text-button room-index-button" data-page="base">${icon("base",14)} Комнаты</button><span class="world-coordinate mono">БАЗА 07 · СЕВЕР</span></div><div id="world" aria-label="Графический штаб: комнаты, рабочие и стройка"></div><div class="world-bottom"><span><i class="status-dot"></i><span id="scene-hint">Нажми на комнату или бойца</span></span><span id="world-raid-note">ОТРЯД НА БАЗЕ</span></div><div class="room-shortcuts" hidden></div></section></section><aside id="command-dock" class="command-dock" aria-label="Сводка и управление выбранным объектом"></aside></div><section id="command-crew" class="command-crew" aria-label="Отряд и рабочие"></section><section id="command-routes" class="command-routes" aria-label="Рейды и сектора"></section><div id="offline-summary"></div><footer class="footer-line command-footer"><span id="save-status">ПРОГРЕСС НА ЭТОМ УСТРОЙСТВЕ</span><span>ПРАПОР · 0.10.0</span></footer></main></div><div id="tool-root" class="tool-backdrop" hidden><section class="tool-window" role="dialog" aria-modal="true" aria-labelledby="tool-title"><header class="tool-head"><div id="page-head" class="page-head"></div><button class="icon-button" data-action="close-tools" aria-label="Закрыть инструмент и вернуться в штаб">×</button></header><div class="tool-scroll"><div id="expedition-alerts"></div><div id="panel"></div></div></section></div><div id="context-shade" class="context-shade" hidden></div><div id="toast" role="status" aria-live="polite" hidden></div><div id="inspector-root"></div><div id="modal-root"></div>`;
 const panel = document.querySelector<HTMLDivElement>("#panel")!;
 document.querySelector(".command-footer")!.prepend(document.querySelector("#offline-summary")!);
 document.querySelector(".world-head .view-switch")!.insertAdjacentHTML("afterend", '<div class="camera-controls" role="group" aria-label="Вид убежища"><button data-camera="out" aria-label="Отдалить убежище" title="Отдалить (−)">−</button><span id="camera-scale" class="camera-scale" aria-label="Масштаб">100%</span><button data-camera="in" aria-label="Приблизить убежище" title="Приблизить (+)">+</button><button data-camera="fit" class="camera-fit" aria-label="Обзор всего убежища" title="Обзор всего убежища (0)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 9V3h6m6 0h6v6m0 6v6h-6M9 21H3v-6"/></svg><span>Обзор</span></button><button data-camera="pan" aria-label="Рука: перемещать вид" title="Рука: перетаскивать убежище" aria-pressed="false"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 12V5a2 2 0 0 1 4 0v7-8a2 2 0 0 1 4 0v8-5a2 2 0 0 1 4 0v8c0 4-3 7-7 7h-1c-2 0-4-1-5-3L3 12a2 2 0 0 1 3-2l2 2"/></svg></button></div>');
@@ -273,20 +276,28 @@ const costLabel = (cost: { money: number; scrap: number }) =>
 	`${n(cost.money)} ₽ · ${cost.scrap} дет.`;
 function updateCameraControls() {
 	const controls = document.querySelector<HTMLElement>(".camera-controls"); if (!controls) return;
-	controls.hidden = worldView !== "base";
+	controls.hidden = worldView === "map";
 	const available = canWorldCamera();
 	controls.querySelectorAll<HTMLButtonElement>("[data-camera]").forEach((button) => { button.disabled = !available; });
 	const farther = controls.querySelector<HTMLButtonElement>('[data-camera="out"]'), closer = controls.querySelector<HTMLButtonElement>('[data-camera="in"]');
-	if (farther) farther.disabled = !available || cameraView.zoom <= MIN_SHELTER_ZOOM + 0.001;
-	if (closer) closer.disabled = !available || cameraView.zoom >= MAX_SHELTER_ZOOM - 0.001;
+	if (farther) farther.disabled = !available || cameraView.zoom <= (cameraView.minZoom ?? MIN_SHELTER_ZOOM) + 0.001;
+	if (closer) closer.disabled = !available || cameraView.zoom >= (cameraView.maxZoom ?? MAX_SHELTER_ZOOM) - 0.001;
+	const fit = controls.querySelector<HTMLButtonElement>('[data-camera="fit"]');
+	if (fit) { fit.innerHTML = `${icon(worldView === "raid" ? "people" : "home", 13)} <span>${worldView === "raid" ? "За бойцом" : "Обзор"}</span>`; fit.setAttribute('aria-label', worldView === "raid" ? "Следовать за бойцом" : "Обзор всего убежища"); fit.title = worldView === "raid" ? "Следовать за бойцом (0)" : "Обзор всего убежища (0)"; }
+	if (farther) farther.setAttribute('aria-label', worldView === "raid" ? "Отдалить улицу" : "Отдалить убежище");
+	if (closer) closer.setAttribute('aria-label', worldView === "raid" ? "Приблизить улицу" : "Приблизить убежище");
 	controls.querySelector<HTMLButtonElement>('[data-camera="pan"]')?.setAttribute("aria-pressed", String(cameraView.panMode));
 	const panButton = controls.querySelector<HTMLButtonElement>('[data-camera="pan"]'); if (panButton) panButton.title = "Рука: перемещать вид. Можно удерживать пробел";
 	controls.querySelector<HTMLButtonElement>('[data-camera="pan"]')?.classList.toggle("active", cameraView.panMode);
 	document.querySelector(".world-card")?.classList.toggle("camera-hand-mode", cameraView.panMode);
 	document.querySelector("#camera-scale")!.textContent = `${Math.round(cameraView.zoom * 100)}%`;
-	document.querySelector("#scene-hint")!.textContent = worldView === "map" ? "Нажми на сектор, чтобы выбрать маршрут" : cameraView.panMode ? "Перетаскивай вид · Обзор — вся база" : cameraView.zoom > 1.05 ? "Осмотр · Рука — сдвиг · Обзор — вся база" : "Нажми на комнату или бойца · + приблизить";
+	document.querySelector("#scene-hint")!.textContent = worldView === "raid" ? cameraView.panMode ? "Осмотри улицу · За бойцом — вернуть камеру" : "Живой маршрут · Рука — осмотр улицы" : worldView === "map" ? "Нажми на сектор, чтобы выбрать маршрут" : cameraView.panMode ? "Перетаскивай вид · Обзор — вся база" : cameraView.zoom > 1.05 ? "Осмотр · Рука — сдвиг · Обзор — вся база" : "Нажми на комнату или бойца · + приблизить";
+	document.querySelector('.world-card')?.classList.toggle('raid-view', worldView === "raid");
+	document.querySelector('.command-main')?.classList.toggle('raid-watching', worldView === "raid");
+	const raidTab = document.querySelector<HTMLButtonElement>('[data-view="raid"]'); if (raidTab) raidTab.disabled = !state.raids.length && !lastWatchedRaid;
 }
 function onWorldCameraChange(value: CameraViewState) {
+	if (value.view && value.view !== worldView) return;
 	cameraView = value;
 	updateCameraControls();
 	positionWorkerRoomTargets();
@@ -297,6 +308,7 @@ function cameraAction(action: string) {
 	else if (action === "out") world.zoomBy(0.8);
 	else if (action === "fit") { world.setPanMode(false); world.resetCamera(); }
 	else if (action === "pan") world.setPanMode(!cameraView.panMode);
+	if (worldView === "raid" && action === "fit") world.setRaidFollow(true);
 	holdWorldInput();
 }
 function inspectRoomView(id: string) {
@@ -1111,10 +1123,11 @@ function renderCommandBoard() {
 	const activeKey = document.activeElement instanceof HTMLElement && dock.contains(document.activeElement) ? document.activeElement.dataset.focusKey : undefined;
 	const mobileContext = window.innerWidth <= 850 && contextMode !== "overview";
 	dock.classList.toggle("context-open", contextMode !== "overview");
+	dock.classList.toggle("raid-dock", worldView === "raid");
 	dock.setAttribute("role", mobileContext ? "dialog" : "complementary");
 	if (mobileContext) { dock.setAttribute("aria-modal", "true"); dock.setAttribute("aria-label", contextMode === "build" ? "Строительство комнаты" : "Управление комнатой"); }
 	else { dock.removeAttribute("aria-modal"); dock.setAttribute("aria-label", "Сводка и управление объектом"); }
-	dock.innerHTML = contextMode === "room" && room ? managedRoomPanel(room) : contextMode === "build" && selectedShelterSite ? `<header class="command-context-head"><span class="eyebrow">Новая комната</span><button class="icon-button" data-action="close-context" data-focus-key="context-close" aria-label="Закрыть строительство">×</button></header><div class="command-dock-scroll">${buildSitePanel(selectedShelterSite.column, selectedShelterSite.row)}</div>` : commandOverview();
+	dock.innerHTML = worldView === "raid" ? renderLiveRaidPanel(state, watchedRaid(), getWatchedReport(state, selectedRaidId), liveCheckpointControls(watchedRaid())) : contextMode === "room" && room ? managedRoomPanel(room) : contextMode === "build" && selectedShelterSite ? `<header class="command-context-head"><span class="eyebrow">Новая комната</span><button class="icon-button" data-action="close-context" data-focus-key="context-close" aria-label="Закрыть строительство">×</button></header><div class="command-dock-scroll">${buildSitePanel(selectedShelterSite.column, selectedShelterSite.row)}</div>` : commandOverview();
 	const scroll = dock.querySelector<HTMLElement>(".command-dock-scroll"); if (scroll) scroll.scrollTop = oldScroll;
 	if (activeKey) {
 		const replacement = dock.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(activeKey)}"]`);
@@ -1135,7 +1148,7 @@ function renderCommandBoard() {
 	const crewStrip = crew.querySelector<HTMLElement>(".command-crew-strip"); if (crewStrip) crewStrip.scrollLeft = crewScroll;
 	if (focusedWorker) crew.querySelector<HTMLElement>(`[data-${focusWasHandle ? "worker-handle" : "scav"}="${CSS.escape(focusedWorker)}"]`)?.focus({ preventScroll: true });
 	const routes = document.querySelector<HTMLElement>("#command-routes")!;
-	routes.innerHTML = `<div class="command-strip-head"><h2>За периметром <span>${state.raids.length} в пути</span></h2><button class="text-button" data-page="raids">Подготовить выход →</button></div>${state.raids.length ? `<div class="command-active-raids">${state.raids.map((raid) => `<button class="mission-chip ${raid.expedition?.status === "choice" ? "needs-decision" : ""}" data-scav="${raid.scavId}"><span>${icon("raids",15)} ${e(raid.scavName)} · ${e(MAP_BY_ID[raid.mapId]!.name)}</span><strong data-raid-time="${raid.id}">${raid.expedition?.status === "choice" ? "ПРИКАЗ" : seconds((raid.endsAt-Date.now())/1000)}</strong><i class="progress"><i data-raid-progress="${raid.id}"></i></i></button>`).join("")}</div>` : ""}<div class="command-sector-strip">${MAPS.map((map) => `<button class="sector-chip ${map.id === selectedMap ? "selected" : ""} ${state.level < map.level ? "locked" : ""}" data-command-map="${map.id}" ${state.level < map.level ? "disabled" : ""} aria-label="Подготовить выход: ${e(map.name)}${state.level < map.level ? `, требуется уровень ${map.level}` : ""}"><span class="sector-chip-art" aria-hidden="true">${sectorArt(map.id, `board-${map.id}`)}</span><span><strong>${e(map.name)}</strong><small>${state.level < map.level ? `УР. ${map.level} · закрыт` : `${map.reward[0]}–${map.reward[1]} ₽`}</small></span>${state.level < map.level ? icon("lock",12) : icon("arrow",12)}</button>`).join("")}</div>`;
+	routes.innerHTML = `<div class="command-strip-head"><h2>За периметром <span>${state.raids.length} в пути</span></h2><button class="text-button" data-page="raids">Подготовить выход →</button></div>${state.raids.length ? `<div class="command-active-raids">${state.raids.map((raid) => `<button class="mission-chip ${raid.expedition?.status === "choice" ? "needs-decision" : ""}" data-watch-raid="${raid.id}" aria-label="Наблюдать рейд: ${e(raid.scavName)}"><span>${icon("raids",15)} ${e(raid.scavName)} · ${e(MAP_BY_ID[raid.mapId]!.name)}</span><strong data-raid-time="${raid.id}">${raid.expedition?.status === "choice" ? "ПРИКАЗ" : seconds((raid.endsAt-Date.now())/1000)}</strong><i class="progress"><i data-raid-progress="${raid.id}"></i></i></button>`).join("")}</div>` : ""}<div class="command-sector-strip">${MAPS.map((map) => `<button class="sector-chip ${map.id === selectedMap ? "selected" : ""} ${state.level < map.level ? "locked" : ""}" data-command-map="${map.id}" ${state.level < map.level ? "disabled" : ""} aria-label="Подготовить выход: ${e(map.name)}${state.level < map.level ? `, требуется уровень ${map.level}` : ""}"><span class="sector-chip-art" aria-hidden="true">${sectorArt(map.id, `board-${map.id}`)}</span><span><strong>${e(map.name)}</strong><small>${state.level < map.level ? `УР. ${map.level} · закрыт` : `${map.reward[0]}–${map.reward[1]} ₽`}</small></span>${state.level < map.level ? icon("lock",12) : icon("arrow",12)}</button>`).join("")}</div>`;
 }
 function commandNextAction(item: RoomCommandStatus) {
 	const room = state.shelter.rooms.find((candidate) => candidate.id === item.roomId); if (!room) return "";
@@ -1617,6 +1630,9 @@ document.addEventListener("click", (event) => {
 		if (reason) { workerPlacement.roomId = target.dataset.workerRoom; workerPlacement.reason = reason; paintWorkerPlacement(); toast(reason, false); return; }
 		assignPlacedWorker(workerPlacement.scavId, target.dataset.workerRoom); return;
 	}
+	if (target.dataset.watchRaid) { watchRaid(target.dataset.watchRaid); return; }
+	if (target.hasAttribute('data-live-close')) { setView("base"); document.querySelector<HTMLButtonElement>('[data-view="base"]')?.focus({ preventScroll: true }); return; }
+	if (target.dataset.raidOrders) { const raid = state.raids.find(item => item.id === target.dataset.raidOrders); if (raid) openInspector(raid.scavId); return; }
 	if (target.dataset.scav) { openInspector(target.dataset.scav); return; }
 	if (target.dataset.camera) { cameraAction(target.dataset.camera); return; }
 	if (target.dataset.cameraRoom) { inspectRoomView(target.dataset.cameraRoom); return; }
@@ -1636,7 +1652,7 @@ document.addEventListener("click", (event) => {
 		return;
 	}
 	if (target.dataset.view) {
-		setView(target.dataset.view as "base" | "map");
+		setView(target.dataset.view as "base" | "map" | "raid");
 		return;
 	}
 	if (target.dataset.map) {
@@ -1801,7 +1817,7 @@ document.addEventListener("click", (event) => {
 		case "run-perk": {
 			selectedPerks.set(id, target.dataset.perk as RunPerk);
 			render();
-			const scope = selectedScav ? document.querySelector("#inspector-root") : document.querySelector("#expedition-alerts");
+			const scope = selectedScav ? document.querySelector("#inspector-root") : worldView === "raid" ? document.querySelector("#command-dock") : document.querySelector("#expedition-alerts");
 			scope?.querySelector<HTMLButtonElement>(`[data-action="run-perk"][data-id="${CSS.escape(id)}"][data-perk="${CSS.escape(target.dataset.perk ?? "")}"]`)?.focus({ preventScroll: true });
 			break;
 		}
@@ -1900,9 +1916,13 @@ document.addEventListener("click", (event) => {
 			renderOfflineSummary();
 			document.querySelector<HTMLButtonElement>('.command-tools [data-page="journal"]')?.focus({ preventScroll: true });
 			break;
-		case "dispatch":
-			act(dispatchRaid(state, id, selectedMap));
+		case "dispatch": {
+			const result = dispatchRaid(state, id, selectedMap);
+			act(result);
+			const raid = state.raids.find(item => item.scavId === id);
+			if (result.ok && raid) watchRaid(raid.id);
 			break;
+		}
 		case "recruit":
 			act(recruitScav(state));
 			break;
@@ -1966,6 +1986,7 @@ document.addEventListener("click", (event) => {
 });
 document.addEventListener("change", async (event) => {
 	const target = event.target as HTMLInputElement | HTMLSelectElement;
+	if (target.hasAttribute("data-live-raid-select")) { watchRaid(target.value); document.querySelector<HTMLSelectElement>('[data-live-raid-select]')?.focus({ preventScroll: true }); return; }
 	if (target.dataset.roomWorker) { chosenWorkers.set(target.dataset.roomWorker, target.value); return; }
 	if (target.dataset.roomRepeat) {
 		const room = state.shelter.rooms.find((item) => item.id === target.dataset.roomRepeat);
@@ -2040,6 +2061,9 @@ document.addEventListener("change", async (event) => {
 			contextMode = "overview";
 			selectedShelterSite = null;
 			selectedRoomId = state.shelter.rooms[0]?.id ?? null;
+			selectedRaidId = state.raids[0]?.id ?? null;
+			lastWatchedRaid = null;
+			world?.selectRaid(selectedRaidId);
 			selectedBenchModule = null;
 			productionWorkshopId = null;
 			selectedPerks.clear(); chosenWorkers.clear(); roomRepeatPreferences.clear();
@@ -2105,7 +2129,39 @@ document.addEventListener("keydown", (event) => {
 		else if (first && last && !event.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) { event.preventDefault(); first.focus(); }
 	}
 });
-function setView(view: "base" | "map") {
+function watchedRaid() {
+	const active = state.raids.find(raid => raid.id === selectedRaidId);
+	if (active) lastWatchedRaid = active;
+	return active ?? (lastWatchedRaid?.id === selectedRaidId ? lastWatchedRaid : null);
+}
+function liveCheckpointControls(raid: Raid | null) {
+	const run = raid?.expedition;
+	if (!raid || !run || run.status !== "choice") return "";
+	const perk = selectedPerks.get(raid.id);
+	const choices = getExpeditionChoices(state, raid, perk);
+	const selected = Boolean(perk && run.offers.includes(perk));
+	return `<h3>Контрольная точка ${run.stage} / 3</h3><p>Уйти с добычей или рискнуть следующим кварталом.</p>${cargoWarehouseNotice(raid)}${run.offers.length ? `<div class="live-perks">${run.offers.map(id => `<button data-action="run-perk" data-id="${raid.id}" data-perk="${id}" aria-pressed="${perk === id}" class="${perk === id ? 'selected' : ''}"><strong>${e(RUN_PERKS[id].label)}</strong><small>${e(RUN_PERKS[id].description)}</small></button>`).join('')}</div>` : ''}<div class="live-branches">${choices.map(quote => `<button data-action="continue-expedition" data-id="${raid.id}" data-branch="${quote.branch}" ${!selected || quote.reason ? 'disabled' : ''}><strong>${e(quote.label)} <b>${Math.round(quote.chance*100)}%</b></strong><small>${seconds(quote.duration)} · ${n(quote.money)} ₽ · ${quote.ammo} патр.${quote.intel ? ` · ${quote.intel} разв.` : ''}</small><span>${e(quote.reason ?? (!selected ? 'Сначала выбери приём' : quote.description))}</span></button>`).join('')}</div><button class="button" data-action="extract" data-id="${raid.id}">Эвакуировать с добычей →</button>`;
+}
+function watchRaid(id: string) {
+	const raid = state.raids.find(item => item.id === id);
+	if (!raid && lastWatchedRaid?.id !== id) { toast("Этот выход уже завершён. Отчёт сохранён в журнале."); return; }
+	selectedRaidId = id; if (raid) lastWatchedRaid = raid;
+	selectedScav = null;
+	document.querySelector<HTMLElement>('#inspector-root')!.innerHTML = '';
+	page = "home"; contextMode = "overview"; selectedShelterSite = null;
+	cancelWorkerPlacement(false, true);
+	world?.selectRaid(id);
+	setView("raid");
+	world?.setRaidFollow(true);
+	render(); worldViewport.focus({preventScroll:true});
+}
+function setView(view: "base" | "map" | "raid") {
+	if (view === "raid") {
+		const target = state.raids.find(raid => raid.id === selectedRaidId) ?? state.raids[0];
+		if (target) { selectedRaidId = target.id; lastWatchedRaid = target; world?.selectRaid(target.id); }
+		else if (!lastWatchedRaid) { toast("Подготовь выход, чтобы наблюдать улицу."); return; }
+		contextMode = "overview";
+	}
 	if (worldView !== view) cancelWorkerPlacement(false, true);
 	world?.cancelCameraGesture();
 	worldView = view;
@@ -2118,6 +2174,7 @@ function setView(view: "base" | "map") {
 	document.querySelector("#scene-hint")!.textContent = view === "base" ? "Нажми на комнату или бойца" : "Нажми на сектор, чтобы выбрать маршрут";
 	(document.querySelector(".room-shortcuts") as HTMLElement).hidden = view === "map";
 	updateCameraControls();
+	if (world) renderCommandBoard();
 }
 render();
 world = createWorld(
@@ -2134,6 +2191,9 @@ world = createWorld(
 		roomProduction: Object.fromEntries(state.shelter.rooms.map((room) => [room.id, getRoomProductionState(state, room)])),
 		selectedScavId: selectedScav,
 		selectedMapId: selectedMap,
+		selectedRaidId,
+		history: state.history,
+		weapons: state.weapons,
 	}),
 	(id) => {
 		if (!canWorldInteract()) return;
@@ -2186,6 +2246,7 @@ const simulationTimer = setInterval(() => {
 		beforeContracts = readyContracts();
 	const summary = advance(state);
 	hud();
+	if (worldView === "raid") { const raid = watchedRaid(); if (raid) updateLiveRaidPanel(document.querySelector<HTMLElement>('#command-dock')!, raid, getWatchedReport(state, selectedRaidId)); }
 	if (
 		summary.completedCount ||
 		state.level !== beforeLevel ||
