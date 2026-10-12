@@ -1,3 +1,4 @@
+import { copyWeaponFixture } from "./weapon-fixtures";
 import { describe, expect, test } from "bun:test";
 import {
 	MAX_OFFLINE_MS,
@@ -262,11 +263,7 @@ describe("the Prapor game loop", () => {
 		const state = createGame(NOW);
 		const template = state.weapons[3]!;
 		while (state.weapons.length < 25) {
-			state.weapons.push({
-				...template,
-				attachments: { ...template.attachments },
-				id: `gun-${state.nextId++}`,
-			});
+			state.weapons.push(copyWeaponFixture(state, template));
 		}
 		dispatchLegacyRaid(state, state.scavs[0]!.id, "courtyard", NOW);
 		state.raids[0]!.chance = 1;

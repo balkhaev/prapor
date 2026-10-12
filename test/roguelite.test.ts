@@ -289,7 +289,7 @@ describe("checkpoint expeditions", () => {
 		expect(next.stage).toBe(1);
 		expect(next.perks).toHaveLength(0);
 		expect(next.offers).toHaveLength(0);
-		expect(next.cargo).toEqual({ money: 0, supplies: { ammo: 0, medicine: 0, scrap: 0, intel: 0 }, weaponIds: [] });
+		expect(next.cargo).toEqual({ money: 0, supplies: { ammo: 0, medicine: 0, scrap: 0, intel: 0 }, weaponIds: [], modules: [] });
 		expect(state.blueprints).toContain("plate_armor");
 		expect(parseSave(saveGame(state))).not.toBeNull();
 	});

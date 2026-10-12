@@ -1,3 +1,4 @@
+import { copyWeaponFixture, useWeaponPlatformFixture } from "./weapon-fixtures";
 import { describe, expect, test } from "bun:test";
 import {
 	MAX_OFFLINE_MS,
@@ -35,11 +36,7 @@ function squad(size: number, seed = 0x70a90211): GameState {
 	for (const scav of state.scavs) {
 		if (!scav.weaponInstanceId) {
 			const template = state.weapons[0]!;
-			const weapon = {
-				...template,
-				id: `gun-${state.nextId++}`,
-				attachments: { ...template.attachments },
-			};
+			const weapon = copyWeaponFixture(state, template);
 			state.weapons.push(weapon);
 			expect(equipWeapon(state, scav.id, weapon.id).ok).toBe(true);
 		}
@@ -103,7 +100,7 @@ describe("automatic operation regression coverage", () => {
 		state.supplies.ammo = 0;
 		// Equal costs make these actual simultaneous resource contenders; gun
 		// roles now let a cheap shotgun leave before a more costly rifle.
-		for (const scav of state.scavs) state.weapons.find((weapon) => weapon.id === scav.weaponInstanceId)!.weaponId = "pm";
+		for (const scav of state.scavs) useWeaponPlatformFixture(state, state.weapons.find((weapon) => weapon.id === scav.weaponInstanceId)!, "pm");
 		for (const scav of [...state.scavs].reverse())
 			expect(setAutoRaid(state, scav.id, "courtyard", 70, NOW).ok).toBe(true);
 		expect(state.raids).toHaveLength(0);
@@ -156,7 +153,7 @@ describe("automatic operation regression coverage", () => {
 		const state = createGame(NOW);
 		for (const scav of state.scavs) {
 			scav.personality = "veteran";
-			state.weapons.find((weapon) => weapon.id === scav.weaponInstanceId)!.weaponId = "sks";
+			useWeaponPlatformFixture(state, state.weapons.find((weapon) => weapon.id === scav.weaponInstanceId)!, "sks");
 			expect(setAutoRaid(state, scav.id, "courtyard", 25, NOW).ok).toBe(true);
 		}
 		const endsAt = state.raids[0]!.endsAt;
@@ -283,7 +280,8 @@ describe("legacy migration regression coverage", () => {
 		expect(state.weapons[0]!.durability).toBe(87);
 		expect(state.scavs[0]!.health).toBe(92);
 		expect(state.rng).toBe(1_300_907_748);
-		expect(state.nextId).toBe(10);
+		// Migration allocates one distinct physical id for each factory component.
+		expect(state.nextId).toBe(10 + state.weapons.reduce((count, gun) => count + Object.keys(gun.modules).length, 0));
 		expect(advance(state, NOW + 600_000).completedCount).toBe(0);
 		expect(state.stats.raidsCompleted).toBe(1);
 		expect(parseSave(saveGame(state))).toEqual(state);
