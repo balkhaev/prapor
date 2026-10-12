@@ -81,7 +81,7 @@ export class RaidStreetRenderer {
 		const center = { x: this.camera.x + this.viewport.width / this.camera.zoom / 2, y: this.camera.y + this.viewport.height / this.camera.zoom / 2 };
 		this.viewport = { ...viewport }; this.camera.x = center.x - viewport.width / this.camera.zoom / 2; this.camera.y = center.y - viewport.height / this.camera.zoom / 2;
 		this.groundMinimap.setPosition(viewport.width - 181, viewport.height - 172); this.mini.setPosition(viewport.width - 181, viewport.height - 172);
-		this.progress.setPosition(23, viewport.height - 53); this.applyCamera();
+		this.progress.setPosition(23, viewport.height - 53); if (this.following) this.follow(1); this.applyCamera();
 	}
 	zoomBy(factor: number, at?: Point): void {
 		if (!Number.isFinite(factor) || factor <= 0) return;
@@ -94,8 +94,12 @@ export class RaidStreetRenderer {
 	}
 	panBy(dx: number, dy: number): void { this.following = false; this.camera.x += dx / this.camera.zoom; this.camera.y += dy / this.camera.zoom; this.applyCamera(); }
 	private applyCamera(): void {
-		const axis = (at: number, size: number, visible: number) => visible >= size ? (size - visible) / 2 : clamp(at, 0, size - visible);
-		this.camera.x = axis(this.camera.x, this.bounds.width, this.viewport.width / this.camera.zoom); this.camera.y = axis(this.camera.y, this.bounds.height, this.viewport.height / this.camera.zoom);
+		// A valid raid position may sit at the map edge. Following keeps that
+		// position framed instead of pushing the pawn behind the minimap.
+		if (!this.following) {
+			const axis = (at: number, size: number, visible: number) => clamp(at, -visible * .65, size - visible * .35);
+			this.camera.x = axis(this.camera.x, this.bounds.width, this.viewport.width / this.camera.zoom); this.camera.y = axis(this.camera.y, this.bounds.height, this.viewport.height / this.camera.zoom);
+		}
 		this.world.setScale(this.camera.zoom).setPosition(-this.camera.x * this.camera.zoom, -this.camera.y * this.camera.zoom);
 	}
 	private follow(amount: number): void {
