@@ -23,6 +23,36 @@ import {
 	claimContract,
 	createGame,
 	dispatchRaid,
+	continueExpedition,
+	extractRaid,
+	getExpeditionChoices,
+	RUN_PERKS,
+	GEAR_MODELS,
+	MARKET_OFFERS,
+	BLUEPRINTS,
+	getMarketReason,
+	getCargoWeight,
+	getCargoValue,
+	getGearRecycleYield,
+	getWeaponSaleValue,
+	getLoadoutStats,
+	getGearModel,
+	getGearCraftReason,
+	getGearRepairCost,
+	craftGear,
+	equipGear,
+	repairGear,
+	recycleGear,
+	setLoadoutOption,
+	setAutoRaidDepth,
+	getSupplyCapacity,
+	getRecoveryAllowance,
+	getRaidQuote,
+	buySupplies,
+	recycleWeapon,
+	getWeaponRecycleYield,
+	getWeaponRole,
+	isAttachmentCompatible,
 	equipWeapon,
 	getContractProgress,
 	getContractLockReason,
@@ -30,9 +60,6 @@ import {
 	getGearCost,
 	getIncomePerMinute,
 	getModCost,
-	getRaidChance,
-	getRaidDuration,
-	getRaidAmmoCost,
 	getRaidPhase,
 	getRepairCost,
 	getScavCapacity,
@@ -60,6 +87,9 @@ import {
 	type RaidReport,
 	type Scav,
 	type WeaponInstance,
+	type Raid,
+	type ExpeditionBranch,
+	type RunPerk,
 } from "./game/engine";
 import { GEAR_LABELS, MAX_GEAR_LEVEL, TACTICS, type GearSlot, type RaidTactic } from "./game/operations";
 import { createWorld } from "./scene";
@@ -127,6 +157,8 @@ let modalOrigin: HTMLElement | null = null;
 let weaponSearch = "";
 let category: WeaponCategory | "all" = "all";
 let collection = false;
+let arsenalTab: "weapons" | "equipment" | "market" = "weapons";
+const selectedPerks = new Map<string, RunPerk>();
 let contractFilter: "open" | "done" | "all" = "open";
 let deferredRender = false;
 let world: ReturnType<typeof createWorld> | null = null;
@@ -141,7 +173,7 @@ const names: Record<Page, string> = {
 	contracts: "Контракты",
 	journal: "Журнал",
 };
-app.innerHTML = `<div class="shell"><aside class="sidebar"><div class="brand"><div class="brand-mark">П</div><div><strong>ПРАПОР</strong><small>СВОИ ЛЮДИ. СВОЁ ДЕЛО.</small></div></div><div class="nav-label">Оперативный штаб</div><nav class="nav" aria-label="Разделы игры">${(Object.keys(names) as Page[]).map((id) => `<button data-page="${id}" aria-label="${names[id]}">${icon(id)}<span>${id === "base" ? "База" : names[id]}</span>${id === "raids" ? '<b class="badge" id="raid-badge">0</b>' : ""}</button>`).join("")}</nav><div class="base-status"><i class="status-dot"></i>База на связи<span class="muted" id="passive-note">Мастерская работает</span></div><footer>ОДИНОЧНАЯ IDLE-ИГРА · 0.3</footer></aside><main class="main"><header class="topbar"><div class="level"><span class="eyebrow">Репутация</span><strong id="level-label"></strong><div class="xp-track"><i id="xp-fill"></i></div></div><div class="resources">${[["money", "Рубли"], ["ammo", "Патроны"], ["medicine", "Медикаменты"], ["scrap", "Детали"], ["intel", "Разведданные"]].map(([key, label]) => `<div class="resource" title="${label}">${icon(key!)}<div><label>${label}</label><strong id="res-${key}"></strong></div></div>`).join("")}</div><button class="settings" data-action="settings" aria-label="Сохранение и помощь">${icon("settings")}</button></header><div class="content"><div id="page-head" class="page-head"></div><div id="offline-summary"></div><div id="hero" class="hero-grid"><section class="world-card"><div class="world-head"><div class="view-switch" aria-label="Вид сцены"><button class="active" data-view="base" aria-pressed="true">${icon("home", 15)} Убежище</button><button data-view="map" aria-pressed="false">${icon("raids", 15)} Карта секторов</button></div><span class="mono world-coordinate">БАЗА 07 · СЕВЕР</span></div><div id="world" aria-label="Двумерная сцена убежища и карта рейдов"></div><div class="world-bottom"><span><i class="status-dot"></i><span id="scene-hint">Нажми на комнату или бойца</span></span><span id="world-raid-note">ОТРЯД НА БАЗЕ</span></div><div class="room-shortcuts" aria-label="Комнаты базы">${(Object.keys(BASE_ROOM_LABELS) as BaseRoom[]).map((room) => `<button class="room-shortcut" data-room-link="${room}">${icon(room === "workshop" ? "scrap" : room === "medbay" ? "medicine" : room === "radio" ? "intel" : "arsenal", 15)}${BASE_ROOM_LABELS[room]}</button>`).join("")}</div></section><aside class="briefing"><div class="briefing-top"><div class="portrait">${portrait}</div><div><span class="eyebrow">На связи</span><strong>Прапор</strong></div><span class="radio-live">● ЭФИР</span></div><h2 id="briefing-title">Каждому — ствол.<br>Каждому — маршрут.</h2><p id="briefing-copy"></p><button class="button" data-page="raids">Подготовить выход ${icon("arrow", 17)}</button><div class="briefing-note">База работает и офлайн · до 8 часов</div></aside></div><div id="panel"></div><div class="footer-line"><span id="save-status">ПРОГРЕСС СОХРАНЯЕТСЯ НА ЭТОМ УСТРОЙСТВЕ</span><span>МАСТЕРСКАЯ РАБОТАЕТ И БЕЗ ТЕБЯ</span></div></div></main></div><div id="toast" role="status" aria-live="polite" hidden></div><div id="inspector-root"></div><div id="modal-root"></div>`;
+app.innerHTML = `<div class="shell"><aside class="sidebar"><div class="brand"><div class="brand-mark">П</div><div><strong>ПРАПОР</strong><small>СВОИ ЛЮДИ. СВОЁ ДЕЛО.</small></div></div><div class="nav-label">Оперативный штаб</div><nav class="nav" aria-label="Разделы игры">${(Object.keys(names) as Page[]).map((id) => `<button data-page="${id}" aria-label="${names[id]}">${icon(id)}<span>${id === "base" ? "База" : names[id]}</span>${id === "raids" ? '<b class="badge" id="raid-badge">0</b>' : ""}</button>`).join("")}</nav><div class="base-status"><i class="status-dot"></i>База на связи<span class="muted" id="passive-note">Мастерская работает</span></div><footer>IDLE-РОГУЛАЙТ · 0.4</footer></aside><main class="main"><header class="topbar"><div class="level"><span class="eyebrow">Репутация</span><strong id="level-label"></strong><div class="xp-track"><i id="xp-fill"></i></div></div><div class="resources">${[["money", "Рубли"], ["ammo", "Патроны"], ["medicine", "Медикаменты"], ["scrap", "Детали"], ["intel", "Разведданные"]].map(([key, label]) => `<div class="resource" title="${label}">${icon(key!)}<div><label>${label}</label><strong id="res-${key}"></strong></div></div>`).join("")}</div><button class="settings" data-action="settings" aria-label="Сохранение и помощь">${icon("settings")}</button></header><div class="content"><div id="page-head" class="page-head"></div><div id="offline-summary"></div><div id="expedition-alerts"></div><div id="hero" class="hero-grid"><section class="world-card"><div class="world-head"><div class="view-switch" aria-label="Вид сцены"><button class="active" data-view="base" aria-pressed="true">${icon("home", 15)} Убежище</button><button data-view="map" aria-pressed="false">${icon("raids", 15)} Карта секторов</button></div><span class="mono world-coordinate">БАЗА 07 · СЕВЕР</span></div><div id="world" aria-label="Двумерная сцена убежища и карта рейдов"></div><div class="world-bottom"><span><i class="status-dot"></i><span id="scene-hint">Нажми на комнату или бойца</span></span><span id="world-raid-note">ОТРЯД НА БАЗЕ</span></div><div class="room-shortcuts" aria-label="Комнаты базы">${(Object.keys(BASE_ROOM_LABELS) as BaseRoom[]).map((room) => `<button class="room-shortcut" data-room-link="${room}">${icon(room === "workshop" ? "scrap" : room === "medbay" ? "medicine" : room === "radio" ? "intel" : "arsenal", 15)}${BASE_ROOM_LABELS[room]}</button>`).join("")}</div></section><aside class="briefing"><div class="briefing-top"><div class="portrait">${portrait}</div><div><span class="eyebrow">На связи</span><strong>Прапор</strong></div><span class="radio-live">● ЭФИР</span></div><h2 id="briefing-title">Каждому — ствол.<br>Каждому — маршрут.</h2><p id="briefing-copy"></p><button class="button" data-page="raids">Подготовить выход ${icon("arrow", 17)}</button><div class="briefing-note">База работает и офлайн · до 8 часов</div></aside></div><div id="panel"></div><div class="footer-line"><span id="save-status">ПРОГРЕСС СОХРАНЯЕТСЯ НА ЭТОМ УСТРОЙСТВЕ</span><span>МАСТЕРСКАЯ РАБОТАЕТ И БЕЗ ТЕБЯ</span></div></div></main></div><div id="toast" role="status" aria-live="polite" hidden></div><div id="inspector-root"></div><div id="modal-root"></div>`;
 const panel = document.querySelector<HTMLDivElement>("#panel")!;
 const costLabel = (cost: { money: number; scrap: number }) =>
 	`${n(cost.money)} ₽ · ${cost.scrap} дет.`;
@@ -211,15 +243,38 @@ function medicineCost(scav: Scav) {
 	return Math.ceil((100 - scav.health) / (25 + state.base.medbay * 5));
 }
 function dispatchBlock(scav: Scav) {
-	const map = MAP_BY_ID[selectedMap]!, weapon = state.weapons.find((w) => w.id === scav.weaponInstanceId);
-	if (state.raids.some((r) => r.scavId === scav.id)) return "Дикий уже на маршруте";
-	if (!weapon) return "Выдай оружие";
-	if (weapon.durability < 10) return "Нужен ремонт оружия";
-	if (scav.health < 25) return "Нужно хотя бы 25 здоровья";
-	if (state.level < map.level) return `Нужен уровень ${map.level}`;
-	if (state.supplies.ammo < getRaidAmmoCost(scav, map)) return "Мастерская пополняет патроны";
-	if (state.supplies.intel < map.intelCost) return "Радиорубка пополняет разведданные";
-	return null;
+	return getRaidQuote(state, scav, MAP_BY_ID[selectedMap]!).reason;
+}
+function supplyName(key: string) {
+	return ({ ammo: "Патроны", medicine: "Медикаменты", scrap: "Детали", intel: "Разведданные" } as Record<string, string>)[key] ?? key;
+}
+function expeditionQueue() {
+	const waiting = state.raids.filter((raid) => raid.expedition?.status === "choice");
+	if (!waiting.length) return "";
+	return `<section class="expedition-queue" aria-label="Экспедиции ждут приказа"><div class="section-head"><h2>${icon("intel", 20)} Нужен твой приказ</h2><span class="decision-pill">${waiting.length} ${waiting.length === 1 ? "боец на связи" : "бойца на связи"}</span></div>${waiting.map((raid) => expeditionCard(raid)).join("")}</section>`;
+}
+function cargoWarehouseNotice(raid: Raid) {
+	const cargo = raid.expedition?.cargo;
+	if (!cargo) return "";
+	const supplyCapacity = getSupplyCapacity(state);
+	const overflow = Object.entries(cargo.supplies).filter(([key, amount]) => amount > Math.max(0, supplyCapacity[key as keyof GameState["supplies"]] - state.supplies[key as keyof GameState["supplies"]])).map(([key, amount]) => `${supplyName(key)}: ${Math.ceil(amount - Math.max(0, supplyCapacity[key as keyof GameState["supplies"]] - state.supplies[key as keyof GameState["supplies"]]))}`);
+	const surplusGuns = Math.max(0, cargo.weaponIds.length - Math.max(0, getStorageCapacity(state) - state.weapons.length));
+	return overflow.length || surplusGuns ? `<p class="risk-note"><strong>На базе не всё поместится.</strong>${overflow.length ? ` Лишние припасы останутся за бортом: ${e(overflow.join(" · "))}.` : ""}${surplusGuns ? ` Стволы сверх вместимости арсенала будут проданы: ${surplusGuns}.` : ""} Можно освободить место или улучшить склад перед эвакуацией.</p>` : '<p class="field-hint">Текущая добыча помещается на складе базы.</p>';
+}
+function expeditionCard(raid: Raid, compact = false) {
+	const run = raid.expedition;
+	if (!run) return "";
+	const scav = state.scavs.find((item) => item.id === raid.scavId);
+	if (!scav) return "";
+	const capacity = run.capacity;
+	const selectedPerk = selectedPerks.get(raid.id);
+	const choices = getExpeditionChoices(state, raid, selectedPerk);
+	const hasPerk = Boolean(selectedPerk && run.offers.includes(selectedPerk));
+	const supplies = Object.entries(run.cargo.supplies).filter(([, amount]) => amount > 0).map(([key, amount]) => `<span>${icon(key, 14)} ${supplyName(key)} +${n(amount)}</span>`).join("");
+	const weapons = run.cargo.weaponIds.map((id) => WEAPON_BY_ID[id]).filter((item) => Boolean(item)).map((def) => `<span>${icon("arsenal", 14)} ${e(def!.name)}</span>`).join("");
+	const cargoMetrics = `<div class="loadout-stats"><span>Груз: ${getCargoWeight(run.cargo).toFixed(1)} / ${capacity.toFixed(1)} ед.</span><span>Ценность: ≈ ${n(getCargoValue(run.cargo))} ₽</span></div>`;
+	const warehouseWarning = `<div data-cargo-warehouse="${raid.id}">${cargoWarehouseNotice(raid)}</div>`;
+	return `<article class="decision-card" data-expedition="${raid.id}"><div class="decision-head"><div class="scav-avatar">${scavPortrait(scav.personality, scav.name)}</div><div><span class="eyebrow">${e(MAP_BY_ID[raid.mapId]!.name)} · точка ${run.stage} / 3</span><h3>${e(scav.name)} ждёт приказа</h3><p>${run.stage >= 3 ? "Маршрут пройден. Забери добычу на базу." : "Добыча ещё в рюкзаке. Можно уйти или рискнуть дальше."}</p></div>${!compact ? `<button class="button ghost small" data-scav="${scav.id}">Личное дело</button>` : ""}</div><div class="decision-content"><div class="expedition-stage" aria-label="Пройдено этапов: ${run.stage} из 3">${[1, 2, 3].map((stage) => `<span class="${stage < run.stage ? "done" : stage === run.stage ? "current" : ""}">${stage < run.stage ? "✓ " : ""}${stage}. ${stage === 1 ? "Вход" : stage === 2 ? "Глубина" : "Цель"}</span>`).join("")}</div><div class="cargo-summary"><div><span>В рюкзаке</span><strong>${n(run.cargo.money)} ₽</strong><small>Наличными · припасы ниже</small></div><div><span>Защищено от потери</span><strong>Открытия</strong><small>Остаются даже при провале</small></div><div><span>Здоровье бойца</span><strong>${Math.floor(scav.health)} / 100</strong><small>Броня на входе: ${Math.round(run.loadout.armorCondition)}%</small></div></div>${cargoMetrics}<p class="field-hint">Ценность — оценка наличных и находок, а не выплата рублями. Деньги не занимают место. При перегрузе боец оставляет лишние припасы; склад на базе тоже ограничен.</p><div class="cargo-items">${supplies}${weapons || (!supplies ? "<span>Рюкзак пока пуст</span>" : "")}</div>${warehouseWarning}${run.discoveries.length ? `<p class="field-hint">Записаны находки: ${run.discoveries.map((id) => e(BLUEPRINTS[id]?.label ?? "Разведанный маршрут")).join(" · ")}. Останутся у базы.</p>` : ""}${run.perks.length ? `<p class="field-hint">Опыт этой экспедиции: ${run.perks.map((perk) => e(RUN_PERKS[perk].label)).join(" · ")}</p>` : ""}${choices.length ? `<p class="risk-note">Следующий этап опаснее. При провале добыча в рюкзаке может быть потеряна; постоянные открытия сохранятся.</p>${run.offers.length ? `<div class="run-perk-pick"><h3>Находка маршрута</h3><p>Выбери один бонус. Он работает до конца этой экспедиции.</p><div class="decision-branches">${run.offers.map((perk) => `<button class="branch-choice ${perk === selectedPerk ? "active" : ""}" data-action="run-perk" data-id="${raid.id}" data-perk="${perk}" data-focus-key="perk-${perk}" aria-pressed="${perk === selectedPerk}"><strong>${e(RUN_PERKS[perk].label)}</strong><p>${e(RUN_PERKS[perk].description)}</p><small>${perk === selectedPerk ? "✓ Выбрано" : "Выбрать бонус"}</small></button>`).join("")}</div></div>` : ""}<h3>Куда дальше?</h3><div class="decision-branches">${choices.map((choice) => `<button class="branch-choice" data-action="continue-expedition" data-id="${raid.id}" data-branch="${choice.branch}" data-focus-key="branch-${choice.branch}" ${choice.reason || (run.offers.length && !hasPerk) ? "disabled" : ""}><strong>${e(choice.label)}</strong><p>${e(choice.description)}</p><small>${Math.round(choice.chance * 100)}% успеха · ${seconds(choice.duration)} · ${n(choice.money)} ₽ + ${choice.ammo} патр.${choice.intel ? ` + ${choice.intel} разв.` : ""}</small><span class="quote-note">${e(choice.reason ?? (run.offers.length && !hasPerk ? "Сначала выбери бонус маршрута" : `Этап ${run.stage + 1} · добыча под риском`))}</span></button>`).join("")}</div>` : ""}<div class="extract-row"><p>Эвакуация вернёт бойца и доставит добычу в пределах склада. ${run.stage < 3 ? "База готовит следующий выход." : "Экспедиция завершится."}</p><button class="button" data-action="extract" data-id="${raid.id}" data-focus-key="extract">${icon("check", 17)} Эвакуировать с добычей</button></div></div></article>`;
 }
 function hud() {
 	document.querySelector("#res-money")!.textContent = `${n(state.money)} ₽`;
@@ -231,13 +286,20 @@ function hud() {
 		end = xpForLevel(state.level + 1);
 	(document.querySelector("#xp-fill") as HTMLElement).style.width =
 		`${Math.min(100, ((state.xp - start) / (end - start)) * 100)}%`;
-	document.querySelector("#raid-badge")!.textContent = String(
-		state.raids.length
-	);
+	const waitingCount = state.raids.filter((raid) => raid.expedition?.status === "choice").length;
+	document.querySelector("#raid-badge")!.textContent = waitingCount ? "!" : String(state.raids.length);
+	document.querySelector<HTMLButtonElement>('.nav [data-page="raids"]')?.setAttribute("aria-label", waitingCount ? `Рейды: ${waitingCount} ждут приказа` : "Рейды");
 	document.querySelector("#passive-note")!.textContent =
-		`Мастерская: +${getIncomePerMinute(state)} ₽ / мин`;
+		state.money >= getRecoveryAllowance(state) ? "Резерв заполнен · прибыль в рейдах" : `Резерв: +${getIncomePerMinute(state)} ₽ / мин`;
+	const incomeStatus = document.querySelector<HTMLElement>("#income-status");
+	if (incomeStatus) incomeStatus.textContent = state.money >= getRecoveryAllowance(state) ? "РЕЗЕРВ ЗАПОЛНЕН" : `+${getIncomePerMinute(state)} ₽ / МИН ДО ${n(getRecoveryAllowance(state))} ₽`;
+	const capacities = getSupplyCapacity(state);
+	for (const key of ["ammo", "medicine", "scrap", "intel"] as const) {
+		const resource = document.querySelector(`#res-${key}`)?.closest<HTMLElement>(".resource");
+		if (resource) resource.title = `${supplyName(key)}: ${n(state.supplies[key])} / ${capacities[key]}. ${state.supplies[key] >= capacities[key] ? "Склад заполнен; производство ждёт расхода." : "База пополняет запас до вместимости."}`;
+	}
 	document.querySelector("#world-raid-note")!.textContent = state.raids.length
-		? `В РЕЙДАХ: ${state.raids.length} · ДИКИЕ НА СВЯЗИ`
+		? state.raids.some((raid) => raid.expedition?.status === "choice") ? "ЕСТЬ СИГНАЛ · НУЖЕН ТВОЙ ПРИКАЗ" : `В РЕЙДАХ: ${state.raids.length} · ДИКИЕ НА СВЯЗИ`
 		: "ОТРЯД НА БАЗЕ";
 	const orderCounter = document.querySelector("#auto-order-count");
 	if (orderCounter) orderCounter.textContent = String(state.scavs.filter((scav) => scav.autoRaid.enabled).length);
@@ -246,11 +308,11 @@ function hud() {
 		.forEach((node) => {
 			const raid = state.raids.find((r) => r.id === node.dataset.raidProgress);
 			if (raid)
-				node.style.width = `${Math.min(100, ((Date.now() - raid.startedAt) / (raid.endsAt - raid.startedAt)) * 100)}%`;
+				node.style.width = `${raid.expedition?.status === "choice" ? 100 : Math.min(100, ((Date.now() - raid.startedAt) / (raid.endsAt - raid.startedAt)) * 100)}%`;
 		});
 	document.querySelectorAll<HTMLElement>("[data-raid-time]").forEach((node) => {
 		const raid = state.raids.find((r) => r.id === node.dataset.raidTime);
-		if (raid) node.textContent = seconds((raid.endsAt - Date.now()) / 1000);
+		if (raid) node.textContent = raid.expedition?.status === "choice" ? "ПРИКАЗ" : seconds((raid.endsAt - Date.now()) / 1000);
 	});
 	document.querySelectorAll<HTMLElement>("[data-raid-phase]").forEach((node) => {
 		const raid = state.raids.find((r) => r.id === node.dataset.raidPhase);
@@ -272,17 +334,17 @@ function hud() {
 	});
 	document.querySelectorAll<HTMLElement>("[data-chance]").forEach((node) => {
 		const scav = state.scavs.find((s) => s.id === node.dataset.chance);
-		if (scav) node.textContent = `${Math.round(getRaidChance(state, scav, MAP_BY_ID[selectedMap]!) * 100)}% успеха`;
+		if (scav) node.textContent = `${Math.round(getRaidQuote(state, scav, MAP_BY_ID[selectedMap]!).chance * 100)}% успеха`;
 	});
 	document.querySelectorAll<HTMLElement>("[data-dispatch-cost]").forEach((node) => {
 		const scav = state.scavs.find((s) => s.id === node.dataset.dispatchCost), map = MAP_BY_ID[selectedMap]!;
-		if (scav) node.textContent = `${getRaidAmmoCost(scav, map)} патр.${map.intelCost ? ` + ${map.intelCost} разв.` : ""}`;
+		if (scav) { const quote = getRaidQuote(state, scav, map); node.textContent = `${n(quote.money)} ₽ + ${quote.ammo} патр.${quote.intel ? ` + ${quote.intel} разв.` : ""}${quote.medicine ? ` + ${quote.medicine} мед.` : ""}`; }
 	});
 	document.querySelectorAll<HTMLButtonElement>('[data-action="dispatch"]').forEach((node) => {
 		const scav = state.scavs.find((s) => s.id === node.dataset.id);
 		const reason = scav ? dispatchBlock(scav) : "Боец не найден";
 		node.disabled = Boolean(reason);
-		node.title = reason ?? "Разовый выход в выбранный сектор";
+		node.title = reason ?? "Первый этап новой экспедиции";
 	});
 	document.querySelectorAll<HTMLButtonElement>('[data-action="gear"]').forEach((node) => {
 		const scav = state.scavs.find((s) => s.id === node.dataset.id);
@@ -311,9 +373,10 @@ function hud() {
 		const busy = state.raids.some((r) => r.weaponInstanceId === weapon.id), mod = node.dataset.mod as Attachment;
 		const repair = node.dataset.action === "repair", cost = repair ? getRepairCost(weapon) : getModCost(weapon, mod);
 		const max = repair ? weapon.durability >= 100 : weapon.attachments[mod] >= 3;
-		node.disabled = busy || max || !canAfford(cost);
+		const compatible = repair || isAttachmentCompatible(weapon, mod);
+		node.disabled = busy || max || !compatible || !canAfford(cost);
 		const note = document.querySelector(`[data-weapon-cost="${weapon.id}-${repair ? "repair" : mod}"]`);
-		if (note) note.textContent = busy ? "Оружие в рейде" : max ? repair ? "Ремонт не нужен" : "Максимальный уровень" : costReason(cost);
+		if (note) note.textContent = busy ? "Оружие в рейде" : !compatible ? "Не подходит этому оружию" : max ? repair ? "Ремонт не нужен" : "Максимальный уровень" : costReason(cost);
 	});
 	document.querySelectorAll<HTMLElement>('[data-gear-note]').forEach((node) => {
 		const scav = state.scavs.find((s) => s.id === node.dataset.gearNote), slot = node.dataset.slot as GearSlot;
@@ -321,26 +384,95 @@ function hud() {
 	});
 	document.querySelectorAll<HTMLElement>("[data-dispatch-note]").forEach((node) => {
 		const scav = state.scavs.find((s) => s.id === node.dataset.dispatchNote);
-		if (scav) node.textContent = dispatchBlock(scav) ?? "Готов к разовому выходу";
+		if (scav) node.textContent = dispatchBlock(scav) ?? "Готов к первому этапу";
+	});
+	document.querySelectorAll<HTMLButtonElement>('[data-action="buy-supplies"]').forEach((node) => {
+		const reason = getMarketReason(state, node.dataset.id ?? "");
+		node.disabled = Boolean(reason);
+		const note = document.querySelector(`[data-market-note="${node.dataset.id}"]`); if (note) note.textContent = reason ?? "Полная партия поместится на складе";
+	});
+	document.querySelectorAll<HTMLButtonElement>('[data-action="craft-gear"]').forEach((node) => {
+		const reason = getGearCraftReason(state, node.dataset.id ?? "");
+		node.disabled = Boolean(reason);
+		const note = document.querySelector(`[data-craft-note="${node.dataset.id}"]`); if (note) note.textContent = reason ?? "Снаряжение появится на складе";
+	});
+	document.querySelectorAll<HTMLButtonElement>('[data-action="repair-gear"]').forEach((node) => {
+		const item = state.gearItems.find((gear) => gear.id === node.dataset.id); if (!item) return;
+		const owner = state.scavs.find((scav) => scav.loadout.armorItemId === item.id || scav.loadout.backpackItemId === item.id);
+		node.disabled = owner?.status === "raiding" || item.durability >= 100 || !canAfford(getGearRepairCost(item));
+	});
+	document.querySelectorAll<HTMLButtonElement>('[data-action="continue-expedition"]').forEach((node) => {
+		const raid = state.raids.find((item) => item.id === node.dataset.id); if (!raid) return;
+		const perk = selectedPerks.get(raid.id);
+		const quote = getExpeditionChoices(state, raid, perk).find((choice) => choice.branch === node.dataset.branch);
+		const reason = quote?.reason ?? (perk && raid.expedition?.offers.includes(perk) ? null : "Сначала выбери бонус маршрута");
+		node.disabled = !quote || Boolean(reason);
+		const note = node.querySelector<HTMLElement>(".quote-note"); if (note) note.textContent = reason ?? `Этап ${(raid.expedition?.stage ?? 0) + 1} · добыча под риском`;
+	});
+	document.querySelectorAll<HTMLElement>('[data-supply-count]').forEach((node) => {
+		const key = node.dataset.supplyCount as keyof GameState["supplies"];
+		if (key in state.supplies) node.textContent = n(state.supplies[key]);
+	});
+	document.querySelectorAll<HTMLButtonElement>('[data-action="recycle-gear"], [data-action="recycle-weapon"]').forEach((node) => {
+		const gear = node.dataset.action === "recycle-gear" ? state.gearItems.find((item) => item.id === node.dataset.id) : null;
+		const weapon = !gear ? state.weapons.find((item) => item.id === node.dataset.id) : null;
+		if (!gear && !weapon) return;
+		const yieldValue = gear ? getGearRecycleYield(gear) : getWeaponRecycleYield(weapon!);
+		const busy = gear ? state.scavs.some((scav) => scav.status === "raiding" && (scav.loadout.armorItemId === gear.id || scav.loadout.backpackItemId === gear.id)) : state.raids.some((raid) => raid.weaponInstanceId === weapon!.id);
+		const reason = busy ? "Предмет сейчас на маршруте" : weapon && state.weapons.length <= 1 ? "Последний ствол нужен отряду" : state.supplies.scrap + yieldValue > capacities.scrap ? "Нет места для деталей: потрать запас или развивай склад" : null;
+		node.disabled = Boolean(reason);
+		node.title = reason ?? `Разбор даст ${yieldValue} деталей`;
+		const note = node.parentElement?.querySelector<HTMLElement>('[data-recycle-note]'); if (note) note.textContent = reason ?? "Разбор возвращает детали; предмет исчезнет";
+	});
+	document.querySelectorAll<HTMLElement>('[data-cargo-warehouse]').forEach((node) => {
+		const raid = state.raids.find((item) => item.id === node.dataset.cargoWarehouse); if (!raid) return;
+		const notice = cargoWarehouseNotice(raid); if (node.innerHTML !== notice) node.innerHTML = notice;
 	});
 }
 function gearCard(scav: Scav, slot: GearSlot) {
 	const level = scav.gear[slot], max = level >= MAX_GEAR_LEVEL, cost = getGearCost(scav, slot);
 	const effect = slot === "armor"
-		? level ? `+${level * 2} п.п. успеха · травмы −${level * 16}%` : "Защита от ранений и гибели"
-		: level ? `+${level * 12}% добычи` : "Больше добычи с каждого выхода";
+		? "Подготовка дополняет защиту выбранной брони и снижает травмы."
+		: "Подготовка повышает вместимость выбранного рюкзака и добычу.";
 	return `<div class="gear-card"><div class="gear-head">${icon(slot, 22)}<div><strong>${GEAR_LABELS[slot]}</strong><span>УР. ${level} / ${MAX_GEAR_LEVEL}</span></div><div class="gear-pips" aria-label="Уровень ${level} из ${MAX_GEAR_LEVEL}">${Array.from({ length: MAX_GEAR_LEVEL }, (_, i) => `<i class="${i < level ? "filled" : ""}"></i>`).join("")}</div></div><p>${effect}</p><button class="button ghost small" data-action="gear" data-id="${scav.id}" data-slot="${slot}" data-focus-key="gear-${slot}" ${max || scav.status === "raiding" || !canAfford(cost) ? "disabled" : ""}>${max ? "Полный комплект" : `Улучшить · ${costLabel(cost)}`}</button><small class="cost-reason" data-gear-note="${scav.id}" data-slot="${slot}">${scav.status === "raiding" ? "После возвращения" : max ? "Полный комплект" : costReason(cost)}</small></div>`;
 }
 function autoRaidCard(scav: Scav) {
 	const plan = scav.autoRaid, route = MAP_BY_ID[plan.mapId], selected = MAP_BY_ID[selectedMap]!;
-	return `<div class="auto-order ${plan.enabled ? "enabled" : ""}"><div class="auto-route">${route ? e(route.name) : "Маршрут не задан"}<span>Выходов: ${n(plan.runs)}</span></div><p data-auto-status="${scav.id}">${e(getAutoRaidStatus(state, scav))}</p><label class="threshold-label">Выходить при здоровье<select data-auto-health="${scav.id}" data-focus-key="auto-health" aria-label="Порог здоровья для ${e(scav.name)}">${[70, 85, 100].map((health) => `<option value="${health}" ${plan.minHealth === health ? "selected" : ""}>${health} / 100${health === 70 ? " · обычный" : health === 85 ? " · бережный" : " · полное"}</option>`).join("")}</select></label>${plan.enabled ? `<div class="auto-order-actions"><button class="button ghost small" data-action="auto-route" data-id="${scav.id}" data-focus-key="auto-route">Маршрут: ${e(selected.name)}</button><button class="button danger small" data-action="auto-stop" data-id="${scav.id}" data-focus-key="auto-stop">${icon("stop", 12)} Остановить автовыходы</button></div><small>Текущий рейд продолжится. Следующий выход отменится.</small>` : `<button class="button secondary small" data-action="auto-enable" data-id="${scav.id}" data-focus-key="auto-enable">${icon("repeat", 14)} Автовыходы: ${e(selected.name)}</button><small>Повторяет рейды и офлайн. Может потерять бойца и оружие.</small>`}</div>`;
+	return `<div class="auto-order ${plan.enabled ? "enabled" : ""}"><div class="auto-route">${route ? e(route.name) : "Маршрут не задан"}<span>Выходов: ${n(plan.runs)}</span></div><p data-auto-status="${scav.id}">${e(getAutoRaidStatus(state, scav))}</p><label class="threshold-label">Глубина следующего автовыхода<select data-auto-depth="${scav.id}" data-focus-key="auto-depth" aria-label="Глубина автовыхода для ${e(scav.name)}">${[1,2,3].map((depth) => `<option value="${depth}" ${plan.maxDepth === depth ? "selected" : ""}>${depth} ${depth === 1 ? "этап · ранняя эвакуация" : depth === 2 ? "этапа · умеренный риск" : "этапа · полный маршрут"}</option>`).join("")}</select></label><label class="threshold-label">Выходить при здоровье<select data-auto-health="${scav.id}" data-focus-key="auto-health" aria-label="Порог здоровья для ${e(scav.name)}">${[70,85,100].map((health) => `<option value="${health}" ${plan.minHealth === health ? "selected" : ""}>${health} / 100${health === 70 ? " · обычный" : health === 85 ? " · бережный" : " · полное"}</option>`).join("")}</select></label>${plan.enabled ? `<div class="auto-order-actions"><button class="button ghost small" data-action="auto-route" data-id="${scav.id}" data-focus-key="auto-route">Маршрут: ${e(selected.name)}</button><button class="button danger small" data-action="auto-stop" data-id="${scav.id}" data-focus-key="auto-stop">${icon("stop",12)} Остановить автовыходы</button></div><small>Текущая экспедиция останется в пути. Будущие выходы отменятся.</small>` : `<button class="button secondary small" data-action="auto-enable" data-id="${scav.id}" data-focus-key="auto-enable">${icon("repeat",14)} Автовыходы: ${e(selected.name)}</button><small>Повторяет маршрут и офлайн, эвакуируется на глубине ${plan.maxDepth}. Каждый выход несёт риск.</small>`}</div>`;
+}
+function activeRaidPanel(raid: Raid) {
+	const radio = raid.expedition?.trail.at(-1);
+	if (raid.expedition?.status === "choice") return expeditionCard(raid, true);
+	return `<div class="active-raid"><div class="active-raid-heading">${icon("raids", 17)}<strong>${e(MAP_BY_ID[raid.mapId]!.name)}</strong><span>${raid.isAuto ? `АВТО · ДО ${raid.expedition?.autoDepth ?? 1}` : "ЭКСПЕДИЦИЯ"}</span></div><div class="raid-time"><span data-raid-phase="${raid.id}">${e(getRaidPhase(raid, Date.now()).label)}</span><strong data-raid-time="${raid.id}">${seconds((raid.endsAt - Date.now()) / 1000)}</strong></div><div class="progress"><i data-raid-progress="${raid.id}"></i></div><p>Этап ${raid.expedition?.stage ?? 1} / ${raid.expedition ? 3 : 1}: ${Math.round(raid.chance * 100)}% успеха · ${e(TACTICS[raid.tactic].label)}. ${raid.expedition ? "В точке связи выбери эвакуацию или путь дальше." : "Старый маршрут завершится по исходным правилам."}</p>${radio ? `<p class="radio-message">${icon("intel",14)} ${e(radio.text)}</p>` : ""}${raid.expedition?.cargo.money ? `<div class="loadout-stats"><span>В рюкзаке: ${n(raid.expedition.cargo.money)} ₽</span><span>Ценность: ≈ ${n(getCargoValue(raid.expedition.cargo))} ₽</span></div>` : ""}</div>`;
+}
+function loadoutEditor(scav: Scav, trainingExpanded = false) {
+	const stats = getLoadoutStats(state, scav), busy = scav.status === "raiding";
+	const role = state.weapons.find((weapon) => weapon.id === scav.weaponInstanceId);
+	const options = (["armor", "backpack"] as GearSlot[]).map((slot) => {
+		const itemId = slot === "armor" ? scav.loadout.armorItemId : scav.loadout.backpackItemId;
+		const item = state.gearItems.find((gear) => gear.id === itemId);
+		const model = item ? getGearModel(item) : null;
+		return `<label class="field-label">${slot === "armor" ? "Броня" : "Рюкзак"}<select data-equip-gear="${scav.id}" data-slot="${slot}" data-focus-key="equip-${slot}" aria-label="${slot === "armor" ? "Броня" : "Рюкзак"} для ${e(scav.name)}" ${busy ? "disabled" : ""}><option value="">Без отдельного предмета</option>${state.gearItems.filter((gear) => getGearModel(gear).slot === slot && !state.scavs.some((person) => person.id !== scav.id && (person.loadout.armorItemId === gear.id || person.loadout.backpackItemId === gear.id))).map((gear) => `<option value="${gear.id}" ${gear.id === itemId ? "selected" : ""}>${e(getGearModel(gear).label)} · ${Math.round(gear.durability)}%</option>`).join("")}</select></label>${model && item ? `<div class="loadout-item-note"><p>${e(model.description)}</p><small>Состояние ${Math.round(item.durability)}% · вес ${model.weight} кг${model.protection ? ` · защита до ${Math.round(model.protection * 100)}%` : ""}${model.capacity ? ` · вместимость ${model.capacity} ед.` : ""}</small>${item.durability < 100 ? `<button class="button ghost small" data-action="repair-gear" data-id="${item.id}" data-focus-key="repair-${slot}" ${busy || !canAfford(getGearRepairCost(item)) ? "disabled" : ""}>Ремонт · ${costLabel(getGearRepairCost(item))}</button>` : ""}</div>` : '<p class="field-hint">Базовое оснащение сохранится. Отдельный предмет добавит свойства и износ.</p>'}`;
+	}).join("");
+	return `<section class="inspector-section loadout-section"><div class="inspector-section-title"><h3>${busy ? "Комплект следующего выхода" : "Комплект для выхода"}</h3><button class="text-button" data-action="open-equipment" data-focus-key="equipment-store">Склад и сборка →</button></div><div class="loadout-stats"><span>Вес ${stats.weight.toFixed(1)} кг</span><span>Защита ${Math.round(stats.protection * 100)}%</span><span>Груз до ${stats.capacity.toFixed(1)} ед.</span><span>Время ×${stats.speedMultiplier.toFixed(2)}</span></div>${role ? `<p class="field-hint">${e(getWeaponRole(role).label)}: ${e(getWeaponRole(role).description)}</p>` : ""}${options}<label class="field-label">Боеприпас<select data-ammo-type="${scav.id}" data-focus-key="ammo-type" aria-label="Боеприпас для ${e(scav.name)}" ${busy ? "disabled" : ""}><option value="standard" ${scav.loadout.ammoType === "standard" ? "selected" : ""}>Обычный · меньше расход</option><option value="piercing" ${scav.loadout.ammoType === "piercing" ? "selected" : ""}>Бронебойный · больше расход</option></select></label><p class="field-hint">Бронебойный боеприпас повышает шанс в бою, но требует больше патронов.</p><label class="loadout-check"><input type="checkbox" data-medkit="${scav.id}" data-focus-key="medkit" ${scav.loadout.medkit ? "checked" : ""} ${busy ? "disabled" : ""}><span>Аптечка в рейд<small>Тратит медикаменты на входе и снижает тяжесть травм.</small></span></label><details class="training-section" ${trainingExpanded ? "open" : ""}><summary data-focus-key="training-summary">Подготовка оснащения · броня ${scav.gear.armor} / рюкзак ${scav.gear.backpack}</summary><p class="field-hint">Постоянная подготовка бойца дополняет выбранные предметы.</p><div class="gear-grid">${gearCard(scav, "armor")}${gearCard(scav, "backpack")}</div></details></section>`;
+}
+function sortiePreview(scav: Scav) {
+	const map = MAP_BY_ID[selectedMap]!, quote = getRaidQuote(state, scav, map);
+	return `<section class="inspector-section sortie-section"><h3>${scav.status === "raiding" ? "Следующая экспедиция" : "Новая экспедиция"}</h3><label class="field-label">Сектор<select data-inspector-map data-focus-key="map" aria-label="Сектор для экспедиции">${MAPS.map((sector) => `<option value="${sector.id}" ${sector.id === selectedMap ? "selected" : ""} ${state.level < sector.level ? "disabled" : ""}>${e(sector.name)}${state.level < sector.level ? ` · ур. ${sector.level}` : ""}</option>`).join("")}</select></label><div class="sortie-preview"><span><strong data-chance="${scav.id}">${Math.round(quote.chance * 100)}% успеха</strong><small>Первый этап</small></span><span><strong>${seconds(quote.duration)}</strong><small>До точки связи</small></span><span><strong data-dispatch-cost="${scav.id}">${n(quote.money)} ₽ + ${quote.ammo} патр.${quote.intel ? ` + ${quote.intel} разв.` : ""}${quote.medicine ? ` + ${quote.medicine} мед.` : ""}</strong><small>На входе</small></span></div><p class="field-hint">До трёх этапов. После каждого — эвакуация или риск дальше. Добыча остаётся в рюкзаке до возвращения; чертежи сохраняются сразу.</p></section>`;
+}
+function inspectorFooter(scav: Scav, raid: Raid | undefined) {
+	const run = raid?.expedition;
+	if (raid && run?.status === "choice") return `<footer class="inspector-actions decision-footer"><div><strong>Точка ${run.stage} / 3 · связь установлена</strong><small class="dispatch-preview">В рюкзаке ≈ ${n(getCargoValue(run.cargo))} ₽</small><span>Выбери путь выше или возвращайся сейчас</span></div><button class="button" data-action="extract" data-id="${raid.id}" data-focus-key="footer-extract">Эвакуация ${icon("check", 17)}</button></footer>`;
+	const map = MAP_BY_ID[selectedMap]!, quote = getRaidQuote(state, scav, map);
+	return `<footer class="inspector-actions"><div><strong>${raid ? "Боец на маршруте" : e(map.name)}</strong><small class="dispatch-preview"><b data-chance="${scav.id}">${Math.round(quote.chance * 100)}% успеха</b> · <span data-dispatch-cost="${scav.id}">${n(quote.money)} ₽ + ${quote.ammo} патр.${quote.intel ? ` + ${quote.intel} разв.` : ""}${quote.medicine ? ` + ${quote.medicine} мед.` : ""}</span></small><span data-dispatch-note="${scav.id}">${e(quote.reason ?? "Готов к первому этапу")}</span></div><button class="button" data-action="dispatch" data-id="${scav.id}" data-focus-key="dispatch" ${quote.reason ? "disabled" : ""}>В рейд ${icon("arrow", 17)}</button></footer>`;
 }
 function scavCard(scav: Scav) {
 	const raid = state.raids.find((r) => r.scavId === scav.id);
 	const weapon = state.weapons.find((w) => w.id === scav.weaponInstanceId);
 	const personality = PERSONALITY_BY_ID[scav.personality]!;
 	const ready = !dispatchBlock(scav);
-	return `<button class="scav-card ${raid ? "on-mission" : ""} ${selectedScav === scav.id ? "selected" : ""}" data-scav="${scav.id}" aria-label="Открыть бойца ${e(scav.name)}"><span class="scav-card-top"><span class="scav-avatar">${scavPortrait(scav.personality, scav.name)}</span><span class="scav-identity"><strong>${e(scav.name)}</strong><span>${e(personality.name)} · ур. ${scav.level}</span></span><span class="scav-state ${raid ? "away" : ready ? "ready" : "waiting"}">${raid ? "В рейде" : ready ? "Готов" : scav.health < 25 ? "Ранен" : "На базе"}</span></span><span class="scav-card-body"><span class="scav-weapon">${icon("arsenal", 17)} ${weapon ? e(getWeaponDefinition(weapon).name) : "Без оружия"}</span><span class="scav-health"><span>Здоровье <b data-health="${scav.id}">${Math.floor(scav.health)} / 100</b></span><span class="health-track"><i data-health-fill="${scav.id}" style="width:${scav.health}%"></i></span></span>${raid ? `<span class="scav-raid"><span><b>${e(MAP_BY_ID[raid.mapId]!.name)}</b><strong data-raid-time="${raid.id}">${seconds((raid.endsAt - Date.now()) / 1000)}</strong></span><span class="progress"><i data-raid-progress="${raid.id}"></i></span><small data-raid-phase="${raid.id}">${e(getRaidPhase(raid, Date.now()).label)}</small></span>` : `<span class="scav-idle-note">${scav.autoRaid.enabled ? `${icon("repeat", 13)} ${e(MAP_BY_ID[scav.autoRaid.mapId]!.name)} · автовыходы` : `${icon("armor", 13)} Броня ${scav.gear.armor} · Рюкзак ${scav.gear.backpack}`}</span>`}</span><span class="scav-card-bottom"><span>Снаряжение и приказ</span>${icon("arrow", 16)}</span></button>`;
+	const waiting = raid?.expedition?.status === "choice";
+	return `<button class="scav-card ${raid ? "on-mission" : ""} ${selectedScav === scav.id ? "selected" : ""}" data-scav="${scav.id}" aria-label="${waiting ? "Нужен приказ: " : "Открыть бойца "}${e(scav.name)}"><span class="scav-card-top"><span class="scav-avatar">${scavPortrait(scav.personality, scav.name)}</span><span class="scav-identity"><strong>${e(scav.name)}</strong><span>${e(personality.name)} · ур. ${scav.level}</span></span><span class="scav-state ${waiting ? "decision" : raid ? "away" : ready ? "ready" : "waiting"}">${waiting ? "Приказ" : raid ? "В рейде" : ready ? "Готов" : scav.health < 25 ? "Ранен" : "На базе"}</span></span><span class="scav-card-body"><span class="scav-weapon">${icon("arsenal", 17)} ${weapon ? e(getWeaponDefinition(weapon).name) : "Без оружия"}</span><span class="scav-health"><span>Здоровье <b data-health="${scav.id}">${Math.floor(scav.health)} / 100</b></span><span class="health-track"><i data-health-fill="${scav.id}" style="width:${scav.health}%"></i></span></span>${raid ? `<span class="scav-raid"><span><b>${e(MAP_BY_ID[raid.mapId]!.name)}${raid.expedition ? ` · этап ${raid.expedition.stage}/3` : ""}</b><strong data-raid-time="${raid.id}">${waiting ? "ПРИКАЗ" : seconds((raid.endsAt - Date.now()) / 1000)}</strong></span><span class="progress"><i data-raid-progress="${raid.id}"></i></span><small data-raid-phase="${raid.id}">${e(getRaidPhase(raid, Date.now()).label)}</small></span>` : `<span class="scav-idle-note">${scav.autoRaid.enabled ? `${icon("repeat", 13)} ${e(MAP_BY_ID[scav.autoRaid.mapId]!.name)} · глубина ${scav.autoRaid.maxDepth}` : `${icon("backpack", 13)} ${getLoadoutStats(state, scav).capacity.toFixed(1)} ед. груза · ${getLoadoutStats(state, scav).weight.toFixed(1)} кг экип.`}</span>`}</span><span class="scav-card-bottom"><span>${waiting ? "Эвакуация или ещё один этап →" : "Снаряжение и приказ"}</span>${icon("arrow", 16)}</span></button>`;
 }
 function openInspector(id: string) {
 	if (!state.scavs.some((scav) => scav.id === id)) return;
@@ -367,10 +499,10 @@ function renderInspector() {
 	const active = document.activeElement instanceof HTMLElement && root.contains(document.activeElement) ? document.activeElement : null;
 	const focusKey = active?.dataset.focusKey;
 	const autoExpanded = root.querySelector<HTMLDetailsElement>(".order-section")?.open;
-	const raid = state.raids.find((r) => r.scavId === scav.id), map = MAP_BY_ID[selectedMap]!;
+	const trainingExpanded = root.querySelector<HTMLDetailsElement>(".training-section")?.open;
+	const raid = state.raids.find((r) => r.scavId === scav.id);
 	const weapon = state.weapons.find((w) => w.id === scav.weaponInstanceId);
-	const reason = dispatchBlock(scav), chance = Math.round(getRaidChance(state, scav, map) * 100);
-	root.innerHTML = `<div class="inspector-backdrop"><aside class="inspector" role="dialog" aria-modal="true" aria-labelledby="scav-title"><div class="inspector-head"><div><span class="eyebrow">Личное дело · ур. ${scav.level}</span><h2 id="scav-title">${e(scav.name)}</h2></div><button class="icon-button" data-action="close-inspector" data-focus-key="close" aria-label="Закрыть бойца">×</button></div><div class="inspector-scroll"><div class="scav-profile"><div class="inspector-portrait">${scavPortrait(scav.personality, scav.name)}</div><div><strong>${e(PERSONALITY_BY_ID[scav.personality]!.name)}</strong><p>${e(PERSONALITY_BY_ID[scav.personality]!.description)}</p><div class="profile-stats"><span>Бой <b>${scav.combat}</b></span><span>Поиск <b>${scav.scouting}</b></span><span>Выходы <b>${scav.raids}</b></span></div></div></div><div class="health-panel"><div><span>Здоровье</span><strong data-health="${scav.id}">${Math.floor(scav.health)} / 100</strong></div><div class="health-track"><i data-health-fill="${scav.id}" style="width:${scav.health}%"></i></div><div class="health-panel-bottom"><span data-heal-note="${scav.id}">Медблок восстанавливает бесплатно</span><button class="button ghost small" data-action="heal" data-id="${scav.id}" data-focus-key="heal" ${raid || scav.health >= 100 || state.supplies.medicine < medicineCost(scav) ? "disabled" : ""}>${icon("medicine", 15)} Лечить · ${medicineCost(scav)} мед.</button></div></div>${raid ? `<div class="active-raid"><div class="active-raid-heading">${icon("raids", 17)}<strong>${e(MAP_BY_ID[raid.mapId]!.name)}</strong><span>${raid.isAuto ? "АВТОВЫХОД" : "РАЗОВЫЙ"}</span></div><div class="raid-time"><span data-raid-phase="${raid.id}">${e(getRaidPhase(raid, Date.now()).label)}</span><strong data-raid-time="${raid.id}">${seconds((raid.endsAt - Date.now()) / 1000)}</strong></div><div class="progress"><i data-raid-progress="${raid.id}"></i></div><p>На выходе: ${Math.round(raid.chance * 100)}% успеха · ${e(TACTICS[raid.tactic].label)}. Снаряжение доступно после возвращения.</p></div>` : ""}<section class="inspector-section"><div class="inspector-section-title"><h3>Оружие</h3>${weapon ? `<button class="text-button" data-action="inspect-weapon" data-id="${weapon.id}" data-focus-key="weapon-detail">Ремонт и моды →</button>` : ""}</div>${weapon ? `<div class="equipped-art" style="--rarity:${RARITY_COLORS[getWeaponDefinition(weapon).rarity]}">${gunArt(getWeaponDefinition(weapon).category, RARITY_COLORS[getWeaponDefinition(weapon).rarity])}<span><b>${e(getWeaponDefinition(weapon).name)}</b><small>Мощь ${getWeaponPower(weapon)} · состояние ${Math.round(weapon.durability)}%</small></span></div>` : '<p class="field-hint">Для выхода нужен исправный ствол из арсенала.</p>'}<label class="field-label">${raid ? "Оружие занято в рейде" : "Выдать оружие"}<select aria-label="Оружие для ${e(scav.name)}" data-equip="${scav.id}" data-focus-key="weapon" ${raid ? "disabled" : ""}><option value="">Без оружия</option>${state.weapons.filter((w) => !state.scavs.some((s) => s.id !== scav.id && s.weaponInstanceId === w.id)).map((w) => `<option value="${w.id}" ${w.id === scav.weaponInstanceId ? "selected" : ""}>${e(getWeaponDefinition(w).name)} · ${Math.round(w.durability)}%</option>`).join("")}</select></label></section><section class="inspector-section"><h3>${raid ? "Тактика следующего выхода" : "Тактика"}</h3><div class="tactics" role="group" aria-label="Тактика для ${e(scav.name)}">${(Object.keys(TACTICS) as RaidTactic[]).map((tactic) => `<button class="${tactic === scav.tactic ? "active" : ""}" data-action="tactic" data-id="${scav.id}" data-tactic-value="${tactic}" data-focus-key="tactic-${tactic}" aria-pressed="${scav.tactic === tactic}">${TACTICS[tactic].label}</button>`).join("")}</div><p class="field-hint">${e(TACTICS[scav.tactic].description)}</p><div class="gear-grid">${gearCard(scav, "armor")}${gearCard(scav, "backpack")}</div></section><section class="inspector-section sortie-section"><h3>${raid ? "Следующий разовый выход" : "Разовый выход"}</h3><label class="field-label">Сектор<select data-inspector-map data-focus-key="map" aria-label="Сектор для разового выхода">${MAPS.map((m) => `<option value="${m.id}" ${m.id === selectedMap ? "selected" : ""} ${state.level < m.level ? "disabled" : ""}>${e(m.name)}${state.level < m.level ? ` · ур. ${m.level}` : ""}</option>`).join("")}</select></label><div class="sortie-preview"><span><strong data-chance="${scav.id}">${chance}% успеха</strong><small>Оценка возвращения</small></span><span><strong>${seconds(getRaidDuration(state, scav, map))}</strong><small>Время на маршруте</small></span><span><strong>${getRaidAmmoCost(scav, map)} патр.${map.intelCost ? ` + ${map.intelCost} разв.` : ""}</strong><small>За один выход</small></span></div><p class="field-hint">При провале возможна потеря бойца и оружия.</p></section><details class="order-section" ${autoExpanded ?? scav.autoRaid.enabled ? "open" : ""}><summary data-focus-key="order-summary">${icon("repeat", 18)}<span>Постоянный приказ<small>${scav.autoRaid.enabled ? `${e(MAP_BY_ID[scav.autoRaid.mapId]!.name)} · включён` : "Повторять выходы автоматически"}</small></span><b>${scav.autoRaid.enabled ? "ВКЛ" : "+"}</b></summary>${autoRaidCard(scav)}</details></div><footer class="inspector-actions"><div><strong>${raid ? "Боец на маршруте" : e(map.name)}</strong><small class="dispatch-preview"><b data-chance="${scav.id}">${chance}% успеха</b> · <span data-dispatch-cost="${scav.id}">${getRaidAmmoCost(scav, map)} патр.${map.intelCost ? ` + ${map.intelCost} разв.` : ""}</span></small><span data-dispatch-note="${scav.id}">${e(reason ?? "Готов к разовому выходу")}</span></div><button class="button" data-action="dispatch" data-id="${scav.id}" data-focus-key="dispatch" ${reason ? "disabled" : ""}>В рейд ${icon("arrow", 17)}</button></footer></aside></div>`;
+	root.innerHTML = `<div class="inspector-backdrop"><aside class="inspector" role="dialog" aria-modal="true" aria-labelledby="scav-title"><div class="inspector-head"><div><span class="eyebrow">Личное дело · ур. ${scav.level}</span><h2 id="scav-title">${e(scav.name)}</h2></div><button class="icon-button" data-action="close-inspector" data-focus-key="close" aria-label="Закрыть бойца">×</button></div><div class="inspector-scroll">${raid?.expedition?.status === "choice" ? activeRaidPanel(raid) : ""}<div class="scav-profile"><div class="inspector-portrait">${scavPortrait(scav.personality, scav.name)}</div><div><strong>${e(PERSONALITY_BY_ID[scav.personality]!.name)}</strong><p>${e(PERSONALITY_BY_ID[scav.personality]!.description)}</p><div class="profile-stats"><span>Бой <b>${scav.combat}</b></span><span>Поиск <b>${scav.scouting}</b></span><span>Выходы <b>${scav.raids}</b></span></div></div></div><div class="health-panel"><div><span>Здоровье</span><strong data-health="${scav.id}">${Math.floor(scav.health)} / 100</strong></div><div class="health-track"><i data-health-fill="${scav.id}" style="width:${scav.health}%"></i></div><div class="health-panel-bottom"><span data-heal-note="${scav.id}">Медблок восстанавливает бесплатно</span><button class="button ghost small" data-action="heal" data-id="${scav.id}" data-focus-key="heal" ${raid || scav.health >= 100 || state.supplies.medicine < medicineCost(scav) ? "disabled" : ""}>${icon("medicine", 15)} Лечить · ${medicineCost(scav)} мед.</button></div></div>${raid && raid.expedition?.status !== "choice" ? activeRaidPanel(raid) : ""}<section class="inspector-section"><div class="inspector-section-title"><h3>Оружие</h3>${weapon ? `<button class="text-button" data-action="inspect-weapon" data-id="${weapon.id}" data-focus-key="weapon-detail">Ремонт и моды →</button>` : ""}</div>${weapon ? `<div class="equipped-art" style="--rarity:${RARITY_COLORS[getWeaponDefinition(weapon).rarity]}">${gunArt(getWeaponDefinition(weapon).category, RARITY_COLORS[getWeaponDefinition(weapon).rarity])}<span><b>${e(getWeaponDefinition(weapon).name)}</b><small>Мощь ${getWeaponPower(weapon)} · состояние ${Math.round(weapon.durability)}%</small></span></div>` : '<p class="field-hint">Для выхода нужен исправный ствол из арсенала.</p>'}<label class="field-label">${raid ? "Оружие занято в рейде" : "Выдать оружие"}<select aria-label="Оружие для ${e(scav.name)}" data-equip="${scav.id}" data-focus-key="weapon" ${raid ? "disabled" : ""}><option value="">Без оружия</option>${state.weapons.filter((w) => !state.scavs.some((s) => s.id !== scav.id && s.weaponInstanceId === w.id)).map((w) => `<option value="${w.id}" ${w.id === scav.weaponInstanceId ? "selected" : ""}>${e(getWeaponDefinition(w).name)} · ${Math.round(w.durability)}%</option>`).join("")}</select></label></section><section class="inspector-section"><h3>${raid ? "Тактика следующего выхода" : "Тактика"}</h3><div class="tactics" role="group" aria-label="Тактика для ${e(scav.name)}">${(Object.keys(TACTICS) as RaidTactic[]).map((tactic) => `<button class="${tactic === scav.tactic ? "active" : ""}" data-action="tactic" data-id="${scav.id}" data-tactic-value="${tactic}" data-focus-key="tactic-${tactic}" aria-pressed="${scav.tactic === tactic}">${TACTICS[tactic].label}</button>`).join("")}</div><p class="field-hint">${e(TACTICS[scav.tactic].description)}</p></section>${loadoutEditor(scav, trainingExpanded)}${sortiePreview(scav)}<details class="order-section" ${autoExpanded ?? scav.autoRaid.enabled ? "open" : ""}><summary data-focus-key="order-summary">${icon("repeat", 18)}<span>Постоянный приказ<small>${scav.autoRaid.enabled ? `${e(MAP_BY_ID[scav.autoRaid.mapId]!.name)} · включён` : "Повторять выходы автоматически"}</small></span><b>${scav.autoRaid.enabled ? "ВКЛ" : "+"}</b></summary>${autoRaidCard(scav)}</details></div>${inspectorFooter(scav, raid)}</aside></div>`;
 	const scroll = root.querySelector<HTMLElement>(".inspector-scroll"); if (scroll) scroll.scrollTop = oldScroll;
 	if (focusKey) {
 		const replacement = root.querySelector<HTMLElement>(`[data-focus-key="${focusKey}"]`);
@@ -416,18 +548,23 @@ function contractCard(contract: Contract) {
 	return `<article class="contract ${lockReason && !claimed ? "contract-locked" : ""}"><div class="contract-mark">${icon(claimed ? "check" : lockReason ? "lock" : "contracts", 21)}</div><div class="contract-copy"><h3>${e(contract.name)}</h3><p>${e(contract.description)}</p><div class="progress"><i style="width:${Math.min(100, (progress / contract.target) * 100)}%"></i></div><small>${n(Math.min(contract.target, progress))} / ${n(contract.target)}</small>${lockReason && !claimed ? `<div class="contract-lock">${icon("lock", 11)} ${e(lockReason)}</div>` : ""}<div class="reward-supplies">${supplies}</div></div><div class="contract-reward"><span>+${n(contract.reward.money)} ₽</span><span class="muted">+${contract.reward.xp} опыта</span><button class="button secondary small" data-action="claim" data-id="${contract.id}" ${!ready || claimed ? "disabled" : ""}>${claimed ? "Выполнено" : lockReason ? "Закрыт" : ready ? "Забрать" : "В работе"}</button></div></article>`;
 }
 function journalCard(report: RaidReport) {
-	return `<details class="journal-entry" data-report="${report.id}"><summary><time>${new Date(report.at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</time><div class="journal-copy"><strong>${e(report.scavName)} · ${e(MAP_BY_ID[report.mapId]!.name)}</strong><p>${e(report.description)}</p><div class="journal-meta"><span>${report.isAuto ? "АВТОВЫХОД" : "РАЗОВЫЙ"} · ${e(TACTICS[report.tactic].label)}</span><span>${report.money ? `+${n(report.money)} ₽ · ` : ""}Детали +${report.supplies.scrap} · патроны +${report.supplies.ammo}</span></div></div><b class="tag report-result ${report.success ? "success" : "failure"}">${report.success ? "ВЕРНУЛСЯ" : report.lostScav ? "ПОТЕРЯН" : "ПРОВАЛ"}</b><span class="journal-expand">${icon("arrow", 14)}</span></summary><div class="journal-detail">${report.weaponId ? `<div class="report-trophy" style="--rarity:${RARITY_COLORS[WEAPON_BY_ID[report.weaponId]!.rarity]}">${icon("arsenal", 21)}<div><strong>${e(WEAPON_BY_ID[report.weaponId]!.name)}</strong><span>${report.weaponAutoSold ? "Продано: арсенал заполнен" : "Найдено и отправлено в арсенал"}</span></div></div>` : ""}<ol class="route-timeline">${report.events.map((event, i) => `<li class="event-${event.kind}"><div class="timeline-marker">0${i + 1}</div><div><div class="timeline-label"><strong>${e(event.label)}</strong><time>${new Date(event.at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time></div><p>${e(event.text)}</p></div></li>`).join("")}</ol><div class="report-bottom"><span>Разведданные +${report.supplies.intel} · медикаменты +${report.supplies.medicine}</span><span>${report.lostScav ? "Боец потерян" : report.lostWeapon ? "Оружие потеряно" : "Отчёт закрыт"}</span></div></div></details>`;
+	return `<details class="journal-entry" data-report="${report.id}"><summary><time>${new Date(report.at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</time><div class="journal-copy"><strong>${e(report.scavName)} · ${e(MAP_BY_ID[report.mapId]!.name)}</strong><p>${e(report.description)}</p><div class="journal-meta"><span>${report.isAuto ? "АВТОВЫХОД" : "ЭКСПЕДИЦИЯ"} · этапов ${report.depth} · ${e(TACTICS[report.tactic].label)}</span><span>${report.money ? `+${n(report.money)} ₽ · ` : ""}Детали +${report.supplies.scrap} · патроны +${report.supplies.ammo}</span></div></div><b class="tag report-result ${report.success ? "success" : "failure"}">${report.success ? "ВЕРНУЛСЯ" : report.lostScav ? "ПОТЕРЯН" : "ПРОВАЛ"}</b><span class="journal-expand">${icon("arrow", 14)}</span></summary><div class="journal-detail">${report.discoveries.length ? `<div class="report-memory">${icon("intel", 18)} Сохранены открытия: ${report.discoveries.map((id) => e(BLUEPRINTS[id]?.label ?? id)).join(" · ")}</div>` : ""}${report.lostCargo ? `<p class="risk-note">Потеряна добыча из рюкзака: ≈ ${n(getCargoValue(report.lostCargo))} ₽. Постоянные открытия остались у базы.</p>` : ""}${report.weaponId ? `<div class="report-trophy" style="--rarity:${RARITY_COLORS[WEAPON_BY_ID[report.weaponId]!.rarity]}">${icon("arsenal", 21)}<div><strong>${e(WEAPON_BY_ID[report.weaponId]!.name)}</strong><span>${report.weaponAutoSold ? "Продано: арсенал заполнен" : "Найдено и отправлено в арсенал"}</span></div></div>` : ""}<ol class="route-timeline">${report.events.map((event, i) => `<li class="event-${event.kind}"><div class="timeline-marker">${String(i + 1).padStart(2, "0")}</div><div><div class="timeline-label"><strong>${e(event.label)}</strong><time>${new Date(event.at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time></div><p>${e(event.text)}</p></div></li>`).join("")}</ol><div class="report-bottom"><span>Разведданные +${report.supplies.intel} · медикаменты +${report.supplies.medicine}</span><span>${report.lostScav ? "Боец потерян" : report.lostWeapon ? "Оружие потеряно" : "Отчёт закрыт"}</span></div></div></details>`;
 }
 function renderOfflineSummary() {
 	const node = document.querySelector<HTMLElement>("#offline-summary")!;
 	if (!offlineSummary) { node.innerHTML = ""; return; }
 	const minutes = Math.floor(offlineSummary.elapsedMs / 60_000);
 	const elapsed = minutes ? `${minutes} мин` : `${Math.floor(offlineSummary.elapsedMs / 1000)} с`;
-	node.innerHTML = `<aside class="offline-summary"><div class="offline-icon">${icon("time", 26)}</div><div><span class="eyebrow">С возвращением на базу</span><h3>База отработала ${elapsed}${offlineSummary.capped ? " · учтены 8 часов" : ""}.</h3><p>Заработано <strong>+${n(offlineSummary.money)} ₽</strong> · завершено выходов <strong>${n(offlineSummary.completedCount)}</strong>. Мастерская пополнила припасы, медблок восстановил диких.</p></div><button class="button ghost small" data-page="journal">Отчёты ${icon("arrow", 13)}</button><button class="dismiss-button" data-action="dismiss-offline" aria-label="Закрыть сводку">×</button></aside>`;
+	node.innerHTML = `<aside class="offline-summary"><div class="offline-icon">${icon("time", 26)}</div><div><span class="eyebrow">С возвращением на базу</span><h3>База была на связи ${elapsed}${offlineSummary.capped ? " · учтены 8 часов" : ""}.</h3><p>Заработано <strong>+${n(offlineSummary.money)} ₽</strong> · завершено выходов <strong>${n(offlineSummary.completedCount)}</strong>. Мастерская пополнила припасы, медблок восстановил диких.</p></div><button class="button ghost small" data-page="journal">Отчёты ${icon("arrow", 13)}</button><button class="dismiss-button" data-action="dismiss-offline" aria-label="Закрыть сводку">×</button></aside>`;
+}
+function renderExpeditionAlerts() {
+	const waiting = state.raids.filter((raid) => raid.expedition?.status === "choice");
+	const alerts = document.querySelector<HTMLElement>("#expedition-alerts")!;
+	alerts.innerHTML = page === "home" || page === "raids" ? expeditionQueue() : waiting.length ? `<div class="operations-bar decision-notice"><div>${icon("intel", 25)}<div><span class="eyebrow">Сигнал с маршрута</span><strong>${waiting.length} ${waiting.length === 1 ? "боец ждёт" : "бойца ждут"} твой приказ</strong><p>Добыча в рюкзаке. Выбери эвакуацию или следующий этап.</p></div></div><button class="button" data-action="review-decisions">Ответить →</button></div>` : "";
 }
 function operationsBar() {
 	const enabled = state.scavs.filter((scav) => scav.autoRaid.enabled).length;
-	return `<div class="operations-bar"><div>${icon("repeat", 25)}<div><span class="eyebrow">Постоянные приказы</span><strong><span id="auto-order-count">${enabled}</span> — на автовыходах</strong><p>Нажми на бойца, чтобы выдать ствол и задать маршрут.</p></div></div>${enabled ? '<button class="button danger small" data-action="auto-stop-all">Остановить все автовыходы</button>' : (page === "raids" ? '<button class="button secondary small" data-action="focus-roster">Выбрать бойца</button>' : '<button class="button secondary small" data-page="raids">Настроить отряд</button>')}</div>`;
+	return `<div class="operations-bar"><div>${icon("repeat", 25)}<div><span class="eyebrow">Постоянные приказы</span><strong><span id="auto-order-count">${enabled}</span> — на автовыходах</strong><p>Ручной выход ждёт приказа на точках связи. Автовыход сам эвакуируется на заданной глубине.</p></div></div>${enabled ? '<button class="button danger small" data-action="auto-stop-all">Остановить все автовыходы</button>' : (page === "raids" ? '<button class="button secondary small" data-action="focus-roster">Выбрать бойца</button>' : '<button class="button secondary small" data-page="raids">Настроить отряд</button>')}</div>`;
 }
 function render() {
 	deferredRender = false;
@@ -439,19 +576,20 @@ function render() {
 		);
 	const captions: Record<Page, string> = {
 		home: "Железо в арсенале. Свои люди на связи.",
-		raids: "Снаряжай диких, выбирай маршрут, забирай добычу.",
-		arsenal: "Каждая пушка — история. Собери свою коллекцию.",
-		base: "Хорошее убежище работает даже без приказов.",
+		raids: "Три этапа. Выбери путь, сохрани добычу или рискни дальше.",
+		arsenal: "Оружие, комплекты и снабжение — один план выхода.",
+		base: "Развивай базу и сохраняй открытия после потерь.",
 		contracts: "Репутация строится на выполненных обещаниях.",
 		journal: "Кто вышел, кто вернулся и что принёс.",
 	};
 	document.querySelector("#page-head")!.innerHTML =
-		`<div><div class="eyebrow"><span class="page-number">0${Object.keys(names).indexOf(page) + 1} /</span> ${page === "home" ? "УБЕЖИЩЕ ПРАПОРА" : names[page]}</div><h1>${page === "home" ? "Хозяйство под контролем." : names[page]}</h1><p>${captions[page]}</p></div><span class="tag">${icon("time", 13)} +${getIncomePerMinute(state)} ₽ / МИН</span>`;
+		`<div><div class="eyebrow"><span class="page-number">0${Object.keys(names).indexOf(page) + 1} /</span> ${page === "home" ? "УБЕЖИЩЕ ПРАПОРА" : names[page]}</div><h1>${page === "home" ? "Хозяйство под контролем." : names[page]}</h1><p>${captions[page]}</p></div><span class="tag">${icon("time", 13)} <span id="income-status"></span></span>`;
 	(document.querySelector("#hero") as HTMLElement).style.display =
 		page === "home" || (page === "raids" && showTacticalMap) ? "" : "none";
 	document.querySelector("#briefing-title")!.innerHTML = state.scavs.some((scav) => scav.autoRaid.enabled) ? "Люди знают<br>своё дело, брат." : "Каждому — ствол.<br>Каждому — маршрут.";
-	document.querySelector("#briefing-copy")!.textContent = state.scavs.some((scav) => scav.autoRaid.enabled) ? "Твои приказы работают даже без тебя. Следи за бронёй и стволами: после каждой вылазки медблок готовит бойца к следующей, а радиорубка держит связь." : "Выдай дикому оружие, подбери тактику, броню и рюкзак. Автовыходы повторят выбранный маршрут, когда боец восстановится — даже если ты закроешь игру.";
+	document.querySelector("#briefing-copy")!.textContent = state.scavs.some((scav) => scav.autoRaid.enabled) ? "Постоянные приказы повторяют выходы на заданную глубину. Следи за расходом и износом: медблок лечит бойцов, мастерская готовит ограниченный резерв. Дальние этапы приносят больше и рискуют всем рюкзаком." : "Подбери комплект и отправь дикого на первый этап. В точке связи выбери: вернуться с добычей или взять бонус и идти глубже. Открытия останутся у базы даже после потерь.";
 	renderOfflineSummary();
+	renderExpeditionAlerts();
 	if (page === "home")
 		panel.innerHTML = `<div class="stats-strip">${[
 			[
@@ -494,15 +632,15 @@ function render() {
 		}</div>`;
 	if (page === "raids") {
 		const map = MAP_BY_ID[selectedMap]!;
-		panel.innerHTML = `${operationsBar()}<div class="section-head"><h2>Выбери сектор</h2><button class="text-button" data-action="toggle-map" aria-expanded="${showTacticalMap}">${icon("raids", 16)} ${showTacticalMap ? "Скрыть карту" : "Тактическая карта"}</button></div><div class="maps">${MAPS.map((m, i) => `<button class="map-card ${m.id === selectedMap ? "selected" : ""} ${state.level < m.level ? "locked" : ""}" data-map="${m.id}" aria-pressed="${m.id === selectedMap}" ${state.level < m.level ? "disabled" : ""}><span class="map-graphic" style="--map-color:${m.accent}">${icon("raids", 70)}</span><span class="map-index">СЕКТОР 0${i + 1}${state.level < m.level ? ` · ${icon("lock", 10)} УР. ${m.level}` : ""}</span><h3>${e(m.name)}</h3><p>${e(m.subtitle)}</p><div class="map-meta"><span>${seconds(m.duration)} · ${m.ammoCost} патр.${m.intelCost ? ` · ${m.intelCost} разв.` : ""}</span><span>${m.reward[0]}–${m.reward[1]} ₽</span></div></button>`).join("")}</div><div class="selected-sector"><div><span class="eyebrow">Выбранный сектор</span><h3>${e(map.name)}</h3><p>${e(map.description)}</p></div><span class="sector-reward"><strong>${map.reward[0]}–${map.reward[1]} ₽</strong><small>Добыча за успешный выход</small></span></div><div class="section-head"><h2>Снаряжение отряда</h2><button class="button secondary small" data-action="recruit" ${state.scavs.length >= getScavCapacity(state) || state.money < recruitCost(state) ? "disabled" : ""}>${icon("people", 15)} Нанять · ${recruitCost(state)} ₽</button></div><div class="card-grid scav-grid">${state.scavs.map(scavCard).join("") || '<div class="empty">Отряд потерян. Найми нового дикого бесплатно и начни снова.</div>'}</div><p class="muted roster-capacity">Отряд: ${state.scavs.length} / ${getScavCapacity(state)} · Улучшай радиорубку, чтобы нанимать больше диких. Медблок восстанавливает здоровье со временем.</p>`;
+		panel.innerHTML = `${operationsBar()}<div class="section-head"><h2>Выбери сектор</h2><button class="text-button" data-action="toggle-map" aria-expanded="${showTacticalMap}">${icon("raids", 16)} ${showTacticalMap ? "Скрыть карту" : "Тактическая карта"}</button></div><div class="maps">${MAPS.map((m, i) => `<button class="map-card ${m.id === selectedMap ? "selected" : ""} ${state.level < m.level ? "locked" : ""}" data-map="${m.id}" aria-pressed="${m.id === selectedMap}" ${state.level < m.level ? "disabled" : ""}><span class="map-graphic" style="--map-color:${m.accent}">${icon("raids", 70)}</span><span class="map-index">СЕКТОР 0${i + 1}${state.level < m.level ? ` · ${icon("lock", 10)} УР. ${m.level}` : ""}</span><h3>${e(m.name)}</h3><p>${e(m.subtitle)}</p><div class="map-meta"><span>${seconds(m.duration)} · ${m.ammoCost} патр.${m.intelCost ? ` · ${m.intelCost} разв.` : ""}</span><span>${m.reward[0]}–${m.reward[1]} ₽</span></div></button>`).join("")}</div><div class="selected-sector"><div><span class="eyebrow">Выбранный сектор</span><h3>${e(map.name)}</h3><p>${e(map.description)}</p></div><span class="sector-reward"><strong>${map.reward[0]}–${map.reward[1]} ₽</strong><small>Добыча первого этапа</small></span></div><div class="section-head"><h2>Снаряжение отряда</h2><button class="button secondary small" data-action="recruit" ${state.scavs.length >= getScavCapacity(state) || state.money < recruitCost(state) ? "disabled" : ""}>${icon("people", 15)} Нанять · ${recruitCost(state)} ₽</button></div><div class="card-grid scav-grid">${state.scavs.map(scavCard).join("") || '<div class="empty">Отряд потерян. Найми нового дикого бесплатно и начни снова.</div>'}</div><p class="muted roster-capacity">Отряд: ${state.scavs.length} / ${getScavCapacity(state)} · Улучшай радиорубку, чтобы нанимать больше диких. Медблок восстанавливает здоровье со временем.</p>`;
 	}
 	if (page === "arsenal") renderArsenal();
 	if (page === "base") {
 		const descriptions: Record<BaseRoom, string> = {
-			workshop: `Доход +${getIncomePerMinute(state)} ₽/мин. Производит патроны и детали для рейдов и ремонта.`,
+			workshop: `Пополняет резерв до ${n(getRecoveryAllowance(state))} ₽ со скоростью ${getIncomePerMinute(state)} ₽/мин. Производит патроны и детали в пределах склада.`,
 			medbay: `Бесплатно восстанавливает ${((0.04 + state.base.medbay * 0.025) * 60).toFixed(1)} здоровья в минуту. Улучшение ускоряет лечение.`,
-			radio: `Мест для диких: ${getScavCapacity(state)}. Производит разведданные, повышает шанс успеха и сокращает путь.`,
-			storage: `${getStorageCapacity(state)} мест под оружие. При переполнении новая добыча автоматически продаётся.`,
+			radio: `Мест для диких: ${getScavCapacity(state)}. Пополняет ограниченный запас разведданных, повышает шанс успеха и сокращает путь.`,
+			storage: `${getStorageCapacity(state)} мест под оружие. Повышает вместимость запасов и арсенала. Оружие сверх лимита автоматически продаётся при возвращении.`,
 		};
 		panel.innerHTML = `<div class="card-grid">${(
 			Object.keys(BASE_ROOM_LABELS) as BaseRoom[]
@@ -514,7 +652,7 @@ function render() {
 			})
 			.join(
 				""
-			)}</div><div class="raid-instruction">${icon("time", 24)}<div>Работа не останавливается, когда ты уходишь.<br><span class="muted">При возвращении начисляется до 8 часов дохода, производства, лечения и автовыходов. Бойцы с постоянным приказом повторяют рейды, пока есть здоровье, патроны, разведданные и исправное оружие. Медблок и мастерская помогают продолжать маршрут; каждый выход остаётся риском.</span></div></div>`;
+			)}</div><div class="raid-instruction">${icon("time", 24)}<div>Работа не останавливается, когда ты уходишь.<br><span class="muted">За отсутствие учитывается до 8 часов: база пополняет резерв и запасы до их пределов, медблок лечит бойцов, постоянные приказы выполняют выходы. Бойцы с постоянным приказом повторяют рейды, пока есть здоровье, патроны, разведданные и исправное оружие. Ручная экспедиция дождётся решения в точке связи; автовыход эвакуируется на заданной глубине. Каждый этап остаётся риском.</span></div></div>${discoveriesSection()}`;
 	}
 	if (page === "contracts") {
 		const contracts = CONTRACTS.filter((contract) => contractFilter === "all" || (contractFilter === "done") === state.claimedContracts.includes(contract.id));
@@ -529,6 +667,8 @@ function render() {
 	hud();
 }
 function renderArsenal() {
+	if (arsenalTab === "equipment") { renderEquipment(); return; }
+	if (arsenalTab === "market") { renderMarket(); return; }
 	const noMatches = `<div class="empty">Ничего не найдено.<br>Измени поиск или категорию.<button class="button ghost small" data-action="reset-weapon-filters">Сбросить поиск и фильтры</button></div>`;
 	const emptyArsenal = `<div class="empty">Арсенал пуст.<br>Отправь бойца за добычей или найми нового, если отряд потерян.<button class="button secondary small" data-page="raids">К отряду ${icon("arrow", 14)}</button></div>`;
 	const guns = state.weapons.filter(
@@ -537,7 +677,7 @@ function renderArsenal() {
 	if (!guns.some((w) => w.id === selectedWeapon))
 		selectedWeapon = guns[0]?.id ?? "";
 	const selected = state.weapons.find((w) => w.id === selectedWeapon);
-	panel.innerHTML = `<div class="arsenal-toolbar"><div class="filters">${(["all", "rifle", "smg", "shotgun", "sniper", "pistol"] as const).map((c) => `<button data-filter="${c}" aria-pressed="${category === c}" class="${category === c ? "active" : ""}">${c === "all" ? "Все пушки" : CATEGORY_LABELS[c]}</button>`).join("")}<button data-action="collection" aria-pressed="${collection}" class="${collection ? "active" : ""}">Коллекция ${state.discoveredWeapons.length}/${WEAPONS.length}</button></div><span class="tag">${state.weapons.length} / ${getStorageCapacity(state)} МЕСТ</span></div><label class="weapon-search">${icon("arsenal", 18)}<input type="search" data-weapon-search aria-label="Поиск оружия" placeholder="Найти оружие по названию" value="${e(weaponSearch)}"></label>${
+	panel.innerHTML = `${arsenalTabs()}<div class="arsenal-toolbar"><div class="filters">${(["all", "rifle", "smg", "shotgun", "sniper", "pistol"] as const).map((c) => `<button data-filter="${c}" aria-pressed="${category === c}" class="${category === c ? "active" : ""}">${c === "all" ? "Все пушки" : CATEGORY_LABELS[c]}</button>`).join("")}<button data-action="collection" aria-pressed="${collection}" class="${collection ? "active" : ""}">Коллекция ${state.discoveredWeapons.length}/${WEAPONS.length}</button></div><span class="tag">${state.weapons.length} / ${getStorageCapacity(state)} МЕСТ</span></div><label class="weapon-search">${icon("arsenal", 18)}<input type="search" data-weapon-search aria-label="Поиск оружия" placeholder="Найти оружие по названию" value="${e(weaponSearch)}"></label>${
 		collection
 			? `<div class="weapons-grid">${WEAPONS.filter(
 					(w) => (category === "all" || w.category === category) && w.name.toLocaleLowerCase("ru").includes(weaponSearch.toLocaleLowerCase("ru"))
@@ -559,23 +699,58 @@ function renderArsenal() {
 				}</div>${selected ? weaponDetail(selected) : ""}</div>`
 	}`;
 }
+function arsenalTabs() {
+	return `<div class="section-tabs" role="group" aria-label="Раздел арсенала">${([["weapons", "arsenal", "Оружие"], ["equipment", "armor", "Комплекты"], ["market", "money", "Снабжение"]] as const).map(([id, symbol, label]) => `<button data-arsenal-tab="${id}" aria-pressed="${arsenalTab === id}" class="${arsenalTab === id ? "active" : ""}">${icon(symbol, 17)} ${label}</button>`).join("")}</div>`;
+}
+function renderEquipment() {
+	const items = state.gearItems.map((item) => {
+		const model = getGearModel(item), repair = getGearRepairCost(item);
+		const owner = state.scavs.find((scav) => scav.loadout.armorItemId === item.id || scav.loadout.backpackItemId === item.id);
+		const busy = owner?.status === "raiding";
+		return `<article class="logistics-card"><span class="eyebrow">${model.slot === "armor" ? "Броня" : "Рюкзак"} · ${owner ? e(owner.name) : "На складе"}</span><h3>${icon(model.slot, 23)} ${e(model.label)}</h3><p>${e(model.description)}</p><div class="loadout-stats"><span>Состояние ${Math.round(item.durability)}%</span><span>Вес ${model.weight} кг</span>${model.protection ? `<span>Защита до ${Math.round(model.protection * 100)}%</span>` : ""}${model.capacity ? `<span>Груз до ${model.capacity} ед.</span>` : ""}</div><div class="health-track"><i style="width:${item.durability}%"></i></div>${owner ? `<button class="button ghost" data-scav="${owner.id}">Комплект: ${e(owner.name)}</button>` : `<label class="field-label">Выдать бойцу<select data-assign-gear="${item.id}" data-slot="${model.slot}" aria-label="Выдать ${e(model.label)} бойцу"><option value="">Выбери бойца</option>${state.scavs.filter((scav) => scav.status !== "raiding").map((scav) => `<option value="${scav.id}">${e(scav.name)}${(model.slot === "armor" ? scav.loadout.armorItemId : scav.loadout.backpackItemId) ? " · заменить предмет" : ""}</option>`).join("")}</select></label>`}<button class="button secondary small" data-action="repair-gear" data-id="${item.id}" ${busy || item.durability >= 100 || !canAfford(repair) ? "disabled" : ""}>Ремонт · ${costLabel(repair)}</button><small class="quote-note">${busy ? "Предмет на маршруте" : item.durability >= 100 ? "Ремонт не нужен" : costReason(repair)}</small><button class="button ghost small" data-action="recycle-gear" data-id="${item.id}" ${busy ? "disabled" : ""}>Разобрать · ${getGearRecycleYield(item)} дет.</button><small class="quote-note" data-recycle-note>Разбор возвращает детали; предмет исчезнет</small></article>`;
+	}).join("");
+	const recipes = GEAR_MODELS.map((model) => {
+		const reason = getGearCraftReason(state, model.id);
+		const known = !model.blueprint || state.blueprints.includes(model.blueprint);
+		return `<article class="logistics-card ${known ? "" : "locked"}"><span class="eyebrow">${known ? "Чертёж известен" : "Нужен чертёж"}</span><h3>${icon(model.slot, 22)} ${e(model.label)}</h3><p>${e(model.description)}</p><div class="loadout-stats"><span>Вес ${model.weight} кг</span>${model.protection ? `<span>Защита до ${Math.round(model.protection * 100)}%</span>` : ""}${model.capacity ? `<span>Груз до ${model.capacity} ед.</span>` : ""}</div><button class="button secondary" data-action="craft-gear" data-id="${model.id}" ${reason ? "disabled" : ""}>Собрать · ${costLabel(model)}</button><small class="quote-note" data-craft-note="${model.id}">${e(reason ?? "Снаряжение появится на складе")}</small></article>`;
+	}).join("");
+	panel.innerHTML = `${arsenalTabs()}<div class="logistics-intro">${icon("armor", 28)}<div><h3>У комплекта есть цена и характер.</h3><p>Тяжёлая броня повышает защиту, вместительный рюкзак удержит больше находок. Вес удлиняет путь и расход; износ ослабляет предмет. Сравни итоговый комплект в личном деле бойца.</p></div></div><div class="section-head"><h2>Склад снаряжения <span class="muted">/ ${state.gearItems.length}</span></h2><button class="text-button" data-page="raids">К бойцам →</button></div>${items ? `<div class="logistics-grid">${items}</div>` : '<div class="empty">Отдельных предметов пока нет. Собери лёгкую броню или рюкзак ниже, затем выдай бойцу.</div>'}<div class="section-head"><h2>Сборка по чертежам</h2><button class="text-button" data-action="open-discoveries">Постоянные открытия →</button></div><div class="logistics-grid">${recipes}</div>`;
+}
+function renderMarket() {
+	const capacities = getSupplyCapacity(state);
+	panel.innerHTML = `${arsenalTabs()}<div class="logistics-intro">${icon("money", 28)}<div><h3>Каждый выход должен окупаться.</h3><p>Патроны, разведданные, лечение и ремонт расходуются. База даёт ограниченный запас для восстановления, основная прибыль — добыча. Излишки оружия можно продать или разобрать на детали.</p></div></div><div class="economy-balance"><div>Резерв для восстановления<strong>${n(getRecoveryAllowance(state))} ₽</strong><span>Пассивные рубли до этой суммы</span></div><div>Отряд на автовыходах<strong>${state.scavs.filter((scav) => scav.autoRaid.enabled).length}</strong><span>Каждый повтор оплачивается</span></div><div>Запасной арсенал<strong>${state.weapons.filter((weapon) => !state.scavs.some((scav) => scav.weaponInstanceId === weapon.id)).length} пушек</strong><span>Продажа или разбор</span></div></div><div class="section-head"><h2>Закупить припасы</h2><span class="muted">Склад имеет предел</span></div><div class="logistics-grid">${MARKET_OFFERS.map((offer) => {
+		const reason = getMarketReason(state, offer.id);
+		return `<article class="logistics-card"><span class="eyebrow">${supplyName(offer.supply)}</span><h3>${icon(offer.supply, 25)} ${e(offer.label)}</h3><p>На складе <b data-supply-count="${offer.supply}">${n(state.supplies[offer.supply])}</b> / ${capacities[offer.supply]} · партия +${offer.amount}</p><div class="progress"><i style="width:${Math.min(100, state.supplies[offer.supply] / capacities[offer.supply] * 100)}%"></i></div><button class="button secondary" data-action="buy-supplies" data-id="${offer.id}" ${reason ? "disabled" : ""}>Купить ${offer.amount} · ${n(offer.money)} ₽</button><small class="quote-note" data-market-note="${offer.id}">${e(reason ?? "Полная партия поместится на складе")}</small></article>`;
+	}).join("")}</div><div class="raid-instruction">${icon("scrap", 25)}<div>Разбор возвращает детали для ремонта и сборки.<br><span class="muted">Во вкладке «Оружие» выбери лишний ствол. Продажа принесёт рубли, разбор — детали. Сначала сними предмет с бойца, если хочешь сохранить его комплект.</span></div></div>`;
+}
+function discoveriesSection() {
+	const unlocked = Object.keys(BLUEPRINTS).filter((id) => state.blueprints.includes(id)).length;
+	return `<section id="discoveries"><div class="section-head"><h2>Память отряда <span class="muted">/ ${unlocked} открытий</span></h2></div><div class="logistics-intro">${icon("intel", 26)}<div><h3>Потеря не обнуляет путь.</h3><p>Чертежи и разведанные тропы сохраняются сразу после находки. Тайники открывают грузовую раму, оружейный склад — плитник, разведка — безопасные маршруты. Каждый выбор оставляет след.</p></div></div><div class="research-grid">${Object.entries(BLUEPRINTS).map(([id, discovery]) => {
+		const known = state.blueprints.includes(id);
+		return `<article class="research-card ${known ? "unlocked" : ""}"><span class="eyebrow">${known ? "✓ Открыто навсегда" : "Пока неизвестно"}</span><h3>${e(discovery.label)}</h3><p>${e(discovery.description)}</p>${known && GEAR_MODELS.some((model) => model.blueprint === id) ? '<button class="button ghost small" data-action="open-equipment">Собрать по чертежу →</button>' : ""}</article>`;
+	}).join("")}</div></section>`;
+}
 function weaponDetail(weapon: WeaponInstance) {
-	const def = getWeaponDefinition(weapon),
-		owner = state.scavs.find((s) => s.weaponInstanceId === weapon.id),
-		busy = state.raids.some((r) => r.weaponInstanceId === weapon.id),
-		repair = getRepairCost(weapon);
-	return `<aside class="weapon-detail"><span class="eyebrow" style="color:${RARITY_COLORS[def.rarity]}">${RARITY_LABELS[def.rarity]} · ${CATEGORY_LABELS[def.category]}</span><h2>${e(def.name)}</h2>${gunArt(def.category, RARITY_COLORS[def.rarity])}<p>${e(def.description)}</p><div class="detail-row"><span>Мощность</span><strong>${getWeaponPower(weapon)}</strong></div><div class="detail-row"><span>Надёжность</span><strong>${def.reliability}%</strong></div><div class="detail-row"><span>Состояние</span><strong>${Math.round(weapon.durability)}%</strong></div><div class="health-track"><i style="width:${weapon.durability}%"></i></div><div class="detail-row"><span>Выдано</span><strong>${owner ? e(owner.name) : "На складе"}</strong></div><div class="weapon-assign">${owner ? `<button class="button ghost" data-scav="${owner.id}">${icon("people", 16)} Личное дело: ${e(owner.name)}</button>` : `<label class="field-label">Выдать бойцу<select data-assign-weapon="${weapon.id}" aria-label="Выдать ${e(def.name)} бойцу"><option value="">Выбери бойца</option>${state.scavs.filter((scav) => scav.status !== "raiding").map((scav) => `<option value="${scav.id}">${e(scav.name)}${scav.weaponInstanceId ? " · заменить ствол" : " · без оружия"}</option>`).join("")}</select></label>`}</div><div class="mods">${(Object.keys(ATTACHMENT_LABELS) as Attachment[]).map((mod) => `<div class="mod-row"><div>${ATTACHMENT_LABELS[mod]} <span>ур. ${weapon.attachments[mod]}</span></div><button class="button ghost small" data-action="mod" data-id="${weapon.id}" data-mod="${mod}" ${busy || weapon.attachments[mod] >= 3 || !canAfford(getModCost(weapon, mod)) ? "disabled" : ""} title="${costLabel(getModCost(weapon, mod))}">${weapon.attachments[mod] >= 3 ? "MAX" : `${getModCost(weapon, mod).money} ₽ + ${getModCost(weapon, mod).scrap} дет.`}</button><small class="cost-reason" data-weapon-cost="${weapon.id}-${mod}">${busy ? "Оружие в рейде" : weapon.attachments[mod] >= 3 ? "Максимальный уровень" : costReason(getModCost(weapon, mod))}</small></div>`).join("")}</div><div class="detail-actions"><button class="button secondary" data-action="repair" data-id="${weapon.id}" ${busy || weapon.durability >= 100 || !canAfford(repair) ? "disabled" : ""}>Ремонт · ${costLabel(repair)}</button><small class="cost-reason" data-weapon-cost="${weapon.id}-repair">${busy ? "Оружие в рейде" : weapon.durability >= 100 ? "Ремонт не нужен" : costReason(repair)}</small><button class="button ghost" data-action="sell" data-id="${weapon.id}" ${busy || state.weapons.length <= 1 ? "disabled" : ""}>Продать · ${Math.max(15, Math.round(def.value * (0.35 + weapon.durability / 200)))} ₽</button></div></aside>`;
+	const def = getWeaponDefinition(weapon), role = getWeaponRole(weapon);
+	const owner = state.scavs.find((scav) => scav.weaponInstanceId === weapon.id);
+	const busy = state.raids.some((raid) => raid.weaponInstanceId === weapon.id);
+	const repair = getRepairCost(weapon);
+	const mods = (Object.keys(ATTACHMENT_LABELS) as Attachment[]).map((mod) => {
+		const compatible = isAttachmentCompatible(weapon, mod), cost = getModCost(weapon, mod), max = weapon.attachments[mod] >= 3;
+		return `<div class="mod-row"><div>${ATTACHMENT_LABELS[mod]} <span>ур. ${weapon.attachments[mod]}</span></div><button class="button ghost small" data-action="mod" data-id="${weapon.id}" data-mod="${mod}" ${busy || max || !compatible || !canAfford(cost) ? "disabled" : ""}>${!compatible ? "Не подходит" : max ? "MAX" : costLabel(cost)}</button><small class="cost-reason" data-weapon-cost="${weapon.id}-${mod}">${busy ? "Оружие в рейде" : !compatible ? "Не подходит этому оружию" : max ? "Максимальный уровень" : costReason(cost)}</small></div>`;
+	}).join("");
+	return `<aside class="weapon-detail"><span class="eyebrow" style="color:${RARITY_COLORS[def.rarity]}">${RARITY_LABELS[def.rarity]} · ${CATEGORY_LABELS[def.category]}</span><h2>${e(def.name)}</h2>${gunArt(def.category, RARITY_COLORS[def.rarity])}<p>${e(def.description)}</p><div class="weapon-role"><strong>${e(role.label)}</strong><p>${e(role.description)}</p><div class="loadout-stats"><span>Вес ${role.weight} кг</span><span>Патроны ×${role.ammoMultiplier.toFixed(2)}</span></div></div><div class="detail-row"><span>Мощность</span><strong>${getWeaponPower(weapon)}</strong></div><div class="detail-row"><span>Надёжность</span><strong>${def.reliability}%</strong></div><div class="detail-row"><span>Состояние</span><strong>${Math.round(weapon.durability)}%</strong></div><div class="health-track"><i style="width:${weapon.durability}%"></i></div><div class="detail-row"><span>Выдано</span><strong>${owner ? e(owner.name) : "На складе"}</strong></div><div class="weapon-assign">${owner ? `<button class="button ghost" data-scav="${owner.id}">${icon("people",16)} Личное дело: ${e(owner.name)}</button>` : `<label class="field-label">Выдать бойцу<select data-assign-weapon="${weapon.id}" aria-label="Выдать ${e(def.name)} бойцу"><option value="">Выбери бойца</option>${state.scavs.filter((scav) => scav.status !== "raiding").map((scav) => `<option value="${scav.id}">${e(scav.name)}${scav.weaponInstanceId ? " · заменить ствол" : " · без оружия"}</option>`).join("")}</select></label>`}</div><div class="mods">${mods}</div><div class="detail-actions"><button class="button secondary" data-action="repair" data-id="${weapon.id}" ${busy || weapon.durability >= 100 || !canAfford(repair) ? "disabled" : ""}>Ремонт · ${costLabel(repair)}</button><small class="cost-reason" data-weapon-cost="${weapon.id}-repair">${busy ? "Оружие в рейде" : weapon.durability >= 100 ? "Ремонт не нужен" : costReason(repair)}</small><button class="button ghost" data-action="sell" data-id="${weapon.id}" ${busy || state.weapons.length <= 1 ? "disabled" : ""}>Продать · ${n(getWeaponSaleValue(weapon))} ₽</button><button class="button ghost" data-action="recycle-weapon" data-id="${weapon.id}" ${busy || state.weapons.length <= 1 ? "disabled" : ""}>Разобрать · ${getWeaponRecycleYield(weapon)} дет.</button><small class="quote-note" data-recycle-note>${busy ? "Оружие занято на маршруте" : state.weapons.length <= 1 ? "Последний ствол нужен отряду для восстановления" : "Продажа даёт рубли; разбор — детали в пределах склада"}</small></div></aside>`;
 }
 function showSettings() {
 	document.querySelector("#modal-root")!.innerHTML =
-		`<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title"><h2 id="settings-title">Твоё дело — при тебе.</h2><p>Прогресс хранится в этом браузере. Перед сменой устройства экспортируй сохранение. При возвращении база начисляет до 8 часов дохода, производства, лечения и рейдов по постоянным приказам.</p><p>Автовыходы продолжаются офлайн до нехватки ресурсов, здоровья или исправного оружия. Они несут риск потери бойца и ствола. Останови постоянный приказ в карточке дикого, чтобы отменить будущие выходы.</p>${protectedSave ? '<p class="order-risk">Исходный файл не удалось прочитать. Он остаётся в браузере без изменений; автоматическое сохранение временной сессии отключено. Скачай исходный файл и импортируй корректное сохранение.</p>' : ""}<p>Начни с «Дворов»: выбери дикого и оружие, отправь в рейд. Забери награду контракта «Первый выход», затем развивай мастерскую и радиорубку.</p><div class="detail-actions"><button class="button secondary" data-action="export">${protectedSave ? "Скачать исходный файл" : "Экспорт"}</button><button class="button ghost" data-action="import">Импорт</button></div><input type="file" accept="application/json,.json" id="save-file" hidden><div class="save-note">Один рейд — один результат. Сохранение восстанавливает отряд, оружие, броню, рюкзаки, тактику, приказы и рейды. Импорт заменит текущий прогресс после проверки файла.</div><button class="button ghost" style="width:100%;margin-top:20px" data-action="close-modal">Продолжить</button></section></div>`;
+		`<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title"><h2 id="settings-title">Твоё дело — при тебе.</h2><p>Прогресс хранится в этом браузере. Перед сменой устройства экспортируй сохранение. За отсутствие учитывается до 8 часов пополнения резерва, запасов, лечения и рейдов по постоянным приказам. Рубли и припасы пополняются до предела базы.</p><p>Автовыходы повторяются офлайн до выбранной глубины и нехватки ресурсов, здоровья или исправного оружия. Ручная экспедиция остановится в точке связи до твоего приказа. Они несут риск потери бойца и ствола. Останови постоянный приказ в карточке дикого, чтобы отменить будущие выходы.</p>${protectedSave ? '<p class="order-risk">Исходный файл не удалось прочитать. Он остаётся в браузере без изменений; автоматическое сохранение временной сессии отключено. Скачай исходный файл и импортируй корректное сохранение.</p>' : ""}<p>Начни с «Дворов»: выбери бойца и оружие, отправь на первый этап. После точки связи эвакуируйся или выбери бонус и путь дальше. Чертежи и память маршрутов сохраняются после потерь; рубли и найденные предметы попадут на базу при эвакуации.</p><div class="detail-actions"><button class="button secondary" data-action="export">${protectedSave ? "Скачать исходный файл" : "Экспорт"}</button><button class="button ghost" data-action="import">Импорт</button></div><input type="file" accept="application/json,.json" id="save-file" hidden><div class="save-note">Сохранение восстанавливает отряд, оружие, износ снаряжения, комплекты, чертежи, приказы и текущие этапы. Ручные экспедиции ждут твоего приказа в точке связи. Импорт заменит текущий прогресс после проверки файла.</div><button class="button ghost" style="width:100%;margin-top:20px" data-action="close-modal">Продолжить</button></section></div>`;
 	focusModal();
 }
 function showAutoRaidOrder(scavId: string) {
 	const scav = state.scavs.find((item) => item.id === scavId);
 	if (!scav) return;
 	const map = MAP_BY_ID[selectedMap]!;
-	document.querySelector("#modal-root")!.innerHTML = `<div class="modal-backdrop"><section class="modal auto-raid-modal" role="dialog" aria-modal="true" aria-labelledby="auto-title"><span class="eyebrow">Постоянный приказ · ${e(scav.name)}</span><h2 id="auto-title">Автовыходы: ${e(map.name)}</h2><div class="order-brief"><span>${icon("repeat", 19)} Повторять выбранный маршрут</span><span>${icon("medicine", 19)} Выходить при ${scav.autoRaid.minHealth} / 100 здоровья</span><span>${icon("time", 19)} Работать и офлайн · до 8 часов</span></div><p>Дикий будет снова уходить в рейды, как только вернётся и восстановится. Приказ действует, пока хватает патронов и разведданных и оружие пригодно к бою. Мастерская и медблок могут подготовить следующий выход.</p><p class="order-risk">Каждый повтор несёт риск: можно потерять дикого и его оружие. Броня снижает потери, но не гарантирует возвращение.</p><p>Кнопка «Остановить автовыходы» отменяет будущие выходы. Текущий рейд боец завершит.</p><div class="detail-actions"><button class="button" data-action="confirm-auto" data-id="${scav.id}" data-route="${map.id}" data-min-health="${scav.autoRaid.minHealth}">${scav.autoRaid.enabled ? "Изменить приказ" : "Включить автовыходы"}</button><button class="button ghost" data-action="close-modal">Назад к бойцу</button></div></section></div>`;
+	document.querySelector("#modal-root")!.innerHTML = `<div class="modal-backdrop"><section class="modal auto-raid-modal" role="dialog" aria-modal="true" aria-labelledby="auto-title"><span class="eyebrow">Постоянный приказ · ${e(scav.name)}</span><h2 id="auto-title">Автовыходы: ${e(map.name)}</h2><div class="order-brief"><span>${icon("repeat", 19)} Повторять выбранный маршрут</span><span>${icon("medicine", 19)} Выходить при ${scav.autoRaid.minHealth} / 100 здоровья</span><span>${icon("backpack", 19)} Эвакуироваться на глубине ${scav.autoRaid.maxDepth} / 3</span><span>${icon("time", 19)} Работать и офлайн · до 8 часов</span></div><p>Дикий будет повторять маршрут до глубины ${scav.autoRaid.maxDepth}, затем эвакуируется автоматически. Приказ действует, пока хватает рублей на логистику, патронов, разведданных и исправного снаряжения. Он работает и офлайн; ручные выходы продолжаются только после твоего выбора.</p><p class="order-risk">Каждый повтор несёт риск: можно потерять дикого и его оружие. Броня снижает потери, но не гарантирует возвращение.</p><p>Кнопка «Остановить автовыходы» отменяет будущие выходы. Текущая экспедиция останется в пути с исходной глубиной эвакуации.</p><div class="detail-actions"><button class="button" data-action="confirm-auto" data-id="${scav.id}" data-route="${map.id}" data-min-health="${scav.autoRaid.minHealth}">${scav.autoRaid.enabled ? "Изменить приказ" : "Включить автовыходы"}</button><button class="button ghost" data-action="close-modal">Назад к бойцу</button></div></section></div>`;
 	focusModal();
 }
 document.addEventListener("click", (event) => {
@@ -618,6 +793,11 @@ document.addEventListener("click", (event) => {
 		render();
 		return;
 	}
+	if (target.dataset.arsenalTab) {
+		arsenalTab = target.dataset.arsenalTab as typeof arsenalTab;
+		render();
+		return;
+	}
 	if (target.dataset.contractFilter) {
 		contractFilter = target.dataset.contractFilter as typeof contractFilter;
 		render();
@@ -625,6 +805,72 @@ document.addEventListener("click", (event) => {
 	}
 	const id = target.dataset.id ?? "";
 	switch (target.dataset.action) {
+		case "review-decisions":
+			closeInspector();
+			page = "raids";
+			render();
+			window.scrollTo(0, 0);
+			document.querySelector<HTMLButtonElement>('[data-action="run-perk"], [data-action="extract"]')?.focus({ preventScroll: true });
+			break;
+		case "run-perk": {
+			selectedPerks.set(id, target.dataset.perk as RunPerk);
+			render();
+			const scope = selectedScav ? document.querySelector("#inspector-root") : document.querySelector("#expedition-alerts");
+			scope?.querySelector<HTMLButtonElement>(`[data-action="run-perk"][data-id="${CSS.escape(id)}"][data-perk="${CSS.escape(target.dataset.perk ?? "")}"]`)?.focus({ preventScroll: true });
+			break;
+		}
+		case "continue-expedition": {
+			const perk = selectedPerks.get(id);
+			if (!perk) { toast("Выбери бонус маршрута.", false); break; }
+			act(continueExpedition(state, id, target.dataset.branch as ExpeditionBranch, perk));
+			selectedPerks.delete(id);
+			if (!selectedScav) document.querySelector<HTMLButtonElement>(`[data-scav="${CSS.escape(state.raids.find((raid) => raid.id === id)?.scavId ?? "")}"]`)?.focus({ preventScroll: true });
+			break;
+		}
+		case "extract": {
+			const scavId = state.raids.find((raid) => raid.id === id)?.scavId;
+			act(extractRaid(state, id));
+			selectedPerks.delete(id);
+			if (!selectedScav && scavId) document.querySelector<HTMLButtonElement>(`[data-scav="${CSS.escape(scavId)}"]`)?.focus({ preventScroll: true });
+			break;
+		}
+		case "open-equipment":
+			closeInspector();
+			page = "arsenal";
+			arsenalTab = "equipment";
+			render();
+			window.scrollTo(0, 0);
+			break;
+		case "open-discoveries":
+			closeInspector();
+			page = "base";
+			render();
+			document.querySelector("#discoveries")?.scrollIntoView({ block: "start", behavior: scrollBehavior() });
+			break;
+		case "craft-gear":
+			act(craftGear(state, id));
+			break;
+		case "repair-gear":
+			act(repairGear(state, id));
+			break;
+		case "buy-supplies":
+			act(buySupplies(state, id));
+			break;
+		case "recycle-gear":
+		case "recycle-weapon": {
+			const gear = target.dataset.action === "recycle-gear" ? state.gearItems.find((item) => item.id === id) : null;
+			const weapon = !gear ? state.weapons.find((item) => item.id === id) : null;
+			if (!gear && !weapon) break;
+			const label = gear ? getGearModel(gear).label : getWeaponDefinition(weapon!).name;
+			const yieldValue = gear ? getGearRecycleYield(gear) : getWeaponRecycleYield(weapon!);
+			document.querySelector("#modal-root")!.innerHTML = `<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="recycle-title"><h2 id="recycle-title">Разобрать ${e(label)}?</h2><p>Предмет исчезнет. База получит ${yieldValue} деталей. Для них должно хватать места на складе. Если предмет выдан бойцу, слот станет пустым.</p><div class="detail-actions"><button class="button danger" data-action="confirm-recycle" data-kind="${gear ? "gear" : "weapon"}" data-id="${id}">Разобрать · +${yieldValue} дет.</button><button class="button ghost" data-action="close-modal">Оставить</button></div></section></div>`;
+			focusModal();
+			break;
+		}
+		case "confirm-recycle":
+			closeModal();
+			act(target.dataset.kind === "gear" ? recycleGear(state, id) : recycleWeapon(state, id));
+			break;
 		case "focus-roster":
 			document.querySelector(".scav-grid")?.scrollIntoView({ block: "start", behavior: scrollBehavior() });
 			document.querySelector<HTMLButtonElement>(".scav-grid [data-scav]")?.focus({ preventScroll: true });
@@ -641,6 +887,7 @@ document.addEventListener("click", (event) => {
 			act(setRaidTactic(state, id, target.dataset.tacticValue as RaidTactic));
 			break;
 		case "inspect-weapon":
+			arsenalTab = "weapons";
 			selectedWeapon = id;
 			category = "all";
 			weaponSearch = "";
@@ -746,6 +993,11 @@ document.addEventListener("change", async (event) => {
 	if (target.dataset.assignWeapon && target.value) act(equipWeapon(state, target.value, target.dataset.assignWeapon));
 	if (target.dataset.equip)
 		act(equipWeapon(state, target.dataset.equip, target.value || null));
+	if (target.dataset.equipGear) act(equipGear(state, target.dataset.equipGear, target.dataset.slot as GearSlot, target.value || null));
+	if (target.dataset.assignGear && target.value) act(equipGear(state, target.value, target.dataset.slot as GearSlot, target.dataset.assignGear));
+	if (target.dataset.ammoType) act(setLoadoutOption(state, target.dataset.ammoType, "ammoType", target.value));
+	if (target.dataset.medkit) act(setLoadoutOption(state, target.dataset.medkit, "medkit", (target as HTMLInputElement).checked));
+	if (target.dataset.autoDepth) act(setAutoRaidDepth(state, target.dataset.autoDepth, Number(target.value)));
 	if (target.dataset.tactic)
 		act(setRaidTactic(state, target.dataset.tactic, target.value as RaidTactic));
 	if (target.dataset.autoHealth) {
@@ -850,7 +1102,7 @@ const readyContracts = () =>
 			!getContractLockReason(state, contract) &&
 			getContractProgress(state, contract) >= contract.target
 	).length;
-const rosterStatus = () => `${state.scavs.map((scav) => `${scav.id}:${scav.status}:${scav.autoRaid.enabled}`).join(";")}|${state.raids.map((raid) => raid.id).join(";")}`;
+	const rosterStatus = () => `${state.scavs.map((scav) => `${scav.id}:${scav.status}:${scav.autoRaid.enabled}`).join(";")}|${state.raids.map((raid) => `${raid.id}:${raid.expedition?.stage}:${raid.expedition?.status}`).join(";")}`;
 function interacting() {
 	return document.activeElement?.tagName === "SELECT" || document.activeElement?.tagName === "INPUT" || Boolean(document.querySelector("#modal-root .modal"));
 }

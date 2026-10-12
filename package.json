@@ -1,6 +1,6 @@
 {
   "name": "prapor",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "description": "Прапор — 2D idle: коллекция пушек, убежище и рейды диких",
@@ -9,6 +9,7 @@
     "worktree": "node .devhub/worktree.cjs",
     "check": "tsc --noEmit",
     "test": "bun test",
+    "balance": "bun scripts/balance.ts",
     "build": "vite build",
     "start": "bun server.ts"
   },

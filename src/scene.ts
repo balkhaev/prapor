@@ -1212,7 +1212,7 @@ export function createWorld(
 			for (const [room, label] of this.roomLabels)
 				label.setText(`${names[room]} · ${state.base[room] ?? 1} ↗`);
 			this.operationsCaption.setText(
-				`В РЕЙДЕ: ${state.raids.length}  ·  АВТОМАРШРУТЫ: ${state.scavs?.filter((scav) => scav.autoRaid?.enabled).length ?? 0}`
+				`В РЕЙДЕ: ${state.raids.length}  ·  ЖДУТ ПРИКАЗ: ${state.raids.filter((raid) => raid.expedition?.status === "choice").length}`
 			);
 			this.scavs.forEach((slot, index) => {
 				const { actor, motion, gear, label, order, selection } = slot;
@@ -1369,8 +1369,9 @@ export function createWorld(
 						const item = this.raidActors.get(raid.id);
 						if (item) item.hovered = false;
 						const selected = snapshot().selectedScavId === raid.scavId;
+						const waiting = snapshot().raids.find((item) => item.id === raid.id)?.expedition?.status === "choice";
 						label.setVisible(selected);
-						phase.setVisible(selected);
+						phase.setVisible(selected || waiting);
 					});
 					marker.on("pointerdown", () => {
 						if (requestedView !== "map") return;
@@ -1392,10 +1393,12 @@ export function createWorld(
 				const marker = this.raidActors.get(raid.id);
 				if (!marker) continue;
 				const selected = state.selectedScavId === raid.scavId;
+				const waiting = raid.expedition?.status === "choice";
 				marker.label.setVisible(selected || marker.hovered);
-				marker.phase.setVisible(selected || marker.hovered).setText(
-					`${raid.isAuto ? "↻ " : ""}${getRaidPhase(raid, Date.now()).label.toLocaleUpperCase("ru-RU")}`
+				marker.phase.setVisible(selected || marker.hovered || waiting).setText(
+					waiting && !selected && !marker.hovered ? "!" : `${raid.isAuto ? "↻ " : ""}${getRaidPhase(raid, Date.now()).label.toLocaleUpperCase("ru-RU")}`
 				);
+				marker.phase.setColor(waiting ? "#ffe0a0" : "#edcc91");
 				marker.actor.setDepth(selected ? 2000 : 0);
 			}
 			this.mapLayer.sort("depth");
@@ -1425,7 +1428,8 @@ export function createWorld(
 					);
 					// Travel out, search locally, then return; completed raids wait at headquarters.
 					let travel: number;
-					if (progress < 0.22) travel = progress / 0.22;
+					if (raid.expedition?.status === "choice") travel = 1;
+					else if (progress < 0.22) travel = progress / 0.22;
 					else if (progress > 0.8) travel = (1 - progress) / 0.2;
 					else travel = 1;
 					const search = progress >= 0.22 && progress <= 0.8;

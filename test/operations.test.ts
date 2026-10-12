@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	MAX_OFFLINE_MS,
 	SAVE_KEY,
+	SAVE_VERSION,
 	advance,
 	createGame,
 	equipWeapon,
@@ -100,6 +101,9 @@ describe("automatic operation regression coverage", () => {
 	test("shared empty ammunition waits for production and awards simultaneous contenders in a stable order", () => {
 		const state = createGame(NOW);
 		state.supplies.ammo = 0;
+		// Equal costs make these actual simultaneous resource contenders; gun
+		// roles now let a cheap shotgun leave before a more costly rifle.
+		for (const scav of state.scavs) state.weapons.find((weapon) => weapon.id === scav.weaponInstanceId)!.weaponId = "pm";
 		for (const scav of [...state.scavs].reverse())
 			expect(setAutoRaid(state, scav.id, "courtyard", 70, NOW).ok).toBe(true);
 		expect(state.raids).toHaveLength(0);
@@ -152,6 +156,7 @@ describe("automatic operation regression coverage", () => {
 		const state = createGame(NOW);
 		for (const scav of state.scavs) {
 			scav.personality = "veteran";
+			state.weapons.find((weapon) => weapon.id === scav.weaponInstanceId)!.weaponId = "sks";
 			expect(setAutoRaid(state, scav.id, "courtyard", 25, NOW).ok).toBe(true);
 		}
 		const endsAt = state.raids[0]!.endsAt;
@@ -252,7 +257,7 @@ describe("legacy migration regression coverage", () => {
 		expect(SAVE_KEY).toBe("prapor.save.v1");
 		const state = parseSave(VERSION_ONE_SAVE)!;
 		expect(state).not.toBeNull();
-		expect(state.schemaVersion).toBe(2);
+		expect(state.schemaVersion).toBe(SAVE_VERSION);
 		expect(state.money).toBe(644);
 		expect(state.rng).toBe(1_300_907_748);
 		expect(state.scavs.every((scav) => !scav.autoRaid.enabled)).toBe(true);
@@ -267,7 +272,9 @@ describe("legacy migration regression coverage", () => {
 		expect(state.raids[0]!.backpackLevel).toBe(0);
 		expect(advance(state, NOW + 34_000).completedCount).toBe(1);
 		// Golden result from the pre-migration engine, using this same persisted seed.
-		expect(state.money).toBe(768);
+		// The migrated loot remains identical. This old balance already exceeds
+		// the new recovery allowance, so it receives no extra idle cash.
+		expect(state.money).toBe(760);
 		expect(state.supplies).toEqual({ ammo: 28, medicine: 6, scrap: 22, intel: 4 });
 		expect(state.history[0]!.success).toBe(true);
 		expect(state.history[0]!.money).toBe(116);
@@ -280,5 +287,46 @@ describe("legacy migration regression coverage", () => {
 		expect(advance(state, NOW + 600_000).completedCount).toBe(0);
 		expect(state.stats.raidsCompleted).toBe(1);
 		expect(parseSave(saveGame(state))).toEqual(state);
+	});
+
+	test("a v2 save migrates personal upgrades, automatic policies and old weapon mods without replacing its active outcome", () => {
+		const legacy = JSON.parse(VERSION_ONE_SAVE);
+		legacy.schemaVersion = 2;
+		for (const scav of legacy.scavs) {
+			scav.tactic = "balanced";
+			scav.gear = { armor: 0, backpack: 0 };
+			scav.autoRaid = { mapId: "courtyard", enabled: false, minHealth: 70, runs: 0, waitingReason: null };
+		}
+		legacy.scavs[1].gear = { armor: 3, backpack: 2 };
+		legacy.scavs[1].tactic = "cautious";
+		legacy.scavs[1].autoRaid.enabled = true;
+		legacy.scavs[2].autoRaid.minHealth = 95;
+		// The former workshop accepted these mods even on a PM: migrate the
+		// owner's existing item, while new installs respect compatibility.
+		legacy.weapons[3].attachments = { optic: 2, magazine: 3, stock: 1 };
+		Object.assign(legacy.raids[0], { isAuto: false, tactic: "balanced", armorLevel: 0, backpackLevel: 0 });
+		legacy.stats.autoRaidsCompleted = 0;
+		legacy.stats.mapWins = {};
+		const state = parseSave(JSON.stringify(legacy))!;
+		expect(state).not.toBeNull();
+		expect(state.schemaVersion).toBe(SAVE_VERSION);
+		expect(state.scavs[1]!.gear).toEqual({ armor: 3, backpack: 2 });
+		expect(state.scavs[1]!.tactic).toBe("cautious");
+		expect(state.scavs[1]!.autoRaid.enabled).toBe(true);
+		expect(state.scavs[1]!.autoRaid.maxDepth).toBe(1);
+		expect(state.scavs[2]!.autoRaid.minHealth).toBe(95);
+		expect(state.weapons[3]!.attachments).toEqual({ optic: 2, magazine: 3, stock: 1 });
+		expect(state.raids[0]!.expedition).toBeNull();
+		expect(state.raids[0]!.seed).toBe(1_300_907_748);
+		expect(advance(state, NOW + 34_000).completedCount).toBe(1);
+		expect(state.history[0]!.money).toBe(116);
+		expect(state.history[0]!.supplies).toEqual({ ammo: 5, medicine: 0, scrap: 4, intel: 1 });
+		expect(state.weapons[0]!.durability).toBe(87);
+		expect(state.scavs[0]!.health).toBe(92);
+		expect(state.raids.some((raid) => raid.scavId === state.scavs[1]!.id && raid.expedition !== null)).toBe(true);
+		expect(parseSave(saveGame(state))).toEqual(state);
+		const after = saveGame(state);
+		expect(advance(state, state.lastUpdated).completedCount).toBe(0);
+		expect(saveGame(state)).toBe(after);
 	});
 });
