@@ -100,7 +100,7 @@ export const BASE_ROOM_LABELS: Record<BaseRoom, string> = {
 	workshop: "Мастерская",
 	medbay: "Медблок",
 	radio: "Радиорубка",
-	storage: "Арсенал",
+	storage: "Склад",
 };
 
 export const WEAPONS: WeaponDefinition[] = [

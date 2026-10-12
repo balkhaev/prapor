@@ -180,10 +180,24 @@ function toast(message: string, ok = true) {
 	}, 6000);
 }
 function act(result: ActionResult) {
+	const origin = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+	const actionSelector = origin?.dataset.action
+		? ["action", "id", "mod", "slot"].filter((key) => origin.dataset[key] != null)
+			.map((key) => `[data-${key}="${CSS.escape(origin.dataset[key]!)}"]`).join("")
+		: null;
 	toast(result.message, result.ok);
 	persist();
 	render();
+	if (!selectedScav && actionSelector) {
+		const replacement = document.querySelector<HTMLButtonElement>(actionSelector);
+		if (replacement && !replacement.disabled) replacement.focus({ preventScroll: true });
+		else {
+			const context = replacement?.closest<HTMLElement>(".card, .weapon-detail, .contract");
+			if (context) { context.tabIndex = -1; context.focus({ preventScroll: true }); }
+		}
+	}
 }
+const scrollBehavior = (): ScrollBehavior => window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth";
 function canAfford(cost: { money: number; scrap: number }) {
 	return state.money >= cost.money && state.supplies.scrap >= cost.scrap;
 }
@@ -244,7 +258,7 @@ function hud() {
 	});
 	document.querySelectorAll<HTMLElement>("[data-health]").forEach((node) => {
 		const scav = state.scavs.find((s) => s.id === node.dataset.health);
-		if (scav) node.textContent = `${Math.round(scav.health)} / 100`;
+		if (scav) node.textContent = `${Math.floor(scav.health)} / 100`;
 	});
 	document
 		.querySelectorAll<HTMLElement>("[data-health-fill]")
@@ -326,7 +340,7 @@ function scavCard(scav: Scav) {
 	const weapon = state.weapons.find((w) => w.id === scav.weaponInstanceId);
 	const personality = PERSONALITY_BY_ID[scav.personality]!;
 	const ready = !dispatchBlock(scav);
-	return `<button class="scav-card ${raid ? "on-mission" : ""} ${selectedScav === scav.id ? "selected" : ""}" data-scav="${scav.id}" aria-label="Открыть бойца ${e(scav.name)}"><span class="scav-card-top"><span class="scav-avatar">${scavPortrait(scav.personality, scav.name)}</span><span class="scav-identity"><strong>${e(scav.name)}</strong><span>${e(personality.name)} · ур. ${scav.level}</span></span><span class="scav-state ${raid ? "away" : ready ? "ready" : "waiting"}">${raid ? "В рейде" : ready ? "Готов" : scav.health < 25 ? "Ранен" : "На базе"}</span></span><span class="scav-card-body"><span class="scav-weapon">${icon("arsenal", 17)} ${weapon ? e(getWeaponDefinition(weapon).name) : "Без оружия"}</span><span class="scav-health"><span>Здоровье <b data-health="${scav.id}">${Math.round(scav.health)} / 100</b></span><span class="health-track"><i data-health-fill="${scav.id}" style="width:${scav.health}%"></i></span></span>${raid ? `<span class="scav-raid"><span><b>${e(MAP_BY_ID[raid.mapId]!.name)}</b><strong data-raid-time="${raid.id}">${seconds((raid.endsAt - Date.now()) / 1000)}</strong></span><span class="progress"><i data-raid-progress="${raid.id}"></i></span><small data-raid-phase="${raid.id}">${e(getRaidPhase(raid, Date.now()).label)}</small></span>` : `<span class="scav-idle-note">${scav.autoRaid.enabled ? `${icon("repeat", 13)} ${e(MAP_BY_ID[scav.autoRaid.mapId]!.name)} · автовыходы` : `${icon("armor", 13)} Броня ${scav.gear.armor} · Рюкзак ${scav.gear.backpack}`}</span>`}</span><span class="scav-card-bottom"><span>Снаряжение и приказ</span>${icon("arrow", 16)}</span></button>`;
+	return `<button class="scav-card ${raid ? "on-mission" : ""} ${selectedScav === scav.id ? "selected" : ""}" data-scav="${scav.id}" aria-label="Открыть бойца ${e(scav.name)}"><span class="scav-card-top"><span class="scav-avatar">${scavPortrait(scav.personality, scav.name)}</span><span class="scav-identity"><strong>${e(scav.name)}</strong><span>${e(personality.name)} · ур. ${scav.level}</span></span><span class="scav-state ${raid ? "away" : ready ? "ready" : "waiting"}">${raid ? "В рейде" : ready ? "Готов" : scav.health < 25 ? "Ранен" : "На базе"}</span></span><span class="scav-card-body"><span class="scav-weapon">${icon("arsenal", 17)} ${weapon ? e(getWeaponDefinition(weapon).name) : "Без оружия"}</span><span class="scav-health"><span>Здоровье <b data-health="${scav.id}">${Math.floor(scav.health)} / 100</b></span><span class="health-track"><i data-health-fill="${scav.id}" style="width:${scav.health}%"></i></span></span>${raid ? `<span class="scav-raid"><span><b>${e(MAP_BY_ID[raid.mapId]!.name)}</b><strong data-raid-time="${raid.id}">${seconds((raid.endsAt - Date.now()) / 1000)}</strong></span><span class="progress"><i data-raid-progress="${raid.id}"></i></span><small data-raid-phase="${raid.id}">${e(getRaidPhase(raid, Date.now()).label)}</small></span>` : `<span class="scav-idle-note">${scav.autoRaid.enabled ? `${icon("repeat", 13)} ${e(MAP_BY_ID[scav.autoRaid.mapId]!.name)} · автовыходы` : `${icon("armor", 13)} Броня ${scav.gear.armor} · Рюкзак ${scav.gear.backpack}`}</span>`}</span><span class="scav-card-bottom"><span>Снаряжение и приказ</span>${icon("arrow", 16)}</span></button>`;
 }
 function openInspector(id: string) {
 	if (!state.scavs.some((scav) => scav.id === id)) return;
@@ -337,11 +351,12 @@ function openInspector(id: string) {
 	document.querySelector<HTMLButtonElement>('[data-action="close-inspector"]')?.focus();
 }
 function closeInspector() {
+	const closedId = selectedScav;
 	selectedScav = null;
 	document.querySelector("#inspector-root")!.innerHTML = "";
 	setOverlayState();
 	if (inspectorOrigin?.isConnected) inspectorOrigin.focus();
-	else document.querySelector<HTMLButtonElement>('.nav button.active')?.focus();
+	else (document.querySelector<HTMLButtonElement>(`[data-scav="${CSS.escape(closedId ?? "")}"]`) ?? document.querySelector<HTMLButtonElement>('.nav button.active'))?.focus({ preventScroll: true });
 }
 function renderInspector() {
 	const root = document.querySelector<HTMLDivElement>("#inspector-root")!;
@@ -355,7 +370,7 @@ function renderInspector() {
 	const raid = state.raids.find((r) => r.scavId === scav.id), map = MAP_BY_ID[selectedMap]!;
 	const weapon = state.weapons.find((w) => w.id === scav.weaponInstanceId);
 	const reason = dispatchBlock(scav), chance = Math.round(getRaidChance(state, scav, map) * 100);
-	root.innerHTML = `<div class="inspector-backdrop"><aside class="inspector" role="dialog" aria-modal="true" aria-labelledby="scav-title"><div class="inspector-head"><div><span class="eyebrow">Личное дело · ур. ${scav.level}</span><h2 id="scav-title">${e(scav.name)}</h2></div><button class="icon-button" data-action="close-inspector" data-focus-key="close" aria-label="Закрыть бойца">×</button></div><div class="inspector-scroll"><div class="scav-profile"><div class="inspector-portrait">${scavPortrait(scav.personality, scav.name)}</div><div><strong>${e(PERSONALITY_BY_ID[scav.personality]!.name)}</strong><p>${e(PERSONALITY_BY_ID[scav.personality]!.description)}</p><div class="profile-stats"><span>Бой <b>${scav.combat}</b></span><span>Поиск <b>${scav.scouting}</b></span><span>Выходы <b>${scav.raids}</b></span></div></div></div><div class="health-panel"><div><span>Здоровье</span><strong data-health="${scav.id}">${Math.round(scav.health)} / 100</strong></div><div class="health-track"><i data-health-fill="${scav.id}" style="width:${scav.health}%"></i></div><div class="health-panel-bottom"><span data-heal-note="${scav.id}">Медблок восстанавливает бесплатно</span><button class="button ghost small" data-action="heal" data-id="${scav.id}" data-focus-key="heal" ${raid || scav.health >= 100 || state.supplies.medicine < medicineCost(scav) ? "disabled" : ""}>${icon("medicine", 15)} Лечить · ${medicineCost(scav)} мед.</button></div></div>${raid ? `<div class="active-raid"><div class="active-raid-heading">${icon("raids", 17)}<strong>${e(MAP_BY_ID[raid.mapId]!.name)}</strong><span>${raid.isAuto ? "АВТОВЫХОД" : "РАЗОВЫЙ"}</span></div><div class="raid-time"><span data-raid-phase="${raid.id}">${e(getRaidPhase(raid, Date.now()).label)}</span><strong data-raid-time="${raid.id}">${seconds((raid.endsAt - Date.now()) / 1000)}</strong></div><div class="progress"><i data-raid-progress="${raid.id}"></i></div><p>На выходе: ${Math.round(raid.chance * 100)}% успеха · ${e(TACTICS[raid.tactic].label)}. Снаряжение доступно после возвращения.</p></div>` : ""}<section class="inspector-section"><div class="inspector-section-title"><h3>Оружие</h3>${weapon ? `<button class="text-button" data-action="inspect-weapon" data-id="${weapon.id}" data-focus-key="weapon-detail">Ремонт и моды →</button>` : ""}</div>${weapon ? `<div class="equipped-art" style="--rarity:${RARITY_COLORS[getWeaponDefinition(weapon).rarity]}">${gunArt(getWeaponDefinition(weapon).category, RARITY_COLORS[getWeaponDefinition(weapon).rarity])}<span><b>${e(getWeaponDefinition(weapon).name)}</b><small>Мощь ${getWeaponPower(weapon)} · состояние ${Math.round(weapon.durability)}%</small></span></div>` : '<p class="field-hint">Для выхода нужен исправный ствол из арсенала.</p>'}<label class="field-label">${raid ? "Оружие занято в рейде" : "Выдать оружие"}<select aria-label="Оружие для ${e(scav.name)}" data-equip="${scav.id}" data-focus-key="weapon" ${raid ? "disabled" : ""}><option value="">Без оружия</option>${state.weapons.filter((w) => !state.scavs.some((s) => s.id !== scav.id && s.weaponInstanceId === w.id)).map((w) => `<option value="${w.id}" ${w.id === scav.weaponInstanceId ? "selected" : ""}>${e(getWeaponDefinition(w).name)} · ${Math.round(w.durability)}%</option>`).join("")}</select></label></section><section class="inspector-section"><h3>${raid ? "Тактика следующего выхода" : "Тактика"}</h3><div class="tactics" role="group" aria-label="Тактика для ${e(scav.name)}">${(Object.keys(TACTICS) as RaidTactic[]).map((tactic) => `<button class="${tactic === scav.tactic ? "active" : ""}" data-action="tactic" data-id="${scav.id}" data-tactic-value="${tactic}" data-focus-key="tactic-${tactic}" aria-pressed="${scav.tactic === tactic}">${TACTICS[tactic].label}</button>`).join("")}</div><p class="field-hint">${e(TACTICS[scav.tactic].description)}</p><div class="gear-grid">${gearCard(scav, "armor")}${gearCard(scav, "backpack")}</div></section><section class="inspector-section sortie-section"><h3>${raid ? "Следующий разовый выход" : "Разовый выход"}</h3><label class="field-label">Сектор<select data-inspector-map data-focus-key="map" aria-label="Сектор для разового выхода">${MAPS.map((m) => `<option value="${m.id}" ${m.id === selectedMap ? "selected" : ""} ${state.level < m.level ? "disabled" : ""}>${e(m.name)}${state.level < m.level ? ` · ур. ${m.level}` : ""}</option>`).join("")}</select></label><div class="sortie-preview"><span><strong data-chance="${scav.id}">${chance}% успеха</strong><small>Оценка возвращения</small></span><span><strong>${seconds(getRaidDuration(state, scav, map))}</strong><small>Время на маршруте</small></span><span><strong>${getRaidAmmoCost(scav, map)} патр.${map.intelCost ? ` + ${map.intelCost} разв.` : ""}</strong><small>За один выход</small></span></div><p class="field-hint">При провале возможна потеря бойца и оружия.</p></section><details class="order-section" ${autoExpanded ?? scav.autoRaid.enabled ? "open" : ""}><summary data-focus-key="order-summary">${icon("repeat", 18)}<span>Постоянный приказ<small>${scav.autoRaid.enabled ? `${e(MAP_BY_ID[scav.autoRaid.mapId]!.name)} · включён` : "Повторять выходы автоматически"}</small></span><b>${scav.autoRaid.enabled ? "ВКЛ" : "+"}</b></summary>${autoRaidCard(scav)}</details></div><footer class="inspector-actions"><div><strong>${raid ? "Боец на маршруте" : e(map.name)}</strong><small class="dispatch-preview"><b data-chance="${scav.id}">${chance}% успеха</b> · <span data-dispatch-cost="${scav.id}">${getRaidAmmoCost(scav, map)} патр.${map.intelCost ? ` + ${map.intelCost} разв.` : ""}</span></small><span data-dispatch-note="${scav.id}">${e(reason ?? "Готов к разовому выходу")}</span></div><button class="button" data-action="dispatch" data-id="${scav.id}" data-focus-key="dispatch" ${reason ? "disabled" : ""}>В рейд ${icon("arrow", 17)}</button></footer></aside></div>`;
+	root.innerHTML = `<div class="inspector-backdrop"><aside class="inspector" role="dialog" aria-modal="true" aria-labelledby="scav-title"><div class="inspector-head"><div><span class="eyebrow">Личное дело · ур. ${scav.level}</span><h2 id="scav-title">${e(scav.name)}</h2></div><button class="icon-button" data-action="close-inspector" data-focus-key="close" aria-label="Закрыть бойца">×</button></div><div class="inspector-scroll"><div class="scav-profile"><div class="inspector-portrait">${scavPortrait(scav.personality, scav.name)}</div><div><strong>${e(PERSONALITY_BY_ID[scav.personality]!.name)}</strong><p>${e(PERSONALITY_BY_ID[scav.personality]!.description)}</p><div class="profile-stats"><span>Бой <b>${scav.combat}</b></span><span>Поиск <b>${scav.scouting}</b></span><span>Выходы <b>${scav.raids}</b></span></div></div></div><div class="health-panel"><div><span>Здоровье</span><strong data-health="${scav.id}">${Math.floor(scav.health)} / 100</strong></div><div class="health-track"><i data-health-fill="${scav.id}" style="width:${scav.health}%"></i></div><div class="health-panel-bottom"><span data-heal-note="${scav.id}">Медблок восстанавливает бесплатно</span><button class="button ghost small" data-action="heal" data-id="${scav.id}" data-focus-key="heal" ${raid || scav.health >= 100 || state.supplies.medicine < medicineCost(scav) ? "disabled" : ""}>${icon("medicine", 15)} Лечить · ${medicineCost(scav)} мед.</button></div></div>${raid ? `<div class="active-raid"><div class="active-raid-heading">${icon("raids", 17)}<strong>${e(MAP_BY_ID[raid.mapId]!.name)}</strong><span>${raid.isAuto ? "АВТОВЫХОД" : "РАЗОВЫЙ"}</span></div><div class="raid-time"><span data-raid-phase="${raid.id}">${e(getRaidPhase(raid, Date.now()).label)}</span><strong data-raid-time="${raid.id}">${seconds((raid.endsAt - Date.now()) / 1000)}</strong></div><div class="progress"><i data-raid-progress="${raid.id}"></i></div><p>На выходе: ${Math.round(raid.chance * 100)}% успеха · ${e(TACTICS[raid.tactic].label)}. Снаряжение доступно после возвращения.</p></div>` : ""}<section class="inspector-section"><div class="inspector-section-title"><h3>Оружие</h3>${weapon ? `<button class="text-button" data-action="inspect-weapon" data-id="${weapon.id}" data-focus-key="weapon-detail">Ремонт и моды →</button>` : ""}</div>${weapon ? `<div class="equipped-art" style="--rarity:${RARITY_COLORS[getWeaponDefinition(weapon).rarity]}">${gunArt(getWeaponDefinition(weapon).category, RARITY_COLORS[getWeaponDefinition(weapon).rarity])}<span><b>${e(getWeaponDefinition(weapon).name)}</b><small>Мощь ${getWeaponPower(weapon)} · состояние ${Math.round(weapon.durability)}%</small></span></div>` : '<p class="field-hint">Для выхода нужен исправный ствол из арсенала.</p>'}<label class="field-label">${raid ? "Оружие занято в рейде" : "Выдать оружие"}<select aria-label="Оружие для ${e(scav.name)}" data-equip="${scav.id}" data-focus-key="weapon" ${raid ? "disabled" : ""}><option value="">Без оружия</option>${state.weapons.filter((w) => !state.scavs.some((s) => s.id !== scav.id && s.weaponInstanceId === w.id)).map((w) => `<option value="${w.id}" ${w.id === scav.weaponInstanceId ? "selected" : ""}>${e(getWeaponDefinition(w).name)} · ${Math.round(w.durability)}%</option>`).join("")}</select></label></section><section class="inspector-section"><h3>${raid ? "Тактика следующего выхода" : "Тактика"}</h3><div class="tactics" role="group" aria-label="Тактика для ${e(scav.name)}">${(Object.keys(TACTICS) as RaidTactic[]).map((tactic) => `<button class="${tactic === scav.tactic ? "active" : ""}" data-action="tactic" data-id="${scav.id}" data-tactic-value="${tactic}" data-focus-key="tactic-${tactic}" aria-pressed="${scav.tactic === tactic}">${TACTICS[tactic].label}</button>`).join("")}</div><p class="field-hint">${e(TACTICS[scav.tactic].description)}</p><div class="gear-grid">${gearCard(scav, "armor")}${gearCard(scav, "backpack")}</div></section><section class="inspector-section sortie-section"><h3>${raid ? "Следующий разовый выход" : "Разовый выход"}</h3><label class="field-label">Сектор<select data-inspector-map data-focus-key="map" aria-label="Сектор для разового выхода">${MAPS.map((m) => `<option value="${m.id}" ${m.id === selectedMap ? "selected" : ""} ${state.level < m.level ? "disabled" : ""}>${e(m.name)}${state.level < m.level ? ` · ур. ${m.level}` : ""}</option>`).join("")}</select></label><div class="sortie-preview"><span><strong data-chance="${scav.id}">${chance}% успеха</strong><small>Оценка возвращения</small></span><span><strong>${seconds(getRaidDuration(state, scav, map))}</strong><small>Время на маршруте</small></span><span><strong>${getRaidAmmoCost(scav, map)} патр.${map.intelCost ? ` + ${map.intelCost} разв.` : ""}</strong><small>За один выход</small></span></div><p class="field-hint">При провале возможна потеря бойца и оружия.</p></section><details class="order-section" ${autoExpanded ?? scav.autoRaid.enabled ? "open" : ""}><summary data-focus-key="order-summary">${icon("repeat", 18)}<span>Постоянный приказ<small>${scav.autoRaid.enabled ? `${e(MAP_BY_ID[scav.autoRaid.mapId]!.name)} · включён` : "Повторять выходы автоматически"}</small></span><b>${scav.autoRaid.enabled ? "ВКЛ" : "+"}</b></summary>${autoRaidCard(scav)}</details></div><footer class="inspector-actions"><div><strong>${raid ? "Боец на маршруте" : e(map.name)}</strong><small class="dispatch-preview"><b data-chance="${scav.id}">${chance}% успеха</b> · <span data-dispatch-cost="${scav.id}">${getRaidAmmoCost(scav, map)} патр.${map.intelCost ? ` + ${map.intelCost} разв.` : ""}</span></small><span data-dispatch-note="${scav.id}">${e(reason ?? "Готов к разовому выходу")}</span></div><button class="button" data-action="dispatch" data-id="${scav.id}" data-focus-key="dispatch" ${reason ? "disabled" : ""}>В рейд ${icon("arrow", 17)}</button></footer></aside></div>`;
 	const scroll = root.querySelector<HTMLElement>(".inspector-scroll"); if (scroll) scroll.scrollTop = oldScroll;
 	if (focusKey) {
 		const replacement = root.querySelector<HTMLElement>(`[data-focus-key="${focusKey}"]`);
@@ -387,7 +402,9 @@ function openRoom(room: BaseRoom) {
 	page = "base";
 	render();
 	window.scrollTo(0, 0);
-	document.querySelector<HTMLElement>(`[data-room="${room}"]`)?.focus({ preventScroll: true });
+	const card = document.querySelector<HTMLElement>(`[data-room="${room}"]`);
+	card?.focus({ preventScroll: true });
+	card?.scrollIntoView({ block: "center", behavior: scrollBehavior() });
 }
 function contractCard(contract: Contract) {
 	const progress = getContractProgress(state, contract),
@@ -410,7 +427,7 @@ function renderOfflineSummary() {
 }
 function operationsBar() {
 	const enabled = state.scavs.filter((scav) => scav.autoRaid.enabled).length;
-	return `<div class="operations-bar"><div>${icon("repeat", 25)}<div><span class="eyebrow">Постоянные приказы</span><strong><span id="auto-order-count">${enabled}</span> диких на автовыходах</strong><p>Нажми на бойца, чтобы выдать ствол и задать маршрут.</p></div></div>${enabled ? '<button class="button danger small" data-action="auto-stop-all">Остановить все автовыходы</button>' : '<button class="button secondary small" data-page="raids">Настроить отряд</button>'}</div>`;
+	return `<div class="operations-bar"><div>${icon("repeat", 25)}<div><span class="eyebrow">Постоянные приказы</span><strong><span id="auto-order-count">${enabled}</span> — на автовыходах</strong><p>Нажми на бойца, чтобы выдать ствол и задать маршрут.</p></div></div>${enabled ? '<button class="button danger small" data-action="auto-stop-all">Остановить все автовыходы</button>' : (page === "raids" ? '<button class="button secondary small" data-action="focus-roster">Выбрать бойца</button>' : '<button class="button secondary small" data-page="raids">Настроить отряд</button>')}</div>`;
 }
 function render() {
 	deferredRender = false;
@@ -441,7 +458,7 @@ function render() {
 				"people",
 				state.scavs.length,
 				"ДИКИХ В ОТРЯДЕ",
-				`${getScavCapacity(state)} мест`,
+				`Мест: ${getScavCapacity(state)}`,
 			],
 			[
 				"arsenal",
@@ -484,7 +501,7 @@ function render() {
 		const descriptions: Record<BaseRoom, string> = {
 			workshop: `Доход +${getIncomePerMinute(state)} ₽/мин. Производит патроны и детали для рейдов и ремонта.`,
 			medbay: `Бесплатно восстанавливает ${((0.04 + state.base.medbay * 0.025) * 60).toFixed(1)} здоровья в минуту. Улучшение ускоряет лечение.`,
-			radio: `${getScavCapacity(state)} места для диких. Производит разведданные, повышает шанс успеха и сокращает путь.`,
+			radio: `Мест для диких: ${getScavCapacity(state)}. Производит разведданные, повышает шанс успеха и сокращает путь.`,
 			storage: `${getStorageCapacity(state)} мест под оружие. При переполнении новая добыча автоматически продаётся.`,
 		};
 		panel.innerHTML = `<div class="card-grid">${(
@@ -505,7 +522,7 @@ function render() {
 	}
 	if (page === "journal")
 		panel.innerHTML = state.history.length
-			? `<div class="section-head"><h2>Последние ${state.history.length} выходов</h2><span class="muted">Всего: ${n(state.stats.raidsCompleted)} · нажми отчёт, чтобы открыть маршрут</span></div>${state.history.map(journalCard).join("")}`
+			? `<div class="section-head"><h2>Последние отчёты · ${state.history.length}</h2><span class="muted">Всего: ${n(state.stats.raidsCompleted)} · нажми отчёт, чтобы открыть маршрут</span></div>${state.history.map(journalCard).join("")}`
 			: '<div class="empty">Радио пока молчит.<br>Отправь дикого в первый рейд — здесь появится его отчёт.</div>';
 	panel.querySelectorAll<HTMLDetailsElement>("details[data-report]").forEach((node) => { node.open = expandedReports.includes(node.dataset.report); });
 	renderInspector();
@@ -593,6 +610,7 @@ document.addEventListener("click", (event) => {
 	if (target.dataset.weapon) {
 		selectedWeapon = target.dataset.weapon;
 		render();
+		if (window.innerWidth <= 640) document.querySelector(".weapon-detail")?.scrollIntoView({ block: "start", behavior: scrollBehavior() });
 		return;
 	}
 	if (target.dataset.filter) {
@@ -607,13 +625,17 @@ document.addEventListener("click", (event) => {
 	}
 	const id = target.dataset.id ?? "";
 	switch (target.dataset.action) {
+		case "focus-roster":
+			document.querySelector(".scav-grid")?.scrollIntoView({ block: "start", behavior: scrollBehavior() });
+			document.querySelector<HTMLButtonElement>(".scav-grid [data-scav]")?.focus({ preventScroll: true });
+			break;
 		case "close-inspector":
 			closeInspector();
 			break;
 		case "toggle-map":
 			showTacticalMap = !showTacticalMap;
 			render();
-			if (showTacticalMap) { setView("map"); document.querySelector("#hero")?.scrollIntoView({ behavior: "smooth", block: "start" }); }
+			if (showTacticalMap) { setView("map"); document.querySelector("#hero")?.scrollIntoView({ behavior: scrollBehavior(), block: "start" }); }
 			break;
 		case "tactic":
 			act(setRaidTactic(state, id, target.dataset.tacticValue as RaidTactic));
