@@ -163,6 +163,7 @@ describe("command next-step projection", () => {
 		expect(projection.kind).toBe("capacity");
 		expect(projection.tab).toBe("production");
 		expect(projection.detail).toBe(getResourceProductionQuote(state, medbay.id, "medicine-batch").reason!);
+		expect(projection.detail).toContain("Материалы ещё не списаны");
 		expect(projection.progress).toBe(0);
 		expect(saveGame(state)).toBe(saved);
 	});

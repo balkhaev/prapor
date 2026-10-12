@@ -620,7 +620,9 @@ export function getResourceProductionQuote(state: GameState, roomId: string, rec
 	else if (roomWorkRate(state, room) === 0) reason = "Назначь здорового рабочего.";
 	else {
 		reason = productionCostReason(state, recipe.cost);
-		if (!reason) reason = roomOutputReason(state, { output: { supplies: recipe.output, moduleModelId: null } } as ProductionJob);
+		if (!reason && roomOutputReason(state, { output: { supplies: recipe.output, moduleModelId: null } } as ProductionJob)) {
+			reason = "На складе нет места для новой партии. Материалы ещё не списаны.";
+		}
 	}
 	return { money: recipe?.cost.money ?? 0, supplies: { ...(recipe?.cost.supplies ?? emptySupplies()) }, duration: recipe?.durationSeconds ?? 0, reason };
 }
