@@ -32,7 +32,7 @@ export const BLUEPRINTS: Record<string, { label: string; description: string }> 
 };
 export const EXPEDITION_BRANCHES: Record<ExpeditionBranch, { label: string; description: string; chanceBonus: number; lootBonus: number; ammoMultiplier: number; durationMultiplier: number }> = {
 	scavenge: { label: "Тайники", description: "Больше припасов и деталей. На втором этапе можно найти чертёж грузовой рамы.", chanceBonus: 0, lootBonus: 0.25, ammoMultiplier: 0.85, durationMultiplier: 1.1 },
-	combat: { label: "Оружейный склад", description: "Выше шанс найти пушку и чертёж плитника. Больше патронов и опасности.", chanceBonus: -0.08, lootBonus: 0.15, ammoMultiplier: 1.5, durationMultiplier: 1 },
+	combat: { label: "Оружейный склад", description: "Больше оружейных модулей и ствольных коробок. На втором этапе — чертёж плитника. Больше патронов и риска.", chanceBonus: -0.08, lootBonus: 0.15, ammoMultiplier: 1.5, durationMultiplier: 1 },
 	recon: { label: "Разведка", description: "Меньше добычи, выше шанс пройти. Нужны разведданные; запоминает безопасные тропы.", chanceBonus: 0.07, lootBonus: -0.1, ammoMultiplier: 0.7, durationMultiplier: 0.9 },
 };
 export const RUN_PERKS: Record<RunPerk, { label: string; description: string }> = {
@@ -40,7 +40,7 @@ export const RUN_PERKS: Record<RunPerk, { label: string; description: string }> 
 	haggler: { label: "Тайники барыги", description: "+20% к деньгам, но −4% к шансу следующих этапов." },
 	pathfinder: { label: "Срезать путь", description: "Следующие этапы на 20% быстрее, но расход патронов +1." },
 	fieldMedic: { label: "Полевая перевязка", description: "Ранения на следующих этапах вдвое слабее." },
-	gunsmith: { label: "Полевой оружейник", description: "Оружие изнашивается вдвое медленнее; шанс трофейной пушки +10%." },
+	gunsmith: { label: "Полевой оружейник", description: "Оружие изнашивается вдвое медленнее; модули в добыче получают +10 к состоянию, шанс пушки +10%." },
 };
 export const MARKET_OFFERS: { id: string; label: string; supply: keyof Supplies; amount: number; money: number }[] = [
 	{ id: "ammo", label: "Ящик патронов", supply: "ammo", amount: 20, money: 130 },

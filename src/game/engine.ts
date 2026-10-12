@@ -16,7 +16,7 @@ import { GEAR_LABELS, MAX_GEAR_LEVEL, TACTICS, type GearSlot, type RaidTactic } 
 export { GEAR_LABELS, MAX_GEAR_LEVEL, TACTICS, type GearSlot, type RaidTactic } from "./operations";
 import { BLUEPRINTS, EXPEDITION_BRANCHES, GEAR_MODEL_BY_ID, MARKET_OFFERS, RUN_PERKS, WEAPON_ROLES, type AmmoType, type Cargo, type ExpeditionBranch, type GearItem, type Loadout, type RunPerk } from "./systems";
 export * from "./systems";
-import { FACTORY_KITS, MODULE_BY_ID, MODULE_MODELS, MODULE_SLOTS, MODULE_SLOT_LABELS, RECEIVER_INFO, type ModuleInstance, type ModuleSlot } from "./modules";
+import { FACTORY_KITS, MODULE_BY_ID, MODULE_MODELS, MODULE_SLOTS, MODULE_SLOT_LABELS, modulePlatformLabel, RECEIVER_INFO, type ModuleInstance, type ModuleSlot } from "./modules";
 export * from "./modules";
 
 export const SAVE_KEY = "prapor.save.v1";
@@ -336,7 +336,7 @@ export function getModuleDefinition(item: ModuleInstance) {
 function moduleFitReason(weapon: WeaponInstance, item: ModuleInstance): string | null {
 	const model = getModuleDefinition(item), info = RECEIVER_INFO[weapon.weaponId]!;
 	if (model.slot === "receiver" && model.weaponId !== weapon.weaponId) return "Эта ствольная коробка относится к другой пушке. Собери её отдельно.";
-	if (!model.platforms.includes("*") && !model.platforms.includes(info.platform)) return `Нужна платформа ${model.platforms.join(" / ")}; у пушки ${info.platform}.`;
+	if (!model.platforms.includes("*") && !model.platforms.includes(info.platform)) return `Нужна платформа ${model.platforms.map(modulePlatformLabel).join(" / ")}; у пушки ${modulePlatformLabel(info.platform)}.`;
 	if (!model.calibers.includes("*") && !model.calibers.includes(info.caliber)) return `Калибр ${model.calibers.join(" / ")} не подходит к ${info.caliber}.`;
 	if (model.requiresMount && !Object.values(weapon.modules).some((part) => getModuleDefinition(part).providesMounts.includes(model.requiresMount!))) return `Нет крепления ${model.requiresMount === "rail-top" ? "верхней планки" : model.requiresMount === "rail-bottom" ? "нижней планки цевья" : model.requiresMount === "dovetail" ? "бокового кронштейна" : `резьбы ${info.caliber}`}.`;
 	return null;

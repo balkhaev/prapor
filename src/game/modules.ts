@@ -11,6 +11,11 @@ export interface ModuleModel {
 	craftCost: { money: number; scrap: number }; workshopLevel: number; lootTier: number;
 }
 export const MODULE_SLOTS: ModuleSlot[] = ["receiver", "barrel", "handguard", "stock", "magazine", "optic", "muzzle", "foregrip"];
+export const MODULE_PLATFORM_LABELS: Record<string, string> = {
+	pm: "ПМ", tt: "ТТ", toz: "ТОЗ-106", mp133: "МР-133", kedr: "Кедр", sks: "СКС",
+	ak: "АК", saiga: "Сайга", vityaz: "Витязь", mosin: "Мосинка", val: "ВАЛ / ВСС", rpk: "РПК", svd: "СВД", pkp: "ПКП",
+};
+export const modulePlatformLabel = (platform: string) => Object.hasOwn(MODULE_PLATFORM_LABELS, platform) ? MODULE_PLATFORM_LABELS[platform]! : platform.toUpperCase();
 export const MODULE_SLOT_LABELS: Record<ModuleSlot, string> = { receiver: "Ствольная коробка", barrel: "Ствол", handguard: "Цевьё", stock: "Приклад", magazine: "Магазин", optic: "Прицел", muzzle: "Дульное устройство", foregrip: "Рукоять" };
 const platforms: Record<string, [string, string]> = {
 	pm: ["pm", "9x18"], tt: ["tt", "7.62x25"], toz: ["toz", "20g"], mp133: ["mp133", "12g"],
@@ -41,7 +46,7 @@ for (const weapon of WEAPONS) {
 	const kit: Partial<Record<ModuleSlot, string>> = {};
 	for (const slot of info.requiredSlots) {
 		const moduleId = slot === "receiver" ? `receiver-${weapon.id}` : `factory-${weapon.id}-${slot}`;
-		model(moduleId, `${MODULE_SLOT_LABELS[slot]} · ${weapon.name.split(" «")[0]}`, slot, `Штатная деталь ${weapon.name}. Калибр ${info.caliber}, платформа ${info.platform}.`, {
+		model(moduleId, `${MODULE_SLOT_LABELS[slot]} · ${weapon.name.split(" «")[0]}`, slot, `Штатная деталь ${weapon.name}. Калибр ${info.caliber}, платформа ${modulePlatformLabel(info.platform)}.`, {
 			platforms: [info.platform], calibers: [info.caliber], weaponId: weapon.id,
 			value: Math.max(8, Math.round(weapon.value * values[slot]!)), rarity: weapon.rarity,
 			stats: stats({ weight: weight * shares[slot]! }),
@@ -61,25 +66,25 @@ for (const platform of familyIds) {
 	const factoryWeight = (slot: ModuleSlot) => MODULE_MODELS.find((item) => item.id === FACTORY_KITS[weapon.id]![slot])?.stats.weight ?? 0.3;
 	const family = { platforms: [platform], calibers, rarity: "uncommon" as Rarity, workshopLevel: 2, lootTier: 2 };
 	for (const caliber of calibers) {
-		model(`barrel-${platform}-${caliber}-short`, `Короткий ствол · ${platform}`, "barrel", "Легче и удобнее, но −6 урона, +9 отдачи. Не совместим с другим калибром.", { ...family, calibers: [caliber], appearance: "short", value: 95,
+		model(`barrel-${platform}-${caliber}-short`, `Короткий ствол · ${modulePlatformLabel(platform)}`, "barrel", "Легче и удобнее, но −6 урона, +9 отдачи. Не совместим с другим калибром.", { ...family, calibers: [caliber], appearance: "short", value: 95,
 			stats: stats({ weight: factoryWeight("barrel") * 0.7, damage: -6, ergonomics: 12, recoil: 9, reliability: -2 }), providesMounts: [`thread:${caliber}`] });
-		model(`barrel-${platform}-${caliber}-long`, `Длинный ствол · ${platform}`, "barrel", "+7 урона и −8 отдачи, но тяжелее и −9 удобства.", { ...family, calibers: [caliber], appearance: "long", value: 135,
+		model(`barrel-${platform}-${caliber}-long`, `Длинный ствол · ${modulePlatformLabel(platform)}`, "barrel", "+7 урона и −8 отдачи, но тяжелее и −9 удобства.", { ...family, calibers: [caliber], appearance: "long", value: 135,
 			stats: stats({ weight: factoryWeight("barrel") * 1.3, damage: 7, ergonomics: -9, recoil: -8, reliability: 2 }), providesMounts: [`thread:${caliber}`] });
 	}
 	if (weapon.category !== "pistol") {
-		model(`handguard-${platform}-rail`, `Цевьё с планками · ${platform}`, "handguard", "Открывает крепления для прицела и рукояти. Вес выше; удобство −3.", { ...family, appearance: "rail", value: 85, workshopLevel: 1,
+		model(`handguard-${platform}-rail`, `Цевьё с планками · ${modulePlatformLabel(platform)}`, "handguard", "Открывает крепления для прицела и рукояти. Вес выше; удобство −3.", { ...family, appearance: "rail", value: 85, workshopLevel: 1,
 			stats: stats({ weight: factoryWeight("handguard") + 0.2, ergonomics: -3 }), providesMounts: ["rail-top", "rail-bottom"] });
-		model(`handguard-${platform}-light`, `Лёгкое цевьё · ${platform}`, "handguard", "+9 удобства и меньше веса; креплений для прицела и рукояти нет.", { ...family, appearance: "light", value: 100,
+		model(`handguard-${platform}-light`, `Лёгкое цевьё · ${modulePlatformLabel(platform)}`, "handguard", "+9 удобства и меньше веса; креплений для прицела и рукояти нет.", { ...family, appearance: "light", value: 100,
 			stats: stats({ weight: Math.max(0.1, factoryWeight("handguard") - 0.15), ergonomics: 9, reliability: -2 }) });
-		model(`stock-${platform}-folding`, `Складной приклад · ${platform}`, "stock", "+10 удобства, меньше веса. Отдача +9, надёжность −2.", { ...family, appearance: "folding", value: 95,
+		model(`stock-${platform}-folding`, `Складной приклад · ${modulePlatformLabel(platform)}`, "stock", "+10 удобства, меньше веса. Отдача +9, надёжность −2.", { ...family, appearance: "folding", value: 95,
 			stats: stats({ weight: factoryWeight("stock") * 0.65, ergonomics: 10, recoil: 9, reliability: -2 }) });
-		model(`stock-${platform}-tactical`, `Опорный приклад · ${platform}`, "stock", "Отдача −12, надёжность +3. Тяжелее и −7 удобства.", { ...family, appearance: "tactical", value: 145,
+		model(`stock-${platform}-tactical`, `Опорный приклад · ${modulePlatformLabel(platform)}`, "stock", "Отдача −12, надёжность +3. Тяжелее и −7 удобства.", { ...family, appearance: "tactical", value: 145,
 			stats: stats({ weight: factoryWeight("stock") + 0.25, ergonomics: -7, recoil: -12, reliability: 3 }) });
 	}
 	for (const caliber of calibers) {
-		model(`magazine-${platform}-${caliber}-extended`, `Ёмкий магазин · ${platform}`, "magazine", "+3 огневой мощи, отдача −3. Больше веса и расход патронов ×1.15; −8 удобства.", { ...family, calibers: [caliber], appearance: "extended", value: 95,
+		model(`magazine-${platform}-${caliber}-extended`, `Ёмкий магазин · ${modulePlatformLabel(platform)}`, "magazine", "+3 огневой мощи, отдача −3. Больше веса и расход патронов ×1.15; −8 удобства.", { ...family, calibers: [caliber], appearance: "extended", value: 95,
 			stats: stats({ weight: factoryWeight("magazine") + 0.3, damage: 3, ergonomics: -8, recoil: -3, ammoMultiplier: 1.15 }) });
-		model(`magazine-${platform}-${caliber}-quick`, `Быстрый магазин · ${platform}`, "magazine", "+8 удобства, но −3 огневой мощи. Легче и расход патронов ×0.9.", { ...family, calibers: [caliber], appearance: "quick", value: 70, workshopLevel: 1,
+		model(`magazine-${platform}-${caliber}-quick`, `Быстрый магазин · ${modulePlatformLabel(platform)}`, "magazine", "+8 удобства, но −3 огневой мощи. Легче и расход патронов ×0.9.", { ...family, calibers: [caliber], appearance: "quick", value: 70, workshopLevel: 1,
 			stats: stats({ weight: factoryWeight("magazine") * 0.8, damage: -3, ergonomics: 8, ammoMultiplier: 0.9 }) });
 	}
 }
