@@ -93,6 +93,7 @@ import {
 	getRoomUpgradeQuote,
 	upgradeRoom,
 	assignWorker,
+	getWorkerAssignmentReason,
 	getWorkerAffinity,
 	getRoomWorkerCapacity,
 	getRoomProductionState,
@@ -222,9 +223,19 @@ let toastTimer: ReturnType<typeof setTimeout>;
 let storageWarning = false;
 let worldInputBlockedUntil = 0;
 let worldOverlaySignature = "";
+let worldView: "base" | "map" = "base";
+type WorkerPlacement = { scavId: string; mode: "pointer" | "keyboard"; roomId: string | null; reason: string | null };
+type CrewPointer = { scavId: string; pointerId: number; startX: number; startY: number; clientX: number; clientY: number; source: HTMLElement; started: boolean };
+let workerPlacement: WorkerPlacement | null = null;
+let crewPointer: CrewPointer | null = null;
+let suppressWorkerClickUntil = 0;
+let workerRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 function holdWorldInput() { worldInputBlockedUntil = Date.now() + 350; }
+function canWorldDrag() {
+	return worldView === "base" && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal") && !(window.innerWidth <= 850 && contextMode !== "overview");
+}
 function canWorldInteract() {
-	return Date.now() >= worldInputBlockedUntil && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal") && !(window.innerWidth <= 850 && contextMode !== "overview");
+	return !workerPlacement && !crewPointer?.started && Date.now() >= worldInputBlockedUntil && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal") && !(window.innerWidth <= 850 && contextMode !== "overview");
 }
 function captureInterfacePointer(event: PointerEvent) {
 	const target = event.target instanceof Element ? event.target : null;
@@ -240,8 +251,10 @@ const names: Record<Page, string> = {
 	contracts: "Контракты",
 	journal: "Журнал",
 };
-app.innerHTML = `<div class="shell command-shell"><header class="topbar command-hud"><div class="command-brand"><span class="brand-mark">П</span><div><strong>ПРАПОР</strong><small>УБЕЖИЩЕ 07</small></div></div><div class="level"><span class="eyebrow">Репутация</span><strong id="level-label"></strong><div class="xp-track"><i id="xp-fill"></i></div></div><div class="resources">${[["money", "Рубли"], ["ammo", "Патроны"], ["medicine", "Медикаменты"], ["scrap", "Материалы"], ["intel", "Разведданные"]].map(([key, label]) => `<div class="resource" title="${label}">${icon(key!,18)}<div><label>${label}</label><strong id="res-${key}"></strong></div><i class="resource-cap" id="cap-${key}"></i></div>`).join("")}</div><button class="settings" data-action="settings" aria-label="Сохранение и помощь">${icon("settings",18)}</button></header><main class="main command-main"><div class="command-toolbar"><div class="command-heading"><h1>Свои люди. Своё убежище.</h1><span><i class="status-dot"></i><span id="passive-note">База на связи</span></span></div><nav class="nav command-tools" aria-label="Инструменты штаба">${(Object.keys(names) as Page[]).map((id) => `<button data-page="${id}" aria-label="${names[id]}" title="${names[id]}">${icon(id,17)}<span>${names[id]}</span>${id === "raids" ? '<b class="badge" id="raid-badge">0</b>' : ""}</button>`).join("")}</nav></div><div class="command-stage-layout"><section id="hero" class="hero-grid"><section class="world-card"><div class="world-head"><div class="view-switch" aria-label="Вид сцены"><button class="active" data-view="base" aria-pressed="true">${icon("home",14)} Убежище</button><button data-view="map" aria-pressed="false">${icon("raids",14)} Сектора</button></div><button class="text-button room-index-button" data-page="base">${icon("base",14)} Комнаты</button><span class="world-coordinate mono">БАЗА 07 · СЕВЕР</span></div><div id="world" aria-label="Графический штаб: комнаты, рабочие и стройка"></div><div class="world-bottom"><span><i class="status-dot"></i><span id="scene-hint">Нажми на комнату или бойца</span></span><span id="world-raid-note">ОТРЯД НА БАЗЕ</span></div><div class="room-shortcuts" hidden></div></section></section><aside id="command-dock" class="command-dock" aria-label="Сводка и управление выбранным объектом"></aside></div><section id="command-crew" class="command-crew" aria-label="Отряд и рабочие"></section><section id="command-routes" class="command-routes" aria-label="Рейды и сектора"></section><div id="offline-summary"></div><footer class="footer-line command-footer"><span id="save-status">ПРОГРЕСС НА ЭТОМ УСТРОЙСТВЕ</span><span>ПРАПОР · 0.7</span></footer></main></div><div id="tool-root" class="tool-backdrop" hidden><section class="tool-window" role="dialog" aria-modal="true" aria-labelledby="tool-title"><header class="tool-head"><div id="page-head" class="page-head"></div><button class="icon-button" data-action="close-tools" aria-label="Закрыть инструмент и вернуться в штаб">×</button></header><div class="tool-scroll"><div id="expedition-alerts"></div><div id="panel"></div></div></section></div><div id="context-shade" class="context-shade" hidden></div><div id="toast" role="status" aria-live="polite" hidden></div><div id="inspector-root"></div><div id="modal-root"></div>`;
+app.innerHTML = `<div class="shell command-shell"><header class="topbar command-hud"><div class="command-brand"><span class="brand-mark">П</span><div><strong>ПРАПОР</strong><small>УБЕЖИЩЕ 07</small></div></div><div class="level"><span class="eyebrow">Репутация</span><strong id="level-label"></strong><div class="xp-track"><i id="xp-fill"></i></div></div><div class="resources">${[["money", "Рубли"], ["ammo", "Патроны"], ["medicine", "Медикаменты"], ["scrap", "Материалы"], ["intel", "Разведданные"]].map(([key, label]) => `<div class="resource" title="${label}">${icon(key!,18)}<div><label>${label}</label><strong id="res-${key}"></strong></div><i class="resource-cap" id="cap-${key}"></i></div>`).join("")}</div><button class="settings" data-action="settings" aria-label="Сохранение и помощь">${icon("settings",18)}</button></header><main class="main command-main"><div class="command-toolbar"><div class="command-heading"><h1>Свои люди. Своё убежище.</h1><span><i class="status-dot"></i><span id="passive-note">База на связи</span></span></div><nav class="nav command-tools" aria-label="Инструменты штаба">${(Object.keys(names) as Page[]).map((id) => `<button data-page="${id}" aria-label="${names[id]}" title="${names[id]}">${icon(id,17)}<span>${names[id]}</span>${id === "raids" ? '<b class="badge" id="raid-badge">0</b>' : ""}</button>`).join("")}</nav></div><div class="command-stage-layout"><section id="hero" class="hero-grid"><section class="world-card"><div class="world-head"><div class="view-switch" aria-label="Вид сцены"><button class="active" data-view="base" aria-pressed="true">${icon("home",14)} Убежище</button><button data-view="map" aria-pressed="false">${icon("raids",14)} Сектора</button></div><button class="text-button room-index-button" data-page="base">${icon("base",14)} Комнаты</button><span class="world-coordinate mono">БАЗА 07 · СЕВЕР</span></div><div id="world" aria-label="Графический штаб: комнаты, рабочие и стройка"></div><div class="world-bottom"><span><i class="status-dot"></i><span id="scene-hint">Нажми на комнату или бойца</span></span><span id="world-raid-note">ОТРЯД НА БАЗЕ</span></div><div class="room-shortcuts" hidden></div></section></section><aside id="command-dock" class="command-dock" aria-label="Сводка и управление выбранным объектом"></aside></div><section id="command-crew" class="command-crew" aria-label="Отряд и рабочие"></section><section id="command-routes" class="command-routes" aria-label="Рейды и сектора"></section><div id="offline-summary"></div><footer class="footer-line command-footer"><span id="save-status">ПРОГРЕСС НА ЭТОМ УСТРОЙСТВЕ</span><span>ПРАПОР · 0.8</span></footer></main></div><div id="tool-root" class="tool-backdrop" hidden><section class="tool-window" role="dialog" aria-modal="true" aria-labelledby="tool-title"><header class="tool-head"><div id="page-head" class="page-head"></div><button class="icon-button" data-action="close-tools" aria-label="Закрыть инструмент и вернуться в штаб">×</button></header><div class="tool-scroll"><div id="expedition-alerts"></div><div id="panel"></div></div></section></div><div id="context-shade" class="context-shade" hidden></div><div id="toast" role="status" aria-live="polite" hidden></div><div id="inspector-root"></div><div id="modal-root"></div>`;
 const panel = document.querySelector<HTMLDivElement>("#panel")!;
+document.querySelector(".world-card")!.insertAdjacentHTML("beforeend", '<div id="worker-room-targets" class="worker-room-targets" role="group" aria-label="Выбери рабочую комнату" hidden></div><div id="worker-placement" class="worker-placement" hidden><div><strong id="worker-placement-title"></strong><span id="worker-placement-hint"></span></div><button class="icon-button" data-worker-cancel aria-label="Отменить назначение">×</button></div>');
+app.insertAdjacentHTML("beforeend", '<div id="worker-drag-ghost" class="worker-drag-ghost" aria-hidden="true" hidden></div><div id="worker-drop-status" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>');
 const costLabel = (cost: { money: number; scrap: number }) =>
 	`${n(cost.money)} ₽ · ${cost.scrap} дет.`;
 let protectedSave = Boolean(raw && !loaded);
@@ -278,6 +291,190 @@ function toast(message: string, ok = true) {
 		node.hidden = true;
 	}, 6000);
 }
+function workerPickReason(id: string) {
+	const reason = getWorkerAssignmentReason(state, id, null);
+	if (reason) return reason;
+	return state.scavs.find((scav) => scav.id === id)!.health < 25 ? "Бойцу нужно восстановиться до 25% здоровья." : null;
+}
+function announceWorkerPlacement(message: string) {
+	const status = document.querySelector<HTMLElement>("#worker-drop-status");
+	if (status && status.textContent !== message) status.textContent = message;
+}
+function queueDeferredWorkerRefresh() {
+	if (!deferredRender || workerRefreshTimer != null) return;
+	workerRefreshTimer = setTimeout(() => {
+		workerRefreshTimer = null;
+		if (deferredRender && !interacting()) render();
+	}, 0);
+}
+function releaseCrewPointer() {
+	const gesture = crewPointer;
+	crewPointer = null;
+	if (gesture?.source.hasPointerCapture(gesture.pointerId)) gesture.source.releasePointerCapture(gesture.pointerId);
+	queueDeferredWorkerRefresh();
+}
+function clearWorkerPlacement() {
+	workerPlacement = null;
+	for (const id of ["worker-placement", "worker-room-targets", "worker-drag-ghost"]) { const node = document.getElementById(id); if (node) node.hidden = true; }
+	document.body.classList.remove("placing-worker");
+	document.querySelectorAll(".crew-chip.is-dragging").forEach((node) => node.classList.remove("is-dragging"));
+	queueDeferredWorkerRefresh();
+}
+function focusWorkerHandle(id: string) {
+	document.querySelector<HTMLButtonElement>(`#command-crew [data-worker-handle="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
+}
+function cancelWorkerPlacement(restoreFocus = false, announce = false) {
+	const id = workerPlacement?.scavId ?? crewPointer?.scavId;
+	const active = Boolean(workerPlacement || crewPointer?.started);
+	releaseCrewPointer();
+	clearWorkerPlacement();
+	world?.cancelScavDrag();
+	if (active) { holdWorldInput(); suppressWorkerClickUntil = Date.now() + 450; }
+	if (announce && active) announceWorkerPlacement("Назначение отменено.");
+	if (restoreFocus && id && canWorldDrag()) focusWorkerHandle(id);
+}
+function paintWorkerPlacement() {
+	if (!workerPlacement) return;
+	const scav = state.scavs.find((item) => item.id === workerPlacement!.scavId);
+	if (!scav) { cancelWorkerPlacement(); return; }
+	const room = state.shelter.rooms.find((item) => item.id === workerPlacement!.roomId);
+	const title = `${scav.name} → ${room ? ROOM_DEFINITIONS[room.type].label : "рабочее место"}`;
+	const hint = workerPlacement.reason ?? (room ? scav.assignment === room.id ? "Уже работает здесь" : `Подходит: ${Math.round(getWorkerAffinity(scav, room.type))} / 100 · ${workerPlacement.mode === "keyboard" ? "Enter — назначить" : "отпусти, чтобы назначить"}` : workerPlacement.mode === "keyboard" ? "Выбери комнату · Tab — перейти · Esc — отменить" : "Перенеси в рабочую комнату · Esc — отменить");
+	const banner = document.querySelector<HTMLElement>("#worker-placement")!;
+	banner.hidden = false; banner.classList.toggle("blocked", Boolean(workerPlacement.reason));
+	document.querySelector("#worker-placement-title")!.textContent = title;
+	document.querySelector("#worker-placement-hint")!.textContent = hint;
+	document.body.classList.add("placing-worker");
+	document.querySelector<HTMLElement>(`#command-crew [data-worker-card="${CSS.escape(scav.id)}"]`)?.classList.add("is-dragging");
+	announceWorkerPlacement(`${title}. ${hint}`);
+	const ghost = document.querySelector<HTMLElement>("#worker-drag-ghost")!;
+	ghost.hidden = !crewPointer?.started;
+	if (crewPointer?.started) {
+		if (ghost.dataset.scav !== scav.id) { ghost.dataset.scav = scav.id; ghost.innerHTML = `<span class="crew-portrait">${scavPortrait(scav.personality, scav.name)}</span><span><strong>${e(scav.name)}</strong><small></small></span>`; }
+		ghost.querySelector("small")!.textContent = room ? workerPlacement.reason ?? ROOM_DEFINITIONS[room.type].label : "Выбери комнату";
+		ghost.classList.toggle("blocked", Boolean(workerPlacement.reason));
+		ghost.style.left = `${Math.max(8, Math.min(window.innerWidth - 194, crewPointer.clientX + 16))}px`;
+		ghost.style.top = `${Math.max(8, Math.min(window.innerHeight - 66, crewPointer.clientY - 70))}px`;
+	}
+}
+function onWorldDragState(value: { scavId: string; roomId: string | null; reason: string | null } | null) {
+	if (!value) {
+		if (workerPlacement?.mode === "pointer" || crewPointer?.started) {
+			if (workerPlacement?.reason) announceWorkerPlacement(`${workerPlacement.reason} Назначение не изменено.`);
+			releaseCrewPointer(); holdWorldInput(); suppressWorkerClickUntil = Date.now() + 450;
+		}
+		clearWorkerPlacement(); return;
+	}
+	workerPlacement = { ...value, mode: "pointer" };
+	paintWorkerPlacement();
+}
+function renderWorkerRoomTargets() {
+	if (workerPlacement?.mode !== "keyboard") return;
+	const scav = state.scavs.find((item) => item.id === workerPlacement!.scavId); if (!scav) return;
+	const layer = document.querySelector<HTMLElement>("#worker-room-targets")!;
+	layer.hidden = false;
+	const canvas = document.querySelector<HTMLCanvasElement>("#world canvas"), card = document.querySelector<HTMLElement>(".world-card");
+	if (!canvas || !card) return;
+	const canvasRect = canvas.getBoundingClientRect(), cardRect = card.getBoundingClientRect();
+	layer.style.left = `${canvasRect.left - cardRect.left}px`; layer.style.top = `${canvasRect.top - cardRect.top}px`;
+	layer.style.width = `${canvasRect.width}px`; layer.style.height = `${canvasRect.height}px`;
+	layer.innerHTML = state.shelter.rooms.map((room) => {
+		const reason = getWorkerAssignmentReason(state, scav.id, room.id), definition = ROOM_DEFINITIONS[room.type];
+		const x = [40, 220, 448, 628][room.column] ?? 40;
+		return `<button class="worker-room-target ${reason ? "unavailable" : "available"}" data-worker-room="${room.id}" aria-disabled="${Boolean(reason)}" aria-describedby="worker-placement-hint" aria-label="${e(definition.label)}, этаж ${room.row + 1}, ${room.workerIds.length} из ${getRoomWorkerCapacity(room)} работников. ${e(reason ?? (scav.assignment === room.id ? "Уже работает здесь" : `Назначить ${scav.name}, подходит ${Math.round(getWorkerAffinity(scav, room.type))} из 100`))}" title="${e(reason ?? "Назначить бойца")}" style="left:${x / 840 * 100}%;top:${(148 + room.row * 111) / 520 * 100}%;width:${172 / 840 * 100}%;height:${100 / 520 * 100}%;--room-color:${definition.color}"><span>${icon(roomIcon(room.type),15)} ${e(definition.label)}</span><small>${reason ? "Недоступно" : scav.assignment === room.id ? "Уже работает" : `Назначить · ${room.workerIds.length}/${getRoomWorkerCapacity(room)}`}</small></button>`;
+	}).join("");
+}
+function refreshWorkerRoomTargets() {
+	if (workerPlacement?.mode !== "keyboard") return;
+	const scav = state.scavs.find((item) => item.id === workerPlacement!.scavId); if (!scav) return;
+	document.querySelectorAll<HTMLButtonElement>("#worker-room-targets [data-worker-room]").forEach((node) => {
+		const room = state.shelter.rooms.find((item) => item.id === node.dataset.workerRoom); if (!room) return;
+		const reason = getWorkerAssignmentReason(state, scav.id, room.id);
+		node.setAttribute("aria-disabled", String(Boolean(reason)));
+		node.classList.toggle("unavailable", Boolean(reason)); node.classList.toggle("available", !reason);
+		node.title = reason ?? "Назначить бойца";
+		node.setAttribute("aria-label", `${ROOM_DEFINITIONS[room.type].label}, этаж ${room.row + 1}, ${room.workerIds.length} из ${getRoomWorkerCapacity(room)} работников. ${reason ?? (scav.assignment === room.id ? "Уже работает здесь" : `Назначить ${scav.name}, подходит ${Math.round(getWorkerAffinity(scav, room.type))} из 100`)}`);
+		node.querySelector("small")!.textContent = reason ? "Недоступно" : scav.assignment === room.id ? "Уже работает" : `Назначить · ${room.workerIds.length}/${getRoomWorkerCapacity(room)}`;
+	});
+	if (workerPlacement.roomId) workerPlacement.reason = getWorkerAssignmentReason(state, scav.id, workerPlacement.roomId);
+	paintWorkerPlacement();
+}
+function beginKeyboardAssignment(id: string) {
+	if (!canWorldDrag()) { toast("Вернись к убежищу, чтобы назначить бойца.", false); return; }
+	const reason = workerPickReason(id); if (reason) { toast(reason, false); return; }
+	if (workerPlacement?.mode === "keyboard" && workerPlacement.scavId === id) { cancelWorkerPlacement(true, true); return; }
+	cancelWorkerPlacement();
+	workerPlacement = { scavId: id, mode: "keyboard", roomId: null, reason: null };
+	paintWorkerPlacement(); renderWorkerRoomTargets();
+	(document.querySelector<HTMLButtonElement>('#worker-room-targets [aria-disabled="false"]') ?? document.querySelector<HTMLButtonElement>("#worker-room-targets button") ?? document.querySelector<HTMLButtonElement>("[data-worker-cancel]"))?.focus({ preventScroll: true });
+}
+function assignPlacedWorker(scavId: string, roomId: string) {
+	if (!canWorldDrag()) { cancelWorkerPlacement(false, true); return; }
+	const scav = state.scavs.find((item) => item.id === scavId), room = state.shelter.rooms.find((item) => item.id === roomId);
+	const alreadyAssigned = scav?.assignment === roomId;
+	const returnFocus = workerPlacement?.mode === "keyboard";
+	cancelWorkerPlacement();
+	const result = assignWorker(state, scavId, roomId);
+	act(result.ok && scav && room ? { ...result, message: alreadyAssigned ? `${scav.name} уже работает: ${ROOM_DEFINITIONS[room.type].label}.` : `${scav.name} назначен: ${ROOM_DEFINITIONS[room.type].label}.` } : result);
+	announceWorkerPlacement(result.ok && scav && room ? `${scav.name}: ${ROOM_DEFINITIONS[room.type].label}.` : result.message);
+	if (returnFocus) focusWorkerHandle(scavId);
+}
+function startCrewPointer(event: PointerEvent) {
+	if (!event.isPrimary || event.button !== 0) return;
+	const target = event.target instanceof Element ? event.target : null;
+	const handle = target?.closest<HTMLElement>("#command-crew [data-worker-handle]");
+	const portrait = event.pointerType !== "touch" ? target?.closest<HTMLElement>("#command-crew [data-portrait-scav]") : null;
+	const source = handle ?? portrait, id = handle?.dataset.workerHandle ?? portrait?.dataset.portraitScav;
+	if (!source || !id || !canWorldDrag() || workerPickReason(id)) return;
+	cancelWorkerPlacement();
+	crewPointer = { scavId: id, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, clientX: event.clientX, clientY: event.clientY, source, started: false };
+	source.setPointerCapture(event.pointerId);
+}
+function moveCrewPointer(event: PointerEvent) {
+	const gesture = crewPointer;
+	if (!gesture || gesture.pointerId !== event.pointerId) return;
+	gesture.clientX = event.clientX; gesture.clientY = event.clientY;
+	if (!gesture.started) {
+		if (Math.hypot(event.clientX - gesture.startX, event.clientY - gesture.startY) < 8) return;
+		if (!canWorldDrag() || !world?.beginScavDrag(gesture.scavId)) { cancelWorkerPlacement(); holdWorldInput(); suppressWorkerClickUntil = Date.now() + 450; return; }
+		gesture.started = true;
+	}
+	event.preventDefault();
+	world?.moveScavDrag(event.clientX, event.clientY);
+	paintWorkerPlacement();
+}
+function finishCrewPointer(event: PointerEvent) {
+	const gesture = crewPointer;
+	if (!gesture || gesture.pointerId !== event.pointerId) return;
+	releaseCrewPointer();
+	if (!gesture.started) return;
+	event.preventDefault(); holdWorldInput(); suppressWorkerClickUntil = Date.now() + 450;
+	world?.moveScavDrag(event.clientX, event.clientY);
+	world?.endScavDrag();
+	clearWorkerPlacement();
+}
+function cancelCrewPointer(event: PointerEvent) {
+	if (crewPointer?.pointerId === event.pointerId) cancelWorkerPlacement(false, true);
+}
+function suppressWorkerClick(event: MouseEvent) {
+	if (event.detail > 0 && Date.now() < suppressWorkerClickUntil) { event.preventDefault(); event.stopImmediatePropagation(); }
+}
+function workerTargetFocus(event: FocusEvent) {
+	if (workerPlacement?.mode !== "keyboard") return;
+	const target = event.target instanceof Element ? event.target : null;
+	const roomId = target?.closest<HTMLElement>("[data-worker-room]")?.dataset.workerRoom;
+	if (roomId) { workerPlacement.roomId = roomId; workerPlacement.reason = getWorkerAssignmentReason(state, workerPlacement.scavId, roomId); paintWorkerPlacement(); }
+	else if (!target?.closest("[data-worker-handle], [data-worker-cancel]")) cancelWorkerPlacement(false, true);
+}
+function cancelPlacementForBlur() { cancelWorkerPlacement(false, true); }
+document.addEventListener("pointerdown", startCrewPointer);
+document.addEventListener("pointermove", moveCrewPointer, { passive: false });
+document.addEventListener("pointerup", finishCrewPointer);
+document.addEventListener("pointercancel", cancelCrewPointer);
+document.addEventListener("lostpointercapture", cancelCrewPointer);
+document.addEventListener("click", suppressWorkerClick, true);
+document.addEventListener("focusin", workerTargetFocus);
+window.addEventListener("blur", cancelPlacementForBlur);
 function act(result: ActionResult) {
 	const origin = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 	const actionSelector = origin?.dataset.action
@@ -354,6 +551,15 @@ function expeditionCard(raid: Raid, compact = false) {
 	return `<article class="decision-card" data-expedition="${raid.id}"><div class="decision-head"><div class="scav-avatar">${scavPortrait(scav.personality, scav.name)}</div><div><span class="eyebrow">${e(MAP_BY_ID[raid.mapId]!.name)} · точка ${run.stage} / 3</span><h3>${e(scav.name)} ждёт приказа</h3><p>${run.stage >= 3 ? "Маршрут пройден. Забери добычу на базу." : "Добыча ещё в рюкзаке. Можно уйти или рискнуть дальше."}</p></div>${!compact ? `<button class="button ghost small" data-scav="${scav.id}">Личное дело</button>` : ""}</div><div class="decision-content"><div class="expedition-stage" aria-label="Пройдено этапов: ${run.stage} из 3">${[1, 2, 3].map((stage) => `<span class="${stage < run.stage ? "done" : stage === run.stage ? "current" : ""}">${stage < run.stage ? "✓ " : ""}${stage}. ${stage === 1 ? "Вход" : stage === 2 ? "Глубина" : "Цель"}</span>`).join("")}</div><div class="cargo-summary"><div><span>В рюкзаке</span><strong>${n(run.cargo.money)} ₽</strong><small>Наличными · припасы ниже</small></div><div><span>Защищено от потери</span><strong>Открытия</strong><small>Остаются даже при провале</small></div><div><span>Здоровье бойца</span><strong>${Math.floor(scav.health)} / 100</strong><small>Броня на входе: ${Math.round(run.loadout.armorCondition)}%</small></div></div>${cargoMetrics}<p class="field-hint">Ценность — оценка наличных и находок, а не выплата рублями. Деньги не занимают место. При перегрузе боец оставляет лишние припасы; склад на базе тоже ограничен.</p><div class="cargo-items">${supplies}${weapons || (!supplies ? "<span>Рюкзак пока пуст</span>" : "")}</div>${moduleCargo(run.cargo.modules)}${warehouseWarning}${run.discoveries.length ? `<p class="field-hint">Записаны находки: ${run.discoveries.map((id) => e(BLUEPRINTS[id]?.label ?? "Разведанный маршрут")).join(" · ")}. Останутся у базы.</p>` : ""}${run.perks.length ? `<p class="field-hint">Опыт этой экспедиции: ${run.perks.map((perk) => e(RUN_PERKS[perk].label)).join(" · ")}</p>` : ""}${choices.length ? `<p class="risk-note">Следующий этап опаснее. При провале добыча в рюкзаке может быть потеряна; постоянные открытия сохранятся.</p>${run.offers.length ? `<div class="run-perk-pick"><h3>Находка маршрута</h3><p>Выбери один бонус. Он работает до конца этой экспедиции.</p><div class="decision-branches">${run.offers.map((perk) => `<button class="branch-choice ${perk === selectedPerk ? "active" : ""}" data-action="run-perk" data-id="${raid.id}" data-perk="${perk}" data-focus-key="perk-${perk}" aria-pressed="${perk === selectedPerk}"><strong>${e(RUN_PERKS[perk].label)}</strong><p>${e(RUN_PERKS[perk].description)}</p><small>${perk === selectedPerk ? "✓ Выбрано" : "Выбрать бонус"}</small></button>`).join("")}</div></div>` : ""}<h3>Куда дальше?</h3><div class="decision-branches">${choices.map((choice) => `<button class="branch-choice" data-action="continue-expedition" data-id="${raid.id}" data-branch="${choice.branch}" data-focus-key="branch-${choice.branch}" ${choice.reason || (run.offers.length && !hasPerk) ? "disabled" : ""}><strong>${e(choice.label)}</strong><p>${e(choice.description)}</p><small>${Math.round(choice.chance * 100)}% успеха · ${seconds(choice.duration)} · ${n(choice.money)} ₽ + ${choice.ammo} патр.${choice.intel ? ` + ${choice.intel} разв.` : ""}</small><span class="quote-note">${e(choice.reason ?? (run.offers.length && !hasPerk ? "Сначала выбери бонус маршрута" : `Этап ${run.stage + 1} · добыча под риском`))}</span></button>`).join("")}</div>` : ""}<div class="extract-row"><p>Эвакуация вернёт бойца и доставит добычу в пределах склада. ${run.stage < 3 ? "База готовит следующий выход." : "Экспедиция завершится."}</p><button class="button" data-action="extract" data-id="${raid.id}" data-focus-key="extract">${icon("check", 17)} Эвакуировать с добычей</button></div></div></article>`;
 }
 function hud() {
+	if (workerPlacement && (!canWorldDrag() || workerPickReason(workerPlacement.scavId))) cancelWorkerPlacement(false, true);
+	refreshWorkerRoomTargets();
+	document.querySelectorAll<HTMLButtonElement>("#command-crew [data-worker-handle]").forEach((node) => {
+		const reason = workerPickReason(node.dataset.workerHandle!);
+		const name = state.scavs.find((scav) => scav.id === node.dataset.workerHandle)?.name ?? "бойца";
+		node.setAttribute("aria-disabled", String(Boolean(reason)));
+		node.setAttribute("aria-label", `Назначить ${name} в комнату${reason ? `: ${reason}` : ". Перетащи или выбери комнату"}`);
+		node.title = reason ?? "Перетащи в комнату или нажми для выбора";
+	});
 	document.querySelector("#res-money")!.textContent = `${n(state.money)} ₽`;
 	for (const key of ["ammo", "medicine", "scrap", "intel"] as const)
 		document.querySelector(`#res-${key}`)!.textContent = n(state.supplies[key]);
@@ -654,6 +860,7 @@ function setOverlayState() {
 	const drawerOpen = Boolean(selectedScav);
 	const toolsOpen = page !== "home";
 	const mobileContext = window.innerWidth <= 850 && contextMode !== "overview";
+	if (!canWorldDrag()) cancelWorkerPlacement(false, true);
 	const contextIdentity = mobileContext ? `${contextMode}:${selectedRoomId ?? ""}:${selectedShelterSite?.column ?? ""}:${selectedShelterSite?.row ?? ""}` : "";
 	const signature = `${modalOpen}:${selectedScav ?? ""}:${page}:${contextIdentity}`;
 	if (signature !== worldOverlaySignature) {
@@ -757,6 +964,7 @@ function shelterHomeNote() {
 	return `<div class="shelter-home-note"><div><span class="eyebrow">Жизнь убежища</span><h3>${working ? `${working} бойцов на рабочих местах` : "Комнатам нужны свои люди"}</h3><p>${blocked ? `${blocked} производств ждут работников, расходников или места на складе.` : busy.length ? `Настроено производств: ${busy.length}. Готовые партии поступают на склад.` : "Назначь бойцов, выбери рецепты и поставь оружейные модули в очередь мастерской."}</p></div><button class="button secondary" data-page="base">Управлять комнатами ${icon("arrow", 16)}</button></div>`;
 }
 function renderCommandBoard() {
+	cancelWorkerPlacement(false, true);
 	const dock = document.querySelector<HTMLElement>("#command-dock")!;
 	const room = state.shelter.rooms.find((item) => item.id === selectedRoomId);
 	const oldScroll = dock.querySelector<HTMLElement>(".command-dock-scroll")?.scrollTop ?? 0;
@@ -771,11 +979,17 @@ function renderCommandBoard() {
 	if (activeKey) dock.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(activeKey)}"]`)?.focus({ preventScroll: true });
 	document.querySelector<HTMLElement>("#context-shade")!.hidden = !mobileContext;
 	const crew = document.querySelector<HTMLElement>("#command-crew")!;
-	crew.innerHTML = `<div class="command-strip-head"><h2>Свои люди <span>${state.scavs.length} / ${getScavCapacity(state)}</span></h2><button class="text-button" data-page="raids">Снаряжение и приказы →</button></div><div class="command-crew-strip">${state.scavs.map((scav) => {
+	const crewScroll = crew.querySelector<HTMLElement>(".command-crew-strip")?.scrollLeft ?? 0;
+	const focusedWorker = document.activeElement instanceof HTMLElement && crew.contains(document.activeElement) ? document.activeElement.dataset.workerHandle ?? document.activeElement.dataset.scav : null;
+	const focusWasHandle = document.activeElement instanceof HTMLElement && Boolean(document.activeElement.dataset.workerHandle);
+	crew.innerHTML = `<div class="command-strip-head"><h2>Свои люди <span>${state.scavs.length} / ${getScavCapacity(state)}</span><small class="crew-drag-help">Перенеси портрет в комнату</small></h2><button class="text-button" data-page="raids">Снаряжение и приказы →</button></div><div class="command-crew-strip">${state.scavs.map((scav) => {
 		const raid = state.raids.find((item) => item.scavId === scav.id), working = scav.assignment ? state.shelter.rooms.find((item) => item.id === scav.assignment) : null;
 		const waiting = raid?.expedition?.status === "choice";
-		return `<button class="crew-chip ${waiting ? "awaits-order" : ""} ${working ? "on-duty" : ""}" data-scav="${scav.id}" aria-label="${e(scav.name)}: ${waiting ? "ждёт приказа" : working ? `работает: ${e(ROOM_DEFINITIONS[working.type].label)}` : raid ? "в рейде" : "на базе"}"><span class="crew-portrait">${scavPortrait(scav.personality, scav.name)}<b>${scav.level}</b></span><span class="crew-chip-copy"><strong>${e(scav.name)}</strong><small>${waiting ? "Нужен приказ" : working ? e(ROOM_DEFINITIONS[working.type].label) : raid ? e(MAP_BY_ID[raid.mapId]!.name) : scav.health < 25 ? "Восстанавливается" : "На базе"}</small><span class="health-track"><i data-health-fill="${scav.id}" style="width:${scav.health}%"></i></span></span>${waiting ? `<span class="crew-alert">!</span>` : working ? `<span class="crew-duty">${icon(roomIcon(working.type),13)}</span>` : ""}</button>`;
+		const pickReason = workerPickReason(scav.id);
+		return `<div class="crew-chip ${waiting ? "awaits-order" : ""} ${working ? "on-duty" : ""}" data-worker-card="${scav.id}"><button class="crew-inspect" data-scav="${scav.id}" aria-label="${e(scav.name)}: ${waiting ? "ждёт приказа" : working ? `работает: ${e(ROOM_DEFINITIONS[working.type].label)}` : raid ? "в рейде" : "на базе"}"><span class="crew-portrait" data-portrait-scav="${scav.id}">${scavPortrait(scav.personality, scav.name)}<b>${scav.level}</b></span><span class="crew-chip-copy"><strong>${e(scav.name)}</strong><small>${waiting ? "Нужен приказ" : working ? e(ROOM_DEFINITIONS[working.type].label) : raid ? e(MAP_BY_ID[raid.mapId]!.name) : scav.health < 25 ? "Восстанавливается" : "На базе"}</small><span class="health-track"><i data-health-fill="${scav.id}" style="width:${scav.health}%"></i></span></span>${waiting ? `<span class="crew-alert">!</span>` : ""}</button><button class="crew-assign-handle" data-worker-handle="${scav.id}" aria-disabled="${Boolean(pickReason)}" aria-label="Назначить ${e(scav.name)} в комнату${pickReason ? `: ${e(pickReason)}` : ". Перетащи или выбери комнату"}" title="${e(pickReason ?? "Перетащи в комнату или нажми для выбора")}">${icon("people",15)}<span aria-hidden="true">⠿</span></button></div>`;
 	}).join("")}<button class="crew-recruit" data-action="recruit" ${state.scavs.length >= getScavCapacity(state) || state.money < recruitCost(state) ? "disabled" : ""} aria-label="Нанять нового бойца">${icon("people",23)}<span>Нанять</span><small>${recruitCost(state)} ₽</small></button></div>`;
+	const crewStrip = crew.querySelector<HTMLElement>(".command-crew-strip"); if (crewStrip) crewStrip.scrollLeft = crewScroll;
+	if (focusedWorker) crew.querySelector<HTMLElement>(`[data-${focusWasHandle ? "worker-handle" : "scav"}="${CSS.escape(focusedWorker)}"]`)?.focus({ preventScroll: true });
 	const routes = document.querySelector<HTMLElement>("#command-routes")!;
 	routes.innerHTML = `<div class="command-strip-head"><h2>За периметром <span>${state.raids.length} в пути</span></h2><button class="text-button" data-page="raids">Подготовить выход →</button></div>${state.raids.length ? `<div class="command-active-raids">${state.raids.map((raid) => `<button class="mission-chip ${raid.expedition?.status === "choice" ? "needs-decision" : ""}" data-scav="${raid.scavId}"><span>${icon("raids",15)} ${e(raid.scavName)} · ${e(MAP_BY_ID[raid.mapId]!.name)}</span><strong data-raid-time="${raid.id}">${raid.expedition?.status === "choice" ? "ПРИКАЗ" : seconds((raid.endsAt-Date.now())/1000)}</strong><i class="progress"><i data-raid-progress="${raid.id}"></i></i></button>`).join("")}</div>` : ""}<div class="command-sector-strip">${MAPS.map((map) => `<button class="sector-chip ${map.id === selectedMap ? "selected" : ""} ${state.level < map.level ? "locked" : ""}" data-command-map="${map.id}" ${state.level < map.level ? "disabled" : ""} aria-label="Подготовить выход: ${e(map.name)}${state.level < map.level ? `, требуется уровень ${map.level}` : ""}"><span class="sector-chip-art">${sectorArt(map.id, `board-${map.id}`)}</span><span><strong>${e(map.name)}</strong><small>${state.level < map.level ? `УР. ${map.level} · закрыт` : `${map.reward[0]}–${map.reward[1]} ₽`}</small></span>${state.level < map.level ? icon("lock",12) : icon("arrow",12)}</button>`).join("")}</div>`;
 }
@@ -1179,7 +1393,7 @@ function weaponDetail(weapon: WeaponInstance) {
 }
 function showSettings() {
 	document.querySelector("#modal-root")!.innerHTML =
-		`<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title"><h2 id="settings-title">Твоё дело — при тебе.</h2><p>Прогресс хранится в этом браузере. Перед сменой устройства экспортируй сохранение. За отсутствие учитывается до 8 часов стройки, пополнения резерва, работы назначенных бойцов, лечения и рейдов по постоянным приказам. Рубли и припасы пополняются до предела базы.</p><p>Автовыходы повторяются офлайн до выбранной глубины и нехватки ресурсов, здоровья или исправного оружия. Ручная экспедиция остановится в точке связи до твоего приказа. Они несут риск потери бойца и ствола. Останови постоянный приказ в карточке дикого, чтобы отменить будущие выходы.</p>${protectedSave ? '<p class="order-risk">Исходный файл не удалось прочитать. Он остаётся в браузере без изменений; автоматическое сохранение временной сессии отключено. Скачай исходный файл и импортируй корректное сохранение.</p>' : ""}<p>Начни с «Дворов»: выбери бойца и оружие, отправь на первый этап. После точки связи эвакуируйся или выбери бонус и путь дальше. Чертежи и память маршрутов сохраняются после потерь; рубли и найденные предметы попадут на базу при эвакуации.</p><div class="detail-actions"><button class="button secondary" data-action="export">${protectedSave ? "Скачать исходный файл" : "Экспорт"}</button><button class="button ghost" data-action="import">Импорт</button></div><input type="file" accept="application/json,.json" id="save-file" hidden><div class="save-note">Сохранение восстанавливает отряд, физические сборки и запасные модули с их состоянием, комплекты, чертежи, приказы и текущие этапы. Ручные экспедиции ждут твоего приказа в точке связи. Импорт заменит текущий прогресс после проверки файла.</div><button class="button ghost" style="width:100%;margin-top:20px" data-action="close-modal">Продолжить</button></section></div>`;
+		`<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title"><h2 id="settings-title">Твоё дело — при тебе.</h2><p>Прогресс хранится в этом браузере. Перед сменой устройства экспортируй сохранение. За отсутствие учитывается до 8 часов стройки, пополнения резерва, работы назначенных бойцов, лечения и рейдов по постоянным приказам. Рубли и припасы пополняются до предела базы.</p><p>Автовыходы повторяются офлайн до выбранной глубины и нехватки ресурсов, здоровья или исправного оружия. Ручная экспедиция остановится в точке связи до твоего приказа. Они несут риск потери бойца и ствола. Останови постоянный приказ в карточке дикого, чтобы отменить будущие выходы.</p>${protectedSave ? '<p class="order-risk">Исходный файл не удалось прочитать. Он остаётся в браузере без изменений; автоматическое сохранение временной сессии отключено. Скачай исходный файл и импортируй корректное сохранение.</p>' : ""}<p>Для назначения на работу перетащи бойца на комнату: мышью — за портрет или фигурку, на телефоне — за значок рядом с портретом. Кнопка «Назначить» рядом с портретом позволяет выбрать комнату с клавиатуры; Tab переключает комнаты, Enter назначает, Esc отменяет. Для выхода в рейд сначала освободи работника.</p><p>Начни с «Дворов»: выбери бойца и оружие, отправь на первый этап. После точки связи эвакуируйся или выбери бонус и путь дальше. Чертежи и память маршрутов сохраняются после потерь; рубли и найденные предметы попадут на базу при эвакуации.</p><div class="detail-actions"><button class="button secondary" data-action="export">${protectedSave ? "Скачать исходный файл" : "Экспорт"}</button><button class="button ghost" data-action="import">Импорт</button></div><input type="file" accept="application/json,.json" id="save-file" hidden><div class="save-note">Сохранение восстанавливает отряд, физические сборки и запасные модули с их состоянием, комплекты, чертежи, приказы и текущие этапы. Ручные экспедиции ждут твоего приказа в точке связи. Импорт заменит текущий прогресс после проверки файла.</div><button class="button ghost" style="width:100%;margin-top:20px" data-action="close-modal">Продолжить</button></section></div>`;
 	focusModal();
 }
 function showAutoRaidOrder(scavId: string) {
@@ -1202,6 +1416,13 @@ document.addEventListener("click", (event) => {
 		if ((event.target as HTMLElement).classList.contains("tool-backdrop")) closeTools();
 		if ((event.target as HTMLElement).id === "context-shade") closeCommandContext();
 		return;
+	}
+	if (target.dataset.workerHandle) { beginKeyboardAssignment(target.dataset.workerHandle); return; }
+	if (target.hasAttribute("data-worker-cancel")) { cancelWorkerPlacement(true, true); return; }
+	if (target.dataset.workerRoom && workerPlacement?.mode === "keyboard") {
+		const reason = getWorkerAssignmentReason(state, workerPlacement.scavId, target.dataset.workerRoom);
+		if (reason) { workerPlacement.roomId = target.dataset.workerRoom; workerPlacement.reason = reason; paintWorkerPlacement(); toast(reason, false); return; }
+		assignPlacedWorker(workerPlacement.scavId, target.dataset.workerRoom); return;
 	}
 	if (target.dataset.scav) { openInspector(target.dataset.scav); return; }
 	if (target.dataset.shelterRoom) { openShelterRoom(target.dataset.shelterRoom); return; }
@@ -1607,6 +1828,7 @@ document.addEventListener("change", async (event) => {
 			}
 			const old = state;
 			const oldProtected = protectedSave;
+			cancelWorkerPlacement();
 			state = imported.state;
 			protectedSave = false;
 			if (!persist()) {
@@ -1660,6 +1882,14 @@ document.addEventListener("input", (event) => {
 	if (caret != null) replacement?.setSelectionRange(caret, caret);
 });
 document.addEventListener("keydown", (event) => {
+	if ((workerPlacement || crewPointer) && event.key === "Escape") { event.preventDefault(); cancelWorkerPlacement(true, true); return; }
+	if (workerPlacement?.mode === "keyboard" && event.key === "Tab") {
+		const controls = Array.from(document.querySelectorAll<HTMLButtonElement>("#worker-room-targets button, #worker-placement button")).filter((node) => node.getClientRects().length > 0);
+		const first = controls[0], last = controls.at(-1);
+		if (first && last && event.shiftKey && (document.activeElement === first || !controls.includes(document.activeElement as HTMLButtonElement))) { event.preventDefault(); last.focus({ preventScroll: true }); }
+		else if (first && last && !event.shiftKey && (document.activeElement === last || !controls.includes(document.activeElement as HTMLButtonElement))) { event.preventDefault(); first.focus({ preventScroll: true }); }
+		return;
+	}
 	const dialog = document.querySelector<HTMLElement>("#modal-root .modal") ?? document.querySelector<HTMLElement>(".inspector") ?? (page !== "home" ? document.querySelector<HTMLElement>(".tool-window") : window.innerWidth <= 850 && contextMode !== "overview" ? document.querySelector<HTMLElement>("#command-dock") : null);
 	if (!dialog) return;
 	if (event.key === "Escape") {
@@ -1675,6 +1905,8 @@ document.addEventListener("keydown", (event) => {
 	}
 });
 function setView(view: "base" | "map") {
+	if (worldView !== view) cancelWorkerPlacement(false, true);
+	worldView = view;
 	world?.setView(view);
 	document
 		.querySelectorAll<HTMLButtonElement>("[data-view]")
@@ -1708,6 +1940,10 @@ world = createWorld(
 		document.querySelector<HTMLButtonElement>('[data-action="close-tools"]')?.focus();
 	},
 	{ canInteract: canWorldInteract,
+		canDrag: canWorldDrag,
+		getAssignmentReason: (scavId, roomId) => getWorkerAssignmentReason(state, scavId, roomId),
+		onAssignScav: assignPlacedWorker,
+		onDragState: onWorldDragState,
 		onRoom: (room) => { if (canWorldInteract()) openRoom(room); },
 		onScav: (id) => { if (canWorldInteract()) openInspector(id); },
 		onShelterRoom: (id) => { if (canWorldInteract()) openShelterRoom(id); },
@@ -1724,7 +1960,7 @@ const readyContracts = () =>
 const rosterStatus = () => `${state.scavs.map((scav) => `${scav.id}:${scav.status}:${scav.autoRaid.enabled}:${scav.assignment}`).join(";")}|${state.raids.map((raid) => `${raid.id}:${raid.expedition?.stage}:${raid.expedition?.status}`).join(";")}`;
 const shelterStatus = () => state.shelter.rooms.map((room) => `${room.id}:${room.status}:${room.level}:${room.queue.map((job) => job.id).join(",")}:${room.workerIds.join(",")}:${room.recipeId}:${room.repeat}:${room.pending}:${room.cycles}`).join(";");
 function interacting() {
-	return document.activeElement?.tagName === "SELECT" || document.activeElement?.tagName === "INPUT" || Boolean(document.querySelector("#modal-root .modal"));
+	return Boolean(workerPlacement || crewPointer) || document.activeElement?.tagName === "SELECT" || document.activeElement?.tagName === "INPUT" || Boolean(document.querySelector("#modal-root .modal"));
 }
 function refreshAfterAdvance() {
 	if (interacting()) deferredRender = true;
@@ -1759,7 +1995,7 @@ const simulationTimer = setInterval(() => {
 	if (++ticks % 5 === 0) persist();
 }, 1000);
 document.addEventListener("visibilitychange", () => {
-	if (document.hidden) persist();
+	if (document.hidden) { cancelWorkerPlacement(false, true); persist(); }
 	else {
 		const summary = advance(state);
 		if (summary.elapsedMs >= 60_000 || summary.completedCount) offlineSummary = summary;
@@ -1771,6 +2007,7 @@ window.addEventListener("pagehide", persist);
 window.addEventListener("beforeunload", persist);
 let contextIsMobile = window.innerWidth <= 850;
 const responsiveContext = () => {
+	cancelWorkerPlacement(false, true);
 	const mobile = window.innerWidth <= 850;
 	if (mobile === contextIsMobile) return;
 	contextIsMobile = mobile;
@@ -1778,12 +2015,22 @@ const responsiveContext = () => {
 };
 window.addEventListener("resize", responsiveContext);
 import.meta.hot?.dispose(() => {
+	cancelWorkerPlacement();
 	persist();
 	clearInterval(simulationTimer);
 	clearTimeout(toastTimer);
+	if (workerRefreshTimer != null) clearTimeout(workerRefreshTimer);
 	world?.game.destroy(true);
 	window.removeEventListener("resize", responsiveContext);
 	document.removeEventListener("pointerdown", captureInterfacePointer, true);
+	document.removeEventListener("pointerdown", startCrewPointer);
+	document.removeEventListener("pointermove", moveCrewPointer);
+	document.removeEventListener("pointerup", finishCrewPointer);
+	document.removeEventListener("pointercancel", cancelCrewPointer);
+	document.removeEventListener("lostpointercapture", cancelCrewPointer);
+	document.removeEventListener("click", suppressWorkerClick, true);
+	document.removeEventListener("focusin", workerTargetFocus);
+	window.removeEventListener("blur", cancelPlacementForBlur);
 });
 if (protectedSave) {
 	toast(

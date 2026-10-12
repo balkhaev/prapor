@@ -566,18 +566,24 @@ export function upgradeRoom(state: GameState, roomId: string, now = Date.now()):
 	room.status = "upgrading"; room.construction = { workDone: 0, workRequired: quote.duration * 1_000_000, targetLevel: room.level + 1, cost: { money: quote.money, scrap: quote.scrap } };
 	return ok("Улучшение началось. Производственная очередь ждёт завершения работ.");
 }
+/** Pure preview for room highlights; committing an assignment validates again after advancing time. */
+export function getWorkerAssignmentReason(state: GameState, scavId: string, roomId: string | null): string | null {
+	const scav = state.scavs.find((item) => item.id === scavId), room = roomId === null ? null : roomById(state, roomId);
+	if (!scav || (roomId !== null && !room)) return "Боец или помещение не найдены.";
+	if (scav.status === "raiding") return "Боец сейчас в рейде.";
+	if (room) {
+		if (room.status !== "ready") return "Помещение ещё не готово.";
+		if (scav.health < 25) return "Бойцу нужно восстановиться до 25% здоровья.";
+		if (!ROOM_DEFINITIONS[room.type].production) return "В этом помещении рабочие не требуются.";
+		if (!room.workerIds.includes(scavId) && room.workerIds.length >= getRoomWorkerCapacity(room)) return "Все рабочие места заняты.";
+	}
+	return null;
+}
 export function assignWorker(state: GameState, scavId: string, roomId: string | null, now = Date.now()): ActionResult {
 	if (!isTime(now)) return fail("Некорректное время.");
 	rebaseClock(state, now); simulateAdvance(state, now, roomId !== null ? new Set([scavId]) : new Set());
-	const scav = state.scavs.find((item) => item.id === scavId), room = roomId === null ? null : roomById(state, roomId);
-	if (!scav || (roomId !== null && !room)) return fail("Боец или помещение не найдены.");
-	if (scav.status === "raiding") return fail("Боец сейчас в рейде.");
-	if (room) {
-		if (room.status !== "ready") return fail("Помещение ещё не готово.");
-		if (scav.health < 25) return fail("Бойцу нужно восстановиться до 25% здоровья.");
-		if (!ROOM_DEFINITIONS[room.type].production) return fail("В этом помещении рабочие не требуются.");
-		if (!room.workerIds.includes(scavId) && room.workerIds.length >= getRoomWorkerCapacity(room)) return fail("Все рабочие места заняты.");
-	}
+	const reason = getWorkerAssignmentReason(state, scavId, roomId); if (reason) return fail(reason);
+	const scav = state.scavs.find((item) => item.id === scavId)!, room = roomId === null ? null : roomById(state, roomId)!;
 	for (const current of state.shelter.rooms) current.workerIds = current.workerIds.filter((workerId) => workerId !== scavId);
 	scav.assignment = room?.id ?? null;
 	if (room) room.workerIds.push(scavId);
