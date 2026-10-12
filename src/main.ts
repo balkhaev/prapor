@@ -941,7 +941,10 @@ function focusCommandControl(key: string) {
 	const keyed = dock?.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(key)}"]`);
 	const fallback = dock?.querySelector<HTMLElement>('[data-focus-key="command-production"]');
 	const target = [keyed, fallback].find((node) => node?.isConnected && node.getClientRects().length > 0 && !node.closest("[inert]"));
-	if (target) target.focus({ preventScroll: true });
+	if (target) {
+		target.focus({ preventScroll: true });
+		target.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
+	}
 }
 function refreshCommandOverview(summary: CommandSummary) {
 	if (contextMode !== "overview" || interacting() || commandSummaryKey(summary) === commandSummarySignature) return;
