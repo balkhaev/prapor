@@ -1,0 +1,13 @@
+{
+  "checks": [
+    "bun run check",
+    "bun run test",
+    "bun run build"
+  ],
+  "mode": "mvp",
+  "releaseBranch": "main",
+  "remote": null,
+  "stageBranch": "stage",
+  "version": 1,
+  "worktreeRoot": "F:/worktrees/prapor"
+}

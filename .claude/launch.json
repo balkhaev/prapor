@@ -1,0 +1,15 @@
+{
+  "configurations": [
+    {
+      "name": "game",
+      "port": 3020,
+      "runtimeArgs": [
+        "F:/code/devhub/src/cli.ts",
+        "attach",
+        "prapor/game"
+      ],
+      "runtimeExecutable": "bun"
+    }
+  ],
+  "version": "0.0.1"
+}

@@ -1,0 +1,6 @@
+<!-- BEGIN:DEVHUB:WORKTREE-POLICY -->
+## DevHub workflow — owner policy
+
+The canonical checkout is `F:/code/prapor`; its mode, checks and worktree folder are in [.devhub/worktree.json](F:/code/prapor/.devhub/worktree.json). The owner's rules for this machine (dev servers only through DevHub, project modes, temporary worktrees, leaving nothing behind) are kept once, in `F:/code/AGENTS.md`; `F:/worktrees/AGENTS.md` and the global agent instructions carry the same text. Read them before changing repository state.
+<!-- END:DEVHUB:WORKTREE-POLICY -->
+

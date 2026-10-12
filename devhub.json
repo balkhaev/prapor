@@ -1,0 +1,25 @@
+{
+  "description": "Прапор — 2D idle: коллекция пушек, убежище и рейды диких",
+  "id": "prapor",
+  "launch": {
+    "dev": [
+      "game"
+    ]
+  },
+  "name": "prapor",
+  "services": [
+    {
+      "command": "bun x --no-install vite --host 127.0.0.1 --port 3020 --strictPort",
+      "health": "/",
+      "id": "game",
+      "name": "2D игра",
+      "port": 3020,
+      "ui": [
+        {
+          "label": "Играть",
+          "url": "/"
+        }
+      ]
+    }
+  ]
+}
