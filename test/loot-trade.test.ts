@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { withoutMedical } from "./legacy-health-fixture";
+import { withoutLoot } from "./legacy-loot-fixture";
+import { withoutArsenalLoot } from "./legacy-strategy-fixture";
 import {
 	advance, continueExpedition, createGame, creditMarketMoney, dispatchRaid, extractRaid, getCargoValue, getCargoWeight, getLootCapacity,
 	getSupplyCapacity, getTradeAssetRow, getTradeInventory, getTradeQuote, LOOT_MODELS, parseSave, parseTradeAsset, receiveTradeAsset,
-	recycleLootItem, SAVE_VERSION, saveGame, sellLootItem, takeTradeAsset, type GameState, type LootItem,
+	recycleLootItem, saveGame, sellLootItem, setLoadoutOption, takeTradeAsset, SAVE_VERSION, type GameState, type LootItem,
 } from "../src/game/engine";
 import { MAPS } from "../src/game/data";
 import { getRaidLootPool, rollRaidLoot } from "../src/game/loot";
@@ -11,6 +14,7 @@ import { ensureShelterLogistics } from "../src/game/shelter-logistics";
 const NOW = 1_792_000_000_000;
 function start(seed = 9) {
 	const state = createGame(NOW); state.money = 10_000; state.supplies.ammo = 60; state.supplies.intel = 10;
+	expect(setLoadoutOption(state, state.scavs[0]!.id, "medkit", true).ok).toBe(true);
 	expect(dispatchRaid(state, state.scavs[0]!.id, "courtyard", NOW).ok).toBe(true);
 	const raid = state.raids[0]!; raid.seed = seed; raid.chance = 1; raid.expedition!.capacity = 50;
 	return { state, raid };
@@ -24,13 +28,13 @@ describe("named physical raid loot", () => {
 	test("v15 ammunition saves migrate without adding loot rules to their already paid sortie", () => {
 		const state = createGame(NOW); state.scavs[0]!.loadout.ammoType = "tracer";
 		expect(dispatchRaid(state, state.scavs[0]!.id, "courtyard", NOW).ok).toBe(true);
-		const old = structuredClone(state); old.schemaVersion = 15; delete old.raids[0]!.lootVersion; delete old.raids[0]!.expedition!.lootCatalogVersion;
+		const old = withoutMedical(withoutLoot(withoutArsenalLoot(structuredClone(state)))); old.schemaVersion = 15;
 		const migrated = parseSave(saveGame(old))!; expect(migrated).not.toBeNull(); expect(migrated.schemaVersion).toBe(SAVE_VERSION);
 		expect(migrated.raids[0]!.lootVersion).toBeUndefined(); expect(migrated.raids[0]!.expedition!.ammunition).toEqual(old.raids[0]!.expedition!.ammunition);
 		expect(migrated.scavs[0]!.loadout.ammoType).toBe("tracer"); migrated.raids[0]!.chance = 1;
 		advance(migrated, migrated.raids[0]!.endsAt); expect(migrated.raids[0]!.expedition!.cargo.lootItems).toBeUndefined(); valid(migrated);
 		const premature = structuredClone(old); premature.schemaVersion = 14; expect(parseSave(saveGame(premature))).toBeNull();
-		const contaminated = structuredClone(state); contaminated.schemaVersion = 15; expect(parseSave(saveGame(contaminated))).toBeNull();
+		const contaminated = withoutMedical(structuredClone(state)); contaminated.schemaVersion = 15; expect(parseSave(saveGame(contaminated))).toBeNull();
 	});
 	test("all 24 finds have distinct identities, meaningful weights, prices and useful salvage", () => {
 		expect(LOOT_MODELS).toHaveLength(24); expect(new Set(LOOT_MODELS.map(item => item.id)).size).toBe(24);

@@ -47,7 +47,12 @@ export function shelterRoomPosition(column: number, row: number): ShelterPoint {
 	return { x: 40 + column * SHELTER_COLUMN_STRIDE, y: 148 + row * SHELTER_ROW_STRIDE };
 }
 
+/** A building spans its lots and the internal gaps; only its outer paths stay open. */
+export function shelterRoomRect(column: number, row: number, width = 1, height = 1): ShelterRect {
+	return { ...shelterRoomPosition(column, row), width: SHELTER_ROOM_WIDTH + (width - 1) * SHELTER_COLUMN_STRIDE, height: SHELTER_ROOM_HEIGHT + (height - 1) * SHELTER_ROW_STRIDE };
+}
+
 /** Ground corners run clockwise from the room's rear corner, in absolute projected world pixels. */
-export function shelterRoomPolygon(column: number, row: number): ShelterPoint[] {
-	return projectRect({ ...shelterRoomPosition(column, row), width: SHELTER_ROOM_WIDTH, height: SHELTER_ROOM_HEIGHT });
+export function shelterRoomPolygon(column: number, row: number, width = 1, height = 1): ShelterPoint[] {
+	return projectRect(shelterRoomRect(column, row, width, height));
 }

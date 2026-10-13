@@ -7,8 +7,9 @@ import { join } from "node:path";
 import { createLiveService, getLiveLootPool, type LiveService } from "../server/live";
 import { LiveEconomyError, type EconomyLoot, type LiveDelivery, type LiveEconomy, type LiveSupplyReceipt, type LiveSupplyRequest } from "../server/live-economy";
 import { LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT, type LiveCommand, type LiveSnapshot } from "../src/game/live";
-import { LIVE_MAPS } from "../src/game/live-maps";
+import { getLiveMap, LIVE_MAPS } from "../src/game/live-maps";
 import { LOOT_MODELS } from "../src/game/loot";
+import { createHealth, createMedicalInventory, type MedicalInventory } from "../src/game/health";
 
 const ORIGIN = "https://game.delopusk.ru";
 interface Session { cookie: string; gameId: string; owner: string; id?: string }
@@ -78,17 +79,20 @@ function restart(edit?: (db: Database) => void): void {
   if (edit) { const db = new Database(dbPath); edit(db); db.close(); }
   service = createLiveService(options());
 }
-function editPlayers(values: Array<{ session: Session; x?: number; y?: number; ammo?: number; medkits?: number; health?: number; cargo?: number; stash?: number; lootItems?: EconomyLoot[]; lastCombatAt?: number }>, drops?: EconomyLoot[][]): void {
+function editPlayers(values: Array<{ session: Session; x?: number; y?: number; ammo?: number; medkits?: number; medicine?: Partial<MedicalInventory>; health?: number; cargo?: number; stash?: number; lootItems?: EconomyLoot[]; lastCombatAt?: number }>, drops?: EconomyLoot[][]): void {
   restart(db => {
     for (const value of values) {
       const row = db.query<{ identity: string; state: string }, []>("SELECT identity,state FROM live_players").all().find(row => JSON.parse(row.state).id === value.session.id)!;
       const { session: _session, ...fields } = value;
-      const player = { ...JSON.parse(row.state), x: 2, y: 2, safeUntil: 0, lastCombatAt: 0, ...fields };
+      const player = { ...JSON.parse(row.state), ...getLiveMap("perimeter").extracts[0]!, safeUntil: 0, lastCombatAt: 0, ...fields };
+      if (value.health !== undefined) { player.body = createHealth(value.health); if (value.health <= 0) player.body.parts.head.hp = 0; }
+      if (value.medkits !== undefined) player.medicine = createMedicalInventory({ ...player.medicine, medkit: value.medkits * 40 });
+      if (value.medicine) player.medicine = createMedicalInventory({ ...player.medicine, ...value.medicine });
       db.query("UPDATE live_players SET state=? WHERE identity=?").run(JSON.stringify(player), row.identity);
     }
     const row = db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!, world = JSON.parse(row.state);
-    for (const scav of world.scavs) { scav.health = 0; scav.respawnAt = time + 1_000_000; }
-    if (drops) world.drops = drops.map(items => ({ id: randomUUID(), mapId: "customs", x: 2, y: 2, amount: 0, items, expiresAt: time + 1_000_000, source: "body" }));
+    for (const scav of world.scavs) { scav.health = 0; scav.body = createHealth(); scav.body.parts.head.hp = 0; scav.respawnAt = time + 1_000_000; }
+    if (drops) world.drops = drops.map(items => ({ id: randomUUID(), mapId: "perimeter", ...getLiveMap("perimeter").extracts[0]!, amount: 0, items, expiresAt: time + 1_000_000, source: "body" }));
     db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify(world));
   });
 }
@@ -114,12 +118,16 @@ describe("multiplayer loot and durable headquarters economy", () => {
   test("all 24 trophies occur in authored map pools, rare finds follow danger, and drops carry private source UUIDs", async () => {
     const models = new Set(LIVE_MAPS.flatMap(map => map.lootSpawns.flatMap(point => getLiveLootPool(map.id, point).map(entry => entry.model.id))));
     expect([...models].sort()).toEqual(LOOT_MODELS.map(model => model.id).sort());
-    expect(getLiveLootPool("depot", { x: 2, y: 2 }).every(entry => entry.model.minDepth === 1)).toBe(true);
-    expect(getLiveLootPool("depot", { x: 33, y: 11 }).some(entry => entry.model.id === "secure-drive")).toBe(true);
+    expect(getLiveLootPool("perimeter", { x: 0, y: 0 }).every(entry => entry.model.minDepth === 1)).toBe(true);
+    const contested = getLiveMap("perimeter").pois.find(poi => poi.danger === 3 && poi.districtId === "depot")!;
+    expect(getLiveLootPool("perimeter", { x: contested.x + 10, y: contested.y + 10 }).some(entry => entry.model.id === "secure-drive")).toBe(true);
     const first = await enter();
     expect(first.state.self.gameId).toBe(first.session.gameId);
-    expect(first.state.drops.every(drop => drop.amount === 0 && drop.items && drop.items.length >= 1 && drop.items.length <= 2)).toBe(true);
-    const ids = first.state.drops.flatMap(drop => drop.items!.map(item => item.id));
+    expect(first.state.drops.every(drop => drop.amount === 0 && drop.items === undefined)).toBe(true);
+    const db = new Database(dbPath, { readonly: true });
+    const stored = JSON.parse(db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!.state) as { drops: Array<{ items?: EconomyLoot[] }> }; db.close();
+    expect(stored.drops.every(drop => drop.items && drop.items.length >= 1 && drop.items.length <= 2)).toBe(true);
+    const ids = stored.drops.flatMap(drop => drop.items!.map(item => item.id));
     expect(new Set(ids).size).toBe(ids.length); expect(ids.every(id => /^[0-9a-f-]{36}$/.test(id))).toBe(true);
     expect(JSON.stringify(first.state)).not.toContain(first.session.owner);
   });
@@ -145,7 +153,7 @@ describe("multiplayer loot and durable headquarters economy", () => {
     editPlayers([{ session: owner, health: 87, ammo: 11, medkits: 1, cargo: 70, stash: 100 }]);
     economy = fakeEconomy(); restart();
     const bound = await enter(owner); expect(bound.state.self.id).toBe(legacy.selfId);
-    expect(bound.state.entities.find(item => item.id === owner.id)!.health).toBe(87);
+    expect(bound.state.entities.find(item => item.id === owner.id)!.health).toBeCloseTo(87);
     const extracted = await act(owner, { type: "extract" });
     expect(extracted.self.cargo).toBe(0); expect(extracted.self.stash).toBe(0); expect(credited).toBe(170);
     expect(extracted.self.ammo).toBe(11); expect(extracted.self.medkits).toBe(1);
@@ -159,7 +167,7 @@ describe("multiplayer loot and durable headquarters economy", () => {
 
   test("one shared named drop has one winner, weight and item count are hard limits, and trophy price is not a cash capacity", async () => {
     const first = await enter(), second = await enter(), expensive = trophy("secure-drive");
-    editPlayers([{ session: first.session, cargo: 499 }, { session: second.session, x: 3 }], [[expensive]]);
+    editPlayers([{ session: first.session, cargo: 499 }, { session: second.session, x: 7 }], [[expensive]]);
     await enter(first.session); await enter(second.session);
     const drop = (await state(first.session)).drops.find(drop => drop.items?.some(item => item.id === expensive.id))!;
     const replies = await Promise.all([call("action", { type: "loot", id: drop.id }, first.session), call("action", { type: "loot", id: drop.id }, second.session)]);
@@ -180,9 +188,9 @@ describe("multiplayer loot and durable headquarters economy", () => {
 
   test("PvP death transfers exact named cargo once and respawn produces neither duplicate trophies nor free supplies", async () => {
     const first = await enter(), second = await enter(), carried = [trophy("gold-ring"), trophy("bandage-roll")];
-    editPlayers([{ session: first.session, x: 1, y: 2 }, { session: second.session, x: 2, y: 2, ammo: 17, medkits: 1, cargo: 40, lootItems: carried }], []);
+    editPlayers([{ session: first.session, x: 5, y: 6 }, { session: second.session, x: 6, y: 6, ammo: 17, medkits: 1, cargo: 40, lootItems: carried }], []);
     await enter(first.session); await enter(second.session);
-    for (let hit = 0; hit < 4; hit++) { time += 1000; await act(first.session, { type: "attack", targetId: second.session.id! }); }
+    for (let hit = 0; hit < 3; hit++) { time += 1000; await act(first.session, { type: "attack", targetId: second.session.id! }); }
     const dead = await state(second.session), body = dead.drops.find(drop => drop.items?.some(item => item.id === carried[0]!.id))!;
     expect(dead.self.lootItems).toEqual([]); expect(dead.self.cargo).toBe(0); expect(body.items).toEqual(carried); expect(body.amount).toBe(40);
     const recovered = await act(first.session, { type: "loot", id: body.id }); expect(recovered.self.lootItems).toEqual(carried); expect(recovered.self.cargo).toBe(40);
@@ -193,16 +201,17 @@ describe("multiplayer loot and durable headquarters economy", () => {
     expect((await state(second.session)).self.lootItems).toEqual([]);
   });
 
-  test("extract, travel and resupply cannot erase a body during the eight second combat lock", async () => {
+  test("extract and resupply cannot erase a body during combat, and obsolete travel cannot teleport into a district", async () => {
     const first = await enter(), second = await enter(), item = trophy();
-    editPlayers([{ session: first.session, x: 1, y: 2, ammo: 40, lootItems: [item] }, { session: second.session, x: 2, y: 2 }], []);
+    editPlayers([{ session: first.session, x: 5, y: 6, ammo: 40, lootItems: [item] }, { session: second.session, x: 6, y: 6 }], []);
     await enter(first.session); await enter(second.session); await act(first.session, { type: "attack", targetId: second.session.id! });
-    for (const command of [{ type: "extract" }, { type: "travel", mapId: "depot" }, { type: "resupply" }]) {
+    for (const command of [{ type: "extract" }, { type: "resupply" }]) {
       const reply = await call("action", command, first.session); expect(reply.status).toBe(409); expect(await reply.json()).toEqual({ code: "in_combat" });
     }
     expect((await state(first.session)).self.lootItems).toEqual([item]); expect(pending()).toBe(0); expect(deliveries.size).toBe(0);
-    time += 8001; const moved = await act(first.session, { type: "travel", mapId: "depot" });
-    expect(moved.world.id).toBe("depot"); expect(moved.self.lootItems).toEqual([]); expect(delivered).toEqual([item]); expect(moved.self.ammo).toBe(39);
+    expect((await call("action", { type: "travel", mapId: "depot" }, first.session)).status).toBe(400);
+    time += 8001; const extracted = await act(first.session, { type: "extract" });
+    expect(extracted.world.id).toBe("perimeter"); expect(extracted.self.lootItems).toEqual([]); expect(delivered).toEqual([item]); expect(extracted.self.ammo).toBe(39);
   });
 
   test("a full headquarters preserves a visible parcel across restart and later delivers its unchanged contents once", async () => {
@@ -225,6 +234,33 @@ describe("multiplayer loot and durable headquarters economy", () => {
     expect(waiting.self.pendingDelivery).toHaveLength(1); expect(waiting.self.lootItems).toEqual([]); expect(delivered).toEqual([item]); expect(credited).toBe(50);
     restart(); const restored = await enter(first.session); expect(restored.state.self.pendingDelivery).toEqual([]);
     expect(delivered).toEqual([item]); expect(credited).toBe(50); expect(deliveries.size).toBe(1); expect(pending()).toBe(0);
+  });
+
+  test("startup delivery acknowledgement atomically persists a bleeding offline owner's remaining physical death drop", async () => {
+    const first = await enter(), parcelItem = trophy("gold-ring"), remainingItem = trophy("coffee");
+    editPlayers([{ session: first.session, cargo: 50, lootItems: [parcelItem] }], []); await enter(first.session);
+    blocked = true; await act(first.session, { type: "extract" }); expect(pending()).toBe(1); expect(delivered).toEqual([]);
+    restart(db => {
+      const row = db.query<{ identity: string; state: string }, []>("SELECT identity,state FROM live_players").all().find(row => JSON.parse(row.state).id === first.session.id)!;
+      const player = JSON.parse(row.state);
+      player.body = createHealth(); player.body.parts.head.hp = 1.5; player.body.parts.chest.bleeding = "heavy";
+      player.healthAt = time; player.cargo = 25; player.lootItems = [remainingItem];
+      db.query("UPDATE live_players SET state=? WHERE identity=?").run(JSON.stringify(player), row.identity);
+      blocked = false; time += 10_000;
+    });
+    // Inspect durable state before any tick, rejoin or close can incidentally save the new drop.
+    const db = new Database(dbPath, { readonly: true });
+    try {
+      const world = JSON.parse(db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!.state) as { drops: Array<{ amount: number; items?: EconomyLoot[] }> };
+      const corpse = world.drops.filter(drop => drop.items?.some(item => item.id === remainingItem.id));
+      expect(corpse).toHaveLength(1); expect(corpse[0]).toMatchObject({ amount: 25, items: [remainingItem] });
+      const saved = db.query<{ state: string }, []>("SELECT state FROM live_players").all().map(row => JSON.parse(row.state)).find(player => player.id === first.session.id)!;
+      expect(saved.cargo).toBe(0); expect(saved.lootItems).toEqual([]); expect(saved.body.parts.head.hp).toBe(0);
+    } finally { db.close(); }
+    expect(delivered).toEqual([parcelItem]); expect(credited).toBe(50); expect(pending()).toBe(0); expect(deliveries.size).toBe(1);
+    restart(); const restored = (await enter(first.session)).state;
+    expect(restored.self.lootItems).toEqual([]); expect(restored.drops.filter(drop => drop.items?.some(item => item.id === remainingItem.id))).toHaveLength(1);
+    expect(delivered).toEqual([parcelItem]); expect(credited).toBe(50);
   });
 
   test("a slow command body uses the current body after eviction and same-identity rejoin, withdrawing cargo once", async () => {
@@ -285,6 +321,38 @@ describe("multiplayer loot and durable headquarters economy", () => {
     expect(supplied.self.ammo).toBe(54); expect(supplied.self.medkits).toBe(1); expect(stocks.get(first.session.owner)).toEqual({ ammo: 0, medkits: 0 });
     const empty = await act(first.session, { type: "resupply" }); expect(empty.self.ammo).toBe(54); expect(empty.self.medkits).toBe(1);
     expect(pending()).toBe(0); expect(supplyReceipts.size).toBe(2);
+  });
+
+  test("spent splints require a paid medical bundle even with a full medkit, and a lost acknowledgement refills only once", async () => {
+    const first = await enter();
+    expect(first.state.self.medicine).toEqual({ medkit: 80, bandage: 2, tourniquet: 1, splint: 1, painkiller: 1, surgery: 1 });
+    editPlayers([{ session: first.session }], []);
+    restart(db => {
+      const row = db.query<{ identity: string; state: string }, []>("SELECT identity,state FROM live_players").all().find(row => JSON.parse(row.state).id === first.session.id)!;
+      const player = JSON.parse(row.state); player.body.parts.leftLeg.fracture = true;
+      db.query("UPDATE live_players SET state=? WHERE identity=?").run(JSON.stringify(player), row.identity);
+    });
+    await enter(first.session);
+    const treating = await act(first.session, { type: "treat", medicine: "splint", part: "leftLeg" });
+    expect(treating.self.medicine.splint).toBe(1);
+    time = treating.self.treatment!.endsAt; service.tick();
+    const treated = await state(first.session);
+    expect(treated.self.body.parts.leftLeg.fracture).toBe(false);
+    expect(treated.self.medicine.splint).toBe(0); expect(treated.self.medicine.medkit).toBe(80);
+    const extracted = await act(first.session, { type: "extract" });
+    expect(extracted.self.medicine).toEqual(treated.self.medicine);
+    expect(stocks.get(first.session.owner)).toEqual({ ammo: 100, medkits: 10 });
+    throwAfterSupply = true;
+    const waiting = await act(first.session, { type: "resupply" });
+    expect(waiting.self.medicine.splint).toBe(0); expect(waiting.self.medicine.medkit).toBe(80);
+    expect([...supplyRequests.values()][0]).toMatchObject({ ammo: 0, medkits: 1 });
+    expect(stocks.get(first.session.owner)).toEqual({ ammo: 100, medkits: 9 }); expect(pending()).toBe(1);
+    restart(); const restored = await enter(first.session);
+    expect(restored.state.self.medicine).toEqual(first.state.self.medicine);
+    expect(stocks.get(first.session.owner)).toEqual({ ammo: 100, medkits: 9 }); expect(pending()).toBe(0);
+    restart(); expect((await enter(first.session)).state.self.medicine).toEqual(first.state.self.medicine);
+    expect(supplyReceipts.size).toBe(1);
+    expect((await call("action", { type: "resupply" }, first.session)).status).toBe(409);
   });
 
   test("failed live acknowledgement stops the service and recovery retries a committed delivery instead of restoring cargo", async () => {

@@ -1,7 +1,7 @@
 import type { Supplies } from "./data";
 import type { FieldKit, ShelterLogistics } from "./shelter-logistics";
 
-export type ShelterRoomType = "workshop" | "ammo" | "recycler" | "medbay" | "radio" | "storage" | "dormitory";
+export type ShelterRoomType = "workshop" | "ammo" | "recycler" | "medbay" | "radio" | "storage" | "dormitory" | "hangar";
 export interface ShelterCost { money: number; supplies: Supplies }
 export interface ProductionJob {
 	id: string; kind: "module" | "resource"; recipeId: string; modelId: string | null;
@@ -10,6 +10,8 @@ export interface ProductionJob {
 }
 export interface RoomInstance {
 	id: string; type: ShelterRoomType; column: number; row: number; level: number;
+	/** Quarter turn; old saves and compact structures default to the original orientation. */
+	rotation?: 0 | 1;
 	status: "building" | "ready" | "upgrading";
 	construction: { workDone: number; workRequired: number; targetLevel: number; cost: { money: number; scrap: number } } | null;
 	workerIds: string[]; queue: ProductionJob[]; recipeId: string | null; repeat: boolean; pending: boolean; cycles: number;
@@ -33,7 +35,7 @@ export function isShelterSiteCoordinate(column: number, row: number): boolean {
 }
 /** Old saves and presentation snapshots without layout data keep the original foundation. */
 export function getShelterSites(shelter: ShelterLayout): readonly ShelterSite[] { return shelter.sites ?? initialSites(); }
-/** Only an outer wall adjoining an already open floor can be excavated; the entrance street is never a candidate. */
+/** New territory must adjoin an owned site; the entrance street is never a candidate. */
 export function getShelterFrontier(shelter: ShelterLayout): ShelterSite[] {
 	const sites = getShelterSites(shelter);
 	const reserved = new Set([...sites, ...(shelter.expansions ?? [])].map((site) => `${site.column}:${site.row}`));
@@ -48,6 +50,7 @@ export function getShelterFrontier(shelter: ShelterLayout): ShelterSite[] {
 export const ROOM_DEFINITIONS: Record<ShelterRoomType, {
 	label: string; description: string; color: string; cost: { money: number; scrap: number };
 	buildSeconds: number; workerSkill: "combat" | "scouting" | "balanced"; production: boolean;
+	footprint?: { width: number; height: number }; unlockLevel?: number;
 }> = {
 	workshop: { label: "Мастерская", description: "Оружейные детали производятся по заказу. Опытные мастера и дополнительные рабочие ускоряют очередь.", color: "#d0a76f", cost: { money: 260, scrap: 10 }, buildSeconds: 90, workerSkill: "balanced", production: true },
 	ammo: { label: "Патронный цех", description: "Снаряжает партии патронов из деталей и рублей. Нужны рабочие с боевым опытом.", color: "#b5bd80", cost: { money: 160, scrap: 5 }, buildSeconds: 60, workerSkill: "combat", production: true },
@@ -56,7 +59,21 @@ export const ROOM_DEFINITIONS: Record<ShelterRoomType, {
 	radio: { label: "Радиорубка", description: "Готовит разведданные за рубли. Нужны наблюдательные бойцы.", color: "#8eafbd", cost: { money: 180, scrap: 6 }, buildSeconds: 70, workerSkill: "scouting", production: true },
 	storage: { label: "Склад", description: "Дополнительные места для оружия, деталей и припасов. Рабочие не требуются.", color: "#a2a98a", cost: { money: 220, scrap: 8 }, buildSeconds: 80, workerSkill: "balanced", production: false },
 	dormitory: { label: "Жилой блок", description: "Два новых места для отряда на первом уровне, затем ещё по одному. Рабочие не требуются.", color: "#c1ae94", cost: { money: 240, scrap: 8 }, buildSeconds: 90, workerSkill: "balanced", production: false },
+	hangar: { label: "Ангар", description: "Большая постройка 3×2, доступная с 4-го уровня. На каждом уровне: +18 мест для оружия, +48 для деталей и дополнительный запас припасов. Рабочие не требуются.", color: "#87a0ad", cost: { money: 900, scrap: 30 }, buildSeconds: 180, workerSkill: "balanced", production: false, footprint: { width: 3, height: 2 }, unlockLevel: 4 },
 };
+export function getRoomFootprint(room: Pick<RoomInstance, "type" | "rotation">): { width: number; height: number } {
+	const footprint = ROOM_DEFINITIONS[room.type].footprint ?? { width: 1, height: 1 };
+	return room.rotation === 1 ? { width: footprint.height, height: footprint.width } : { ...footprint };
+}
+export function getRoomSites(room: Pick<RoomInstance, "type" | "rotation" | "column" | "row">): ShelterSite[] {
+	const { width, height } = getRoomFootprint(room);
+	return Array.from({ length: height }, (_, row) => Array.from({ length: width }, (_, column) =>
+		({ column: room.column + column, row: room.row + row }))).flat();
+}
+/** Every occupied site resolves to the same stable structure, including its non-origin cells. */
+export function getShelterRoomAt(shelter: ShelterLayout, column: number, row: number): RoomInstance | undefined {
+	return shelter.rooms?.find(room => getRoomSites(room).some(site => site.column === column && site.row === row));
+}
 const supplies = (changes: Partial<Supplies> = {}): Supplies => ({ ammo: 0, medicine: 0, scrap: 0, intel: 0, ...changes });
 export const RESOURCE_RECIPES: { id: string; roomType: ShelterRoomType; label: string; description: string; durationSeconds: number; cost: ShelterCost; output: Supplies; minLevel?: number; outputKit?: FieldKit }[] = [
 	{ id: "ammo-batch", roomType: "ammo", label: "Партия патронов", description: "12 патронов из одной детали и 10 ₽.", durationSeconds: 40, cost: { money: 10, supplies: supplies({ scrap: 1 }) }, output: supplies({ ammo: 12 }) },

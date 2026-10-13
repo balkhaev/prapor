@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { advance, claimLootDelivery, createGame, dispatchRaid, extractRaid, getLootCapacity, getLootTraderPrice, getRaidQuote, MAX_PENDING_LOOT_DELIVERIES, parseSave, PENDING_LOOT_RAID_LIMIT, SAVE_VERSION, saveGame, sellLootItem, setAutoRaid, type GameState, type LootDelivery, type LootItem } from "../src/game/engine";
 import { MAP_BY_ID } from "../src/game/data";
+import { withoutBarters } from "./legacy-loot-fixture";
 
 const NOW = 1_792_000_000_000;
 function put(state: GameState, modelId = "duct-tape"): LootItem {
@@ -64,13 +65,25 @@ describe("player-owned pending loot deliveries", () => {
 		for (let index = 0; index < source.length; index++) expect(sellLootItem(restored, restored.lootItems![0]!.id).ok).toBe(true);
 		expect(claimLootDelivery(restored, delivery.id).ok).toBe(true); expect(restored.lootItems!.slice(-source.length)).toEqual(source); valid(restored);
 	});
-	test("historic v17 overflow sales stay paid history and never restore sold objects during migration", () => {
+	test("historic v19 overflow sales stay paid history and never restore sold objects during migration", () => {
 		const { state, delivery } = fullReturn(), report = state.history[0]!, sold = delivery.items.map(item => ({ item, money: getLootTraderPrice(item) }));
-		state.schemaVersion = 17; delete state.pendingLoot; delete report.lootPending; report.lootAutoSold = sold;
+		state.schemaVersion = 19; withoutBarters(state); report.lootAutoSold = sold;
 		const proceeds = sold.reduce((sum, value) => sum + value.money, 0); state.money += proceeds; state.stats.moneyEarned += proceeds; report.money += proceeds;
 		const migrated = parseSave(saveGame(state))!; expect(migrated).not.toBeNull(); expect(migrated.schemaVersion).toBe(SAVE_VERSION);
 		expect(migrated.pendingLoot).toBeUndefined(); expect(migrated.history[0]!.lootAutoSold).toEqual(sold); expect(migrated.money).toBe(state.money); expect(migrated.lootItems).toEqual(state.lootItems);
 		expect(claimLootDelivery(migrated, delivery.id).ok).toBe(false); valid(migrated);
+	});
+	test("pending ownership and report fields begin at v20 while released medical and territory saves remain readable", () => {
+		for (const version of [18, 19]) {
+			const state = createGame(NOW); state.schemaVersion = version; withoutBarters(state);
+			expect(parseSave(saveGame(state))).not.toBeNull();
+			parcel(state); expect(parseSave(saveGame(state))).toBeNull();
+			const { state: history, delivery } = fullReturn(), sold = delivery.items.map(item => ({ item, money: getLootTraderPrice(item) }));
+			history.schemaVersion = version; withoutBarters(history); history.history[0]!.lootAutoSold = sold;
+			const proceeds = sold.reduce((sum, value) => sum + value.money, 0); history.money += proceeds; history.stats.moneyEarned += proceeds; history.history[0]!.money += proceeds;
+			expect(parseSave(saveGame(history))).not.toBeNull();
+			history.history[0]!.lootPending = []; expect(parseSave(saveGame(history))).toBeNull();
+		}
 	});
 	test("strict parcel parsing rejects duplicate ownership, impossible sources and receipt tampering", () => {
 		const { state } = fullReturn(); valid(state);
@@ -84,7 +97,7 @@ describe("player-owned pending loot deliveries", () => {
 			(value: GameState) => { value.pendingLoot![0]!.items[0]!.modelId = "__proto__"; },
 			(value: GameState) => { value.history[0]!.lootPending![0]!.modelId = "coffee"; value.pendingLoot![0]!.items[0]!.modelId = "duct-tape"; },
 			(value: GameState) => { value.history[0]!.lootItems = structuredClone(value.history[0]!.lootPending!); },
-			(value: GameState) => { value.schemaVersion = 17; },
+			(value: GameState) => { value.schemaVersion = 19; },
 		]) { const altered = structuredClone(state); mutate(altered); expect(parseSave(saveGame(altered))).toBeNull(); }
 		const extra = JSON.parse(saveGame(state)); extra.pendingLoot[0].price = 1; expect(parseSave(JSON.stringify(extra))).toBeNull();
 		const bounded = createGame(NOW); for (let index = 0; index < MAX_PENDING_LOOT_DELIVERIES; index++) parcel(bounded);

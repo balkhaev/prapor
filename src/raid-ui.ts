@@ -9,6 +9,8 @@ import { getRaidFieldFrame, getRaidFieldObjective, getRaidFieldPlan, type RaidFi
 import { getGameplayGuidance } from './gameplay-guidance';
 import { ammunitionSnapshot } from './ammunition-ui';
 import { planBrief, raidStrategyResults } from './raid-strategy-ui';
+import { raidHealthPanel } from './gameplay-ui';
+import { healthPercent } from './game/health';
 import { raidLootReceipt, raidLootOverflow } from './flea-ui';
 import { LOOT_MODEL_BY_ID, type LootItem } from './game/engine';
 
@@ -17,6 +19,11 @@ const n = (value: number) => Math.floor(value).toLocaleString('ru-RU');
 const time = (seconds: number) => `${Math.floor(Math.max(0, seconds) / 60)}:${String(Math.floor(Math.max(0, seconds) % 60)).padStart(2,'0')}`;
 const clock = (at: number) => new Date(at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 const plans = new Map<string, RaidFieldPlan>();
+function healthStatus(scav: { health: number } | undefined, report: RaidReport | null): string {
+	if (report?.lostScav) return 'Боец погиб';
+	if (report) return report.medical ? `Здоровье при возвращении ${Math.floor(healthPercent(report.medical.body))} / 100` : 'Здоровье в отчёте не указано';
+	return scav ? `Здоровье ${Math.floor(scav.health)} / 100` : 'Состояние неизвестно';
+}
 function renderSquadLiveMembers(state: GameState, raid: Raid, report: RaidReport | null, now: number): string {
  const party=getSquadRaidFieldFrame(raid,state.raids,now,undefined,report);
  if(!party)return '';
@@ -160,7 +167,7 @@ export function renderLiveRaidPanel(state: GameState, raid: Raid | null, candida
 	const phase = report ? squadReportPhase(report) : frame.label;
 	const mission = report ? 'Итог выхода' : raid.expedition?.status === 'choice' ? 'Нужен твой приказ' : `Этап ${raid.expedition?.stage ?? 1} · В пути`;
 	const selector = `<div class="live-watch-picker"><label for="live-raid-select">Наблюдать</label><select id="live-raid-select" data-live-raid-select data-focus-key="live-raid-picker" aria-label="Наблюдаемый рейд">${!state.raids.some(item => item.id === raid.id) ? `<option value="${raid.id}">${e(raid.scavName)} · Выход завершён</option>` : ''}${raidRepresentatives(state.raids).map(item => `<option value="${item.id}" ${item.id === raid.id ? 'selected' : ''}>${e(raidTitle(item))} · ${e(MAP_BY_ID[item.mapId]?.name ?? 'Сектор')}${item.expedition?.status === 'choice' ? ' · ПРИКАЗ' : ''}</option>`).join('')}</select></div>`;
-	return `<header class="live-raid-head"><div><span class="eyebrow">${e(MAP_BY_ID[raid.mapId]?.name ?? 'Сектор')} · ${e(planFor(raid).theme.label)}</span><h2>${e(raidTitle(raid))}</h2></div><button class="icon-button" data-live-close aria-label="Вернуться в убежище">×</button></header>${selector}<div class="live-raid-status ${report ? reportSucceeded(report) ? 'finished' : 'failed' : frame.action === 'skirmish' ? 'danger' : ''}" data-live-status><div><span class="live-signal"></span><strong data-live-phase>${e(phase)}</strong><b data-live-time>${report ? reportStatus(report) : raid.expedition?.status === 'choice' ? 'ПРИКАЗ' : time((raid.endsAt-now)/1000)}</b></div><p data-live-detail>${e(report?.description ?? frame.detail)}</p><span class="live-raid-progress"><i data-live-progress style="width:${report ? 100 : Math.round(frame.progress*100)}%"></i></span><small data-live-mission>${mission}</small></div><div class="live-raid-scroll ${raid.squad?"has-party":""}">${raid.squad?renderSquadLiveMembers(state,raid,report,now):""}<div class="live-kit"><span class="scav-avatar">${scavPortrait(scav?.personality ?? 'veteran', raid.scavName, raid.scavAppearance)}</span><div><strong>${e(weapon ? getWeaponDefinition(weapon).name : report?.lostWeapon ? 'Оружие потеряно' : 'Комплект бойца')}</strong><small><span data-live-health>${scav ? `Здоровье ${Math.floor(scav.health)} / 100` : report?.lostScav ? 'Боец потерян' : 'Выход закончен'}</span> · ${raid.tactic === 'cautious' ? 'Осторожно' : raid.tactic === 'bold' ? 'Напористо' : 'Сбалансированно'}</small>${report?'':planBrief(raid)}<small class="live-kit-ready" data-live-ready>${stats ? stats.ready ? `Пушка исправна · ${Math.floor(weapon!.durability)}%` : e(stats.issues.join(' · ')) : ''}</small></div></div>${ammunitionSnapshot(raid.expedition?.ammunition?.modelId, true)}${renderObjective(raid,report,now)}${!report && raid.expedition?.status === 'choice' ? `<div class="live-decision">${decision}<button class="button secondary" data-raid-orders="${raid.id}">Развернуть приказы →</button></div>` : !report ? `<button class="button ghost live-orders" data-raid-orders="${raid.id}">Комплект и приказы →</button>` : ''}${report ? renderRaidResult(state,report) : ""}<div data-live-cargo>${raid.squad?renderSquadCargo(state,raid,report):renderCargo(raid,report)}</div><div class="live-raid-events-head"><h3>Связь с улицей</h3><span>Текущий этап</span></div><div class="live-raid-feed" data-live-feed>${renderLiveRaidFeed(raid, report, now)}</div>${renderVisits(raid,report ? raid.endsAt : now)}${renderJourney(raid,report)}<div class="live-camera-note">Рука — осмотреть квартал. «За бойцом» — вернуться к отряду.</div></div>`;
+	return `<header class="live-raid-head"><div><span class="eyebrow">${e(MAP_BY_ID[raid.mapId]?.name ?? 'Сектор')} · ${e(planFor(raid).theme.label)}</span><h2>${e(raidTitle(raid))}</h2></div><button class="icon-button" data-live-close aria-label="Вернуться в убежище">×</button></header>${selector}<div class="live-raid-status ${report ? reportSucceeded(report) ? 'finished' : 'failed' : frame.action === 'skirmish' ? 'danger' : ''}" data-live-status><div><span class="live-signal"></span><strong data-live-phase>${e(phase)}</strong><b data-live-time>${report ? reportStatus(report) : raid.expedition?.status === 'choice' ? 'ПРИКАЗ' : time((raid.endsAt-now)/1000)}</b></div><p data-live-detail>${e(report?.description ?? frame.detail)}</p><span class="live-raid-progress"><i data-live-progress style="width:${report ? 100 : Math.round(frame.progress*100)}%"></i></span><small data-live-mission>${mission}</small></div><div class="live-raid-scroll ${raid.squad?"has-party":""}">${raid.squad?renderSquadLiveMembers(state,raid,report,now):""}<div class="live-kit"><span class="scav-avatar">${scavPortrait(scav?.personality ?? 'veteran', raid.scavName, raid.scavAppearance)}</span><div><strong>${e(weapon ? getWeaponDefinition(weapon).name : report?.lostWeapon ? 'Оружие потеряно' : 'Комплект бойца')}</strong><small><span data-live-health>${e(healthStatus(scav,report))}</span> · ${raid.tactic === 'cautious' ? 'Осторожно' : raid.tactic === 'bold' ? 'Напористо' : 'Сбалансированно'}</small>${report?'':planBrief(raid)}<small class="live-kit-ready" data-live-ready>${stats ? stats.ready ? `Пушка исправна · ${Math.floor(weapon!.durability)}%` : e(stats.issues.join(' · ')) : ''}</small></div></div>${ammunitionSnapshot(raid.expedition?.ammunition?.modelId, true)}<div data-live-medical>${raidHealthPanel(state,raid,report)}</div>${renderObjective(raid,report,now)}${!report && raid.expedition?.status === 'choice' ? `<div class="live-decision">${decision}<button class="button secondary" data-raid-orders="${raid.id}">Развернуть приказы →</button></div>` : !report ? `<button class="button ghost live-orders" data-raid-orders="${raid.id}">Комплект и приказы →</button>` : ''}${report ? renderRaidResult(state,report) : ""}<div data-live-cargo>${raid.squad?renderSquadCargo(state,raid,report):renderCargo(raid,report)}</div><div class="live-raid-events-head"><h3>Связь с улицей</h3><span>Текущий этап</span></div><div class="live-raid-feed" data-live-feed>${renderLiveRaidFeed(raid, report, now)}</div>${renderVisits(raid,report ? raid.endsAt : now)}${renderJourney(raid,report)}<div class="live-camera-note">Рука — осмотреть квартал. «За бойцом» — вернуться к отряду.</div></div>`;
 }
 function renderLiveRaidFeed(raid: Raid, report: RaidReport | null, now: number) {
 	const events = getRaidFieldFrame(raid, report ? raid.endsAt : now, planFor(raid)).observedEvents.slice(-3).reverse();
@@ -178,6 +185,18 @@ export function updateLiveRaidPanel(root: HTMLElement, raid: Raid, candidate: Ra
 	set('[data-live-route]', `Осмотрено ${goal.visited.length} / ${goal.totalSearches} · Участок ${goal.segment} / ${goal.segments}`);
 	set('[data-live-action-time]', goal.remainingSeconds ? time(goal.remainingSeconds) : 'НА СВЯЗИ');
 	if (state) {
+		const medical = root.querySelector<HTMLElement>('[data-live-medical]');
+		if (medical) {
+			const html = raidHealthPanel(state, raid, report);
+			if (medical.dataset.medicalView !== html) {
+				const focused = medical.contains(document.activeElement) ? (document.activeElement as HTMLElement).closest<HTMLElement>('[data-medical-member]')?.dataset.medicalMember : undefined;
+				const open = [...medical.querySelectorAll<HTMLDetailsElement>('[data-medical-member][open]')].map(node => node.dataset.medicalMember);
+				const expanded = [...medical.querySelectorAll<HTMLDetailsElement>('[data-medical-member]')].length > 0;
+				medical.innerHTML = html; medical.dataset.medicalView = html;
+				if (expanded) medical.querySelectorAll<HTMLDetailsElement>('[data-medical-member]').forEach(node => { node.open = open.includes(node.dataset.medicalMember); });
+				if (focused) medical.querySelector<HTMLElement>(`[data-medical-member="${CSS.escape(focused)}"]>summary`)?.focus({ preventScroll: true });
+			}
+		}
 		if (report) {
 			const action = getGameplayGuidance(state).action;
 			set('[data-gameplay-next-detail]', action.detail); set('[data-gameplay-next-label]', `${action.label} →`);
@@ -189,7 +208,7 @@ export function updateLiveRaidPanel(root: HTMLElement, raid: Raid, candidate: Ra
 			root.querySelector("[data-party-current]")?.classList.toggle("rival",party.activeAction?.kind==="hesitation");
 		}
 		const scav = state.scavs.find(item => item.id === raid.scavId), weapon = state.weapons.find(item => item.id === raid.weaponInstanceId), stats = weapon ? getWeaponStats(weapon) : null;
-		set('[data-live-health]', scav ? `Здоровье ${Math.floor(scav.health)} / 100` : report?.lostScav ? 'Боец потерян' : 'Выход закончен');
+		set('[data-live-health]', healthStatus(scav, report));
 		set('[data-live-ready]', stats ? stats.ready ? `Пушка исправна · ${Math.floor(weapon!.durability)}%` : stats.issues.join(' · ') : '');
 	}
 	const track = root.querySelector<HTMLElement>('[data-live-progress]'); if(track) track.style.width = `${report ? 100 : Math.round(frame.progress*100)}%`;

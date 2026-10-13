@@ -11,6 +11,28 @@
 .live-camera button[aria-pressed=true]{background:#677d4d;border-color:#bbc78a;color:#fff0c7}
 .live-camera button[data-live-zoom=overview]{font-size:10px;padding:0 9px}
 .live-map-title{font-size:14px;color:#e6dfbc;margin:17px 0 10px}
+.live-perimeter-card{margin:0 0 15px;padding:12px;border:1px solid #a8b27a44;border-radius:5px;background:#17362544}
+.live-perimeter-card p{font-size:10px;line-height:1.7;color:#becbb0;margin:8px 0 0}
+.live-district-list{display:grid!important;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:7px!important}
+.live-district-list .live-map-card{align-items:flex-start;gap:7px;padding:10px 8px}
+.live-district-list .live-map-icon{width:23px;height:30px;font-size:21px}
+.live-district-list .live-map-card strong{font-size:11px;letter-spacing:0}
+.live-district-list .live-map-card small{font-size:7px;line-height:1.6;display:block}
+.live-district-list .live-map-card p{font-size:8px;line-height:1.6;margin:5px 0 0}
+.live-purpose-list{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:7px;margin:10px 0 13px}
+.live-purpose-card{display:flex;flex-direction:column;gap:6px;padding:10px;min-height:82px;border:1px solid #8e9d654d;border-radius:4px;background:#233e2b;color:#dce0b4;text-align:left;font-family:inherit;cursor:pointer}
+.live-purpose-card.selected{border-color:#d7c692;background:#59644755;box-shadow:inset 2px 0 #d7c692}
+.live-purpose-card strong{font-size:11px;color:#e3e5b8}.live-purpose-card small{font-size:9px;line-height:1.6;color:#afbf9d}
+.live-goal{padding:12px;margin:15px 0;border:1px solid #a2b47555;border-radius:5px;background:#536d3f22}
+.live-goal h3{display:flex;justify-content:space-between;gap:5px;font-size:12px;margin:0;color:#dce5b1}.live-goal h3 span{font-size:8px;font-weight:500;color:#a6bd96}
+.live-goal p,.live-goal>small{font-size:9px;line-height:1.8;color:#b7c6a3;display:block;margin:8px 0}
+.live-goal>small{font-size:8px;margin-bottom:0;color:#99b28c}
+.live-poi-route{display:flex;align-items:center;gap:8px;justify-content:space-between;width:100%;min-height:42px;margin:6px 0;padding:8px;background:#243f2b66;border:1px solid #82996655;border-radius:3px;color:#d1dfb5;text-align:left;font-family:inherit;cursor:pointer}
+.live-poi-route>span{display:flex;flex-direction:column;gap:4px;min-width:0}.live-poi-route strong{font-size:10px;overflow-wrap:anywhere}.live-poi-route small{font-size:8px;color:#a5bd95}.live-poi-route b{font-size:9px;white-space:nowrap;color:#e0d9ad;flex:none}
+.live-container-row{display:flex;align-items:center;justify-content:space-between;gap:7px;padding:10px 8px;margin:6px 0;border:1px solid #b3aa7155;border-radius:4px;background:#73633222}
+.live-container-row>div:first-child{display:flex;flex-direction:column;gap:5px;min-width:0}.live-container-row strong{font-size:10px;color:#dccb98}.live-container-row small{font-size:8px;color:#b5b691;line-height:1.6}
+.live-container-content{font-size:10px;line-height:1.6;color:#e4d8b1;overflow-wrap:anywhere;margin:3px 0 0}
+.live-search-progress{flex:none;display:flex;flex-direction:column;gap:5px;width:104px}.live-search-progress progress{width:100%;height:5px;accent-color:#bdc781}.live-search-progress span{font-size:8px;color:#d0d5a6;text-align:center}
 .live-map-list{display:flex;flex-direction:column;gap:8px;margin:0 0 14px}
 .live-map-card{display:flex;align-items:center;gap:11px;min-width:0;width:100%;border:1px solid #8e9d654d;border-radius:5px;background:linear-gradient(125deg,#40513c88,#24392c);padding:12px;text-align:left;color:#dfe2bc;font-family:inherit;cursor:pointer;transition:border-color .15s,background .15s}
 .live-map-card.selected{border-color:#d4c893;background:linear-gradient(125deg,#64704488,#34432d);box-shadow:inset 3px 0 #d4c893}
@@ -156,6 +178,29 @@
  .live-dock .button{font-size:10px}.live-orders{grid-template-columns:minmax(0,1fr) 112px;column-gap:7px}
 }
 @media(prefers-reduced-motion:reduce){.live-health i{transition:none}}
+.live-medical{margin:0 0 14px;padding:12px 0;border-top:1px solid #a5b27d25;border-bottom:1px solid #a5b27d25}
+.live-medical h3{display:flex;justify-content:space-between;gap:8px;font-size:11px;color:#e5ddb8;margin:0 0 10px}
+.live-medical h3 span{font-size:9px;color:#b3bd93;font-weight:500;white-space:nowrap}
+.live-body-parts{display:grid;grid-template-columns:1fr 1fr;gap:5px}
+.live-body-part{min-width:0;text-align:left;padding:7px 8px;background:#203125;border:1px solid #96a57626;border-radius:3px;color:#ccd2b5;cursor:pointer}
+.live-body-part:first-child{grid-column:1 / -1}
+.live-body-part.selected{border-color:#c0b979;background:#39402a;box-shadow:inset 2px 0 #c0b979}
+.live-body-part>span{display:flex;justify-content:space-between;gap:4px;font-size:9px;font-weight:600}
+.live-body-part b{font:8px "IBM Plex Mono",monospace;white-space:nowrap;color:#d8dda9}
+.live-body-part i{display:block;height:3px;background:linear-gradient(to right,#9ab575 var(--part-health),#101e15 var(--part-health));margin:5px 0 4px}
+.live-body-part small{display:block;font-size:7px;line-height:1.3;color:#95a488}
+.live-body-part.injured small{color:#e4c684}.live-body-part.critical small{color:#ecaa92}.live-body-part.critical i{background:linear-gradient(to right,#d08b73 var(--part-health),#101e15 var(--part-health))}
+.live-medical-effects,.live-medical-help{font-size:8px;line-height:1.65;color:#a7b595;margin:8px 0}
+.live-medicines{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-top:8px}
+.live-medicines button{display:flex;flex-direction:column;gap:4px;min-width:0;padding:8px;text-align:left;color:#d6dbbd;background:#243526;border:1px solid #91a77944;border-radius:3px;cursor:pointer}
+.live-medicines button strong{font-size:9px}.live-medicines button span{font:8px "IBM Plex Mono",monospace;color:#aabc92}
+.live-medicines button:disabled{opacity:.45;cursor:default}.live-medicines button:not(:disabled):hover{border-color:#d4c890;background:#3d432c}
+.live-treatment{display:grid;grid-template-columns:1fr auto;gap:5px;padding:10px;background:#43462b;border:1px solid #b0af6c55;border-radius:3px;font-size:10px;color:#ede4ac}
+.live-treatment strong{font-size:9px;line-height:1.5}.live-treatment .text-button{grid-column:1 / -1;justify-self:start;font-size:9px}
+.live-urgent-treatment{width:100%;font-size:9px!important;text-align:left}
+.live-target-fire{display:flex;flex-direction:column;gap:3px}.live-aim{font-size:8px!important;padding:5px!important;color:#e5bb95!important}
+@media(max-width:850px){.live-body-parts{grid-template-columns:repeat(4,minmax(0,1fr))}.live-body-part:first-child{grid-column:auto}.live-medicines{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:480px){.live-body-parts{grid-template-columns:repeat(2,minmax(0,1fr))}.live-body-part:first-child{grid-column:1 / -1}.live-medicines{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
 .live-cargo,.live-delivery{padding:13px 0;border-top:1px solid #a19a7540}
 .live-cargo h3,.live-delivery h3{display:flex;justify-content:space-between;gap:10px;font-size:12px;color:#e3d3ac;margin:0 0 10px}

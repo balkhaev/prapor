@@ -1,6 +1,7 @@
 import {
 	ROOM_DEFINITIONS, RESOURCE_RECIPES, getModuleCapacity, getSupplyCapacity,
 	getRoomProductionState, getResourceProductionQuote, getFieldKitStock, FIELD_KIT_CAPACITY,
+	isScavMedicallyReady,
 	type GameState, type RoomInstance, type ProductionJob,
 } from "./game/engine";
 
@@ -46,7 +47,14 @@ function describeRoom(state: GameState, room: RoomInstance): RoomCommandStatus {
 	const configured = Boolean(room.recipeId && (room.repeat || room.pending));
 	const quote = configured && room.recipeId ? getResourceProductionQuote(state, room.id, room.recipeId) : null;
 	if (!job && quote?.block === "target") return result("ready", "Запас по плану", quote.reason!, "production", null);
-	if (production.rate === 0) return result("workers", room.workerIds.length ? "Нужен здоровый работник" : "Ждёт работников", production.reason ?? "Назначь бойца: производство требует здоровья от 25%.", "staff", "Назначить людей", job || configured ? 90 : 45);
+	if (production.rate === 0) {
+		const recovering = room.workerIds.map(id => state.scavs.find(scav => scav.id === id)).find(scav => scav && !isScavMedicallyReady(scav));
+		const course = recovering?.medicalTreatment;
+		const detail = course ? `${recovering!.name}: оплаченный курс лечения, осталось ${Math.max(0, Math.ceil((course.endsAt - state.lastUpdated) / 1000))} сек. Работа возобновится после восстановления; можно назначить другого готового бойца.`
+			: recovering?.body ? `${recovering.name}: нужно восстановить здоровье и подвижность. Назначь другого готового бойца или дождись лечения.`
+			: production.reason ?? "Назначь бойца с восстановленной подвижностью, без кровотечений и со здоровьем от 25%.";
+		return result("workers", course ? "Работник проходит лечение" : room.workerIds.length ? "Нужен здоровый работник" : "Ждёт работников", detail, "staff", "Назначить людей", job || configured ? 90 : 45);
+	}
 	if (job) return result("running", "Производство идёт", production.status, "production", null);
 	if (configured && room.recipeId) {
 		const quote = getResourceProductionQuote(state, room.id, room.recipeId);
@@ -73,6 +81,6 @@ export function getCommandSummary(state: GameState): CommandSummary {
 	return {
 		rooms, counts, attention: rooms.filter((room) => room.cta !== null).sort((a, b) => b.priority - a.priority),
 		queuedJobs: state.shelter.rooms.reduce((total, room) => total + room.queue.length, 0),
-		freeWorkers: state.scavs.filter((scav) => !scav.assignment && scav.status !== "raiding" && scav.health >= 25).length,
+		freeWorkers: state.scavs.filter((scav) => !scav.assignment && scav.status !== "raiding" && isScavMedicallyReady(scav)).length,
 	};
 }

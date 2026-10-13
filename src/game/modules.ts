@@ -15,6 +15,7 @@ export const MODULE_PLATFORM_LABELS: Record<string, string> = {
 	pm: "ПМ", tt: "ТТ", toz: "ТОЗ-106", mp133: "МР-133", kedr: "Кедр", sks: "СКС",
 	ak: "АК", saiga: "Сайга", vityaz: "Витязь", mosin: "Мосинка", val: "ВАЛ / ВСС", rpk: "РПК", svd: "СВД", pkp: "ПКП",
 	ar: "AR / M4 / HK416", p90: "P90", mp7: "MP7", ump: "UMP-45", "1911": "M1911", mcx: "MCX", scar: "SCAR-H", trg: "TRG-42",
+	g36: "G36", aug: "AUG", fal: "FAL", ar10: "AR-10 / SR-25", vector: "Vector", fiveseven: "Five-seveN", sr2: "СР-2", sr1: "СР-1", glock: "Glock 20", ash12: "АШ-12", tkm: "ВПО-209", svdk: "СВДК", awm: "AWM", m870: "M870",
 };
 export const modulePlatformLabel = (platform: string) => Object.hasOwn(MODULE_PLATFORM_LABELS, platform) ? MODULE_PLATFORM_LABELS[platform]! : platform.toUpperCase();
 export const MODULE_SLOT_LABELS: Record<ModuleSlot, string> = { receiver: "Ствольная коробка", barrel: "Ствол", handguard: "Цевьё", stock: "Приклад", magazine: "Магазин", optic: "Прицел", muzzle: "Дульное устройство", foregrip: "Рукоять", mount: "Крепление", flashlight: "Фонарь", laser: "Лазер" };
@@ -25,13 +26,14 @@ const platforms: Record<string, [string, string]> = {
 	rpk: ["rpk", "7.62x39"], svd: ["svd", "7.62x54"], asval: ["val", "9x39"], pkp: ["pkp", "7.62x54"],
 	m4a1: ["ar", "5.56x45"], hk416: ["ar", "5.56x45"], p90: ["p90", "5.7x28"], mp7: ["mp7", "4.6x30"],
 	ump45: ["ump", ".45acp"], m1911: ["1911", ".45acp"], mcx: ["mcx", ".300blk"], scarh: ["scar", "7.62x51"], trg42: ["trg", ".338lapua"],
+	g36: ["g36", "5.56x45"], aug: ["aug", "5.56x45"], fal: ["fal", "7.62x51"], sr25: ["ar10", "7.62x51"], vector: ["vector", ".45acp"], fiveseven: ["fiveseven", "5.7x28"], sr2: ["sr2", "9x21"], sr1: ["sr1", "9x21"], glock20: ["glock", "10mm"], ash12: ["ash12", "12.7x55"], vpo209: ["tkm", ".366tkm"], svdk: ["svdk", "9.3x64"], awm: ["awm", ".300winmag"], m870: ["m870", "12g"],
 };
 export interface ReceiverInfo {
 	platform: string; caliber: string; requiredSlots: ModuleSlot[];
 	/** Physical assembly metadata shared by the bench, inventory art and held weapon. */
-	bodyGeometry?: "ar" | "p90" | "mp7" | "ump" | "1911" | "mcx" | "scar" | "trg";
-	feedGeometry?: "box" | "grip" | "horizontal";
-	action?: "automatic" | "pistol" | "bolt";
+	bodyGeometry?: "ar" | "p90" | "mp7" | "ump" | "1911" | "mcx" | "scar" | "trg" | "g36" | "aug" | "fal" | "ar10" | "vector" | "fiveseven" | "sr2" | "sr1" | "glock" | "ash12" | "tkm" | "svdk" | "awm" | "m870";
+	feedGeometry?: "box" | "grip" | "horizontal" | "rear-box" | "tube";
+	action?: "automatic" | "pistol" | "bolt" | "pump" | "semiauto";
 }
 const arsenalConfig: Record<string, { weight: number; ammoMultiplier: number; receiverStats?: Partial<ModuleModel["stats"]>; geometry: Pick<ReceiverInfo, "bodyGeometry" | "feedGeometry" | "action"> }> = {
 	m4a1: { weight: 4.1, ammoMultiplier: 1, receiverStats: { ergonomics: 4, recoil: -2 }, geometry: { bodyGeometry: "ar", feedGeometry: "box", action: "automatic" } },
@@ -44,12 +46,34 @@ const arsenalConfig: Record<string, { weight: number; ammoMultiplier: number; re
 	scarh: { weight: 5.8, ammoMultiplier: 1.12, receiverStats: { ergonomics: -6, recoil: 6 }, geometry: { bodyGeometry: "scar", feedGeometry: "box", action: "automatic" } },
 	trg42: { weight: 7.8, ammoMultiplier: 2, receiverStats: { ergonomics: -10, recoil: 12 }, geometry: { bodyGeometry: "trg", feedGeometry: "box", action: "bolt" } },
 };
+// This wave has its own partition: shared calibers cannot move released models
+// across the 621-model save and paid-loot boundary.
+const waveTwoConfig: typeof arsenalConfig = {
+	g36: { weight: 3.65, ammoMultiplier: 1, receiverStats: { ergonomics: 2, recoil: 1 }, geometry: { bodyGeometry: "g36", feedGeometry: "box", action: "automatic" } },
+	aug: { weight: 3.85, ammoMultiplier: 1.03, receiverStats: { ergonomics: 4, recoil: -2 }, geometry: { bodyGeometry: "aug", feedGeometry: "rear-box", action: "automatic" } },
+	fal: { weight: 5.1, ammoMultiplier: 1.14, receiverStats: { ergonomics: -7, recoil: 9 }, geometry: { bodyGeometry: "fal", feedGeometry: "box", action: "automatic" } },
+	sr25: { weight: 6.1, ammoMultiplier: 2, receiverStats: { ergonomics: -7, recoil: 2 }, geometry: { bodyGeometry: "ar10", feedGeometry: "box", action: "semiauto" } },
+	vector: { weight: 3.25, ammoMultiplier: 1.24, receiverStats: { ergonomics: 5, recoil: -8 }, geometry: { bodyGeometry: "vector", feedGeometry: "box", action: "automatic" } },
+	fiveseven: { weight: .95, ammoMultiplier: 1.06, receiverStats: { ergonomics: 5, recoil: -5 }, geometry: { bodyGeometry: "fiveseven", feedGeometry: "grip", action: "pistol" } },
+	sr2: { weight: 2.8, ammoMultiplier: 1.13, receiverStats: { ergonomics: 4, recoil: 2 }, geometry: { bodyGeometry: "sr2", feedGeometry: "grip", action: "automatic" } },
+	sr1: { weight: 1.2, ammoMultiplier: 1.15, receiverStats: { ergonomics: -2, recoil: 4 }, geometry: { bodyGeometry: "sr1", feedGeometry: "grip", action: "pistol" } },
+	glock20: { weight: 1.08, ammoMultiplier: 1.08, receiverStats: { ergonomics: 1, recoil: 8 }, geometry: { bodyGeometry: "glock", feedGeometry: "grip", action: "pistol" } },
+	ash12: { weight: 7.2, ammoMultiplier: 1.85, receiverStats: { ergonomics: -11, recoil: 16 }, geometry: { bodyGeometry: "ash12", feedGeometry: "rear-box", action: "automatic" } },
+	vpo209: { weight: 4.35, ammoMultiplier: 1.06, receiverStats: { ergonomics: -2, recoil: 5 }, geometry: { bodyGeometry: "tkm", feedGeometry: "box", action: "semiauto" } },
+	svdk: { weight: 7.2, ammoMultiplier: 3, receiverStats: { ergonomics: -11, recoil: 11 }, geometry: { bodyGeometry: "svdk", feedGeometry: "box", action: "semiauto" } },
+	awm: { weight: 8.1, ammoMultiplier: 3.15, receiverStats: { ergonomics: -13, recoil: 13 }, geometry: { bodyGeometry: "awm", feedGeometry: "box", action: "bolt" } },
+	m870: { weight: 4.25, ammoMultiplier: .95, receiverStats: { ergonomics: -3, recoil: 4 }, geometry: { bodyGeometry: "m870", feedGeometry: "tube", action: "pump" } },
+};
+const allArsenalConfig = { ...arsenalConfig, ...waveTwoConfig };
+const waveTwoPlatforms = new Set(Object.keys(waveTwoConfig).map((weaponId) => platforms[weaponId]![0]));
+const releasedCalibers = new Set(WEAPONS.slice(0, 25).map((weapon) => platforms[weapon.id]![1]));
+const waveTwoCalibers = new Set(Object.keys(waveTwoConfig).map((weaponId) => platforms[weaponId]![1]).filter((caliber) => !releasedCalibers.has(caliber)));
 const arsenalPlatforms = new Set(Object.keys(arsenalConfig).map((weaponId) => platforms[weaponId]![0]));
 const arsenalCalibers = new Set(Object.keys(arsenalConfig).map((weaponId) => platforms[weaponId]![1]));
 export const RECEIVER_INFO: Record<string, ReceiverInfo> = Object.fromEntries(WEAPONS.map((weapon) => [weapon.id, {
 	platform: platforms[weapon.id]![0], caliber: platforms[weapon.id]![1],
 	requiredSlots: weapon.category === "pistol" ? ["receiver", "barrel", "magazine"] : ["receiver", "barrel", "handguard", "stock", "magazine"],
-	...arsenalConfig[weapon.id]?.geometry,
+	...allArsenalConfig[weapon.id]?.geometry,
 }]));
 export const MODULE_MODELS: ModuleModel[] = [];
 function model(id: string, label: string, slot: ModuleSlot, description: string, opts: Partial<ModuleModel> = {}): ModuleModel {
@@ -64,14 +88,14 @@ export const FACTORY_KITS: Record<string, Partial<Record<ModuleSlot, string>>> =
 for (const weapon of WEAPONS) {
 	const info = RECEIVER_INFO[weapon.id]!;
 	const pistol = weapon.category === "pistol";
-	const config = arsenalConfig[weapon.id];
+	const config = allArsenalConfig[weapon.id];
 	const weight = config?.weight ?? WEAPON_ROLES[weapon.category].weight;
 	const shares: Partial<Record<ModuleSlot, number>> = pistol ? { receiver: 0.42, barrel: 0.38, magazine: 0.2 } : { receiver: 0.28, barrel: 0.28, handguard: 0.1, stock: 0.17, magazine: 0.17 };
 	const values: Partial<Record<ModuleSlot, number>> = pistol ? { receiver: 0.45, barrel: 0.35, magazine: 0.2 } : { receiver: 0.4, barrel: 0.25, handguard: 0.1, stock: 0.15, magazine: 0.1 };
 	const kit: Partial<Record<ModuleSlot, string>> = {};
 	for (const slot of info.requiredSlots) {
 		const moduleId = slot === "receiver" ? `receiver-${weapon.id}` : `factory-${weapon.id}-${slot}`;
-		const nativeMounts = slot === "receiver" && config ? info.platform === "1911" ? ["pistol-rail"] : ["rail-top"]
+		const nativeMounts = slot === "receiver" && config ? ["1911", "fiveseven", "sr1", "glock"].includes(info.platform) ? ["pistol-rail"] : info.platform === "fal" ? ["receiver-bridge"] : ["tkm", "svdk"].includes(info.platform) ? ["dovetail"] : ["rail-top"]
 			: slot === "handguard" && config && info.platform !== "p90" ? ["rail-bottom", "rail-side"]
 				: slot === "handguard" && info.platform === "p90" ? ["rail-side"] : null;
 		model(moduleId, `${MODULE_SLOT_LABELS[slot]} · ${weapon.name.split(" «")[0]}`, slot, `Штатная деталь ${weapon.name}. Калибр ${info.caliber}, платформа ${modulePlatformLabel(info.platform)}.`, {
@@ -80,13 +104,14 @@ for (const weapon of WEAPONS) {
 			stats: stats({ weight: weight * shares[slot]!, ...(slot === "receiver" ? config?.receiverStats : {}), ammoMultiplier: slot === "receiver" ? config?.ammoMultiplier ?? 1 : 1 }),
 			workshopLevel: slot === "receiver" ? { common: 1, uncommon: 1, rare: 2, epic: 3, legendary: 4 }[weapon.rarity] : 1,
 			providesMounts: nativeMounts ?? (slot === "receiver" && ["ak", "val", "svd", "rpk", "vityaz"].includes(info.platform) ? ["dovetail"]
-				: slot === "barrel" && !["toz", "mp133"].includes(info.platform) ? [`thread:${info.caliber}`] : []),
+				: slot === "barrel" && !["toz", "mp133", "m870"].includes(info.platform) ? [`thread:${info.caliber}`] : []),
 		});
 		kit[slot] = moduleId;
 	}
 	FACTORY_KITS[weapon.id] = kit;
 }
 const familyIds = [...new Set(Object.values(RECEIVER_INFO).map((info) => info.platform))];
+const barrelThreads = (platform: string, caliber: string) => ["val", "m870"].includes(platform) ? [] : [`thread:${caliber}`];
 for (const platform of familyIds) {
 	const definitions = WEAPONS.filter((weapon) => RECEIVER_INFO[weapon.id]!.platform === platform);
 	const weapon = definitions[0]!;
@@ -95,16 +120,16 @@ for (const platform of familyIds) {
 	const family = { platforms: [platform], calibers, rarity: "uncommon" as Rarity, workshopLevel: 2, lootTier: 2 };
 	for (const caliber of calibers) {
 		model(`barrel-${platform}-${caliber}-short`, `Короткий ствол · ${modulePlatformLabel(platform)}`, "barrel", "Легче и удобнее, но −6 урона, +9 отдачи. Не совместим с другим калибром.", { ...family, calibers: [caliber], appearance: "short", value: 95,
-			stats: stats({ weight: factoryWeight("barrel") * 0.7, damage: -6, ergonomics: 12, recoil: 9, reliability: -2 }), providesMounts: [`thread:${caliber}`] });
+			stats: stats({ weight: factoryWeight("barrel") * 0.7, damage: -6, ergonomics: 12, recoil: 9, reliability: -2 }), providesMounts: platform === "m870" ? [] : [`thread:${caliber}`] });
 		model(`barrel-${platform}-${caliber}-long`, `Длинный ствол · ${modulePlatformLabel(platform)}`, "barrel", "+7 урона и −8 отдачи, но тяжелее и −9 удобства.", { ...family, calibers: [caliber], appearance: "long", value: 135,
-			stats: stats({ weight: factoryWeight("barrel") * 1.3, damage: 7, ergonomics: -9, recoil: -8, reliability: 2 }), providesMounts: [`thread:${caliber}`] });
+			stats: stats({ weight: factoryWeight("barrel") * 1.3, damage: 7, ergonomics: -9, recoil: -8, reliability: 2 }), providesMounts: platform === "m870" ? [] : [`thread:${caliber}`] });
 	}
 	if (weapon.category !== "pistol") {
 		model(`handguard-${platform}-rail`, `Цевьё с планками · ${modulePlatformLabel(platform)}`, "handguard", "Открывает крепления для прицела и рукояти. Вес выше; удобство −3.", { ...family, appearance: "rail", value: 85, workshopLevel: 1,
 			stats: stats({ weight: factoryWeight("handguard") + 0.2, ergonomics: -3 }), providesMounts: ["rail-top", "rail-bottom"] });
 		model(`handguard-${platform}-light`, `Лёгкое цевьё · ${modulePlatformLabel(platform)}`, "handguard", "+9 удобства и меньше веса; креплений для прицела и рукояти нет.", { ...family, appearance: "light", value: 100,
 			stats: stats({ weight: Math.max(0.1, factoryWeight("handguard") - 0.15), ergonomics: 9, reliability: -2 }) });
-		if (platform !== "p90") model(`stock-${platform}-folding`, `Складной приклад · ${modulePlatformLabel(platform)}`, "stock", "+10 удобства, меньше веса. Отдача +9, надёжность −2.", { ...family, appearance: "folding", value: 95,
+		if (!["p90", "aug", "ash12"].includes(platform)) model(`stock-${platform}-folding`, `Складной приклад · ${modulePlatformLabel(platform)}`, "stock", "+10 удобства, меньше веса. Отдача +9, надёжность −2.", { ...family, appearance: "folding", value: 95,
 			stats: stats({ weight: factoryWeight("stock") * 0.65, ergonomics: 10, recoil: 9, reliability: -2 }) });
 		model(`stock-${platform}-tactical`, `Опорный приклад · ${modulePlatformLabel(platform)}`, "stock", "Отдача −12, надёжность +3. Тяжелее и −7 удобства.", { ...family, appearance: "tactical", value: 145,
 			stats: stats({ weight: factoryWeight("stock") + 0.25, ergonomics: -7, recoil: -12, reliability: 3 }) });
@@ -136,7 +161,7 @@ for (const platform of familyIds) {
 	const factoryWeight = (slot: ModuleSlot) => MODULE_MODELS.find((item) => item.id === FACTORY_KITS[weapon.id]![slot])?.stats.weight ?? 0.3;
 	const family = { platforms: [platform], calibers };
 	for (const caliber of calibers) {
-		const providesMounts = platform === "val" ? [] : [`thread:${caliber}`];
+		const providesMounts = barrelThreads(platform, caliber);
 		model(`barrel-${platform}-${caliber}-heavy`, `Утолщённый ствол «Опора» · ${label}`, "barrel", `+5 урона, −10 отдачи, +6 надёжности. Вес ×1,4 и −13 удобства.${platform === "val" ? " Встроенное дульное устройство; внешние насадки не устанавливаются." : " Резьба только своего калибра."}`, {
 			...family, calibers: [caliber], appearance: "heavy", value: 190, rarity: "rare", workshopLevel: 3, lootTier: 3, providesMounts,
 			stats: stats({ weight: factoryWeight("barrel") * 1.4, damage: 5, ergonomics: -13, recoil: -10, reliability: 6 }),
@@ -147,7 +172,7 @@ for (const platform of familyIds) {
 		});
 	}
 	if (weapon.category !== "pistol") {
-		if (!["p90", "mp7"].includes(platform)) model(`handguard-${platform}-wood`, `Деревянное цевьё «Классика» · ${label}`, "handguard", "+4 удобства, +3 надёжности; немного тяжелее штатного. Планок для прицела и рукояти нет.", {
+		if (!["p90", "mp7", "aug", "ash12", "vector", "g36", "sr2"].includes(platform)) model(`handguard-${platform}-wood`, `Деревянное цевьё «Классика» · ${label}`, "handguard", "+4 удобства, +3 надёжности; немного тяжелее штатного. Планок для прицела и рукояти нет.", {
 			...family, appearance: "wood", value: 60, rarity: "common", workshopLevel: 1, lootTier: 1,
 			stats: stats({ weight: factoryWeight("handguard") + 0.1, ergonomics: 4, reliability: 3 }),
 		});
@@ -248,7 +273,7 @@ for (const part of MODULE_MODELS) {
 		part.providesMounts.push("rail-side");
 		part.description = part.description.replace("для прицела и рукояти", "для прицела, рукояти, фонаря и лазера").replace("две планки", "три планки");
 	}
-	if (part.slot === "barrel" && part.appearance !== "short" && part.platforms.every((platform) => !["pm", "tt", "val", "1911", "p90", "mp7"].includes(platform))) {
+	if (part.slot === "barrel" && part.appearance !== "short" && part.platforms.every((platform) => !["pm", "tt", "val", "1911", "p90", "mp7", "fiveseven", "sr1", "glock", "sr2"].includes(platform))) {
 		part.providesMounts = [...part.providesMounts];
 		part.providesMounts.push("barrel-clamp");
 		if (["long", "fluted"].includes(part.appearance) || part.platforms.every((platform) => !["kedr", "toz"].includes(platform))) part.providesMounts.push("barrel-clamp-wide");
@@ -314,6 +339,17 @@ model("mount-1911-bridge", "Мостовая планка · M1911", "mount", "�
 	platforms: ["1911"], calibers: [".45acp"], appearance: "pistol-bridge", requiresMount: "pistol-rail", providesMounts: ["rail-top", "rail-side"],
 	value: 135, rarity: "uncommon", workshopLevel: 2, lootTier: 2, stats: stats({ weight: .15, ergonomics: -4, reliability: -1 }),
 });
+for (const platform of ["fiveseven", "sr1", "glock"]) {
+	const weapon = WEAPONS.find((definition) => RECEIVER_INFO[definition.id]!.platform === platform)!;
+	model(`mount-${platform}-bridge`, `Мостовая планка · ${modulePlatformLabel(platform)}`, "mount", "Собственная опора рамки открывает верхний прицел и боковое устройство. Мост другой платформы не подходит; подствольную рукоять не поддерживает.", {
+		platforms: [platform], calibers: [RECEIVER_INFO[weapon.id]!.caliber], appearance: "pistol-bridge", requiresMount: "pistol-rail", providesMounts: ["rail-top", "rail-side"],
+		value: 145, rarity: "uncommon", workshopLevel: 2, lootTier: 2, stats: stats({ weight: .14, ergonomics: -4, reliability: -1 }),
+	});
+}
+model("mount-fal-bridge", "Крышка с планкой · FAL", "mount", "Опирается на собственную крышку коробки FAL и открывает верхний прицел. Универсальный верхний вынос не заменяет это основание.", {
+	platforms: ["fal"], calibers: ["7.62x51"], appearance: "top-triple", requiresMount: "receiver-bridge", providesMounts: ["rail-top", "rail-side"],
+	value: 190, rarity: "rare", workshopLevel: 2, lootTier: 2, stats: stats({ weight: .3, ergonomics: -5, reliability: 2 }),
+});
 // A P90's rear support is a removable buttpad, not a folding rifle stock.
 // The same physical slots still own distinct, removable pieces of its body.
 for (const part of MODULE_MODELS) {
@@ -376,9 +412,36 @@ for (const part of MODULE_MODELS) {
 // Keep the first 411 existing models in their original order. Catalogue additions
 // must not reshuffle legacy catalogue boundaries or saved recipe lists.
 const isArsenalModel = (part: ModuleModel) => part.platforms.some((platform) => arsenalPlatforms.has(platform)) || part.calibers.some((caliber) => arsenalCalibers.has(caliber));
-const originalModels = MODULE_MODELS.filter((part) => !isArsenalModel(part));
-const arsenalModels = MODULE_MODELS.filter(isArsenalModel);
-MODULE_MODELS.splice(0, MODULE_MODELS.length, ...originalModels, ...arsenalModels);
+const isWaveTwoModel = (part: ModuleModel) => part.platforms.some((platform) => waveTwoPlatforms.has(platform)) || part.calibers.some((caliber) => waveTwoCalibers.has(caliber));
+const originalModels = MODULE_MODELS.filter((part) => !isArsenalModel(part) && !isWaveTwoModel(part));
+const arsenalModels = MODULE_MODELS.filter((part) => isArsenalModel(part) && !isWaveTwoModel(part));
+const waveTwoModels = MODULE_MODELS.filter(isWaveTwoModel);
+for (const part of waveTwoModels) {
+	const weapon = WEAPONS.slice(25).find((definition) => {
+		const info = RECEIVER_INFO[definition.id]!;
+		return (part.platforms.includes("*") || part.platforms.includes(info.platform)) && part.calibers.includes(info.caliber);
+	})!;
+	if (part.appearance !== "factory") {
+		const price = Math.max(1, Math.min(2.4, Math.sqrt(weapon.value / 390)));
+		part.value = Math.round(part.value * price);
+		part.craftCost = { money: Math.ceil(part.value * 1.4) + 15, scrap: Math.ceil(part.value / 100) + 1 };
+	}
+	if (["aug", "ash12"].some((platform) => part.platforms.includes(platform))) {
+		if (part.slot === "stock") {
+			part.label = `${({ factory: "Штатный затыльник", tactical: "Опорный затыльник", skeleton: "Облегчённый затыльник", precision: "Регулируемая задняя опора", padded: "Резиновый затыльник" } as Record<string, string>)[part.appearance]} · ${modulePlatformLabel(RECEIVER_INFO[weapon.id]!.platform)}`;
+			part.description += " Заменяет заднюю опору буллпапа; складной трубки приклада нет.";
+		}
+		if (part.slot === "magazine") part.description += " Коробка подачи находится позади спусковой рукояти буллпапа.";
+	}
+	if (["vector", "sr2", "fiveseven", "sr1", "glock"].some((platform) => part.platforms.includes(platform)) && part.slot === "magazine") part.description += part.platforms.includes("vector") ? " Магазин устанавливается перед спусковой рукоятью в отдельную шахту низкого корпуса Vector." : " Магазин устанавливается внутрь пистолетной рукояти.";
+	if (part.platforms.includes("m870") && part.slot === "magazine") {
+		part.label = part.appearance === "window" ? "Трубка подачи с индикатором · M870" : `${({ factory: "Штатная", extended: "Удлинённая", quick: "Быстрозарядная", compact: "Короткая" } as Record<string, string>)[part.appearance]} трубка подачи · M870`;
+		part.description += " Подствольная трубка с продольной подачей патронов; коробчатый магазин и барабан не устанавливаются.";
+	}
+	if (part.platforms.includes("m870") && part.slot === "handguard") part.description += " Подвижное помповое цевьё; сохраняет свободный ход под стволом.";
+	if (part.platforms.includes("awm") && part.slot === "receiver") part.description += " Болтовая длинная коробка и дорогой магнум-запас: ближнее наведение медленнее.";
+}
+MODULE_MODELS.splice(0, MODULE_MODELS.length, ...originalModels, ...arsenalModels, ...waveTwoModels);
 export const MODULE_BY_ID: Record<string, ModuleModel> = Object.fromEntries(MODULE_MODELS.map((item) => [item.id, item]));
 
 /** Only real, rooted connections expose rails: an adapter cannot support itself. */

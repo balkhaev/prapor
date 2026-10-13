@@ -46,6 +46,7 @@ export function liveEconomyChanged(previous: LivePlayer | null, next: LivePlayer
   if (command === 'resupply' || command === 'extract' || command === 'travel') return true;
   if (!previous || previous.gameId !== next.gameId) return true;
   if (next.ammo > previous.ammo || next.medkits > previous.medkits) return true;
+  if (Object.keys(next.medicine).some(type => next.medicine[type as keyof typeof next.medicine] > previous.medicine[type as keyof typeof previous.medicine])) return true;
   const before = previous.pendingDelivery ?? [], after = next.pendingDelivery ?? [];
   if (before.length > after.length) return true;
   const afterIds = new Set(after.flatMap(parcel => parcel.items).map(item => item.id));

@@ -7,7 +7,8 @@ export interface GameCommandArguments {
   cancelMarketListing: [string]; claimMarketSale: [string];
   sellLootItem: [string]; recycleLootItem: [string];
   barterGear: [string, string[]]; claimLootDelivery: [string];
-  excavateShelter: [number, number]; buildRoom: [string, number, number]; upgradeRoom: [string];
+  excavateShelter: [number, number]; buildRoom: [string, number, number, (0 | 1)?]; upgradeRoom: [string];
+  moveRoom: [string, number, number, (0 | 1)?]; rotateRoom: [string];
   assignWorker: [string, string | null]; queueModuleProduction: [string, string];
   setRoomRecipe: [string, string | null, boolean]; cancelProduction: [string, string];
   setProductionReserve: [ShelterCost]; setRoomStockTarget: [string, number | null];

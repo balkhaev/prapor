@@ -8,9 +8,10 @@ import { createGameService, type GameService } from "../server/game";
 import { createLiveService, type LiveService } from "../server/live";
 import type { LiveEconomy } from "../server/live-economy";
 import type { GameActionSnapshot, GameCommand, GameSnapshot } from "../src/game/commands";
-import type { LiveCommand, LiveSnapshot } from "../src/game/live";
+import type { LiveCommand, LivePoint, LiveSnapshot } from "../src/game/live";
 import { getLiveMap } from "../src/game/live-maps";
 import { readMarketSnapshot, type MarketSnapshot } from "../src/game/flea";
+import { createHealth, createMedicalInventory } from "../src/game/health";
 
 const ORIGIN = "http://multiplayer.test", NOW = 1_792_000_000_000;
 const fixtures: Array<{ folder: string; game: GameService; live: LiveService }> = [];
@@ -23,9 +24,10 @@ afterEach(async () => {
 interface Player { cookie: string; game: GameSnapshot; live: LiveSnapshot }
 async function fixture() {
   const folder = await mkdtemp(join(tmpdir(), "prapor-multiplayer-flow-")), gamePath = join(folder, "game.sqlite"), livePath = join(folder, "live.sqlite");
-  const gameOptions = { dbPath: gamePath, secureCookies: false, allowedOrigins: [ORIGIN], now: () => NOW };
+  let time = NOW;
+  const gameOptions = { dbPath: gamePath, secureCookies: false, allowedOrigins: [ORIGIN], now: () => time };
   let game = createGameService(gameOptions);
-  const liveOptions = { dbPath: livePath, secureCookies: false, allowedOrigins: [ORIGIN], now: () => NOW, random: () => 0, automaticTicks: false, economy: game.liveEconomy };
+  const liveOptions = { dbPath: livePath, secureCookies: false, allowedOrigins: [ORIGIN], now: () => time, random: () => 0, automaticTicks: false, economy: game.liveEconomy };
   const value = { folder, game, live: createLiveService(liveOptions) }; fixtures.push(value);
   const request = (path: string, player?: Player, body?: unknown) => new Request(`${ORIGIN}/api/${path}`, {
     method: body === undefined ? "GET" : "POST", headers: {
@@ -58,19 +60,20 @@ async function fixture() {
   async function market(player: Player): Promise<MarketSnapshot> {
     const reply = (await game.fetch(request("game/market", player)))!; expect(reply.status).toBe(200); return readMarketSnapshot(await reply.json());
   }
-  async function editLive(players: Player[], items: Array<{ id: string; modelId: string; foundAt: number }> = [], ammo?: number, medkits?: number) {
+  async function editLive(players: Player[], items: Array<{ id: string; modelId: string; foundAt: number }> = [], ammo?: number, medkits?: number, position?: LivePoint) {
     value.live.close();
     const db = new Database(livePath);
     try {
-      const exit = getLiveMap("customs").extracts[0]!;
+      const exit = getLiveMap("perimeter").extracts[0]!;
       for (const player of players) {
         const row = db.query<{ identity: string; state: string }, []>("SELECT identity,state FROM live_players").all().find(row => JSON.parse(row.state).id === player.live.selfId)!;
-        const state = JSON.parse(row.state); Object.assign(state, exit, { safeUntil: 0, lastCombatAt: 0, disconnectAt: 0, ...(ammo === undefined ? {} : { ammo }), ...(medkits === undefined ? {} : { medkits }) });
+        const state = JSON.parse(row.state); Object.assign(state, position ?? exit, { safeUntil: 0, lastCombatAt: 0, disconnectAt: 0, ...(ammo === undefined ? {} : { ammo }), ...(medkits === undefined ? {} : { medkits }) });
+        if (medkits !== undefined) state.medicine = createMedicalInventory({ ...state.medicine, medkit: medkits * 40 });
         db.query("UPDATE live_players SET state=? WHERE identity=?").run(JSON.stringify(state), row.identity);
       }
       const row = db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!, world = JSON.parse(row.state);
-      for (const scav of world.scavs) { scav.health = 0; scav.respawnAt = NOW + 1_000_000; }
-      if (items.length) world.drops.push({ id: randomUUID(), mapId: "customs", ...exit, amount: 0, items, source: "body", expiresAt: NOW + 1_000_000 });
+      for (const scav of world.scavs) { scav.health = 0; scav.body = createHealth(); scav.body.parts.head.hp = 0; scav.respawnAt = NOW + 1_000_000; }
+      if (items.length) world.drops.push({ id: randomUUID(), mapId: "perimeter", ...exit, amount: 0, items, source: "body", expiresAt: NOW + 1_000_000 });
       db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify(world));
     } finally { db.close(); }
     value.live = createLiveService(liveOptions);
@@ -86,11 +89,48 @@ async function fixture() {
       const reply = (await value.live.fetch(request("live/join", player, {})))!; expect(reply.status).toBe(200); player.live = await reply.json() as LiveSnapshot;
     }
   }
-  return { value, enter, request, gameState, gameAction, liveAction, market, editLive, restart,
+  async function advance(ms: number, players: Player[]) {
+    for (let elapsed = 0; elapsed < ms; elapsed += 250) {
+      time += 250; value.live.tick();
+      if (elapsed % 1000 === 0) for (const player of players) {
+        const reply = (await value.live.fetch(request("live/state", player)))!; expect(reply.status).toBe(200); player.live = await reply.json() as LiveSnapshot;
+      }
+    }
+    for (const player of players) { const reply = (await value.live.fetch(request("live/state", player)))!; expect(reply.status).toBe(200); player.live = await reply.json() as LiveSnapshot; }
+  }
+  return { value, enter, request, gameState, gameAction, liveAction, market, editLive, restart, advance,
     setBridge: (bridge: LiveEconomy) => { liveOptions.economy = bridge; } };
 }
 
 describe("real multiplayer loot, shared market and headquarters supplies", () => {
+  test("a generated jacket hides named contents until server search and two real headquarters can extract its loot only once", async () => {
+    const f = await fixture(), first = await f.enter(), second = await f.enter();
+    const anchor = getLiveMap("perimeter").containers.find(anchor => anchor.kind === "jacket")!;
+    await f.editLive([first, second], [], undefined, undefined, anchor);
+    const hidden = first.live.drops.find(drop => drop.containerId === anchor.id)!;
+    expect(hidden).toBeDefined(); expect(hidden).toMatchObject({ containerKind: "jacket", searched: false, amount: 0 }); expect(hidden.items).toBeUndefined();
+    expect(second.live.drops.find(drop => drop.id === hidden.id)!.items).toBeUndefined();
+    await f.liveAction(first, { type: "loot", id: hidden.id }, 409);
+    await f.liveAction(first, { type: "search", id: hidden.id }); await f.liveAction(second, { type: "search", id: hidden.id });
+    await f.advance(anchor.searchMs - 250, [first, second]); expect(first.live.drops.find(drop => drop.id === hidden.id)!.items).toBeUndefined();
+    await f.advance(250, [first, second]);
+    const revealed = first.live.drops.find(drop => drop.id === hidden.id)!;
+    expect(revealed.searched).toBe(true); expect(revealed.items!.length).toBeGreaterThan(0);
+    expect(second.live.drops.find(drop => drop.id === hidden.id)!.items).toEqual(revealed.items);
+    expect(new Set(revealed.items!.map(item => item.id)).size).toBe(revealed.items!.length);
+    const attempts = await Promise.all([f.value.live.fetch(f.request("live/action", first, { type: "loot", id: hidden.id })), f.value.live.fetch(f.request("live/action", second, { type: "loot", id: hidden.id }))]);
+    expect(attempts.map(reply => reply!.status).sort()).toEqual([200, 409]);
+    await f.advance(250, [first, second]);
+    const winner = first.live.self.lootItems!.length ? first : second, loser = winner === first ? second : first;
+    expect(winner.live.self.lootItems).toEqual(revealed.items); expect(loser.live.self.lootItems).toEqual([]);
+    await f.editLive([winner]); await f.liveAction(winner, { type: "extract" });
+    const credited = await f.gameState(winner), models = revealed.items!.map(item => item.modelId).sort();
+    expect(credited.state.lootItems!.map(item => item.modelId).sort()).toEqual(models);
+    const ids = credited.state.lootItems!.map(item => item.id), revision = credited.revision;
+    await f.liveAction(winner, { type: "extract" }); await f.restart([winner, loser]);
+    expect((await f.gameState(winner)).state.lootItems!.map(item => item.id)).toEqual(ids); expect(winner.game.revision).toBe(revision);
+    expect((await f.gameState(loser)).state.lootItems ?? []).toEqual([]);
+  });
   test("two guests compete for one physical find, extract it to headquarters, trade it and use bought supplies online", async () => {
     const f = await fixture(), first = await f.enter(), second = await f.enter();
     const item = { id: randomUUID(), modelId: "coffee", foundAt: NOW };
@@ -128,8 +168,10 @@ describe("real multiplayer loot, shared market and headquarters supplies", () =>
     await f.gameAction(second, { type: "buyMarketListing", args: [ammoOffer.id] });
     const beforeAmmo = second.game.state.supplies.ammo, beforeMedicine = second.game.state.supplies.medicine;
     await f.editLive([second], [], 50, 1);
+    expect(second.live.self.medicine.medkit).toBe(40);
     await f.liveAction(second, { type: "resupply" });
     expect(second.live.self.ammo).toBe(60); expect(second.live.self.medkits).toBe(2);
+    expect(second.live.self.medicine.medkit).toBe(80);
     await f.gameState(second);
     expect(second.game.state.supplies.ammo).toBe(beforeAmmo - 10);
     expect(second.game.state.supplies.medicine).toBe(beforeMedicine - 1);

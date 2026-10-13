@@ -6,6 +6,8 @@ import "./gameplay.css";
 import "./raid-strategy.css";
 import "./shelter-logistics.css";
 import "./flea.css";
+import "./territory.css";
+import { territorySummary, territoryPlan, buildingCatalogue, buildingCatalogueReason, buildingPlacementControls, buildingRelocationControls, type BuildingPlacement } from "./territory-ui";
 import {
 	ATTACHMENT_LABELS,
 	CATEGORY_LABELS,
@@ -51,6 +53,7 @@ import {
 	getRaidPhase,
 	getRepairCost,
 	getScavCapacity,
+	isScavMedicallyReady,
 	getStorageCapacity,
 	getUpgradeCost,
 	getWeaponDefinition,
@@ -76,8 +79,10 @@ import {
 	RESOURCE_RECIPES,
 	getBuildRoomQuote,
 	getShelterSites,
-	getShelterFrontier,
 	getExcavationQuote,
+	getRoomFootprint,
+	getShelterRoomAt,
+	getRoomPlacementReason,
 	getRoomUpgradeQuote,
 	getWorkerAssignmentReason,
 	getWorkerAffinity,
@@ -118,7 +123,7 @@ import { scavGearIllustration } from "./scav-gear-art";
 import { sectorArt, roomMiniArt } from "./command-art";
 import { getCommandSummary, type CommandSummary, type CommandRoomTab, type RoomCommandStatus } from "./command-summary";
 import { getGameplayGuidance } from "./gameplay-guidance";
-import { gameplayFocus, gameplayRoadmap } from "./gameplay-ui";
+import { gameplayFocus, gameplayRoadmap, scavHealthPanel, updateScavHealthPanels, medicalPackEditor, raidHealthPanel } from "./gameplay-ui";
 import { raidPlanEditor, sectorIntelPanel } from "./raid-strategy-ui";
 import { getRaidPlan, type RaidObjective, type RaidPreparation } from "./game/engine";
 import { FIELD_KITS, getFieldKitStock, getProductionReserve, getFieldKitProductionQuote, type FieldKit, type FieldKitSelection } from "./game/engine";
@@ -250,6 +255,8 @@ let selectedScav: string | null = null;
 let showTacticalMap = false;
 let selectedRoomId: string | null = state.shelter.rooms[0]?.id ?? null;
 let selectedShelterSite: { column: number; row: number } | null = null;
+let buildingPlacement: BuildingPlacement | null = null;
+let buildingPlacementBusy = false;
 let roomModuleSlot: ModuleSlot | "all" = "optic";
 let roomModuleSearch = "";
 let contextMode: "overview" | "room" | "build" = "overview";
@@ -336,9 +343,10 @@ function scheduleSessionSave() {
 }
 function holdWorldInput() { worldInputBlockedUntil = Date.now() + 350; }
 function canWorldDrag() {
+	if (buildingPlacement) return false;
 	return !liveMode?.isActive() && !accountDialogOpen && !accountChanging && serverReady && !saveConflict && !protectedSave && worldView === "base" && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal") && !(window.innerWidth <= 850 && contextMode !== "overview");
 }
-function canWorldCamera() { return !liveMode?.isActive() && !accountDialogOpen && !accountChanging && serverReady && !saveConflict && !protectedSave && (canWorldDrag() || (worldView === "raid" && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal"))) && !workerPlacement && !crewPointer; }
+function canWorldCamera() { return !liveMode?.isActive() && !accountDialogOpen && !accountChanging && serverReady && !saveConflict && !protectedSave && (canWorldDrag() || ((worldView === "raid" || Boolean(buildingPlacement) && worldView === "base") && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal"))) && !workerPlacement && !crewPointer; }
 function canWorldInteract() {
 	return !liveMode?.isActive() && !accountDialogOpen && !accountChanging && serverReady && !saveConflict && !protectedSave && !workerPlacement && !crewPointer?.started && Date.now() >= worldInputBlockedUntil && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal") && !(window.innerWidth <= 850 && contextMode !== "overview");
 }
@@ -360,7 +368,7 @@ const names: Record<Page, string> = {
 	achievements: "Достижения",
 	flea: "Барахолка",
 };
-app.innerHTML = `<div id="save-banner" class="save-banner" role="status" hidden></div><div class="shell command-shell"><header class="topbar command-hud"><div class="command-brand"><span class="brand-mark">П</span><div><strong>ПРАПОР</strong><small>УБЕЖИЩЕ 07</small></div></div><div class="level"><span class="eyebrow">Репутация</span><strong id="level-label"></strong><div class="xp-track"><i id="xp-fill"></i></div></div><div class="resources">${[["money", "Рубли"], ["ammo", "Патроны"], ["medicine", "Медикаменты"], ["scrap", "Материалы"], ["intel", "Разведданные"]].map(([key, label]) => `<div class="resource" title="${label}">${icon(key!,18)}<div><label>${label}</label><strong id="res-${key}"></strong></div><i class="resource-cap" id="cap-${key}"></i></div>`).join("")}</div><button class="settings" data-action="settings" aria-label="Сохранение и помощь">${icon("settings",18)}</button></header><main class="main command-main"><div class="command-toolbar"><div class="command-heading"><h1>Свои люди. Своё убежище.</h1><span><i class="status-dot"></i><span id="passive-note">База на связи</span></span></div><nav class="nav command-tools" aria-label="Инструменты штаба">${(Object.keys(names) as Page[]).map((id) => `<button data-page="${id}" aria-label="${names[id]}" title="${names[id]}">${icon(id,17)}<span>${names[id]}</span>${id === "raids" ? '<b class="badge" id="raid-badge">0</b>' : id === "squad" ? '<b class="badge" id="squad-badge" hidden>0</b>' : ""}</button>`).join("")}</nav></div><div class="command-stage-layout"><section id="hero" class="hero-grid"><section class="world-card"><div class="world-head"><div class="view-switch" aria-label="Вид сцены"><button class="active" data-view="base" aria-label="Убежище" title="Убежище" aria-pressed="true">${icon("home",14)} Убежище</button><button data-view="map" aria-label="Сектора" title="Сектора" aria-pressed="false">${icon("raids",14)} Сектора</button><button data-view="raid" aria-label="Живой рейд" title="Живой рейд" aria-pressed="false" disabled>${icon("people",14)} Рейд</button></div><button class="text-button room-index-button" data-page="base">${icon("base",14)} Комнаты</button><span class="world-coordinate mono">БАЗА 07 · СЕВЕР</span></div><div id="world" aria-label="Графический штаб: комнаты, рабочие и стройка"></div><div class="world-bottom"><span><i class="status-dot"></i><span id="scene-hint">Нажми на комнату или бойца</span></span><span id="world-raid-note">ОТРЯД НА БАЗЕ</span></div><div class="room-shortcuts" hidden></div></section></section><aside id="command-dock" class="command-dock" aria-label="Сводка и управление выбранным объектом"></aside></div><section id="command-crew" class="command-crew" aria-label="Отряд и рабочие"></section><section id="command-routes" class="command-routes" aria-label="Рейды и сектора"></section><div id="offline-summary"></div><footer class="footer-line command-footer"><span id="save-status">ПРОГРЕСС НА ЭТОМ УСТРОЙСТВЕ</span><span>ПРАПОР · 0.15.0</span></footer></main></div><div id="tool-root" class="tool-backdrop" hidden><section class="tool-window" role="dialog" aria-modal="true" aria-labelledby="tool-title"><header class="tool-head"><div id="page-head" class="page-head"></div><button class="icon-button" data-action="close-tools" aria-label="Закрыть инструмент и вернуться в штаб">×</button></header><div class="tool-scroll"><div id="expedition-alerts"></div><div id="panel"></div></div></section></div><div id="context-shade" class="context-shade" hidden></div><div id="toast" role="status" aria-live="polite" hidden></div><div id="inspector-root"></div><div id="modal-root"></div>`;
+app.innerHTML = `<div id="save-banner" class="save-banner" role="status" hidden></div><div class="shell command-shell"><header class="topbar command-hud"><div class="command-brand"><span class="brand-mark">П</span><div><strong>ПРАПОР</strong><small>УБЕЖИЩЕ 07</small></div></div><div class="level"><span class="eyebrow">Репутация</span><strong id="level-label"></strong><div class="xp-track"><i id="xp-fill"></i></div></div><div class="resources">${[["money", "Рубли"], ["ammo", "Патроны"], ["medicine", "Медикаменты"], ["scrap", "Материалы"], ["intel", "Разведданные"]].map(([key, label]) => `<div class="resource" title="${label}">${icon(key!,18)}<div><label>${label}</label><strong id="res-${key}"></strong></div><i class="resource-cap" id="cap-${key}"></i></div>`).join("")}</div><button class="settings" data-action="settings" aria-label="Сохранение и помощь">${icon("settings",18)}</button></header><main class="main command-main"><div class="command-toolbar"><div class="command-heading"><h1>Свои люди. Своё убежище.</h1><span><i class="status-dot"></i><span id="passive-note">База на связи</span></span></div><nav class="nav command-tools" aria-label="Инструменты штаба">${(Object.keys(names) as Page[]).map((id) => `<button data-page="${id}" aria-label="${names[id]}" title="${names[id]}">${icon(id,17)}<span>${names[id]}</span>${id === "raids" ? '<b class="badge" id="raid-badge">0</b>' : id === "squad" ? '<b class="badge" id="squad-badge" hidden>0</b>' : ""}</button>`).join("")}</nav></div><div class="command-stage-layout"><section id="hero" class="hero-grid"><section class="world-card"><div class="world-head"><div class="view-switch" aria-label="Вид сцены"><button class="active" data-view="base" aria-label="Убежище" title="Убежище" aria-pressed="true">${icon("home",14)} Убежище</button><button data-view="map" aria-label="Сектора" title="Сектора" aria-pressed="false">${icon("raids",14)} Сектора</button><button data-view="raid" aria-label="Живой рейд" title="Живой рейд" aria-pressed="false" disabled>${icon("people",14)} Рейд</button></div><button class="text-button room-index-button" data-page="base">${icon("base",14)} База</button><span class="world-coordinate mono">БАЗА 07 · СЕВЕР</span></div><div id="world" aria-label="Графический штаб: комнаты, рабочие и стройка"></div><div class="world-bottom"><span><i class="status-dot"></i><span id="scene-hint">Выбери постройку, свободную землю или бойца</span></span><span id="world-raid-note">ОТРЯД НА БАЗЕ</span></div><div class="room-shortcuts" hidden></div></section></section><aside id="command-dock" class="command-dock" aria-label="Сводка и управление выбранным объектом"></aside></div><section id="command-crew" class="command-crew" aria-label="Отряд и рабочие"></section><section id="command-routes" class="command-routes" aria-label="Рейды и сектора"></section><div id="offline-summary"></div><footer class="footer-line command-footer"><span id="save-status">ПРОГРЕСС НА ЭТОМ УСТРОЙСТВЕ</span><span>ПРАПОР · 0.15.0</span></footer></main></div><div id="tool-root" class="tool-backdrop" hidden><section class="tool-window" role="dialog" aria-modal="true" aria-labelledby="tool-title"><header class="tool-head"><div id="page-head" class="page-head"></div><button class="icon-button" data-action="close-tools" aria-label="Закрыть инструмент и вернуться в штаб">×</button></header><div class="tool-scroll"><div id="expedition-alerts"></div><div id="panel"></div></div></section></div><div id="context-shade" class="context-shade" hidden></div><div id="toast" role="status" aria-live="polite" hidden></div><div id="inspector-root"></div><div id="modal-root"></div>`;
 const panel = document.querySelector<HTMLDivElement>("#panel")!;
 document.querySelector<HTMLButtonElement>('.nav [data-page="achievements"]')!.insertAdjacentHTML('beforeend', '<b class="badge" id="achievement-badge">0/12</b>');
 app.insertAdjacentHTML('beforeend', '<aside id="achievement-notice" class="achievement-notice" aria-label="Новая нашивка" hidden></aside>');
@@ -369,7 +377,7 @@ document.querySelector(".world-head .view-switch")!.insertAdjacentHTML("afterend
 const worldViewport = document.querySelector<HTMLElement>("#world")!;
 worldViewport.insertAdjacentHTML("afterend", '<div id="live-world" aria-label="Общий онлайн-периметр" hidden></div>');
 document.querySelector(".world-head .view-switch")!.insertAdjacentHTML("beforeend", '<button data-view="live" aria-label="Бесконечный лайв онлайн" title="Один общий сервер" aria-pressed="false"><span class="live-tab-dot" aria-hidden="true"></span> Лайв · онлайн</button>');
-document.querySelector('.camera-controls [data-camera="fit"]')!.insertAdjacentHTML("beforebegin", `<button data-camera="near" class="camera-fit camera-near" aria-label="Рабочий вид базы" title="Рабочий вид базы: ближе к комнатам">${icon("base",15)}<span>К комнатам</span></button>`);
+document.querySelector('.camera-controls [data-camera="fit"]')!.insertAdjacentHTML("beforebegin", `<button data-camera="near" class="camera-fit camera-near" aria-label="Рабочий вид базы" title="Рабочий вид базы: ближе к постройкам">${icon("base",15)}<span>К постройкам</span></button>`);
 document.querySelector(".world-head")!.insertAdjacentHTML("beforeend", `<button class="scene-sound" data-action="toggle-sound" aria-label="Звуки игры" aria-pressed="false" title="Включить звуки игры">${icon("sound",17)}<span>Звук</span></button>`);
 worldViewport.insertAdjacentHTML("afterend", '<div id="scene-hover" class="scene-hover" hidden><strong></strong><span></span></div>');
 function updateSceneHover(value: { title: string; detail: string } | null) {
@@ -403,6 +411,7 @@ worldViewport.setAttribute("role", "region");
 worldViewport.setAttribute("aria-describedby", "camera-help");
 worldViewport.insertAdjacentHTML("afterend", '<p id="camera-help" class="visually-hidden">Вид убежища: плюс и минус меняют масштаб, ноль возвращает обзор, стрелки сдвигают вид. Рука позволяет перетаскивать убежище. Чтобы назначить бойца, перетащи его портрет или выбери комнату с клавиатуры.</p>');
 document.querySelector(".world-card")!.insertAdjacentHTML("beforeend", '<div id="worker-room-targets" class="worker-room-targets" role="group" aria-label="Выбери рабочую комнату" hidden></div><div id="worker-placement" class="worker-placement" hidden><div><strong id="worker-placement-title"></strong><span id="worker-placement-hint"></span></div><button class="icon-button" data-worker-cancel aria-label="Отменить назначение">×</button></div>');
+document.querySelector(".world-card")!.insertAdjacentHTML("beforeend", '<div id="building-placement" class="building-placement" role="group" aria-label="Размещение постройки" hidden></div>');
 app.insertAdjacentHTML("beforeend", '<div id="worker-drag-ghost" class="worker-drag-ghost" aria-hidden="true" hidden></div><div id="worker-drop-status" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>');
 const costLabel = (cost: { money: number; scrap: number }) =>
 	`${n(cost.money)} ₽ · ${cost.scrap} дет.`;
@@ -572,6 +581,7 @@ async function refreshServerProgress(): Promise<boolean> {
     }
 }
 async function loadServerProgress() {
+    cancelBuildingPlacement();
     if (!authoritative)
         return;
     productionReserveDraft = null;
@@ -752,7 +762,8 @@ function scheduleAchievementNotice() {
 function workerPickReason(id: string) {
 	const reason = getWorkerAssignmentReason(state, id, null);
 	if (reason) return reason;
-	return state.scavs.find((scav) => scav.id === id)!.health < 25 ? "Бойцу нужно восстановиться до 25% здоровья." : null;
+	const scav = state.scavs.find((person) => person.id === id)!;
+	return !isScavMedicallyReady(scav) ? scav.medicalTreatment ? "Боец проходит курс лечения." : "Бойцу нужно восстановить здоровье и подвижность." : null;
 }
 function announceWorkerPlacement(message: string) {
 	const status = document.querySelector<HTMLElement>("#worker-drop-status");
@@ -1029,9 +1040,6 @@ function costReason(cost: { money: number; scrap: number }) {
 	if (state.supplies.scrap < cost.scrap) missing.push(`${n(cost.scrap - state.supplies.scrap)} дет.`);
 	return missing.length ? `Не хватает ${missing.join(" и ")}` : "Припасы есть";
 }
-function medicineCost(scav: Scav) {
-	return Math.ceil((100 - scav.health) / (25 + state.base.medbay * 5));
-}
 function dispatchBlock(scav: Scav) {
 	return getRaidQuote(state, scav, MAP_BY_ID[selectedMap]!).reason;
 }
@@ -1072,7 +1080,7 @@ function expeditionCard(raid: Raid, compact = false) {
 	const weapons = run.cargo.weaponIds.map((id) => WEAPON_BY_ID[id]).filter((item) => Boolean(item)).map((def) => `<span>${icon("arsenal", 14)} ${e(def!.name)}</span>`).join("");
 	const cargoMetrics = `<div class="loadout-stats"><span>Груз: ${getCargoWeight(run.cargo).toFixed(1)} / ${capacity.toFixed(1)} ед.</span><span>Ценность: ≈ ${n(getCargoValue(run.cargo))} ₽</span></div>`;
 	const warehouseWarning = `<div data-cargo-warehouse="${raid.id}">${cargoWarehouseNotice(raid)}</div>`;
-	return `<article class="decision-card" data-expedition="${raid.id}"><div class="decision-head"><div class="scav-avatar">${scavPortrait(scav.personality, scav.name, scav.appearance)}</div><div><span class="eyebrow">${e(MAP_BY_ID[raid.mapId]!.name)} · точка ${run.stage} / 3</span><h3>${e(scav.name)} ждёт приказа</h3><p>${run.stage >= 3 ? "Маршрут пройден. Забери добычу на базу." : "Добыча ещё в рюкзаке. Можно уйти или рискнуть дальше."}</p></div>${!compact ? `<button class="button ghost small" data-scav="${scav.id}">Личное дело</button>` : ""}</div><div class="decision-content"><div class="expedition-stage" aria-label="Пройдено этапов: ${run.stage} из 3">${[1, 2, 3].map((stage) => `<span class="${stage < run.stage ? "done" : stage === run.stage ? "current" : ""}">${stage < run.stage ? "✓ " : ""}${stage}. ${stage === 1 ? "Вход" : stage === 2 ? "Глубина" : "Цель"}</span>`).join("")}</div><div class="cargo-summary"><div><span>В рюкзаке</span><strong>${n(run.cargo.money)} ₽</strong><small>Наличными · припасы ниже</small></div><div><span>Защищено от потери</span><strong>Открытия</strong><small>Остаются даже при провале</small></div><div><span>Здоровье бойца</span><strong>${Math.floor(scav.health)} / 100</strong><small>Броня на входе: ${Math.round(run.loadout.armorCondition)}%</small></div></div>${cargoMetrics}${ammunitionSnapshot(run.ammunition?.modelId, true)}<p class="field-hint">Ценность — оценка наличных и находок, а не выплата рублями. Деньги не занимают место. При перегрузе боец оставляет лишние припасы; склад на базе тоже ограничен.</p><div class="cargo-items">${supplies}${weapons || (!supplies ? "<span>Рюкзак пока пуст</span>" : "")}</div>${moduleCargo(run.cargo.modules)}${raidLootReceipt(run.cargo.lootItems)}${warehouseWarning}${run.discoveries.length ? `<p class="field-hint">Записаны находки: ${run.discoveries.map((id) => e(BLUEPRINTS[id]?.label ?? "Разведанный маршрут")).join(" · ")}. Останутся у базы.</p>` : ""}${run.perks.length ? `<p class="field-hint">Опыт этой экспедиции: ${run.perks.map((perk) => e(RUN_PERKS[perk].label)).join(" · ")}</p>` : ""}${choices.length ? `<p class="risk-note">Следующий этап опаснее. При провале добыча в рюкзаке может быть потеряна; постоянные открытия сохранятся.</p>${run.offers.length ? `<div class="run-perk-pick"><h3>Находка маршрута</h3><p>Выбери один бонус. Он работает до конца этой экспедиции.</p><div class="decision-branches">${run.offers.map((perk) => `<button class="branch-choice ${perk === selectedPerk ? "active" : ""}" data-action="run-perk" data-id="${raid.id}" data-perk="${perk}" data-focus-key="perk-${perk}" aria-pressed="${perk === selectedPerk}"><strong>${e(RUN_PERKS[perk].label)}</strong><p>${e(RUN_PERKS[perk].description)}</p><small>${perk === selectedPerk ? "✓ Выбрано" : "Выбрать бонус"}</small></button>`).join("")}</div></div>` : ""}<h3>Куда дальше?</h3><div class="decision-branches">${choices.map((choice) => `<button class="branch-choice" data-action="continue-expedition" data-id="${raid.id}" data-branch="${choice.branch}" data-focus-key="branch-${choice.branch}" ${choice.reason || (run.offers.length && !hasPerk) ? "disabled" : ""}><strong>${e(choice.label)}</strong><p>${e(choice.description)}</p><small>${Math.round(choice.chance * 100)}% успеха · ${seconds(choice.duration)} · ${n(choice.money)} ₽ + ${choice.ammo} патр.${choice.intel ? ` + ${choice.intel} разв.` : ""}</small>${choice.ammunition ? ammunitionThreat(choice.ammunition) : ""}<span class="quote-note">${e(choice.reason ?? (run.offers.length && !hasPerk ? "Сначала выбери бонус маршрута" : `Этап ${run.stage + 1} · добыча под риском`))}</span></button>`).join("")}</div>` : ""}<div class="extract-row"><p>Эвакуация вернёт бойца и доставит добычу в пределах склада. ${run.stage < 3 ? "База готовит следующий выход." : "Экспедиция завершится."}</p><button class="button" data-action="extract" data-id="${raid.id}" data-focus-key="extract">${icon("check", 17)} Эвакуировать с добычей</button></div></div></article>`;
+	return `<article class="decision-card" data-expedition="${raid.id}"><div class="decision-head"><div class="scav-avatar">${scavPortrait(scav.personality, scav.name, scav.appearance)}</div><div><span class="eyebrow">${e(MAP_BY_ID[raid.mapId]!.name)} · точка ${run.stage} / 3</span><h3>${e(scav.name)} ждёт приказа</h3><p>${run.stage >= 3 ? "Маршрут пройден. Забери добычу на базу." : "Добыча ещё в рюкзаке. Можно уйти или рискнуть дальше."}</p></div>${!compact ? `<button class="button ghost small" data-scav="${scav.id}">Личное дело</button>` : ""}</div><div class="decision-content"><div class="expedition-stage" aria-label="Пройдено этапов: ${run.stage} из 3">${[1, 2, 3].map((stage) => `<span class="${stage < run.stage ? "done" : stage === run.stage ? "current" : ""}">${stage < run.stage ? "✓ " : ""}${stage}. ${stage === 1 ? "Вход" : stage === 2 ? "Глубина" : "Цель"}</span>`).join("")}</div><div class="cargo-summary"><div><span>В рюкзаке</span><strong>${n(run.cargo.money)} ₽</strong><small>Наличными · припасы ниже</small></div><div><span>Защищено от потери</span><strong>Открытия</strong><small>Остаются даже при провале</small></div><div><span>Здоровье бойца</span><strong>${Math.floor(scav.health)} / 100</strong><small>Броня на входе: ${Math.round(run.loadout.armorCondition)}%</small></div></div>${cargoMetrics}${raidHealthPanel(state, raid)}${ammunitionSnapshot(run.ammunition?.modelId, true)}<p class="field-hint">Ценность — оценка наличных и находок, а не выплата рублями. Деньги не занимают место. При перегрузе боец оставляет лишние припасы; склад на базе тоже ограничен.</p><div class="cargo-items">${supplies}${weapons || (!supplies ? "<span>Рюкзак пока пуст</span>" : "")}</div>${moduleCargo(run.cargo.modules)}${raidLootReceipt(run.cargo.lootItems)}${warehouseWarning}${run.discoveries.length ? `<p class="field-hint">Записаны находки: ${run.discoveries.map((id) => e(BLUEPRINTS[id]?.label ?? "Разведанный маршрут")).join(" · ")}. Останутся у базы.</p>` : ""}${run.perks.length ? `<p class="field-hint">Опыт этой экспедиции: ${run.perks.map((perk) => e(RUN_PERKS[perk].label)).join(" · ")}</p>` : ""}${choices.length ? `<p class="risk-note">Следующий этап опаснее. При провале добыча в рюкзаке может быть потеряна; постоянные открытия сохранятся.</p>${run.offers.length ? `<div class="run-perk-pick"><h3>Находка маршрута</h3><p>Выбери один бонус. Он работает до конца этой экспедиции.</p><div class="decision-branches">${run.offers.map((perk) => `<button class="branch-choice ${perk === selectedPerk ? "active" : ""}" data-action="run-perk" data-id="${raid.id}" data-perk="${perk}" data-focus-key="perk-${perk}" aria-pressed="${perk === selectedPerk}"><strong>${e(RUN_PERKS[perk].label)}</strong><p>${e(RUN_PERKS[perk].description)}</p><small>${perk === selectedPerk ? "✓ Выбрано" : "Выбрать бонус"}</small></button>`).join("")}</div></div>` : ""}<h3>Куда дальше?</h3><div class="decision-branches">${choices.map((choice) => `<button class="branch-choice" data-action="continue-expedition" data-id="${raid.id}" data-branch="${choice.branch}" data-focus-key="branch-${choice.branch}" ${choice.reason || (run.offers.length && !hasPerk) ? "disabled" : ""}><strong>${e(choice.label)}</strong><p>${e(choice.description)}</p><small>${Math.round(choice.chance * 100)}% успеха · ${seconds(choice.duration)} · ${n(choice.money)} ₽ + ${choice.ammo} патр.${choice.intel ? ` + ${choice.intel} разв.` : ""}</small>${choice.ammunition ? ammunitionThreat(choice.ammunition) : ""}<span class="quote-note">${e(choice.reason ?? (run.offers.length && !hasPerk ? "Сначала выбери бонус маршрута" : `Этап ${run.stage + 1} · добыча под риском`))}</span></button>`).join("")}</div>` : ""}<div class="extract-row"><p>Эвакуация вернёт бойца и доставит добычу в пределах склада. ${run.stage < 3 ? "База готовит следующий выход." : "Экспедиция завершится."}</p><button class="button" data-action="extract" data-id="${raid.id}" data-focus-key="extract">${icon("check", 17)} Эвакуировать с добычей</button></div></div></article>`;
 }
 function hud() {
 	updateAchievementBadge();
@@ -1166,16 +1174,7 @@ function hud() {
 		const slot = node.dataset.slot as GearSlot;
 		if (scav) node.disabled = scav.status === "raiding" || scav.gear[slot] >= MAX_GEAR_LEVEL || !canAfford(getGearCost(scav, slot));
 	});
-	document.querySelectorAll<HTMLButtonElement>('[data-action="heal"]').forEach((node) => {
-		const scav = state.scavs.find((s) => s.id === node.dataset.id);
-		if (scav) {
-			const cost = medicineCost(scav);
-			node.disabled = scav.status === "raiding" || scav.health >= 100 || state.supplies.medicine < cost;
-			node.innerHTML = `${icon("medicine", 15)} ${scav.health >= 100 ? "Здоров" : `Лечить · ${cost} мед.`}`;
-			const note = document.querySelector(`[data-heal-note="${scav.id}"]`);
-			if (note) note.textContent = scav.status === "raiding" ? "Лечение доступно после возвращения" : state.supplies.medicine < cost ? `Нужно ${cost} мед. · медблок лечит бесплатно` : "Медблок восстанавливает бесплатно";
-		}
-	});
+	updateScavHealthPanels(document, state);
 	document.querySelectorAll<HTMLButtonElement>('[data-action="recruit"]').forEach((node) => { node.disabled = false; });
 	document.querySelectorAll<HTMLButtonElement>('[data-action="recruit-candidate"]').forEach((node) => {
 		const quote = getRecruitCandidateQuote(state, node.dataset.id!);
@@ -1316,6 +1315,12 @@ function hud() {
 		const quote = getBuildRoomQuote(state, node.dataset.roomType as ShelterRoomType, Number(node.dataset.column), Number(node.dataset.row)); node.disabled = Boolean(quote.reason);
 		const note = document.querySelector<HTMLElement>(`[data-build-room-note="${node.dataset.roomType}"]`); if (note) note.textContent = quote.reason ?? "Оплата при начале; стройка идёт и офлайн";
 	});
+	document.querySelectorAll<HTMLButtonElement>('[data-action="place-building"]').forEach(node => {
+		const type = node.dataset.roomType as ShelterRoomType, reason = buildingCatalogueReason(state, type);
+		node.disabled = Boolean(reason);
+		const note = node.closest(".territory-blueprint")?.querySelector<HTMLElement>("[data-blueprint-reason]");
+		if (note) note.textContent = reason ?? "Выбери место внутри периметра";
+	});
 	document.querySelectorAll<HTMLButtonElement>('[data-action="queue-room-module"]').forEach((node) => {
 		const quote = getModuleProductionQuote(state, node.dataset.id ?? "", node.dataset.modelId ?? ""); node.disabled = Boolean(quote.reason);
 		const note = document.querySelector<HTMLElement>(`[data-room-module-note="${node.dataset.modelId}"]`); if (note) note.textContent = quote.reason ?? "Оплаченный заказ начнётся по очереди";
@@ -1364,7 +1369,7 @@ function loadoutEditor(scav: Scav, trainingExpanded = false) {
 		const model = item ? getGearModel(item) : null;
 		return `<label class="field-label">${GEAR_EQUIPMENT_LABELS[slot]}<select data-equip-gear="${scav.id}" data-slot="${slot}" data-focus-key="equip-${slot}" aria-label="${GEAR_EQUIPMENT_LABELS[slot]} для ${e(scav.name)}" ${busy ? "disabled" : ""}><option value="">Без отдельного предмета</option>${state.gearItems.filter((gear) => getGearModel(gear).slot === slot && !state.scavs.some((person) => person.id !== scav.id && scavHasGear(person, gear.id))).map((gear) => `<option value="${gear.id}" ${gear.id === itemId ? "selected" : ""}>${e(getGearModel(gear).label)} · ${Math.round(gear.durability)}%</option>`).join("")}</select></label>${model && item ? `<div class="loadout-item-note"><p>${e(model.description)}</p><small>Состояние ${Math.round(item.durability)}% · вес ${model.weight} кг${model.protection ? ` · защита до ${Math.round(model.protection * 100)}%` : ""}${model.capacity ? ` · вместимость ${model.capacity} ед.` : ""}</small>${item.durability < 100 ? `<button class="button ghost small" data-action="repair-gear" data-id="${item.id}" data-focus-key="repair-${slot}" ${busy || !canAfford(getGearRepairCost(item)) ? "disabled" : ""}>Ремонт · ${costLabel(getGearRepairCost(item))}</button>` : ""}</div>` : '<p class="field-hint">Выбранный предмет меняет защиту, вес и внешний вид бойца.</p>'}`;
 	}).join("");
-	return `<section class="inspector-section loadout-section"><div class="inspector-section-title"><h3>${busy ? "Комплект в рейде" : "Комплект для выхода"}</h3><button class="text-button" data-action="open-equipment" data-focus-key="equipment-store">Склад и сборка →</button></div><div class="loadout-stats"><span>Вес ${stats.weight.toFixed(1)} кг</span><span>Защита ${Math.round(stats.protection * 100)}%</span><span>Груз до ${stats.capacity.toFixed(1)} ед.</span><span>Время ×${stats.speedMultiplier.toFixed(2)}</span></div>${role ? `<p class="field-hint">${e(getWeaponRole(role).label)}: ${e(getWeaponRole(role).description)}</p>` : ""}${options}${ammunition}<label class="loadout-check"><input type="checkbox" data-medkit="${scav.id}" data-focus-key="medkit" ${scav.loadout.medkit ? "checked" : ""} ${busy ? "disabled" : ""}><span>Аптечка в рейд<small>Тратит медикаменты на входе и снижает тяжесть травм.</small></span></label><details class="training-section" ${trainingExpanded ? "open" : ""}><summary data-focus-key="training-summary">Подготовка оснащения · броня ${scav.gear.armor} / рюкзак ${scav.gear.backpack}</summary><p class="field-hint">Постоянная подготовка бойца дополняет выбранные предметы.</p><div class="gear-grid">${gearCard(scav, "armor")}${gearCard(scav, "backpack")}</div></details></section>`;
+	return `<section class="inspector-section loadout-section"><div class="inspector-section-title"><h3>${busy ? "Комплект в рейде" : "Комплект для выхода"}</h3><button class="text-button" data-action="open-equipment" data-focus-key="equipment-store">Склад и сборка →</button></div><div class="loadout-stats"><span>Вес ${stats.weight.toFixed(1)} кг</span><span>Защита ${Math.round(stats.protection * 100)}%</span><span>Груз до ${stats.capacity.toFixed(1)} ед.</span><span>Время ×${stats.speedMultiplier.toFixed(2)}</span></div>${role ? `<p class="field-hint">${e(getWeaponRole(role).label)}: ${e(getWeaponRole(role).description)}</p>` : ""}${options}${ammunition}${medicalPackEditor(state, scav)}<details class="training-section" ${trainingExpanded ? "open" : ""}><summary data-focus-key="training-summary">Подготовка оснащения · броня ${scav.gear.armor} / рюкзак ${scav.gear.backpack}</summary><p class="field-hint">Постоянная подготовка бойца дополняет выбранные предметы.</p><div class="gear-grid">${gearCard(scav, "armor")}${gearCard(scav, "backpack")}</div></details></section>`;
 }
 function sortiePreview(scav: Scav) {
 	const map = MAP_BY_ID[selectedMap]!, quote = getRaidQuote(state, scav, map);
@@ -1388,7 +1393,7 @@ function scavCard(scav: Scav) {
 	const ready = !dispatchBlock(scav);
 	const waiting = raid?.expedition?.status === "choice";
 	const assigned = scav.assignment ? state.shelter.rooms.find((room) => room.id === scav.assignment) : null;
-	return `<button class="scav-card ${raid ? "on-mission" : ""} ${selectedScav === scav.id ? "selected" : ""}" data-scav="${scav.id}" aria-label="${waiting ? "Нужен приказ: " : "Открыть бойца "}${e(scav.name)}"><span class="scav-card-top"><span class="scav-avatar">${scavPortrait(scav.personality, scav.name, scav.appearance)}</span><span class="scav-identity"><strong>${e(scav.name)}</strong><span>${e(personality.name)} · ур. ${scav.level}</span></span><span class="scav-state ${assigned ? "working" : waiting ? "decision" : raid ? "away" : ready ? "ready" : "waiting"}">${assigned ? "На работе" : waiting ? "Приказ" : raid ? "В рейде" : ready ? "Готов" : scav.health < 25 ? "Ранен" : "На базе"}</span></span><span class="scav-card-body"><span class="scav-weapon">${icon("arsenal", 17)} ${weapon ? e(getWeaponDefinition(weapon).name) : "Без оружия"}</span><span class="scav-health"><span>Здоровье <b data-health="${scav.id}">${Math.floor(scav.health)} / 100</b></span><span class="health-track"><i data-health-fill="${scav.id}" style="width:${scav.health}%"></i></span></span>${raid ? `<span class="scav-raid"><span><b>${e(MAP_BY_ID[raid.mapId]!.name)}${raid.expedition ? ` · этап ${raid.expedition.stage}/3` : ""}</b><strong data-raid-time="${raid.id}">${waiting ? "ПРИКАЗ" : seconds((raid.endsAt - Date.now()) / 1000)}</strong></span><span class="progress"><i data-raid-progress="${raid.id}"></i></span><small data-raid-phase="${raid.id}">${e(getRaidPhase(raid, Date.now()).label)}</small></span>` : `<span class="scav-idle-note">${assigned ? `${icon(roomIcon(assigned.type),13)} ${e(ROOM_DEFINITIONS[assigned.type].label)} · рабочий` : scav.autoRaid.enabled ? `${icon("repeat", 13)} ${e(MAP_BY_ID[scav.autoRaid.mapId]!.name)} · глубина ${scav.autoRaid.maxDepth}` : `${icon("backpack", 13)} ${getLoadoutStats(state, scav).capacity.toFixed(1)} ед. груза · ${getLoadoutStats(state, scav).weight.toFixed(1)} кг экип.`}</span>`}</span><span class="scav-card-bottom"><span>${waiting ? raid.expedition!.stage >= 3 ? "Вернуть бойца с добычей →" : "Эвакуация или ещё один этап →" : "Снаряжение и приказ"}</span>${icon("arrow", 16)}</span></button>`;
+	return `<button class="scav-card ${raid ? "on-mission" : ""} ${selectedScav === scav.id ? "selected" : ""}" data-scav="${scav.id}" aria-label="${waiting ? "Нужен приказ: " : "Открыть бойца "}${e(scav.name)}"><span class="scav-card-top"><span class="scav-avatar">${scavPortrait(scav.personality, scav.name, scav.appearance)}</span><span class="scav-identity"><strong>${e(scav.name)}</strong><span>${e(personality.name)} · ур. ${scav.level}</span></span><span class="scav-state ${assigned ? "working" : waiting ? "decision" : raid ? "away" : ready ? "ready" : "waiting"}">${scav.medicalTreatment ? "Лечится" : assigned && isScavMedicallyReady(scav) ? "На работе" : waiting ? "Приказ" : raid ? "В рейде" : ready ? "Готов" : !isScavMedicallyReady(scav) ? "Ранен" : "На базе"}</span></span><span class="scav-card-body"><span class="scav-weapon">${icon("arsenal", 17)} ${weapon ? e(getWeaponDefinition(weapon).name) : "Без оружия"}</span><span class="scav-health"><span>Здоровье <b data-health="${scav.id}">${Math.floor(scav.health)} / 100</b></span><span class="health-track"><i data-health-fill="${scav.id}" style="width:${scav.health}%"></i></span></span>${raid ? `<span class="scav-raid"><span><b>${e(MAP_BY_ID[raid.mapId]!.name)}${raid.expedition ? ` · этап ${raid.expedition.stage}/3` : ""}</b><strong data-raid-time="${raid.id}">${waiting ? "ПРИКАЗ" : seconds((raid.endsAt - Date.now()) / 1000)}</strong></span><span class="progress"><i data-raid-progress="${raid.id}"></i></span><small data-raid-phase="${raid.id}">${e(getRaidPhase(raid, Date.now()).label)}</small></span>` : `<span class="scav-idle-note">${assigned ? `${icon(roomIcon(assigned.type),13)} ${e(ROOM_DEFINITIONS[assigned.type].label)} · рабочий` : scav.autoRaid.enabled ? `${icon("repeat", 13)} ${e(MAP_BY_ID[scav.autoRaid.mapId]!.name)} · глубина ${scav.autoRaid.maxDepth}` : `${icon("backpack", 13)} ${getLoadoutStats(state, scav).capacity.toFixed(1)} ед. груза · ${getLoadoutStats(state, scav).weight.toFixed(1)} кг экип.`}</span>`}</span><span class="scav-card-bottom"><span>${waiting ? raid.expedition!.stage >= 3 ? "Вернуть бойца с добычей →" : "Эвакуация или ещё один этап →" : "Снаряжение и приказ"}</span>${icon("arrow", 16)}</span></button>`;
 }
 function openInspector(id: string) {
 	if (!state.scavs.some((scav) => scav.id === id)) return;
@@ -1430,7 +1435,7 @@ function renderInspector() {
 	const socialExpanded = Array.from(root.querySelectorAll<HTMLDetailsElement>('details[data-social-detail-key][open]')).map(node => node.dataset.socialDetailKey);
 	const raid = state.raids.find((r) => r.scavId === scav.id);
 	const weapon = state.weapons.find((w) => w.id === scav.weaponInstanceId);
-	root.innerHTML = `<div class="inspector-backdrop"><aside class="inspector" role="dialog" aria-modal="true" aria-labelledby="scav-title"><div class="inspector-head"><div><span class="eyebrow">Личное дело · ур. ${scav.level}</span><h2 id="scav-title">${e(scav.name)}</h2></div><button class="icon-button" data-action="close-inspector" data-focus-key="close" aria-label="Закрыть бойца">×</button></div><div class="inspector-scroll">${raid?.expedition?.status === "choice" ? activeRaidPanel(raid) : ""}<div class="scav-profile"><div class="inspector-portrait">${scavPortrait(scav.personality, scav.name, scav.appearance)}</div><div><strong>${e(PERSONALITY_BY_ID[scav.personality]!.name)}</strong><p>${e(PERSONALITY_BY_ID[scav.personality]!.description)}</p><div class="profile-stats"><span>Бой <b>${scav.combat}</b></span><span>Поиск <b>${scav.scouting}</b></span><span>Выходы <b>${scav.raids}</b></span></div></div></div>${scavStoryPanel(state, scav)}${scavRelationsPanel(state, scav)}${scavRecruitmentPanel(state, scav)}${scav.assignment ? scavWorkPanel(scav) : ""}<div class="health-panel"><div><span>Здоровье</span><strong data-health="${scav.id}">${Math.floor(scav.health)} / 100</strong></div><div class="health-track"><i data-health-fill="${scav.id}" style="width:${scav.health}%"></i></div><div class="health-panel-bottom"><span data-heal-note="${scav.id}">Медблок восстанавливает бесплатно</span><button class="button ghost small" data-action="heal" data-id="${scav.id}" data-focus-key="heal" ${raid || scav.health >= 100 || state.supplies.medicine < medicineCost(scav) ? "disabled" : ""}>${icon("medicine", 15)} Лечить · ${medicineCost(scav)} мед.</button></div></div>${raid && raid.expedition?.status !== "choice" ? activeRaidPanel(raid) : ""}<section class="inspector-section"><div class="inspector-section-title"><h3>Оружие</h3>${weapon ? `<button class="text-button" data-action="inspect-weapon" data-id="${weapon.id}" data-focus-key="weapon-detail">Оружейный верстак →</button>` : ""}</div>${weapon ? `<div class="equipped-art" style="--rarity:${RARITY_COLORS[getWeaponDefinition(weapon).rarity]}">${weaponBuildArt(weapon)}<span><b>${e(getWeaponDefinition(weapon).name)}</b><small>Мощь ${getWeaponPower(weapon)} · состояние ${Math.round(weapon.durability)}%</small>${weaponReadiness(weapon)}</span></div>` : '<p class="field-hint">Для выхода нужен исправный ствол из арсенала.</p>'}<label class="field-label">${raid ? "Оружие занято в рейде" : "Выдать оружие"}<select aria-label="Оружие для ${e(scav.name)}" data-equip="${scav.id}" data-focus-key="weapon" ${raid ? "disabled" : ""}><option value="">Без оружия</option>${state.weapons.filter((w) => !state.scavs.some((s) => s.id !== scav.id && s.weaponInstanceId === w.id)).map((w) => `<option value="${w.id}" ${w.id === scav.weaponInstanceId ? "selected" : ""}>${e(getWeaponDefinition(w).name)} · ${Math.round(w.durability)}%${getWeaponStats(w).ready ? "" : " · не собрано"}</option>`).join("")}</select></label></section><section class="inspector-section"><h3>${raid ? "Тактика следующего выхода" : "Тактика"}</h3><div class="tactics" role="group" aria-label="Тактика для ${e(scav.name)}">${(Object.keys(TACTICS) as RaidTactic[]).map((tactic) => `<button class="${tactic === scav.tactic ? "active" : ""}" data-action="tactic" data-id="${scav.id}" data-tactic-value="${tactic}" data-focus-key="tactic-${tactic}" aria-pressed="${scav.tactic === tactic}">${TACTICS[tactic].label}</button>`).join("")}</div><p class="field-hint">${e(TACTICS[scav.tactic].description)}</p></section>${loadoutEditor(scav, trainingExpanded)}${sortiePreview(scav)}<details class="order-section" ${autoExpanded ?? scav.autoRaid.enabled ? "open" : ""}><summary data-focus-key="order-summary">${icon("repeat", 18)}<span>Постоянный приказ<small>${scav.autoRaid.enabled ? `${e(MAP_BY_ID[scav.autoRaid.mapId]!.name)} · включён` : "Повторять выходы автоматически"}</small></span><b>${scav.autoRaid.enabled ? "ВКЛ" : "+"}</b></summary>${autoRaidCard(scav)}</details></div>${inspectorFooter(scav, raid)}</aside></div>`;
+	root.innerHTML = `<div class="inspector-backdrop"><aside class="inspector" role="dialog" aria-modal="true" aria-labelledby="scav-title"><div class="inspector-head"><div><span class="eyebrow">Личное дело · ур. ${scav.level}</span><h2 id="scav-title">${e(scav.name)}</h2></div><button class="icon-button" data-action="close-inspector" data-focus-key="close" aria-label="Закрыть бойца">×</button></div><div class="inspector-scroll">${raid?.expedition?.status === "choice" ? activeRaidPanel(raid) : ""}<div class="scav-profile"><div class="inspector-portrait">${scavPortrait(scav.personality, scav.name, scav.appearance)}</div><div><strong>${e(PERSONALITY_BY_ID[scav.personality]!.name)}</strong><p>${e(PERSONALITY_BY_ID[scav.personality]!.description)}</p><div class="profile-stats"><span>Бой <b>${scav.combat}</b></span><span>Поиск <b>${scav.scouting}</b></span><span>Выходы <b>${scav.raids}</b></span></div></div></div>${scavStoryPanel(state, scav)}${scavRelationsPanel(state, scav)}${scavRecruitmentPanel(state, scav)}${scav.assignment ? scavWorkPanel(scav) : ""}${scavHealthPanel(state, scav)}${raid && raid.expedition?.status !== "choice" ? activeRaidPanel(raid) : ""}<section class="inspector-section"><div class="inspector-section-title"><h3>Оружие</h3>${weapon ? `<button class="text-button" data-action="inspect-weapon" data-id="${weapon.id}" data-focus-key="weapon-detail">Оружейный верстак →</button>` : ""}</div>${weapon ? `<div class="equipped-art" style="--rarity:${RARITY_COLORS[getWeaponDefinition(weapon).rarity]}">${weaponBuildArt(weapon)}<span><b>${e(getWeaponDefinition(weapon).name)}</b><small>Мощь ${getWeaponPower(weapon)} · состояние ${Math.round(weapon.durability)}%</small>${weaponReadiness(weapon)}</span></div>` : '<p class="field-hint">Для выхода нужен исправный ствол из арсенала.</p>'}<label class="field-label">${raid ? "Оружие занято в рейде" : "Выдать оружие"}<select aria-label="Оружие для ${e(scav.name)}" data-equip="${scav.id}" data-focus-key="weapon" ${raid ? "disabled" : ""}><option value="">Без оружия</option>${state.weapons.filter((w) => !state.scavs.some((s) => s.id !== scav.id && s.weaponInstanceId === w.id)).map((w) => `<option value="${w.id}" ${w.id === scav.weaponInstanceId ? "selected" : ""}>${e(getWeaponDefinition(w).name)} · ${Math.round(w.durability)}%${getWeaponStats(w).ready ? "" : " · не собрано"}</option>`).join("")}</select></label></section><section class="inspector-section"><h3>${raid ? "Тактика следующего выхода" : "Тактика"}</h3><div class="tactics" role="group" aria-label="Тактика для ${e(scav.name)}">${(Object.keys(TACTICS) as RaidTactic[]).map((tactic) => `<button class="${tactic === scav.tactic ? "active" : ""}" data-action="tactic" data-id="${scav.id}" data-tactic-value="${tactic}" data-focus-key="tactic-${tactic}" aria-pressed="${scav.tactic === tactic}">${TACTICS[tactic].label}</button>`).join("")}</div><p class="field-hint">${e(TACTICS[scav.tactic].description)}</p></section>${loadoutEditor(scav, trainingExpanded)}${sortiePreview(scav)}<details class="order-section" ${autoExpanded ?? scav.autoRaid.enabled ? "open" : ""}><summary data-focus-key="order-summary">${icon("repeat", 18)}<span>Постоянный приказ<small>${scav.autoRaid.enabled ? `${e(MAP_BY_ID[scav.autoRaid.mapId]!.name)} · включён` : "Повторять выходы автоматически"}</small></span><b>${scav.autoRaid.enabled ? "ВКЛ" : "+"}</b></summary>${autoRaidCard(scav)}</details></div>${inspectorFooter(scav, raid)}</aside></div>`;
 	root.querySelectorAll<HTMLDetailsElement>('details[data-social-detail-key]').forEach(node => { node.open = socialExpanded.includes(node.dataset.socialDetailKey); });
 	const ammoCards = root.querySelector<HTMLElement>(".ammunition-cards"); if (ammoCards) ammoCards.scrollLeft = oldAmmoScroll;
 	const ammoComparison = root.querySelector<HTMLDetailsElement>(".ammunition-comparison"), ammoRoutes = root.querySelector<HTMLDetailsElement>(".ammunition-route-details");
@@ -1445,6 +1450,7 @@ function renderInspector() {
 	setOverlayState();
 }
 function setOverlayState() {
+	paintBuildingPlacement();
 	const modalOpen = accountDialogOpen || accountChanging || Boolean(document.querySelector("#modal-root .modal"));
 	const drawerOpen = Boolean(selectedScav);
 	const toolsOpen = page !== "home";
@@ -1493,6 +1499,7 @@ function openRoom(room: BaseRoom) {
 	else { page = "base"; render(); setView("base"); window.scrollTo(0, 0); }
 }
 function openShelterRoom(id: string, requestedTab?: CommandRoomTab) {
+	if (buildingPlacement) { const room = state.shelter.rooms.find(item => item.id === id); if (room) chooseBuildingSite(room.column, room.row); return; }
 	const room = state.shelter.rooms.find((item) => item.id === id); if (!room) return;
 	if (contextMode !== "room" || selectedRoomId !== id) gameSound.play("select");
 	const roomOrigin = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -1533,6 +1540,9 @@ function refreshCommandOverview(summary: CommandSummary) {
 	if (activeKey) focusCommandControl(activeKey);
 }
 function openShelterSite(column: number, row: number) {
+	if (buildingPlacement) { chooseBuildingSite(column, row); return; }
+	const occupied = getShelterRoomAt(state.shelter, column, row);
+	if (occupied) { openShelterRoom(occupied.id); return; }
 	if (contextMode !== "build" || selectedShelterSite?.column !== column || selectedShelterSite?.row !== row) gameSound.play("select");
 	closeInspector();
 	selectedShelterSite = { column, row };
@@ -1552,6 +1562,62 @@ function closeCommandContext() {
 	if (commandOrigin?.isConnected && commandOrigin.getClientRects().length && !commandOrigin.closest("[inert]")) commandOrigin.focus({ preventScroll: true });
 	else if (commandOrigin?.dataset.focusKey) focusCommandControl(commandOrigin.dataset.focusKey);
 	else document.querySelector<HTMLButtonElement>('[data-page="base"]')?.focus({ preventScroll: true });
+}
+function placementReason(): string | null {
+	if (!buildingPlacement?.site) return null;
+	const { type, roomId, rotation, site } = buildingPlacement;
+	return roomId ? getRoomPlacementReason(state, roomId, site.column, site.row, rotation) : getBuildRoomQuote(state, type, site.column, site.row, rotation).reason;
+}
+function paintBuildingPlacement() {
+	const banner = document.querySelector<HTMLElement>("#building-placement");
+	if (!banner) return;
+	banner.hidden = !buildingPlacement || worldView !== "base";
+	document.body.classList.toggle("placing-building", Boolean(buildingPlacement));
+	if (!buildingPlacement) { world?.setBuildingPlacement(null); return; }
+	const focus = banner.contains(document.activeElement) && document.activeElement instanceof HTMLElement ? document.activeElement.dataset.action : null;
+	banner.innerHTML = buildingPlacementControls(buildingPlacement, placementReason());
+	if (buildingPlacementBusy) banner.querySelectorAll<HTMLButtonElement>("button").forEach(button => { button.disabled = true; });
+	const size = getRoomFootprint(buildingPlacement);
+	world?.setBuildingPlacement({ type: buildingPlacement.type, roomId: buildingPlacement.roomId, rotation: buildingPlacement.rotation, ...size, ...(buildingPlacement.site ?? {}) });
+	if (focus) banner.querySelector<HTMLElement>(`[data-action="${focus}"]`)?.focus({ preventScroll: true });
+}
+function cancelBuildingPlacement() {
+	buildingPlacement = null;
+	paintBuildingPlacement();
+}
+function beginBuildingPlacement(type: ShelterRoomType, roomId?: string) {
+	cancelWorkerPlacement();
+	const room = roomId ? state.shelter.rooms.find(item => item.id === roomId) : null;
+	if (roomId && (!room || room.status !== "ready")) { toast("Дождись готовности постройки.", false); return; }
+	closeInspector();
+	page = "home"; contextMode = "overview"; selectedShelterSite = null;
+	buildingPlacement = { type, ...(roomId ? { roomId } : {}), rotation: room?.rotation ?? 0, site: null };
+	render(); setView("base"); world?.setPanMode(false);
+	paintBuildingPlacement(); worldViewport.focus({ preventScroll: true });
+}
+function chooseBuildingSite(column: number, row: number) {
+	if (!buildingPlacement || buildingPlacementBusy) return;
+	buildingPlacement.site = { column, row };
+	if (page !== "home") closeTools();
+	paintBuildingPlacement();
+	const reason = placementReason();
+	if (reason) toast(reason, false);
+	else document.querySelector<HTMLButtonElement>('[data-action="placement-confirm"]')?.focus({ preventScroll: true });
+}
+async function confirmBuildingPlacement() {
+	if (!buildingPlacement?.site || buildingPlacementBusy) return;
+	const reason = placementReason(); if (reason) { toast(reason, false); paintBuildingPlacement(); return; }
+	const draft = buildingPlacement, { column, row } = draft.site!;
+	buildingPlacementBusy = true; paintBuildingPlacement();
+	try {
+		const result = await gameAction(draft.roomId ? { type: "moveRoom", args: [draft.roomId, column, row, draft.rotation] } : { type: "buildRoom", args: [draft.type, column, row, draft.rotation] });
+		if (result.ok) {
+			cancelBuildingPlacement();
+			selectedRoomId = draft.roomId ?? getShelterRoomAt(state.shelter, column, row)?.id ?? null;
+			selectedShelterSite = null; contextMode = "room"; roomContextTab = "upgrade";
+		}
+		act(result, "build");
+	} finally { buildingPlacementBusy = false; paintBuildingPlacement(); }
 }
 function closeTools() {
 	const closedPage = page;
@@ -1586,11 +1652,6 @@ function roomName(id: string | null) {
 function productionOutput(output: GameState["supplies"]) {
 	return `<div class="recipe-output">${Object.entries(output).filter(([, amount]) => amount > 0).map(([key, amount]) => `<span>${icon(key, 13)} ${supplyName(key)} +${amount}</span>`).join("")}</div>`;
 }
-function shelterOverview() {
-	const rooms = state.shelter.rooms, workers = state.scavs.filter((scav) => scav.assignment), busy = rooms.filter((room) => room.queue.length).length;
-	const free = state.scavs.filter((scav) => !scav.assignment && scav.status !== "raiding" && scav.health >= 25).length;
-	return `<div class="shelter-overview"><div><span>Построено комнат</span><strong>${rooms.filter((room) => room.status === "ready").length} / 12</strong><small>${rooms.filter((room) => room.status !== "ready").length} — в стройке или улучшении</small></div><div><span>Назначены на работу</span><strong>${workers.length} бойцов</strong><small>Свободны на базе: ${free}</small></div><div><span>Заказы в комнатах</span><strong>${rooms.reduce((sum, room) => sum + room.queue.length, 0)}</strong><small>${busy} комнат с очередью</small></div><div><span>Готовые партии</span><strong>${rooms.reduce((sum, room) => sum + room.cycles, 0)}</strong><small>Производство идёт и офлайн</small></div></div>`;
-}
 function shelterHomeNote() {
 	const busy = state.shelter.rooms.filter((room) => room.queue.length || room.recipeId);
 	const working = state.scavs.filter((scav) => scav.assignment).length;
@@ -1613,7 +1674,7 @@ function renderCommandBoard() {
 	dock.setAttribute("role", mobileContext ? "dialog" : "complementary");
 	if (mobileContext) { dock.setAttribute("aria-modal", "true"); dock.setAttribute("aria-label", contextMode === "build" ? "Строительство комнаты" : "Управление комнатой"); }
 	else { dock.removeAttribute("aria-modal"); dock.setAttribute("aria-label", "Сводка и управление объектом"); }
-	dock.innerHTML = worldView === "raid" ? renderLiveRaidPanel(state, watchedRaid(), watchedReport(), liveCheckpointControls(watchedRaid())) : contextMode === "room" && room ? managedRoomPanel(room) : contextMode === "build" && selectedShelterSite ? `<header class="command-context-head"><span class="eyebrow">Новая комната</span><button class="icon-button" data-action="close-context" data-focus-key="context-close" aria-label="Закрыть строительство">×</button></header><div class="command-dock-scroll">${buildSitePanel(selectedShelterSite.column, selectedShelterSite.row)}</div>` : commandOverview();
+	dock.innerHTML = worldView === "raid" ? renderLiveRaidPanel(state, watchedRaid(), watchedReport(), liveCheckpointControls(watchedRaid())) : contextMode === "room" && room ? managedRoomPanel(room) : contextMode === "build" && selectedShelterSite ? `<header class="command-context-head"><span class="eyebrow">Территория базы</span><button class="icon-button" data-action="close-context" data-focus-key="context-close" aria-label="Закрыть строительство">×</button></header><div class="command-dock-scroll">${buildSitePanel(selectedShelterSite.column, selectedShelterSite.row)}</div>` : commandOverview();
 	const scroll = dock.querySelector<HTMLElement>(".command-dock-scroll, .live-raid-scroll") ?? dock; scroll.scrollTop = oldScroll;
 	const explanation = dock.querySelector<HTMLDetailsElement>(".gameplay-explanation"); if (explanation) explanation.open = explanationOpen;
 	dock.querySelectorAll<HTMLDetailsElement>('details[data-logistics-detail]').forEach(node => { node.open = openLogistics.includes(node.dataset.logisticsDetail); });
@@ -1633,7 +1694,7 @@ const crewEvents = getSquadSocialEvents(state);
 		const waiting = raid?.expedition?.status === "choice";
 		const pickReason = workerPickReason(scav.id);
 const sharedEvent = crewEvents.find(event => event.scavIds.includes(scav.id));
-		return `<div class="crew-chip ${waiting ? "awaits-order" : ""} ${working ? "on-duty" : ""}" data-worker-card="${scav.id}"><button class="crew-inspect" data-scav="${scav.id}" aria-label="${e(scav.name)}: ${waiting ? "ждёт приказа" : working ? `работает: ${e(ROOM_DEFINITIONS[working.type].label)}` : raid ? "в рейде" : "на базе"}"><span class="crew-portrait" data-portrait-scav="${scav.id}">${scavPortrait(scav.personality, scav.name, scav.appearance)}<b>${scav.level}</b></span><span class="crew-chip-copy"><strong>${e(scav.name)}</strong><small>${waiting ? "Нужен приказ" : working ? e(ROOM_DEFINITIONS[working.type].label) : raid ? e(MAP_BY_ID[raid.mapId]!.name) : scav.health < 25 ? "Восстанавливается" : "На базе"}</small><span class="health-track"><i data-health-fill="${scav.id}" style="width:${scav.health}%"></i></span></span>${waiting ? `<span class="crew-alert">!</span>` : sharedEvent ? `<span class="crew-alert" title="${e(sharedEvent.title)}" aria-label="Совместное событие ждёт ответа">${icon("squad",12)}</span>` : scav.story.pending && !raid ? `<span class="crew-alert" title="Хочет поговорить" aria-label="Личное событие">◇</span>` : getScavTalentOffers(scav) && !raid ? `<span class="crew-alert" title="Можно выбрать личный талант" aria-label="Доступен новый талант">↑</span>` : ""}</button><button class="crew-assign-handle" data-worker-handle="${scav.id}" aria-disabled="${Boolean(pickReason)}" aria-label="Назначить ${e(scav.name)} в комнату${pickReason ? `: ${e(pickReason)}` : ". Перетащи или выбери комнату"}" title="${e(pickReason ?? "Перетащи в комнату или нажми для выбора")}">${icon("people",15)}<span aria-hidden="true">⠿</span></button></div>`;
+		return `<div class="crew-chip ${waiting ? "awaits-order" : ""} ${working ? "on-duty" : ""}" data-worker-card="${scav.id}"><button class="crew-inspect" data-scav="${scav.id}" aria-label="${e(scav.name)}: ${waiting ? "ждёт приказа" : working ? `работает: ${e(ROOM_DEFINITIONS[working.type].label)}` : raid ? "в рейде" : "на базе"}"><span class="crew-portrait" data-portrait-scav="${scav.id}">${scavPortrait(scav.personality, scav.name, scav.appearance)}<b>${scav.level}</b></span><span class="crew-chip-copy"><strong>${e(scav.name)}</strong><small>${waiting ? "Нужен приказ" : scav.medicalTreatment ? "Лечится" : working && isScavMedicallyReady(scav) ? e(ROOM_DEFINITIONS[working.type].label) : raid ? e(MAP_BY_ID[raid.mapId]!.name) : !isScavMedicallyReady(scav) ? "Восстанавливается" : "На базе"}</small><span class="health-track"><i data-health-fill="${scav.id}" style="width:${scav.health}%"></i></span></span>${waiting ? `<span class="crew-alert">!</span>` : sharedEvent ? `<span class="crew-alert" title="${e(sharedEvent.title)}" aria-label="Совместное событие ждёт ответа">${icon("squad",12)}</span>` : scav.story.pending && !raid ? `<span class="crew-alert" title="Хочет поговорить" aria-label="Личное событие">◇</span>` : getScavTalentOffers(scav) && !raid ? `<span class="crew-alert" title="Можно выбрать личный талант" aria-label="Доступен новый талант">↑</span>` : ""}</button><button class="crew-assign-handle" data-worker-handle="${scav.id}" aria-disabled="${Boolean(pickReason)}" aria-label="Назначить ${e(scav.name)} в комнату${pickReason ? `: ${e(pickReason)}` : ". Перетащи или выбери комнату"}" title="${e(pickReason ?? "Перетащи в комнату или нажми для выбора")}">${icon("people",15)}<span aria-hidden="true">⠿</span></button></div>`;
 	}).join("")}<button class="crew-recruit" data-action="recruit" aria-label="Найм диких: посмотреть кандидатов" title="Выбрать нового дикого и посмотреть связи">${icon("people",23)}<span>Найм</span><small>${getRecruitmentBoard(state).length} на связи</small></button></div>`;
 	const crewStrip = crew.querySelector<HTMLElement>(".command-crew-strip"); if (crewStrip) crewStrip.scrollLeft = crewScroll;
 	if (focusedWorker) crew.querySelector<HTMLElement>(`[data-${focusWasHandle ? "worker-handle" : "scav"}="${CSS.escape(focusedWorker)}"]`)?.focus({ preventScroll: true });
@@ -1667,34 +1728,20 @@ function commandOverview(summary = getCommandSummary(state)) {
 		system("Журнал", "journal", last ? `${last.scavName}: ${last.success ? "вернулся" : "потери"}` : "Отчёты о выходах", 'data-page="journal"'),
 		system("Память отряда", "intel", `${state.blueprints.length} открытий`, 'data-action="open-discoveries"'),
 	].join("");
-	return `${gameplayFocus(getGameplayGuidance(state))}${nextSteps ? `<div class="gameplay-attention"><span class="eyebrow">Оплаченная работа ждёт</span>${nextSteps}</div>` : ""}<div class="command-overview-head"><span class="eyebrow">Дела базы</span><strong>${counts}</strong><small>${summary.freeWorkers} свободных бойцов${summary.counts.building ? ` · ${summary.counts.building} строек` : ""}${state.shelter.expansions.length ? ` · стен в работе: ${state.shelter.expansions.length}` : ""}</small></div><div class="command-system-grid">${tools}</div>`;
+	return `${gameplayFocus(getGameplayGuidance(state))}${nextSteps ? `<div class="gameplay-attention"><span class="eyebrow">Оплаченная работа ждёт</span>${nextSteps}</div>` : ""}<div class="command-overview-head"><span class="eyebrow">Дела базы</span><strong>${counts}</strong><small>${summary.freeWorkers} свободных бойцов${summary.counts.building ? ` · ${summary.counts.building} строек` : ""}${state.shelter.expansions.length ? ` · участков в подготовке: ${state.shelter.expansions.length}` : ""}</small></div><div class="command-system-grid">${tools}</div>`;
 }
 function renderShelter() {
-	const recipeScroll = panel.querySelector<HTMLElement>(".room-module-recipes")?.scrollTop ?? 0;
-	if (!selectedShelterSite && !state.shelter.rooms.some((room) => room.id === selectedRoomId)) selectedRoomId = state.shelter.rooms[0]?.id ?? null;
-	const rooms = state.shelter.rooms;
-	const sites = getShelterSites(state.shelter), frontier = getShelterFrontier(state.shelter);
-	const grid = `<div class="shelter-floor-grid">${sites.map(({ column, row }) => {
-		const room = rooms.find((item) => item.column === column && item.row === row);
-		if (!room) return `<button class="shelter-site ${selectedShelterSite?.column === column && selectedShelterSite.row === row ? "active" : ""}" data-shelter-column="${column}" data-shelter-row="${row}" aria-label="Построить комнату: участок ${column}, ${row}">${icon("base", 27)}<strong>Новая комната</strong><span>Участок ${column}, ${row}</span><small>Свободная площадка +</small></button>`;
-		const info = ROOM_DEFINITIONS[room.type], production = getRoomProductionState(state, room);
-		return `<button class="shelter-site built ${room.status !== "ready" ? "building" : ""} ${production.reason ? "blocked" : ""} ${selectedRoomId === room.id ? "active" : ""}" data-shelter-room="${room.id}" data-focus-key="room-${room.id}" aria-pressed="${selectedRoomId === room.id}" style="--room-color:${info.color}">${icon(roomIcon(room.type), 27)}<strong>${e(info.label)}</strong><span>Ур. ${room.level || "—"} · ${room.workerIds.length} / ${getRoomWorkerCapacity(room)} работников</span><small data-room-status="${room.id}">${e(production.status)}</small><span class="progress"><i data-room-progress="${room.id}" style="width:${Math.round(production.progress * 100)}%"></i></span></button>`;
-	}).join("")}</div><div class="section-head"><h2>Наружные стены</h2><span class="muted">Со стороны улицы — вход</span></div><div class="shelter-floor-grid">${[...frontier, ...state.shelter.expansions].map(({column,row}) => `<button class="shelter-site" data-shelter-column="${column}" data-shelter-row="${row}">${icon("scrap",24)}<strong>${state.shelter.expansions.some((p) => p.column === column && p.row === row) ? "Идут работы" : "Пробить стену"}</strong><span>Участок ${column}, ${row}</span><small>Расширить здание →</small></button>`).join("")}</div>`;
-	panel.innerHTML = `${shelterOverview()}${productionReserveEditor(state, "base", productionReserveDraft)}${fieldKitStockPanel(state)}<section class="shelter-sites command-room-index"><div class="shelter-sites-head"><h2>Комнаты и свободные ячейки</h2><span class="eyebrow">ВЫБЕРИ ОБЪЕКТ</span></div>${grid}<p class="field-hint">Управление выбранной комнатой откроется рядом со схемой убежища.</p></section>${discoveriesSection()}`;
-	const recipes = panel.querySelector<HTMLElement>(".room-module-recipes"); if (recipes) recipes.scrollTop = recipeScroll;
+	panel.innerHTML = `${territorySummary(state)}<section class="shelter-sites"><div class="shelter-sites-head"><h2>План базы</h2><span class="eyebrow">ПОСТРОЙКИ И ЗЕМЛЯ</span></div>${territoryPlan(state, selectedRoomId)}<p class="field-hint">Выбери постройку для управления и переноса. Участки за периметром можно присоединять к базе.</p></section><div class="section-head"><h2>Построить на базе</h2><span class="muted">Место выбираешь на территории</span></div>${buildingCatalogue(state)}${productionReserveEditor(state, "base", productionReserveDraft)}${fieldKitStockPanel(state)}${discoveriesSection()}`;
 }
 function buildSitePanel(column: number, row: number) {
-	const open = getShelterSites(state.shelter).some((p) => p.column === column && p.row === row);
+	const open = getShelterSites(state.shelter).some(site => site.column === column && site.row === row);
 	if (!open) {
-		const expansion = state.shelter.expansions.find((p) => p.column === column && p.row === row);
+		const expansion = state.shelter.expansions.find(site => site.column === column && site.row === row);
 		const quote = getExcavationQuote(state, column, row);
 		const progress = expansion ? expansion.workDone / expansion.workRequired : 0;
-		return `<div class="room-management-head"><span class="eyebrow">Наружная стена · участок ${column}, ${row}</span><h2>${expansion ? "Пробиваем стену" : "Расширить здание"}</h2><p>За стеной будет новая площадка с проходом. После работ здесь можно построить любую комнату. Сторона улицы остаётся входом в убежище.</p></div><div class="room-management-body">${expansion ? `<div class="production-readout"><strong>Работы ${Math.floor(progress * 100)}%</strong><span class="progress"><i style="width:${progress * 100}%"></i></span><p>${seconds((expansion.workRequired - expansion.workDone) / 1_000_000)} до новой площадки. Работы продолжаются офлайн.</p></div>` : `<div class="loadout-stats"><span>Работы ${seconds(quote.duration)}</span><span>Новый участок здания</span></div><button class="button secondary" data-action="excavate-wall" data-column="${column}" data-row="${row}" ${quote.reason ? "disabled" : ""}>Пробить стену · ${costLabel(quote)}</button><p class="quote-note">${e(quote.reason ?? "Материалы списываются один раз при начале работ.")}</p>`}</div>`;
+		return `<div class="room-management-head"><span class="eyebrow">За периметром · участок ${column}, ${row}</span><h2>${expansion ? "Готовим территорию" : "Расширить базу"}</h2><p>Присоедини соседний участок: он станет частью двора. Объединяй свободную землю под большие постройки и выбирай их расположение.</p></div><div class="room-management-body">${expansion ? `<div class="production-readout"><strong>Подготовка ${Math.floor(progress * 100)}%</strong><span class="progress"><i style="width:${progress * 100}%"></i></span><p>${seconds((expansion.workRequired - expansion.workDone) / 1_000_000)} до готовности. Работы продолжаются офлайн.</p></div>` : `<div class="loadout-stats"><span>Подготовка ${seconds(quote.duration)}</span><span>+1 участок территории</span></div><button class="button secondary" data-action="excavate-wall" data-column="${column}" data-row="${row}" ${quote.reason ? "disabled" : ""}>Присоединить участок · ${costLabel(quote)}</button><p class="quote-note">${e(quote.reason ?? "Материалы списываются один раз при начале работ.")}</p>`}</div>`;
 	}
-	return `<div class="room-management-head"><span class="eyebrow">Участок ${column}, ${row}</span><h2>Расширить убежище</h2><p>Построй помещение, дождись окончания стройки, затем назначь рабочих. Склад и жилой блок работают без персонала.</p></div><div class="room-management-body"><div class="shelter-build-options">${(Object.keys(ROOM_DEFINITIONS) as ShelterRoomType[]).map((type) => {
-		const info = ROOM_DEFINITIONS[type], quote = getBuildRoomQuote(state, type, column, row);
-		return `<article class="shelter-build-option"><h3>${icon(roomIcon(type), 24)} ${e(info.label)}</h3><p>${e(info.description)}</p><div class="loadout-stats"><span>Стройка ${seconds(quote.duration)}</span><span>${info.production ? "Нужны работники" : "Без работников"}</span></div><button class="button secondary" data-action="build-room" data-room-type="${type}" data-column="${column}" data-row="${row}" ${quote.reason ? "disabled" : ""}>Построить · ${costLabel(quote)}</button><small class="quote-note" data-build-room-note="${type}">${e(quote.reason ?? "Оплата при начале; стройка идёт и офлайн")}</small></article>`;
-	}).join("")}</div></div>`;
+	return `<div class="room-management-head"><span class="eyebrow">Свободная земля · ${column}, ${row}</span><h2>Новая постройка</h2><p>Выбери здание, затем укажи место на территории. Контур покажет всю его площадь. Здания можно переставлять после завершения строительства.</p></div><div class="room-management-body">${buildingCatalogue(state)}</div>`;
 }
 function productionReadout(room: RoomInstance) {
 	return `<div class="production-readout" data-production-readout="${room.id}">${productionReadoutContent(room, getRoomProductionState(state, room))}</div>`;
@@ -1740,17 +1787,17 @@ function managedRoomPanel(room: RoomInstance) {
 	const tab = info.production ? roomContextTab : "upgrade";
 	const tabs = info.production ? [["staff","Люди"],["production","Производство"],["upgrade","Развитие"]] : [["upgrade","Развитие"]];
 	const content = tab === "staff" ? roomWorkersPanel(room) : tab === "production" ? `${productionReserveEditor(state, room.id, productionReserveDraft, true)}<section class="room-panel-section"><h3>Очередь · ${room.queue.length} / 5</h3>${roomQueuePanel(room)}</section><section class="room-panel-section"><h3>${room.type === "workshop" ? "Комплекты для выхода" : "Рецепты"}</h3>${roomResourcesPanel(room)}</section>${room.type === "workshop" ? `<section class="room-panel-section"><h3>Оружейные модули</h3>${roomModulesPanel(room)}</section>` : ""}` : room.status === "building" ? '<div class="room-queue-empty">Строительство началось. Дождись готовности, затем назначь работников или развивай комнату.</div>' : `<section class="room-panel-section"><h3>Уровень ${room.level} → ${Math.min(5,room.level+1)}</h3><p>Улучшение ускоряет партии и добавляет рабочие места. Люди и оплаченная очередь сохранятся.</p>${roomUpgradeRecipeBenefits(room)}<div class="loadout-stats"><span>Время ${seconds(upgrade.duration)}</span></div><button class="button secondary" data-action="upgrade-room" data-id="${room.id}" ${upgrade.reason ? "disabled" : ""}>Улучшить · ${costLabel(upgrade)}</button><small class="quote-note" data-room-upgrade-note="${room.id}">${e(upgrade.reason ?? "Оплата при начале улучшения")}</small></section>`;
-	return `<header class="command-context-head"><div><span class="eyebrow">Этаж ${room.row + 1} · секция ${room.column + 1} · ур. ${room.level || "—"}</span><h2>${e(info.label)}</h2></div><button class="icon-button" data-action="close-context" data-focus-key="context-close" aria-label="Закрыть комнату">×</button></header><div class="command-room-banner" data-room-summary="${room.id}" data-room-kind="${roomSummary.kind}" style="--room-accent:${info.color}">${roomMiniArt(room.type,`selected-${room.id}`).replace("<svg ", '<svg aria-hidden="true" ')}<div><strong data-room-status="${room.id}">${e(production.status)}</strong><small data-room-eta="${room.id}">${production.remainingSeconds == null ? "" : `${seconds(production.remainingSeconds)} до готовности`}</small><div class="command-room-meta"><span>${info.production ? `${icon("people",12)} ${room.workerIds.length}/${getRoomWorkerCapacity(room)}` : `${icon("check",12)} Без персонала`}</span>${info.production ? `<span>${icon("scrap",12)} Заказов: ${room.queue.length}</span>` : ""}</div><span class="progress"><i data-room-progress="${room.id}" style="width:${production.progress*100}%"></i></span><button class="text-button room-view-action" data-camera-room="${room.id}" data-focus-key="camera-room-${room.id}">Осмотреть комнату ${icon("arrow",13)}</button></div></div><div class="context-tabs" role="group" aria-label="Управление комнатой">${tabs.map(([id,label]) => `<button data-room-context-tab="${id}" data-focus-key="context-tab-${id}" aria-pressed="${tab===id}" class="${tab===id?"active":""}">${label}</button>`).join("")}</div><div class="command-dock-scroll" id="room-management" tabindex="-1">${productionReadout(room)}<p class="command-room-reason" data-room-reason="${room.id}">${e(production.reason ?? (room.status !== "ready" ? "Работа приостановлена до готовности комнаты" : roomSummary.cta ? roomSummary.detail : ""))}</p>${content}${!info.production ? `<p class="field-hint">${e(info.description)} Работники не требуются.</p>` : ""}</div>`;
+	return `<header class="command-context-head"><div><span class="eyebrow">Участок ${room.column}, ${room.row} · ур. ${room.level || "—"}</span><h2>${e(info.label)}</h2></div><button class="icon-button" data-action="close-context" data-focus-key="context-close" aria-label="Закрыть комнату">×</button></header><div class="command-room-banner" data-room-summary="${room.id}" data-room-kind="${roomSummary.kind}" style="--room-accent:${info.color}">${roomMiniArt(room.type,`selected-${room.id}`).replace("<svg ", '<svg aria-hidden="true" ')}<div><strong data-room-status="${room.id}">${e(production.status)}</strong><small data-room-eta="${room.id}">${production.remainingSeconds == null ? "" : `${seconds(production.remainingSeconds)} до готовности`}</small><div class="command-room-meta"><span>${info.production ? `${icon("people",12)} ${room.workerIds.length}/${getRoomWorkerCapacity(room)}` : `${icon("check",12)} Без персонала`}</span>${info.production ? `<span>${icon("scrap",12)} Заказов: ${room.queue.length}</span>` : ""}</div><span class="progress"><i data-room-progress="${room.id}" style="width:${production.progress*100}%"></i></span><button class="text-button room-view-action" data-camera-room="${room.id}" data-focus-key="camera-room-${room.id}">Осмотреть комнату ${icon("arrow",13)}</button></div></div><div class="context-tabs" role="group" aria-label="Управление комнатой">${tabs.map(([id,label]) => `<button data-room-context-tab="${id}" data-focus-key="context-tab-${id}" aria-pressed="${tab===id}" class="${tab===id?"active":""}">${label}</button>`).join("")}</div><div class="command-dock-scroll" id="room-management" tabindex="-1">${productionReadout(room)}<p class="command-room-reason" data-room-reason="${room.id}">${e(production.reason ?? (room.status !== "ready" ? "Работа приостановлена до готовности комнаты" : roomSummary.cta ? roomSummary.detail : ""))}</p>${content}${buildingRelocationControls(room)}${!info.production ? `<p class="field-hint">${e(info.description)} Работники не требуются.</p>` : ""}</div>`;
 }
 function roomWorkersPanel(room: RoomInstance) {
 	const capacity = getRoomWorkerCapacity(room), skill = ROOM_DEFINITIONS[room.type].workerSkill;
 	const required = skill === "combat" ? "Бой" : skill === "scouting" ? "Поиск" : "Бой и поиск";
 	const workers = room.workerIds.map((id) => state.scavs.find((scav) => scav.id === id)).filter((scav): scav is Scav => Boolean(scav));
-	const candidates = state.scavs.filter((scav) => scav.assignment !== room.id && scav.status !== "raiding" && scav.health >= 25)
+	const candidates = state.scavs.filter((scav) => scav.assignment !== room.id && scav.status !== "raiding" && isScavMedicallyReady(scav))
 		.sort((a, b) => Number(Boolean(a.assignment)) - Number(Boolean(b.assignment)) || getWorkerAffinity(b, room.type) - getWorkerAffinity(a, room.type));
 	const selected = chosenWorkers.get(room.id) ?? candidates[0]?.id ?? "";
 	chosenWorkers.set(room.id, candidates.some((scav) => scav.id === selected) ? selected : candidates[0]?.id ?? "");
-	const blocked = room.status !== "ready" ? "Комната ещё не готова" : workers.length >= capacity ? "Все рабочие места заняты" : !candidates.length ? "Нужен свободный боец с 25 здоровья" : null;
+	const blocked = room.status !== "ready" ? "Комната ещё не готова" : workers.length >= capacity ? "Все рабочие места заняты" : !candidates.length ? "Нужен свободный боец с восстановленной подвижностью и здоровьем от 25%" : null;
 	return `<section class="room-panel-section"><h3>Рабочие места <span class="muted">/ ${workers.length} из ${capacity}</span></h3><p>Подходящий навык: ${required}. Несколько работников и высокий навык ускоряют партии. Во время работы боец не уходит в рейд.</p><div class="loadout-stats"><span>Темп комнаты ×${getRoomProductionState(state, room).rate.toFixed(2)}</span><span>Учтены люди и уровень комнаты</span></div>${roomRelationsPanel(state, room, chosenWorkers.get(room.id))}<div class="worker-list">${workers.map((scav) => `<div class="worker-row"><span class="scav-avatar">${scavPortrait(scav.personality, scav.name, scav.appearance)}</span><div><strong>${e(scav.name)}</strong><p>Бой ${scav.combat} · поиск ${scav.scouting} · здоровье ${Math.floor(scav.health)}</p><span class="worker-fit">Подходит: ${Math.round(getWorkerAffinity(scav, room.type))} / 100</span></div><button class="icon-button" data-action="release-worker" data-id="${scav.id}" data-focus-key="release-${scav.id}" aria-label="Освободить ${e(scav.name)} от работы">×</button></div>`).join("") || '<div class="room-queue-empty">Рабочих нет. Оплаченный заказ дождётся назначения бойца.</div>'}</div><label class="field-label worker-assign-field">Назначить бойца<select data-room-worker="${room.id}" aria-label="Работник для ${e(ROOM_DEFINITIONS[room.type].label)}" ${blocked ? "disabled" : ""}>${candidates.map((scav) => `<option value="${scav.id}" ${chosenWorkers.get(room.id) === scav.id ? "selected" : ""}>${e(scav.name)} · подходит ${Math.round(getWorkerAffinity(scav, room.type))} / 100${scav.assignment ? ` · перевести из ${e(roomName(scav.assignment))}` : " · свободен"}</option>`).join("") || '<option>Нет доступных бойцов</option>'}</select></label><button class="button secondary" data-action="assign-worker" data-id="${room.id}" data-focus-key="assign-worker" ${blocked ? "disabled" : ""}>Назначить на работу</button><small class="quote-note">${e(blocked ?? "Боец сменит прежнее рабочее место. Автовыходы будут ждать освобождения")}</small></section>`;
 }
 function roomQueuePanel(room: RoomInstance) {
@@ -1849,7 +1896,7 @@ function render() {
 		home: "Железо в арсенале. Свои люди на связи.",
 		raids: "Три этапа. Выбери путь, сохрани добычу или рискни дальше.",
 		arsenal: "Собери оружие из деталей. Настрой комплект под свой маршрут.",
-		base: "Комнаты, люди и настоящие производственные очереди.",
+		base: "Территория, свободная планировка и большие постройки.",
 		contracts: "Репутация строится на выполненных обещаниях.",
 		journal: "Кто вышел, кто вернулся и что принёс.",
 		recruits: "Выбери характер отряда. Связи переживают потери, таланты растут вместе с бойцами.",
@@ -2247,6 +2294,7 @@ document.addEventListener("click", async (event) => {
 	if (target.dataset.benchSlot) { selectBenchSlot(target.dataset.benchSlot as ModuleSlot); return; }
 	if (target.dataset.roomLink) { openRoom(target.dataset.roomLink as BaseRoom); return; }
 	if (target.dataset.page) {
+		if (buildingPlacement && target.dataset.page !== "base") cancelBuildingPlacement();
 		closeInspector();
 		toolOrigin = target;
 		page = target.dataset.page as Page;
@@ -2362,6 +2410,18 @@ document.addEventListener("click", async (event) => {
 		case 'dismiss-achievement-notice': dismissAchievementNotice(true); break;
 		case "close-tools": closeTools(); break;
 		case "close-context": closeCommandContext(); break;
+		case "place-building": beginBuildingPlacement(target.dataset.roomType as ShelterRoomType); break;
+		case "move-building": {
+			const room = state.shelter.rooms.find(item => item.id === id);
+			if (room) beginBuildingPlacement(room.type, room.id);
+			break;
+		}
+		case "placement-cancel": cancelBuildingPlacement(); render(); break;
+		case "placement-rotate":
+			if (buildingPlacement && !buildingPlacementBusy) { buildingPlacement.rotation = buildingPlacement.rotation === 0 ? 1 : 0; paintBuildingPlacement(); }
+			break;
+		case "placement-confirm": await confirmBuildingPlacement(); break;
+		case "placement-plan": page = "base"; render(); break;
 		case "open-market":
 			toolOrigin = target; page = "arsenal"; arsenalTab = "market"; render(); document.querySelector<HTMLButtonElement>('[data-action="close-tools"]')?.focus(); break;
 		case "excavate-wall": {
@@ -2414,7 +2474,7 @@ document.addEventListener("click", async (event) => {
 		case "seek-production-resource": {
 			const supply = target.dataset.supply as RaidObjective;
 			if (!["ammo", "medicine", "scrap", "intel"].includes(supply)) break;
-			const scav = state.scavs.find(item => !item.assignment && item.status !== "raiding" && item.health >= 25 && item.weaponInstanceId);
+			const scav = state.scavs.find(item => !item.assignment && item.status !== "raiding" && isScavMedicallyReady(item) && item.weaponInstanceId);
 			if (!scav) { page = "raids"; render(); toast("Освободи рабочего или подготовь свободного бойца для выхода."); break; }
 			const result = await gameAction({ type: "setRaidPlan", args: [scav.id, supply, getRaidPlan(scav).preparation] });
 			if (!result.ok) { act(result); break; }
@@ -2885,6 +2945,10 @@ document.addEventListener("keydown", (event) => {
 		event.preventDefault();fleaView.tab=tabs[next]!;render();panel.querySelector<HTMLButtonElement>(`[data-flea-tab="${fleaView.tab}"]`)?.focus({preventScroll:true});scheduleSessionSave();return;
 	}
 	if ((workerPlacement || crewPointer) && event.key === "Escape") { event.preventDefault(); cancelWorkerPlacement(true, true); return; }
+	if (buildingPlacement && !buildingPlacementBusy && event.key === "Escape") { event.preventDefault(); cancelBuildingPlacement(); if (page !== "home") closeTools(); return; }
+	if (buildingPlacement && !buildingPlacementBusy && event.key.toLowerCase() === "r" && !(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLSelectElement)) {
+		event.preventDefault(); buildingPlacement.rotation = buildingPlacement.rotation === 0 ? 1 : 0; paintBuildingPlacement(); return;
+	}
 	if (workerPlacement?.mode === "keyboard" && event.key === "Tab") {
 		const controls = Array.from(document.querySelectorAll<HTMLButtonElement>("#worker-room-targets button, #worker-placement button")).filter((node) => node.getClientRects().length > 0);
 		const index = controls.indexOf(document.activeElement as HTMLButtonElement);
@@ -2949,6 +3013,7 @@ function watchRaid(id: string) {
 	worldViewport.focus({preventScroll:true});
 }
 function setView(view: "base" | "map" | "raid" | "live") {
+	if (view !== "base") cancelBuildingPlacement();
 	if (view === "live") {
 		if (!liveMode) return;
 		cancelWorkerPlacement(false, true); world?.cancelCameraGesture(); closeInspector(); closeModal();
@@ -2963,7 +3028,7 @@ function setView(view: "base" | "map" | "raid" | "live") {
 		render(); updateCameraControls(); updateSaveBanner();
 		return;
 	}
-	if (liveMode?.isActive()) liveMode.hide();
+	if (liveMode?.isActive() && !liveMode.hide()) return;
 	worldViewport.hidden = false;
 	document.querySelector('.world-card')?.classList.remove('live-view');
 	document.querySelector('.command-main')?.classList.remove('live-watching');
@@ -2983,7 +3048,7 @@ function setView(view: "base" | "map" | "raid" | "live") {
 		.forEach((button) =>
 			((button.classList.toggle("active", button.dataset.view === view)), (button.setAttribute("aria-pressed", String(button.dataset.view === view))))
 		);
-	document.querySelector("#scene-hint")!.textContent = view === "base" ? "Нажми на комнату или бойца" : "Нажми на сектор, чтобы выбрать маршрут";
+	document.querySelector("#scene-hint")!.textContent = view === "base" ? "Выбери постройку, свободную землю или бойца" : "Нажми на сектор, чтобы выбрать маршрут";
 	(document.querySelector(".room-shortcuts") as HTMLElement).hidden = view === "map";
 	updateCameraControls();
 	if (world) renderCommandBoard();
@@ -3037,9 +3102,9 @@ const readyContracts = () =>
 			getContractProgress(state, contract) >= contract.target
 	).length;
 const rosterStatus = () => `${state.scavs.map((scav) => `${scav.id}:${scav.status}:${scav.autoRaid.enabled}:${scav.assignment}:${scav.story.pending?.eventId}:${scav.story.bond}:${scav.story.stress}`).join(";")}|${state.raids.map((raid) => `${raid.id}:${raid.expedition?.stage}:${raid.expedition?.status}`).join(";")}|${getSocialPresentationKey(state)}`;
-const shelterStatus = () => `${state.shelter.sites.map((p) => `${p.column}:${p.row}`).join(";")}|${state.shelter.expansions.map((p) => `${p.column}:${p.row}:${Math.floor(p.workDone / p.workRequired * 100)}`).join(";")}|` + state.shelter.rooms.map((room) => `${room.id}:${room.status}:${room.level}:${room.queue.map((job) => job.id).join(",")}:${room.workerIds.join(",")}:${room.recipeId}:${room.repeat}:${room.pending}:${room.cycles}`).join(";");
+const shelterStatus = () => `${state.shelter.sites.map((p) => `${p.column}:${p.row}`).join(";")}|${state.shelter.expansions.map((p) => `${p.column}:${p.row}:${Math.floor(p.workDone / p.workRequired * 100)}`).join(";")}|` + state.shelter.rooms.map((room) => `${room.id}:${room.column}:${room.row}:${room.rotation ?? 0}:${room.status}:${room.level}:${room.queue.map((job) => job.id).join(",")}:${room.workerIds.join(",")}:${room.recipeId}:${room.repeat}:${room.pending}:${room.cycles}`).join(";");
 const achievementPresentationKey = () => getAchievementViews(state).map(view => `${view.id}:${view.unlocked}:${view.active}:${view.steps.map(step => Number(step.done)).join('')}`).join('|');
-const inventoryPresentationKey = () => JSON.stringify({ weapons:state.weapons, modules:state.modules, gear:state.gearItems, scavs:state.scavs.map(({health, ...scav})=>({...scav, healthy:health>=25})), recruitment:state.recruitment,loot:state.lootItems,pendingLoot:state.pendingLoot,kits:getFieldKitStock(state) });
+const inventoryPresentationKey = () => JSON.stringify({ weapons:state.weapons, modules:state.modules, gear:state.gearItems, scavs:state.scavs.map(({health, ...scav})=>({...scav, healthy:isScavMedicallyReady({...scav,health})})), recruitment:state.recruitment,loot:state.lootItems,pendingLoot:state.pendingLoot,kits:getFieldKitStock(state) });
 function interacting() {
 	return Boolean(workerPlacement || crewPointer) || (document.activeElement?.tagName === "SELECT" && !document.activeElement.hasAttribute("data-live-raid-select")) || document.activeElement?.tagName === "INPUT" || Boolean(document.querySelector("#modal-root .modal"));
 }

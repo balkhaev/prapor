@@ -1,6 +1,12 @@
 /** Shared wire contract. The server owns every live position, clock and reward. */
+import type { BodyPart, HealthState, MedicalInventory, TreatmentType } from './health';
 export type { EconomyLoot } from "../../server/live-economy";
 import type { EconomyLoot } from "../../server/live-economy";
+/** One headquarters medicine funds one bundle: 40 HP and one use of each field aid. */
+export const LIVE_MEDICAL_CAPACITY = { medkit: 80, bandage: 2, tourniquet: 1, splint: 1, painkiller: 1, surgery: 1 } as const;
+export function liveMedicalSupplyNeeded(medicine: MedicalInventory): number {
+  return Math.min(2, Math.max(0, Math.ceil((LIVE_MEDICAL_CAPACITY.medkit - medicine.medkit) / 40), ...(['bandage', 'tourniquet', 'splint', 'painkiller', 'surgery'] as const).map(type => LIVE_MEDICAL_CAPACITY[type] - medicine[type])));
+}
 export const LIVE_SERVER_ID = "perimeter-1";
 export const LIVE_SERVER_NAME = "Периметр 01";
 export const LIVE_CAPACITY = 32;
@@ -8,7 +14,10 @@ export const LIVE_LOOT_WEIGHT = 12;
 export const LIVE_LOOT_CAPACITY = 32;
 export const LIVE_PENDING_CAPACITY = 32;
 export type LivePoint = { x: number; y: number };
-export type LiveMapId = "customs" | "sawmill" | "depot";
+export type LiveMapId = "perimeter";
+export type LiveDistrictId = "customs" | "sawmill" | "depot" | "village";
+export type LivePurpose = "pvp" | "pve" | "loot" | "quests";
+export type LiveContainerKind = "duffel" | "jacket" | "toolbox" | "medbag" | "cabinet" | "crate";
 export type LiveTerrain = "road" | "concrete" | "forest" | "water" | "yard";
 export interface LiveObstacle extends LivePoint {
   width: number; height: number;
@@ -20,7 +29,7 @@ export interface LiveZone extends LivePoint {
 }
 export interface LiveMapSummary {
   id: LiveMapId; name: string; description: string;
-  theme: "industrial" | "forest" | "urban";
+  theme: "industrial" | "forest" | "urban" | "mixed";
   width: number; height: number; online: number; npcs: number;
 }
 export interface LiveWorld {
@@ -33,6 +42,29 @@ export interface LiveWorld {
   obstacles: LiveObstacle[];
   extracts: LivePoint[];
   zones: LiveZone[];
+  version: string;
+  seed: string;
+  generatorVersion: number;
+  chunkSize: number;
+  districts: LiveDistrict[];
+  pois: LivePoi[];
+  containers: LiveContainerAnchor[];
+}
+export interface LiveDistrict extends LivePoint {
+  id: LiveDistrictId; name: string; description: string;
+  width: number; height: number; theme: "industrial" | "forest" | "urban";
+  spawns: LivePoint[];
+}
+export interface LivePoi extends LivePoint {
+  id: string; templateId: string; name: string; districtId: LiveDistrictId;
+  width: number; height: number; danger: 1 | 2 | 3;
+  tags: string[];
+  entrances: LivePoint[];
+}
+export interface LiveContainerAnchor extends LivePoint {
+  id: string; poiId: string; kind: LiveContainerKind;
+  lootTable: "mixed" | "tools" | "medical" | "intel" | "valuables" | "provisions";
+  searchMs: number;
 }
 export interface LiveEntity extends LivePoint {
   id: string;
@@ -42,9 +74,15 @@ export interface LiveEntity extends LivePoint {
   health: number;
   action: "idle" | "moving" | "combat" | "downed";
   safeUntil: number;
+  /** Visible signs only; another player's body and medicines stay private. */
+  bleeding?: boolean;
+  limping?: boolean;
+  aimUntil?: number;
+  aimTargetId?: string;
   faction?: "scavs" | "raiders";
   role?: "patrol" | "guard" | "marksman";
 }
+export interface LiveTreatment { type: TreatmentType; part: BodyPart; startedAt: number; endsAt: number }
 export interface LivePlayer {
   id: string;
   ammo: number;
@@ -54,15 +92,26 @@ export interface LivePlayer {
   kills: number;
   respawnAt: number;
   patrol: boolean;
+  body: HealthState;
+  medicine: MedicalInventory;
+  treatment: LiveTreatment | null;
+  leaveAt: number;
   targetId: string | null;
   travelReadyAt: number;
+  districtId: LiveDistrictId;
+  purpose: LivePurpose;
+  searching: { id: string; readyAt: number } | null;
   /** Only the current player's private inventory is included in a snapshot. */
   gameId?: string;
   lootItems?: EconomyLoot[];
   pendingDelivery?: { items: EconomyLoot[]; money: number; message: string }[];
   economyMessage?: string;
 }
-export interface LiveDrop extends LivePoint { id: string; amount: number; items?: EconomyLoot[] }
+export interface LiveDrop extends LivePoint {
+  id: string; amount: number; items?: EconomyLoot[];
+  containerId?: string; containerKind?: LiveContainerKind;
+  searched?: boolean;
+}
 export interface LiveEvent {
   id: string;
   at: number;
@@ -81,6 +130,7 @@ export interface LiveStatus {
   capacity: number;
   startedAt: number;
   maps: LiveMapSummary[];
+  districts: Array<LiveDistrict & { online: number; npcs: number }>;
 }
 export interface LiveSnapshot {
   server: LiveStatus;
@@ -91,15 +141,20 @@ export interface LiveSnapshot {
   entities: LiveEntity[];
   drops: LiveDrop[];
   events: LiveEvent[];
+  worldVersion: string;
+  visibleChunks: LivePoint[];
 }
 export type LiveCommand =
   | { type: "move"; x: number; y: number }
-  | { type: "attack"; targetId: string }
+  | { type: "attack"; targetId: string; aimed?: boolean }
   | { type: "engage"; targetId: string | null }
   | { type: "travel"; mapId: LiveMapId }
   | { type: "loot"; id: string }
+  | { type: "search"; id: string }
   | { type: "heal" }
+  | { type: "treat"; medicine: TreatmentType; part: BodyPart }
+  | { type: "cancelTreatment" }
   | { type: "extract" }
-  | { type: "respawn" }
+  | { type: "respawn"; districtId?: LiveDistrictId; purpose?: LivePurpose }
   | { type: "resupply" }
   | { type: "patrol"; enabled: boolean };
