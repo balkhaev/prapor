@@ -10,7 +10,7 @@
   "services": [
     {
       "command": "bun x --no-install vite --host 127.0.0.1 --port 3020 --strictPort",
-      "needs": ["accounts"],
+      "needs": ["prapor/accounts"],
       "health": "/",
       "id": "game",
       "name": "2D игра",
