@@ -5,8 +5,9 @@ import { advanceShelterRoute, clientToShelterPoint, getShelterCell, planShelterR
 import { clampShelterCamera, focusShelterRect, panShelterCamera, projectShelterRect, resizeShelterCamera, shelterViewportForSize, viewportToShelter, zoomShelterCamera, type ShelterCamera, type ShelterRect, type ShelterViewport, type ClientRect } from "./shelter-camera";
 import { advanceShelterLift, createShelterLift, type LiftRequest } from "./shelter-lift";
 import { advanceScavAnimation, createScavAnimation, type ScavAnimationState } from "./shelter-animation";
-import { type ProductionPresentation } from "./shelter-production";
-import { createShelterStation, type ShelterStation } from "./shelter-stations";
+import { advanceShelterStationClock, getShelterProductionPresentation, type ProductionPresentation } from "./shelter-production";
+import { projectShelterPoint, unprojectShelterPoint, projectShelterBounds, shelterRoomPolygon, shelterRoomPosition } from "./shelter-isometric";
+import { paintIsometricRoom, paintIsometricProduction } from "./shelter-isometric-art";
 import { RaidStreetRenderer } from "./raid-scene";
 
 export interface WorldSnapshot {
@@ -61,6 +62,7 @@ type ScavActor = {
 	selection: Phaser.GameObjects.Ellipse;
 	hovered: boolean;
 	gearSignature: string;
+	position: Point;
 	anchor: Point;
 	route: Point[];
 	goal: string;
@@ -113,11 +115,11 @@ export interface WorldController {
 type ShelterCell = {
 	root: Phaser.GameObjects.Container;
 	art: Phaser.GameObjects.Graphics;
-	backdrop: Phaser.GameObjects.Image | null;
 	frame: Phaser.GameObjects.Graphics;
 	progress: Phaser.GameObjects.Graphics;
 	animation: Phaser.GameObjects.Graphics;
-	station: ShelterStation;
+	stationClock: number;
+	stationJob: string | null;
 	production: ProductionPresentation | null;
 	productLabel: Phaser.GameObjects.Text;
 	label: Phaser.GameObjects.Text;
@@ -148,7 +150,7 @@ const WIDTH = 840;
 const HEIGHT = 520;
 const ROOM_WIDTH = 172;
 const ROOM_HEIGHT = 100;
-const cellPosition = (column: number, row: number): Point => ({ x: [40, 220, 448, 628][column] ?? 40, y: 148 + row * 111 });
+const cellPosition = shelterRoomPosition;
 const ROOM_STYLE: Record<string, { label: string; color: number; light: number; wall: number }> = {
 	workshop: { label: "МАСТЕРСКАЯ", color: 0xd7a368, light: 0xffcc88, wall: 0x594438 },
 	ammo: { label: "ПАТРОНЫ", color: 0xd4d889, light: 0xf1e4a5, wall: 0x515038 },
@@ -200,29 +202,6 @@ function line(
 	alpha = 1
 ): void {
 	g.lineStyle(width, color, alpha).strokePoints(points, false);
-}
-function rifle(
-	g: Phaser.GameObjects.Graphics,
-	x: number,
-	y: number,
-	scale = 1,
-	warm = true
-): void {
-	const p = (px: number, py: number): Point => ({
-		x: x + px * scale,
-		y: y + py * scale,
-	});
-	polygon(
-		g,
-		[p(-20, -3), p(-11, -4), p(-7, 0), p(-13, 3), p(-21, 2)],
-		warm ? 0x8d6542 : 0x34403a
-	);
-	line(g, [p(-12, 0), p(12, 0)], 0x17221c, 5 * scale);
-	line(g, [p(10, 0), p(26, 0)], 0x9b9c83, 2 * scale);
-	line(g, [p(25, 0), p(25, -4)], 0x9b9c83, 2 * scale);
-	polygon(g, [p(-1, 2), p(6, 2), p(4, 11), p(0, 10)], 0x17221c);
-	polygon(g, [p(-8, 3), p(-3, 3), p(-5, 8), p(-9, 7)], 0x293329);
-	line(g, [p(2, -4), p(9, -4)], 0x8d977b, 2 * scale);
 }
 function dashed(
 	g: Phaser.GameObjects.Graphics,
@@ -431,7 +410,8 @@ export function createWorld(
 			const room = snapshot().shelter?.rooms.find((candidate) => candidate.id === id);
 			if (!room) return false;
 			const p = cellPosition(room.column, room.row);
-			this.viewCamera = focusShelterRect(this.viewCamera, { ...p, width: ROOM_WIDTH, height: ROOM_HEIGHT }, 2.5, this.viewport);
+			const bounds = projectShelterBounds({ ...p, width: ROOM_WIDTH, height: ROOM_HEIGHT });
+			this.viewCamera = focusShelterRect(this.viewCamera, { ...bounds, y: bounds.y - 24, height: bounds.height + 24 }, 2.5, this.viewport);
 			if (this.drag) {
 				this.drag.point = null; this.drag.roomId = null; this.drag.cellKey = null;
 				this.dragGhost.clear();
@@ -441,12 +421,12 @@ export function createWorld(
 		}
 
 		projectShelterRect(rect: ShelterRect): (ClientRect & { visible: boolean }) | null {
-			return this.baseLayer && requestedView === "base" ? projectShelterRect(rect, this.viewCamera, this.game.canvas.getBoundingClientRect(), this.viewport) : null;
+			return this.baseLayer && requestedView === "base" ? projectShelterRect(projectShelterBounds(rect), this.viewCamera, this.game.canvas.getBoundingClientRect(), this.viewport) : null;
 		}
 
 		private clientWorld(clientX: number, clientY: number): Point | null {
 			const viewport = clientToShelterPoint(clientX, clientY, this.game.canvas.getBoundingClientRect(), this.viewport.width, this.viewport.height);
-			return viewport ? viewportToShelter(viewport, this.viewCamera, this.viewport) : null;
+			return viewport ? unprojectShelterPoint(viewportToShelter(viewport, this.viewCamera, this.viewport)) : null;
 		}
 
 		private cancelPan(): void {
@@ -518,10 +498,11 @@ export function createWorld(
 			drag.point = point; drag.cellKey = site ? `${site.column}:${site.row}` : null; drag.roomId = roomId; drag.reason = reason;
 			this.dragGhost.clear();
 			if (drag.canvas && point) {
-				this.dragGhost.fillStyle(0x0a1915, .45).fillEllipse(point.x, point.y + 20, 24, 8);
-				this.dragGhost.fillStyle(0xb2c68e).fillRect(point.x - 7, point.y - 13, 14, 18).fillStyle(0xcab18b).fillRect(point.x - 5, point.y - 24, 10, 10);
-				this.dragGhost.fillStyle(0x557663).fillRect(point.x - 6, point.y - 26, 12, 5).fillStyle(0x365341).fillRect(point.x - 5, point.y + 5, 4, 12).fillRect(point.x + 2, point.y + 5, 4, 12);
-				this.dragGhost.lineStyle(2, reason ? 0xd49a7e : 0xb7dfa0, .9).strokeRoundedRect(point.x - 12, point.y - 30, 25, 51, 4);
+				const visual = projectShelterPoint(point);
+				this.dragGhost.fillStyle(0x0a1915, .45).fillEllipse(visual.x, visual.y + 20, 24, 8);
+				this.dragGhost.fillStyle(0xb2c68e).fillRect(visual.x - 7, visual.y - 13, 14, 18).fillStyle(0xcab18b).fillRect(visual.x - 5, visual.y - 24, 10, 10);
+				this.dragGhost.fillStyle(0x557663).fillRect(visual.x - 6, visual.y - 26, 12, 5).fillStyle(0x365341).fillRect(visual.x - 5, visual.y + 5, 4, 12).fillRect(visual.x + 2, visual.y + 5, 4, 12);
+				this.dragGhost.lineStyle(2, reason ? 0xd49a7e : 0xb7dfa0, .9).strokeRoundedRect(visual.x - 12, visual.y - 30, 25, 51, 4);
 			}
 			for (const cell of this.cells.values()) this.paintCellFrame(cell);
 			if (changed) interactions.onDragState?.({ scavId: drag.scavId, roomId, reason });
@@ -580,7 +561,8 @@ export function createWorld(
 				if (event.button !== 0 || this.gesture || this.drag || interactions.canInteract?.() === false) return;
 				const point = this.clientWorld(event.clientX, event.clientY);
 				if (!point) return;
-				const hit = [...this.scavs].filter(([, slot]) => slot.actor.visible && Math.abs(slot.actor.x - point.x) <= 16 * slot.actor.scaleX && point.y >= slot.actor.y - 44 * slot.actor.scaleY && point.y <= slot.actor.y + 2).sort((a, b) => Math.hypot(a[1].actor.x - point.x, a[1].actor.y - 21 - point.y) - Math.hypot(b[1].actor.x - point.x, b[1].actor.y - 21 - point.y))[0];
+				const visual = projectShelterPoint(point);
+				const hit = [...this.scavs].filter(([, slot]) => slot.actor.visible && Math.abs(slot.actor.x - visual.x) <= 16 * slot.actor.scaleX && visual.y >= slot.actor.y - 44 * slot.actor.scaleY && visual.y <= slot.actor.y + 2).sort((a, b) => Math.hypot(a[1].actor.x - visual.x, a[1].actor.y - 21 - visual.y) - Math.hypot(b[1].actor.x - visual.x, b[1].actor.y - 21 - visual.y))[0];
 				if (!hit) return;
 				this.gesture = { scavId: hit[0], pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, active: false };
 				canvas.setPointerCapture(event.pointerId);
@@ -659,523 +641,110 @@ export function createWorld(
 		}
 
 		private paintBunker(): void {
-			const g = this.add.graphics();
+			const g = this.add.graphics().setDepth(-1000);
 			this.baseLayer.add(g);
+			g.fillStyle(0x14221d).fillRect(0, 0, WIDTH, HEIGHT);
+			const quad = (x: number, y: number, width: number, height: number) => [
+				{ x, y }, { x: x + width, y }, { x: x + width, y: y + height }, { x, y: y + height },
+			].map(projectShelterPoint);
+			const footprint = quad(20, 75, 800, 410);
+			polygon(g, footprint.map((p) => ({ x: p.x + 12, y: p.y + 16 })), 0x060f0c, .7);
+			polygon(g, [footprint[1]!, footprint[2]!, { ...footprint[2]!, y: footprint[2]!.y + 14 }, { ...footprint[1]!, y: footprint[1]!.y + 14 }], 0x344238);
+			polygon(g, [footprint[3]!, footprint[2]!, { ...footprint[2]!, y: footprint[2]!.y + 14 }, { ...footprint[3]!, y: footprint[3]!.y + 14 }], 0x23362d);
+			polygon(g, footprint, 0x465044);
+			line(g, [...footprint, footprint[0]!], 0x8d9680, 2, .6);
 			const rng = random(90312);
-			for (let y = 0; y < 128; y += 3) g.fillStyle(blend(0x182d3f, 0x677268, y / 155)).fillRect(0, y, WIDTH, 3);
-			g.fillStyle(0xc0c5a8, .12).fillEllipse(480, 37, 44, 35);
-			g.fillStyle(0xd4d6b7, .38).fillCircle(480, 37, 5);
-			// Distant ruins, nearer tree lines and the lit entrance occupy separate depth planes.
-			for (const district of [{ x: 422, w: 78, h: 31 }, { x: 506, w: 90, h: 57 }, { x: 611, w: 58, h: 42 }, { x: 681, w: 112, h: 49 }]) {
-				g.fillStyle(0x294340, .66).fillRect(district.x, 83 - district.h, district.w, district.h);
-				g.fillStyle(0x9aae94, .16).fillRect(district.x, 83 - district.h, district.w, 2);
-				for (let x = district.x + 9; x < district.x + district.w - 8; x += 16) for (let y = 88 - district.h; y < 78; y += 15) {
-					g.fillStyle((x + y) % 3 ? 0x708d7b : 0xc6a76c, (x + y) % 3 ? .14 : .28).fillRect(x, y, 5, 7);
+			for (let x = 20; x < 820; x += 20) for (let y = 75; y < 485; y += 20) {
+				polygon(g, quad(x, y, 19, 19), blend(0x50594b, 0x1c3027, rng() * .35), .8);
+				const p = projectShelterPoint({ x: x + rng() * 20, y: y + rng() * 20 });
+				g.fillStyle(0xb1b296, .1).fillEllipse(p.x, p.y, 2 + rng() * 3, 1);
+			}
+			// The same route spine and room addresses are retained in the simulation.
+			for (const y of [129, 228, 339, 450]) {
+				line(g, [{ x: 30, y }, { x: 810, y }].map(projectShelterPoint), 0xb6b18b, 2, .28);
+			}
+			for (const x of [400, 440]) line(g, [{ x, y: 100 }, { x, y: 465 }].map(projectShelterPoint), 0xc0bb92, 1, .5);
+			for (let y = 105; y < 465; y += 14) line(g, [{ x: 407, y }, { x: 433, y }].map(projectShelterPoint), 0x202e26, 2, .7);
+			for (let row = 0; row < 3; row++) for (let column = 0; column < 4; column++) this.createCell(column, row);
+			// Supply crates and a perimeter light ground the open-roof bunker in the raid's visual world.
+			for (const [x, y] of [[76, 108], [205, 106], [740, 105]]) {
+				const p = projectShelterPoint({ x: x!, y: y! });
+				if (this.textures.exists("raid-props") && this.textures.get("raid-props").has("crates")) {
+					const crate = this.add.image(p.x, p.y, "raid-props", "crates").setOrigin(.5, 1).setDepth(p.y);
+					crate.setScale(34 / crate.width); this.baseLayer.add(crate);
 				}
 			}
-			for (const plant of [{ x: 12, h: 41 }, { x: 25, h: 32 }, { x: 307, h: 21 }, { x: 461, h: 25 }, { x: 818, h: 45 }]) {
-				line(g, [{ x: plant.x, y: 90 }, { x: plant.x, y: 91 - plant.h }], 0x182e2b, 2);
-				for (let n = 0; n < 4; n++) {
-					const y = 84 - n * plant.h / 6, w = (4 - n) * 5;
-					polygon(g, [{ x: plant.x - w, y }, { x: plant.x, y: y - 15 }, { x: plant.x + w, y }], 0x203a30, .9);
-					line(g, [{ x: plant.x - w, y }, { x: plant.x - 1, y: y - 12 }], 0x8aab85, .6, .17);
-				}
-			}
-			g.fillStyle(0x8eaaa1, .05).fillRect(0, 71, WIDTH, 14);
-			polygon(g, [{ x: 0, y: 91 }, { x: 95, y: 78 }, { x: 196, y: 93 }, { x: 305, y: 87 }, { x: 493, y: 91 }, { x: 687, y: 82 }, { x: 840, y: 94 }, { x: 840, y: 134 }, { x: 0, y: 134 }], 0x24382e);
-			line(g, [{ x: 648, y: 85 }, { x: 648, y: 30 }, { x: 653, y: 27 }, { x: 657, y: 29 }], 0x587664, 4);
-			g.fillStyle(0x162b27).fillEllipse(653, 28, 13, 4);
-			line(g, [{ x: 732, y: 86 }, { x: 737, y: 18 }, { x: 747, y: 18 }, { x: 754, y: 86 }], 0x668270, 3);
-			g.fillStyle(0x41665d).fillRect(730, 14, 31, 20);
-			g.fillStyle(0x90aa89, .28).fillEllipse(745, 14, 32, 7);
-			line(g, [{ x: 731, y: 35 }, { x: 754, y: 67 }, { x: 736, y: 66 }, { x: 751, y: 38 }], 0x789880, 1.2, .6);
-			// Local power stays visible as physical poles and sagging cable, without a new simulation.
-			for (const pole of [282, 787]) {
-				line(g, [{ x: pole, y: 86 }, { x: pole, y: 25 }], 0x786c4e, 3);
-				line(g, [{ x: pole - 11, y: 32 }, { x: pole + 12, y: 32 }], 0xa4a98a, 2);
-				g.fillStyle(0xc0c8aa).fillRect(pole - 8, 27, 3, 7).fillRect(pole + 5, 27, 3, 7);
-			}
-			const cable: Point[] = [];
-			for (let n = 0; n <= 30; n++) cable.push({ x: 282 + n * 505 / 30, y: 28 + Math.sin(n / 30 * Math.PI) * 11 });
-			line(g, cable, 0x152827, 1.1, .82);
-			line(g, [{ x: 281, y: 35 }, { x: 231, y: 49 }, { x: 166, y: 64 }], 0x172b26, 1.2);
-			for (let n = 0; n < 90; n++) {
-				const x = rng() * 840, y = 84 + rng() * 47;
-				g.fillStyle(n % 2 ? 0x87a278 : 0x10231d, .25).fillRect(x, y, 2 + rng() * 6, 1);
-			}
-			g.fillStyle(0x30312a).fillRect(0, 126, WIDTH, HEIGHT - 126);
-			for (const stratum of [{ y: 155, h: 67, c: 0x332f26 }, { y: 275, h: 57, c: 0x2d2b24 }, { y: 402, h: 69, c: 0x292c24 }]) {
-				polygon(g, [{ x: 0, y: stratum.y }, { x: 186, y: stratum.y - 8 }, { x: 394, y: stratum.y + 7 }, { x: 840, y: stratum.y - 11 }, { x: 840, y: stratum.y + stratum.h }, { x: 0, y: stratum.y + stratum.h + 13 }], stratum.c);
-			}
-			for (let n = 0; n < 950; n++) {
-				const x = rng() * WIDTH, y = 127 + rng() * 393;
-				g.fillStyle(n % 4 ? 0x8b8060 : 0x0c160f, .08 + rng() * .16).fillRect(x, y, 1 + rng() * 5, 1 + rng() * 2);
-			}
-			line(g, [{ x: 3, y: 142 }, { x: 22, y: 169 }, { x: 10, y: 222 }], 0x171d16, 2);
-			line(g, [{ x: 826, y: 262 }, { x: 832, y: 307 }, { x: 820, y: 351 }], 0x171d16, 2);
-			g.fillStyle(0x101b13).fillRect(28, 133, 784, 349);
-			g.fillStyle(0x555d49).fillRect(30, 137, 780, 11);
-			g.fillStyle(0x363f30).fillRect(28, 147, 10, 335).fillRect(802, 147, 10, 335);
-			for (let row = 0; row <= 3; row++) {
-				const y = 144 + row * 111;
-				g.fillStyle(0x525b46).fillRect(31, y, 778, 9);
-				g.fillStyle(0x9ca082, .3).fillRect(31, y, 778, 1);
-				g.fillStyle(0x121c13).fillRect(31, y + 7, 778, 3);
-				for (let x = 40; x < 796; x += 32) g.fillStyle(0x151e15, .35).fillRect(x, y + 4, 17, 1);
-			}
-			// The entrance is a shared place for free workers, separated from production rooms.
-			g.fillStyle(0x4b5147).fillRect(42, 73, 143, 60);
-			g.fillStyle(0x717966).fillRect(35, 68, 157, 9);
-			g.fillStyle(0xb0b49c, .45).fillRect(35, 68, 157, 2);
-			g.fillStyle(0x111d19, .45).fillRect(42, 77, 143, 3);
-			g.fillStyle(0x131f16).fillRoundedRect(91, 80, 54, 53, 3);
-			g.lineStyle(3, 0x7a8165).strokeRoundedRect(91, 80, 54, 53, 3);
-			g.fillStyle(0x98aa79).fillRect(98, 86, 39, 20);
-			g.fillStyle(0xd4d9a4, .23).fillRect(99, 87, 37, 4);
-			line(g, [{ x: 117, y: 87 }, { x: 117, y: 107 }], 0x1b2c1b, 2);
-			g.fillStyle(C.gold).fillRect(132, 113, 3, 3);
-			g.fillStyle(0x2c3c32).fillRect(181, 86, 620, 47);
-			g.fillStyle(0x657766, .13).fillRect(182, 89, 617, 26);
-			g.fillStyle(0x859070, .22).fillRect(181, 86, 620, 2);
-			g.fillStyle(0x5b6550).fillRect(181, 130, 620, 4);
-			for (let x = 194; x < 786; x += 26) line(g, [{ x, y: 130 }, { x: x + 12, y: 130 }], C.gold, 2, .21);
-			g.fillStyle(0x17251a).fillRect(197, 90, 73, 27);
-			g.fillStyle(0x777b5e).fillRect(203, 94, 17, 17).fillRect(224, 94, 17, 8).fillRect(247, 94, 16, 15);
-			g.fillStyle(0x202d20).fillRect(693, 109, 67, 5).fillRect(701, 114, 3, 15).fillRect(749, 114, 3, 15);
-			g.fillStyle(0x5b5e41).fillRect(704, 102, 15, 7).fillRect(735, 104, 17, 5);
-			for (const x of [324, 568, 768]) {
-				line(g, [{ x, y: 87 }, { x, y: 96 }], 0x101d18, 1.3);
-				g.fillStyle(0x738778).fillRect(x - 11, 95, 22, 4);
-				g.fillStyle(0xdcdcb6).fillRect(x - 8, 98, 16, 2);
-				polygon(g, [{ x: x - 8, y: 100 }, { x: x + 8, y: 100 }, { x: x + 27, y: 130 }, { x: x - 27, y: 130 }], 0xe1d4aa, .06);
-			}
-			g.fillStyle(0x263a30).fillRect(772, 111, 14, 17);
-			g.fillStyle(0x728269).fillEllipse(779, 110, 14, 4);
-			g.fillStyle(0xd0ae77).fillRect(776, 116, 5, 6);
-			for (let x = 181; x < 780; x += 85) {
-				g.fillStyle(0x17241a).fillRect(x, 126, 2, 10);
-				g.fillStyle(0x7a8a5a).fillRect(x - 3, 124, 7, 2);
-			}
-			g.fillStyle(0x131e15).fillRect(393, 84, 54, 394);
-			line(g, [{ x: 399, y: 91 }, { x: 399, y: 474 }], 0x67715b, 2);
-			line(g, [{ x: 441, y: 91 }, { x: 441, y: 474 }], 0x67715b, 2);
-			for (let y = 101; y < 474; y += 18) {
-				line(g, [{ x: 398, y }, { x: 405, y }], 0x354735, 2);
-				line(g, [{ x: 435, y }, { x: 442, y }], 0x354735, 2);
-			}
-			for (let row = 0; row < 3; row++) {
-				this.baseLayer.add(this.text(10, 184 + row * 111, `−${row + 1}`, 13, "#9ba589"));
-				for (let column = 0; column < 4; column++) this.createCell(column, row);
-			}
-			const casing = this.add.graphics().setDepth(15);
-			for (const x of [29, 212, 620, 801]) {
-				casing.fillStyle(0x15221f).fillRect(x + 2, 146, 10, 336);
-				casing.fillStyle(0x657263).fillRect(x, 146, 7, 334);
-				casing.fillStyle(0xabb19a, .46).fillRect(x, 146, 1.5, 334);
-				casing.fillStyle(0x273a30).fillRect(x + 5, 146, 2, 334);
-				for (let y = 170; y < 470; y += 37) {
-					casing.fillStyle(0x26362b).fillRect(x + 1, y, 5, 8);
-					casing.fillStyle(0xb8bba1, .45).fillCircle(x + 3, y + 3, 1);
-				}
-			}
-			for (const y of [137, 248, 359, 470]) {
-				polygon(casing, [{ x: 29, y }, { x: 803, y }, { x: 811, y: y + 5 }, { x: 34, y: y + 5 }], 0x88927f);
-				casing.fillStyle(0x536352).fillRect(34, y + 5, 777, 6);
-				casing.fillStyle(0x13241e).fillRect(34, y + 10, 777, 2);
-				line(casing, [{ x: 35, y: y + 5 }, { x: 808, y: y + 5 }], 0xc5c5a8, 1, .45);
-				for (let x = 42; x < 800; x += 35) line(casing, [{ x, y: y + 8 }, { x: x + 12, y: y + 8 }], 0x9aa18c, 1, .18);
-				casing.fillStyle(0x0b1c18).fillRect(393, y, 54, 12);
-				line(casing, [{ x: 393, y: y + 5 }, { x: 401, y: y + 5 }], 0xd2b879, 2, .6);
-				line(casing, [{ x: 439, y: y + 5 }, { x: 447, y: y + 5 }], 0xd2b879, 2, .6);
-			}
-			line(casing, [{ x: 24, y: 154 }, { x: 24, y: 488 }, { x: 786, y: 488 }], 0x323f31, 5);
-			line(casing, [{ x: 24, y: 154 }, { x: 24, y: 488 }, { x: 786, y: 488 }], 0x8b947b, 1.7, .52);
-			for (const x of [56, 185, 337, 523, 687, 782]) casing.fillStyle(0x526649).fillRect(x, 484, 3, 9);
-			this.baseLayer.add(casing);
 			const lift = this.add.graphics();
-			lift.fillStyle(0x384a37).fillRect(0, 0, 32, 59);
-			lift.fillStyle(0x101e13).fillRect(4, 6, 24, 43);
-			lift.lineStyle(2, 0x78846b).strokeRect(0, 0, 32, 59);
-			for (let x = 7; x < 30; x += 6) line(lift, [{ x, y: 7 }, { x, y: 49 }], 0x606f54, 1);
-			line(lift, [{ x: 4, y: 30 }, { x: 28, y: 30 }], 0x879271, 2);
-			lift.fillStyle(C.gold).fillRect(4, 54, 24, 3);
+			polygon(lift, [{ x: -15, y: -5 }, { x: 0, y: -12 }, { x: 15, y: -5 }, { x: 0, y: 3 }], 0x84907a);
+			polygon(lift, [{ x: -15, y: -5 }, { x: 0, y: 3 }, { x: 0, y: 7 }, { x: -15, y: -1 }], 0x43594a);
+			polygon(lift, [{ x: 15, y: -5 }, { x: 0, y: 3 }, { x: 0, y: 7 }, { x: 15, y: -1 }], 0x2a4135);
+			for (const x of [-13, 13]) line(lift, [{ x, y: -3 }, { x, y: -21 }], 0xa8ac8b, 1.4);
 			this.liftDoors = this.add.graphics();
-			this.elevator = this.add.container(404, 179, [lift, this.liftDoors]).setDepth(20);
-			this.baseLayer.add(this.elevator);
-			for (const light of [{ x: 119, y: 108, tint: 0xffd7a0 }, { x: 324, y: 111, tint: 0xece1b4 }, { x: 568, y: 111, tint: 0xc6e5cc }]) {
-				this.baseLayer.add(this.add.image(light.x, light.y, "prapor-light").setTint(light.tint).setScale(.43, .25).setAlpha(.18).setBlendMode(Phaser.BlendModes.ADD));
-			}
-			this.ambient = this.add.graphics().setDepth(10);
-			this.baseLayer.add(this.ambient);
-			this.dragGhost = this.add.graphics().setDepth(1200);
-			this.baseLayer.add(this.dragGhost);
-			this.baseCaption = this.text(31, 25, "УБЕЖИЩЕ · СВОИ ЛЮДИ", 15, "#ded2ae").setVisible(false);
-			this.baseLayer.add(this.baseCaption);
-			this.baseLayer.add(this.text(99, 75, "07", 10, "#e4c994"));
-			this.baseLayer.add(this.text(545, 116, "ВХОД · СВОБОДНЫЙ ОТРЯД", 9, "#8f9f81"));
-			this.shelterCaption = this.text(31, 493, "КОМНАТЫ · ЛЮДИ · ПРОИЗВОДСТВО", 12, "#abb69c");
-			this.baseLayer.add(this.shelterCaption);
-			this.baseLayer.sort("depth");
+			this.elevator = this.add.container(0, 0, [lift, this.liftDoors]); this.baseLayer.add(this.elevator);
+			this.ambient = this.add.graphics().setDepth(800); this.baseLayer.add(this.ambient);
+			this.dragGhost = this.add.graphics().setDepth(1200); this.baseLayer.add(this.dragGhost);
+			this.baseCaption = this.text(29, 27, "УБЕЖИЩЕ 07", 15, "#ded2ae").setVisible(false);
+			this.shelterCaption = this.text(29, 477, "КОМНАТЫ · ЛЮДИ · ПРОИЗВОДСТВО", 10, "#abb69c");
+			this.baseLayer.add([this.baseCaption, this.shelterCaption]);
+			this.shelterCaption.setDepth(900); this.baseLayer.sort("depth");
 		}
 
 		private createCell(column: number, row: number): void {
-			const p = cellPosition(column, row);
-			const backdrop = this.textures.exists("shelter-room-atlas") ? this.add.image(2, 24, "shelter-room-atlas", 7).setOrigin(0).setDisplaySize(168, 60) : null;
-			const art = this.add.graphics();
-			const frame = this.add.graphics();
-			const progress = this.add.graphics();
-			const animation = this.add.graphics();
-			const label = this.text(10, 2, "", 18, "#fff0d6").setFontFamily("Manrope, sans-serif").setFontStyle("bold").setLetterSpacing(0).setShadow(0, 1, "#081416", 0, true, true);
-			const status = this.text(22, 82, "", 14, "#c1d8bd").setFontFamily("Manrope, sans-serif").setFontStyle("bold").setLetterSpacing(0).setShadow(0, 1, "#051010", 0, true, true);
-			const productLabel = this.text(86, 25, "", 9, "#f4e4bb").setOrigin(.5, 0).setFontFamily("Manrope, sans-serif").setFontStyle("bold").setLetterSpacing(0).setBackgroundColor("#10231e").setPadding(4, 2).setVisible(false);
-			const feedback = this.text(86, 43, "", 16, "#e6ffce").setOrigin(.5).setFontFamily("Manrope, sans-serif").setFontStyle("bold").setLetterSpacing(0).setBackgroundColor("#163023").setPadding(6, 3).setVisible(false);
-			const lamp = this.add.image(85, 43, "prapor-light").setScale(.66, .38).setAlpha(.12).setBlendMode(Phaser.BlendModes.ADD);
-			const zone = this.add.zone(86, 50, ROOM_WIDTH, ROOM_HEIGHT).setInteractive({ useHandCursor: true });
-			const root = this.add.container(p.x, p.y, [...(backdrop ? [backdrop] : []), art, lamp, animation, frame, label, status, productLabel, progress, feedback, zone]);
-			const station = createShelterStation(this, root);
-			root.moveTo(station.layer, root.list.indexOf(frame));
-			this.baseLayer.add(root);
-			const cell: ShelterCell = { root, art, backdrop, frame, progress, animation, station, production: null, productLabel, label, status, lamp, zone, signature: "", column, row, hovered: false, room: null, working: false, operational: "empty", feedback, lastCycles: null, completedAt: -10000 };
+			const p = cellPosition(column, row), corners = shelterRoomPolygon(column, row);
+			const at = projectShelterPoint({ x: p.x + 86, y: p.y + 18 });
+			const front = projectShelterPoint({ x: p.x + 86, y: p.y + 93 });
+			const art = this.add.graphics(), frame = this.add.graphics(), progress = this.add.graphics(), animation = this.add.graphics();
+			const label = this.text(at.x, at.y - 23, "", 11, "#fff0d6").setOrigin(.5, 0).setFontFamily("Manrope, sans-serif").setFontStyle("bold").setLetterSpacing(0).setBackgroundColor("#11251ee8").setPadding(4, 2);
+			const status = this.text(front.x, front.y - 4, "", 8, "#c1d8bd").setOrigin(.5).setFontFamily("Manrope, sans-serif").setLetterSpacing(0).setBackgroundColor("#10221ded").setPadding(3, 2);
+			const productLabel = this.text(at.x, at.y - 39, "", 9, "#f4e4bb").setOrigin(.5).setLetterSpacing(0).setBackgroundColor("#10231e").setPadding(4, 2).setVisible(false);
+			const feedback = this.text(front.x, front.y - 23, "", 12, "#e6ffce").setOrigin(.5).setLetterSpacing(0).setBackgroundColor("#163023").setPadding(5, 3).setVisible(false);
+			const lamp = this.add.image(at.x, at.y + 5, "prapor-light").setScale(.30, .18).setAlpha(.08).setBlendMode(Phaser.BlendModes.ADD);
+			const bounds = projectShelterBounds({ ...p, width: ROOM_WIDTH, height: ROOM_HEIGHT });
+			const zone = this.add.zone(bounds.x, bounds.y, bounds.width, bounds.height).setOrigin(0);
+			zone.setInteractive(new Phaser.Geom.Polygon(corners.map((point) => ({ x: point.x - bounds.x, y: point.y - bounds.y }))), Phaser.Geom.Polygon.Contains);
+			zone.input!.cursor = "pointer";
+			const root = this.add.container(0, 0, [art, lamp, animation, frame, progress]).setDepth(at.y - 20);
+			const chrome = this.add.container(0, 0, [label, status, productLabel, feedback]).setDepth(950);
+			this.baseLayer.add([root, chrome, zone.setDepth(-800)]);
+			const cell: ShelterCell = { root, art, frame, progress, animation, stationClock: 0, stationJob: null, production: null, productLabel, label, status, lamp, zone, signature: "", column, row, hovered: false, room: null, working: false, operational: "empty", feedback, lastCycles: null, completedAt: -10000 };
 			this.cells.set(`${column}:${row}`, cell);
 			zone.on("pointerover", (pointer: Phaser.Input.Pointer) => { if (this.acceptsPointer(pointer, "base")) { cell.hovered = true; this.paintCellFrame(cell); } });
 			zone.on("pointerout", () => { cell.hovered = false; this.paintCellFrame(cell); });
 			zone.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
 				if (!this.acceptsPointer(pointer, "base")) return;
-				this.clickFeedback({ x: p.x + 86, y: p.y + 49 }, this.baseLayer);
+				this.clickFeedback(projectShelterPoint({ x: p.x + 86, y: p.y + 50 }), this.baseLayer);
 				if (cell.room) {
 					if (interactions.onShelterRoom) interactions.onShelterRoom(cell.room.id);
 					else if (["workshop", "medbay", "radio", "storage"].includes(cell.room.type)) interactions.onRoom?.(cell.room.type as BaseRoom);
-				}
-				else if (interactions.onBuildSite) interactions.onBuildSite({ column, row });
+				} else if (interactions.onBuildSite) interactions.onBuildSite({ column, row });
 				else interactions.onShelterSite?.(column, row);
 			});
 		}
 
 		private paintCellFrame(cell: ShelterCell): void {
-			const state = snapshot();
+			const state = snapshot(), corners = shelterRoomPolygon(cell.column, cell.row);
 			const selected = Boolean(cell.room ? state.selectedRoomId === cell.room.id : state.selectedSite?.column === cell.column && state.selectedSite.row === cell.row);
 			const building = cell.room && cell.room.status !== "ready";
-			const color = selected || cell.hovered ? C.light : building ? C.gold : cell.room ? ROOM_STYLE[cell.room.type]?.color ?? 0x899a7c : 0x788b71;
-			cell.label.setAlpha(cell.room || selected || cell.hovered ? 1 : .68);
-			cell.status.setAlpha(cell.room || selected || cell.hovered ? 1 : .65);
+			let tint = selected || cell.hovered ? C.light : building ? C.gold : cell.room ? ROOM_STYLE[cell.room.type]?.color ?? 0x899a7c : 0x788b71;
+			cell.label.setAlpha(cell.room || selected || cell.hovered ? 1 : .6);
+			cell.status.setAlpha(cell.room || selected || cell.hovered ? 1 : .5);
 			cell.frame.clear();
 			if (this.drag) {
 				const reason = cell.room ? this.assignmentReason(this.drag.scavId, cell.room.id) : "Сначала построй комнату";
-				const target = this.drag.cellKey === `${cell.column}:${cell.row}`;
-				const color = reason ? 0xcc7f6d : 0xa6d193;
-				cell.frame.fillStyle(color, target ? .17 : .045).fillRect(2, 24, ROOM_WIDTH - 4, ROOM_HEIGHT - 27);
-				cell.frame.lineStyle(target ? 3 : 1.4, color, target ? 1 : .58).strokeRect(1, 1, ROOM_WIDTH - 2, ROOM_HEIGHT - 2);
-				return;
+				const target = this.drag.cellKey === `${cell.column}:${cell.row}`; tint = reason ? 0xcc7f6d : 0xa6d193;
+				polygon(cell.frame, corners, tint, target ? .23 : .07);
+				line(cell.frame, [...corners, corners[0]!], tint, target ? 3 : 1.3, target ? 1 : .65); return;
 			}
-			if (selected || cell.hovered) cell.frame.fillStyle(selected ? 0xffd99e : color, selected ? .055 : .025).fillRect(2, 24, ROOM_WIDTH - 4, ROOM_HEIGHT - 27);
-			if (cell.room || selected || cell.hovered) cell.frame.lineStyle(selected ? 2.5 : 1, color, selected || cell.hovered ? 1 : .64).strokeRect(1, 1, ROOM_WIDTH - 2, ROOM_HEIGHT - 2);
-			if (selected || cell.hovered) {
-				for (const x of [1, ROOM_WIDTH - 9]) for (const y of [1, ROOM_HEIGHT - 9]) cell.frame.fillStyle(C.gold, .85).fillRect(x, y, 8, 2).fillRect(x, y, 2, 8);
-			}
-			if (cell.operational === "working") cell.frame.fillStyle(0xc1e4a6, .78).fillRect(2, 78, 4, 14);
-			else if (cell.operational === "blocked") cell.frame.fillStyle(0xf0b37e, .9).fillRect(2, 80, 4, 12);
+			if (selected || cell.hovered) polygon(cell.frame, corners, tint, selected ? .12 : .05);
+			line(cell.frame, [...corners, corners[0]!], tint, selected ? 2.5 : 1, selected || cell.hovered ? 1 : .36);
 		}
 
 		private paintRoom(cell: ShelterCell): void {
-			const g = cell.art, room = cell.room;
-			g.clear();
-			if (cell.backdrop) {
-				// The atlas is a cached static interior. Operational lights, machines,
-				// workers and room chrome remain separate live layers above it.
-				const frames: Record<string, number> = { workshop: 0, medbay: 1, radio: 2, storage: 3, ammo: 4, recycler: 5, dormitory: 6 };
-				const style = ROOM_STYLE[room?.type ?? "workshop"]!;
-				cell.backdrop.setFrame(room ? frames[room.type] ?? 0 : 7).setAlpha(room ? 1 : .58).setTint(room ? 0xffffff : cell.row === 1 ? 0xadb79c : 0x92a5a5).setFlipX(!room && cell.column % 2 === 1);
-				cell.backdrop.setPosition(room ? 2 : 0, room ? 24 : 0).setDisplaySize(room ? 168 : ROOM_WIDTH, room ? 60 : ROOM_HEIGHT);
-				if (!room) {
-					g.fillStyle(0x0b1c1b, .7).fillRoundedRect(6, 3, 110, 21, 3);
-					g.fillStyle(0x0c201d, .64).fillCircle(86, 54, 16);
-					g.lineStyle(1.3, 0xb6c9a5, .45).strokeCircle(86, 54, 13);
-					line(g, [{ x: 79, y: 54 }, { x: 93, y: 54 }], 0xd3dfbd, 2, .75);
-					line(g, [{ x: 86, y: 47 }, { x: 86, y: 61 }], 0xd3dfbd, 2, .75);
-					g.fillStyle(0x0c201d, .68).fillRoundedRect(17, 82, 132, 16, 3);
-					cell.label.setText("Свободно").setFontSize(16).setColor("#afc0a4");
-					cell.status.setText("ПОСТРОИТЬ").setFontSize(12).setColor("#a3b398"); cell.lamp.setVisible(false); return;
-				}
-				g.fillStyle(blend(style.wall, 0x07151b, .52)).fillRect(0, 0, ROOM_WIDTH, 24);
-				g.fillStyle(0x091416).fillRect(0, 84, ROOM_WIDTH, 16);
-				g.fillStyle(style.color, .8).fillRect(2, 2, 3, 19).fillRect(1, 23, 170, 1);
-				line(g, [{ x: 1, y: 25 }, { x: 1, y: 84 }, { x: 171, y: 84 }, { x: 171, y: 25 }], 0x101d20, 3);
-				line(g, [{ x: 2, y: 83 }, { x: 170, y: 83 }], style.color, 1, .5);
-				for (const x of [4, 166]) g.fillStyle(0xbabbaa, .7).fillCircle(x, 28, 1).fillCircle(x, 79, 1);
-				for (let n = 0; n < Math.min(5, room.level); n++) g.fillStyle(0xe3d4a9, .85).fillRect(151 - n * 5, 18, 3, 2);
-				cell.label.setText(style.label).setFontSize(18).setColor("#fff1dc"); cell.status.setFontSize(14); cell.lamp.setVisible(true).setTint(style.light).setAlpha(.08);
-				if (room.status !== "ready") {
-					g.fillStyle(0x091115, .52).fillRect(2, 24, 168, 60);
-					for (const x of [21, 87, 150]) { line(g, [{ x, y: 28 }, { x, y: 81 }], 0x111d20, 5); line(g, [{ x, y: 28 }, { x, y: 80 }], 0xd6b776, 2.3); }
-					for (const y of [43, 65]) line(g, [{ x: 16, y }, { x: 154, y }], 0xb59c6b, 2.5);
-					line(g, [{ x: 21, y: 78 }, { x: 87, y: 31 }, { x: 150, y: 78 }], 0xd0ad69, 1.5, .9);
-					for (let x = 12; x < 166; x += 12) line(g, [{ x, y: 83 }, { x: x + 5, y: 79 }], x % 24 ? 0x141e14 : 0xe2b667, 3);
-					cell.label.setText(`${room.status === "building" ? "СТРОИТСЯ" : "УЛУЧШЕНИЕ"} · ${room.construction?.targetLevel ?? room.level + 1}`).setColor("#ffce8a");
-				}
-				return;
-			}
-			if (!room) {
-				const rng = random(cell.column * 829 + cell.row * 127 + 416);
-				const stone = cell.row === 1 ? [0x3e4138, 0x4e4e3d, 0x343c33] : [0x343e40, 0x414a43, 0x28383a];
-				g.fillStyle(stone[2]!).fillRect(0, 0, ROOM_WIDTH, ROOM_HEIGHT);
-				for (let n = 0; n < 11; n++) {
-					const x = rng() * 190 - 14, y = rng() * 100, w = 22 + rng() * 46, h = 9 + rng() * 17;
-					polygon(g, [{ x, y }, { x: x + w * .64, y: y - h * .5 }, { x: x + w, y: y + 2 }, { x: x + w * .72, y: y + h }, { x: x + 3, y: y + h * .83 }], stone[n % 3]!);
-					line(g, [{ x: x + 2, y: y + 2 }, { x: x + w * .64, y: y - h * .4 }, { x: x + w - 2, y: y + 3 }], 0xa7ae8c, 1, .15);
-				}
-				const seam: Point[] = [];
-				for (let n = 0; n < 8; n++) seam.push({ x: n * 25, y: 55 + Math.sin(n * .8 + cell.column) * 13 });
-				line(g, seam, 0x11231e, 3, .52);
-				line(g, [{ x: 36 + cell.column * 9, y: 0 }, { x: 45 + cell.column * 7, y: 19 }, { x: 39 + cell.column * 8, y: 39 }], 0x826d43, 1.2, .37);
-				g.fillStyle(0x0d211c, .42).fillRoundedRect(7, 3, 107, 20, 4);
-				g.fillStyle(0x182b22, .34).fillEllipse(86, 55, 36, 33);
-				g.lineStyle(1.2, 0xadc1a1, .36).strokeCircle(86, 55, 13);
-				line(g, [{ x: 79, y: 55 }, { x: 93, y: 55 }], 0xd3dfbd, 2, .65);
-				line(g, [{ x: 86, y: 48 }, { x: 86, y: 62 }], 0xd3dfbd, 2, .65);
-				cell.label.setText("Свободно").setFontSize(16).setColor("#afc0a4");
-				cell.status.setText("ПОСТРОИТЬ").setFontSize(12).setColor("#a3b398");
-				cell.lamp.setVisible(false);
-				return;
-			}
-			const style = ROOM_STYLE[room.type] ?? ROOM_STYLE.workshop!;
-			g.fillStyle(0x101919).fillRect(0, 0, ROOM_WIDTH, ROOM_HEIGHT);
-			for (let y = 24; y < 82; y += 3) g.fillStyle(blend(style.wall, 0x101e25, (y - 24) / 170)).fillRect(6, y, 160, 3);
-			polygon(g, [{ x: 1, y: 23 }, { x: 15, y: 34 }, { x: 15, y: 73 }, { x: 1, y: 84 }], blend(style.wall, 0x172522, .31));
-			polygon(g, [{ x: 157, y: 34 }, { x: 171, y: 23 }, { x: 171, y: 84 }, { x: 157, y: 73 }], blend(style.wall, 0x081518, .48));
-			polygon(g, [{ x: 1, y: 23 }, { x: 171, y: 23 }, { x: 157, y: 34 }, { x: 15, y: 34 }], blend(style.wall, 0xa2ae9c, .22));
-			polygon(g, [{ x: 15, y: 73 }, { x: 157, y: 73 }, { x: 171, y: 86 }, { x: 1, y: 86 }], blend(style.wall, 0x9ba7a3, .32));
-			line(g, [{ x: 15, y: 35 }, { x: 15, y: 73 }, { x: 156, y: 73 }, { x: 156, y: 35 }], 0x0a1b19, 2, .68);
-			line(g, [{ x: 3, y: 25 }, { x: 15, y: 34 }, { x: 156, y: 34 }, { x: 169, y: 25 }], style.color, 1.2, .48);
-			for (const x of [12, 39, 66, 93, 120, 147]) line(g, [{ x, y: 76 }, { x: (x - 86) * 1.16 + 86, y: 86 }], 0x111d1c, 1, .55);
-			line(g, [{ x: 3, y: 80 }, { x: 168, y: 80 }], 0xc9c9b1, .8, .15);
-			g.fillStyle(0x091416).fillRect(0, 84, ROOM_WIDTH, 16);
-			g.fillStyle(blend(style.wall, 0x09151a, .42)).fillRect(1, 1, ROOM_WIDTH - 2, 22);
-			g.fillStyle(style.color, .7).fillRect(1, 23, ROOM_WIDTH - 2, 1);
-			g.fillStyle(style.color, .6).fillRect(2, 2, 3, 19);
-			if (room.type === "medbay") {
-				for (let x = 16; x < 155; x += 24) for (let y = 35; y < 72; y += 12) {
-					g.fillStyle((x + y) % 5 ? 0x769b93 : 0xabc4b3, .15).fillRect(x, y, 22, 10);
-					line(g, [{ x, y: y + 11 }, { x: x + 22, y: y + 11 }], 0xc5e0cd, .7, .18);
-				}
-			} else if (room.type === "radio") {
-				for (const x of [16, 64, 111]) {
-					g.fillStyle(0x0c2a2b, .34).fillRect(x, 36, 43, 34);
-					line(g, [{ x, y: 36 }, { x: x + 42, y: 36 }], 0x6ea99f, 1, .24);
-				}
-			} else if (room.type === "dormitory") {
-				g.fillStyle(0xc2a8bf, .12).fillRoundedRect(17, 36, 138, 36, 2);
-				line(g, [{ x: 17, y: 64 }, { x: 154, y: 64 }], 0xcbbaad, 1, .16);
-			} else {
-				for (const x of [17, 52, 87, 122]) {
-					g.fillStyle(0x0c211c, .2).fillRect(x, 35, 32, 38);
-					line(g, [{ x, y: 35 }, { x: x + 31, y: 35 }, { x: x + 31, y: 72 }], style.color, .8, .22);
-				}
-			}
-			line(g, [{ x: 10, y: 30 }, { x: 161, y: 30 }, { x: 161, y: 76 }], 0x12221f, 4);
-			line(g, [{ x: 10, y: 29 }, { x: 161, y: 29 }, { x: 161, y: 73 }], blend(style.color, 0x4f6257, .48), 1.5);
-			for (const x of [13, 49, 87, 124]) g.fillStyle(0xc1c7ad, .7).fillRect(x, 27, 2, 5);
-			g.fillStyle(0x081315).fillRoundedRect(60, 23, 52, 8, 2);
-			g.fillStyle(0xc6cab4, .55).fillRect(63, 25, 46, 2);
-			g.fillStyle(style.light).fillRect(66, 27, 40, 2);
-			polygon(g, [{ x: 66, y: 29 }, { x: 35, y: 79 }, { x: 144, y: 79 }, { x: 106, y: 29 }], style.light, .075);
-			cell.label.setText(style.label).setFontSize(18).setColor("#fff1dc");
-			cell.status.setFontSize(14);
-			cell.lamp.setVisible(true).setTint(style.light);
-			this.paintFurniture(g, room.type, room.level);
-			this.paintRoomDetails(g, room.type, style.color);
-			if (room.status !== "ready") {
-				g.fillStyle(0x091115, .47).fillRect(1, 25, 170, 59);
-				for (const x of [21, 87, 150]) {
-					line(g, [{ x: x + 1, y: 30 }, { x: x + 1, y: 81 }], 0x101b1b, 5);
-					line(g, [{ x, y: 28 }, { x, y: 80 }], 0xd6b776, 2.5);
-				}
-				for (const y of [43, 65]) { line(g, [{ x: 16, y: y + 2 }, { x: 154, y: y + 2 }], 0x192422, 5); line(g, [{ x: 16, y }, { x: 154, y }], 0xb59c6b, 2.5); }
-				line(g, [{ x: 21, y: 78 }, { x: 87, y: 31 }, { x: 150, y: 78 }], 0xd0ad69, 1.5, .9);
-				g.fillStyle(0xe0c385).fillRect(17, 78, 18, 4).fillRect(141, 78, 18, 4);
-				for (let x = 12; x < 166; x += 12) line(g, [{ x, y: 83 }, { x: x + 5, y: 79 }], x % 24 ? 0x141e14 : 0xe2b667, 3);
-				g.fillStyle(0xd5b374).fillRect(136, 29, 15, 10);
-				g.fillStyle(0x2d3328).fillRect(141, 31, 3, 5).fillRect(141, 37, 3, 1);
-				cell.label.setText(`${room.status === "building" ? "СТРОИТСЯ" : "УЛУЧШЕНИЕ"} · ${room.construction?.targetLevel ?? room.level + 1}`).setColor("#ffce8a");
-			}
-		}
-
-		private paintRoomDetails(g: Phaser.GameObjects.Graphics, type: string, accent: number): void {
-			// Fine material details are painted once, independently of production animation.
-			const screw = (x: number, y: number) => { g.fillStyle(0xc3c6b0, .72).fillCircle(x, y, 1.1); line(g, [{ x: x - .6, y: y + .6 }, { x: x + .6, y: y - .6 }], 0x142321, .7); };
-			for (const p of [{ x: 8, y: 25 }, { x: 164, y: 25 }, { x: 8, y: 81 }, { x: 164, y: 81 }]) screw(p.x, p.y);
-			if (type === "workshop") {
-				line(g, [{ x: 22, y: 72 }, { x: 61, y: 72 }], 0xdbc08d, 1.3, .65);
-				for (let x = 28; x < 58; x += 7) { g.fillStyle(0xbca574).fillRect(x, 69, 2, 3); g.fillStyle(0x353d35).fillRect(x, 68, 2, 1); }
-				line(g, [{ x: 104, y: 37 }, { x: 99, y: 47 }, { x: 104, y: 61 }], 0x191e1e, 2);
-				g.fillStyle(0xbaa782).fillRect(109, 35, 44, 16);
-				g.fillStyle(0x8c8069).fillRect(112, 38, 37, 10);
-				rifle(g, 130, 42, .56, true);
-				g.fillStyle(0xba9b70).fillCircle(81, 64, 2);
-				line(g, [{ x: 109, y: 68 }, { x: 149, y: 68 }], 0xd2b07c, .7, .55);
-				for (const x of [14, 63, 115, 156]) screw(x, 76);
-			} else if (type === "ammo") {
-				g.fillStyle(0x24341f).fillRect(10, 42, 9, 27);
-				for (let y = 45; y < 68; y += 4) line(g, [{ x: 12, y }, { x: 17, y }], 0xb9b977, 1);
-				line(g, [{ x: 71, y: 52 }, { x: 78, y: 52 }, { x: 78, y: 70 }], 0xabaf75, 2);
-				g.fillStyle(0x172522).fillCircle(69, 60, 5);
-				g.lineStyle(1, 0xd2cea2).strokeCircle(69, 60, 4);
-				line(g, [{ x: 69, y: 60 }, { x: 71, y: 57 }], 0xe2b468, 1);
-				for (let x = 83; x < 146; x += 8) g.fillStyle(0x212e23).fillCircle(x, 77, 2);
-			} else if (type === "recycler") {
-				for (let x = 22; x < 81; x += 10) line(g, [{ x, y: 78 }, { x: x + 4, y: 73 }], x % 20 ? 0x1c2521 : 0xdda66c, 3);
-				g.lineStyle(1.3, 0xa2765b).strokeCircle(78, 55, 10);
-				g.fillStyle(0x333a2f).fillCircle(78, 55, 7);
-				line(g, [{ x: 10, y: 40 }, { x: 10, y: 32 }, { x: 51, y: 32 }], 0x8e6b51, 3);
-				g.fillStyle(0xb4a083).fillRect(97, 41, 13, 9);
-				line(g, [{ x: 103, y: 43 }, { x: 99, y: 47 }, { x: 107, y: 47 }], 0x526350, 1.5);
-			} else if (type === "medbay") {
-				g.fillStyle(0x82c2c0, .18).fillEllipse(38, 58, 64, 22);
-				g.fillStyle(0xd7e6db).fillRect(77, 51, 19, 23);
-				line(g, [{ x: 81, y: 52 }, { x: 87, y: 52 }, { x: 87, y: 72 }], 0x7ea5a1, 1);
-				g.fillStyle(0xa9d0c3).fillCircle(92, 65, 2);
-				for (let x = 104; x < 138; x += 8) { g.fillStyle(0xd8e3d0).fillRect(x, 73, 4, 6); g.fillStyle(0x9ec2bb).fillRect(x, 72, 4, 2); }
-				line(g, [{ x: 78, y: 36 }, { x: 90, y: 36 }, { x: 90, y: 43 }], 0xbfdbcf, 2);
-				g.fillStyle(0xb9dcce).fillEllipse(90, 44, 13, 4);
-			} else if (type === "radio") {
-				g.fillStyle(0x70d4bb, .13).fillEllipse(40, 67, 67, 25);
-				for (let x = 24; x < 58; x += 4) for (let y = 47; y < 67; y += 4) g.fillStyle(0x86baa7, .08).fillRect(x, y, 1, 1);
-				line(g, [{ x: 28, y: 69 }, { x: 29, y: 74 }, { x: 69, y: 74 }, { x: 72, y: 68 }], 0x132c2c, 2);
-				g.fillStyle(0x8eaaa0).fillRect(29, 71, 29, 3);
-				for (let x = 31; x < 58; x += 4) line(g, [{ x, y: 71 }, { x, y: 74 }], 0x314b48, .8);
-				for (const x of [113, 117]) line(g, [{ x, y: 36 }, { x, y: 75 }], 0x15272a, 1.5);
-				g.fillStyle(0xa5b48f).fillRect(99, 35, 10, 6);
-			} else if (type === "storage") {
-				g.fillStyle(0x222f28).fillRect(79, 34, 5, 49);
-				g.fillStyle(0xd8c286).fillRect(19, 43, 10, 4).fillRect(102, 76, 11, 3);
-				line(g, [{ x: 9, y: 33 }, { x: 154, y: 33 }], 0x89a187, 1.5);
-				g.fillStyle(0xbfa57a).fillRect(149, 56, 12, 19);
-				g.fillStyle(0x726c4f).fillRect(152, 59, 6, 12);
-				for (const x of [16, 79, 89, 152]) screw(x, 80);
-			} else if (type === "dormitory") {
-				g.fillStyle(0xc1abc9).fillRect(31, 46, 41, 4).fillRect(115, 68, 40, 4);
-				g.fillStyle(0x9082a1).fillRect(31, 48, 41, 2).fillRect(115, 70, 40, 2);
-				g.fillStyle(0xc9a779).fillRoundedRect(76, 41, 18, 9, 2);
-				g.fillStyle(0xf2d6a1).fillRect(78, 43, 14, 3);
-				line(g, [{ x: 85, y: 49 }, { x: 85, y: 65 }], 0x9e8c75, 1.5);
-				g.fillStyle(0x9f879b).fillRect(9, 34, 22, 9);
-				g.fillStyle(0xc1b2bd).fillRect(12, 36, 16, 5);
-			}
-			g.fillStyle(accent, .12).fillRect(7, 82, 157, 1);
-		}
-		private paintFurniture(g: Phaser.GameObjects.Graphics, type: string, level: number): void {
-			const panel = (x: number, y: number, w: number, h: number, color: number) => {
-				polygon(g, [{ x: x + 1, y: y + h }, { x: x + w + 4, y: y + h - 1 }, { x: x + w + 11, y: y + h + 5 }, { x: x + 7, y: y + h + 5 }], 0x031315, .5);
-				polygon(g, [{ x, y }, { x: x + 5, y: y - 4 }, { x: x + w + 5, y: y - 4 }, { x: x + w, y }], blend(color, 0xe1ddbd, .3));
-				polygon(g, [{ x: x + w, y }, { x: x + w + 5, y: y - 4 }, { x: x + w + 5, y: y + h - 4 }, { x: x + w, y: y + h }], blend(color, 0x112825, .4));
-				for (let band = 0; band < 5; band++) g.fillStyle(blend(color, 0x0b1d20, band / 20)).fillRect(x, y + h * band / 5, w, h / 5 + .2);
-				line(g, [{ x, y: y + h }, { x, y }, { x: x + w, y }], blend(color, 0xf1e2c4, .5), 1, .8);
-				line(g, [{ x: x + w, y: y + 1 }, { x: x + w, y: y + h }], 0x061215, .8, .78);
-				if (h > 15 && w > 16) {
-					g.fillStyle(0xd4d8ba, .55).fillCircle(x + 3, y + 3, .9).fillCircle(x + w - 3, y + h - 3, .9);
-					line(g, [{ x: x + 3, y: y + h - 3 }, { x: x + w - 3, y: y + h - 3 }], 0xb5bba1, .7, .18);
-				}
-			};
-			const chest = (x: number, y: number, w: number, h: number, color = 0x8c855d) => {
-				panel(x, y, w, h, color);
-				line(g, [{ x: x + 5, y }, { x: x + 5, y: y + h }, { x: x + w - 5, y: y + h }, { x: x + w - 5, y }], 0x30453a, 2);
-				g.fillStyle(0xe0c995).fillRect(x + w / 2 - 4, y + 4, 8, 3);
-				line(g, [{ x: x + w / 2 - 2, y: y + 5 }, { x: x + w / 2 + 2, y: y + 5 }], 0x817b5b, .5);
-			};
-			switch (type) {
-				case "workshop":
-					panel(12, 37, 53, 33, 0x8c704e);
-					for (let x = 18; x < 58; x += 10) { line(g, [{ x, y: 42 }, { x: x + 3, y: 54 }], 0xbcb79a, 2); g.fillStyle(0x222c21).fillRect(x - 1, 55, 5, 5); }
-					panel(11, 72, 78, 7, 0x9e8059);
-					g.fillStyle(0x44503a).fillRect(16, 79, 4, 4).fillRect(80, 79, 4, 4);
-					panel(75, 57, 22, 19, 0x75867c);
-					g.fillStyle(0x9aab80).fillRect(74, 60, 24, 3);
-					line(g, [{ x: 68, y: 69 }, { x: 104, y: 69 }], 0xadb796, 2);
-					g.fillStyle(0x293d2b).fillCircle(79, 64, 6);
-					g.lineStyle(1.4, 0xbdc6ac).strokeCircle(79, 64, 7);
-					g.fillStyle(0x8f9c86).fillCircle(79, 64, 2.7);
-					line(g, [{ x: 70, y: 57 }, { x: 94, y: 57 }], 0xe8d2a7, 1.2, .7);
-					panel(113, 60, 46, 20, 0x8b7250);
-					rifle(g, 131, 60, .5);
-					chest(120, 75, 24, 9);
-					break;
-				case "ammo":
-					panel(23, 37, 49, 43, 0x929267);
-					panel(30, 45, 33, 25, 0x253829);
-					g.fillStyle(0xa49b6a).fillRect(42, 43, 9, 27).fillRect(33, 68, 27, 5);
-					g.fillStyle(0xcfd3b0, .18).fillRect(31, 46, 9, 20);
-					line(g, [{ x: 38, y: 47 }, { x: 38, y: 65 }], 0xf3e4b2, .8, .28);
-					g.fillStyle(0x9b8c5b).fillEllipse(47, 36, 33, 8);
-					panel(78, 71, 74, 10, 0x53634a);
-					for (let x = 84; x < 145; x += 9) g.fillStyle(0xd5b967).fillRect(x, 66, 3, 8);
-					chest(114, 40, 32, 20, 0x938052);
-					g.fillStyle(0x576b47).fillRect(152, 58, 9, 23);
-					break;
-				case "recycler":
-					panel(17, 48, 65, 34, 0x92624f);
-					polygon(g, [{ x: 18, y: 48 }, { x: 28, y: 36 }, { x: 68, y: 36 }, { x: 81, y: 48 }], 0x8b7450);
-					g.fillStyle(0x192e21).fillRect(28, 48, 44, 19);
-					polygon(g, [{ x: 28, y: 48 }, { x: 33, y: 52 }, { x: 68, y: 52 }, { x: 72, y: 48 }], 0xc99f76, .7);
-					for (let x = 30; x < 70; x += 7) g.fillStyle(0xb49d72).fillRect(x, 51, 3, 10);
-					panel(86, 72, 67, 9, 0x4f6046);
-					line(g, [{ x: 96, y: 65 }, { x: 108, y: 68 }, { x: 116, y: 62 }, { x: 130, y: 68 }], 0xa2a98b, 4);
-					chest(118, 43, 35, 20, 0x595e46);
-					g.fillStyle(0x82543c).fillRect(5, 68, 8, 13);
-					break;
-				case "medbay":
-					panel(11, 35, 49, 24, 0x7aa7a4);
-					panel(14, 38, 43, 18, 0x163d43);
-					line(g, [{ x: 17, y: 48 }, { x: 24, y: 48 }, { x: 29, y: 43 }, { x: 34, y: 53 }, { x: 39, y: 43 }, { x: 44, y: 48 }, { x: 52, y: 48 }], 0xb5d0a5, 1.2);
-					panel(12, 68, 62, 8, 0xa9cbc3);
-					g.fillStyle(0xd2e5d6).fillRoundedRect(16, 63, 52, 7, 2);
-					g.fillStyle(0xe0d8ba).fillRect(16, 61, 12, 8);
-					line(g, [{ x: 15, y: 76 }, { x: 15, y: 82 }, { x: 69, y: 82 }, { x: 69, y: 76 }], 0x6d8368, 2);
-					panel(101, 38, 38, 42, 0xa5c9c2);
-					g.fillStyle(0xf1ead3, .17).fillRect(104, 40, 9, 25);
-					g.fillStyle(0xd4d6b5).fillRect(116, 44, 7, 18).fillRect(110, 50, 19, 6);
-					line(g, [{ x: 104, y: 68 }, { x: 136, y: 68 }], 0x344d38, 2);
-					g.fillStyle(0xd7d0af).fillRect(142, 70, 17, 4);
-					line(g, [{ x: 154, y: 68 }, { x: 154, y: 63 }, { x: 147, y: 63 }], 0x97b49a, 2);
-					break;
-				case "radio":
-					panel(12, 68, 96, 12, 0x497a78);
-					panel(20, 44, 43, 26, 0x629d99);
-					panel(24, 47, 35, 19, 0x0f383a);
-					polygon(g, [{ x: 25, y: 48 }, { x: 39, y: 48 }, { x: 53, y: 65 }, { x: 47, y: 65 }], 0x77c5b2, .16);
-					g.lineStyle(1, 0x9dbb87, .65).strokeCircle(42, 57, 7);
-					line(g, [{ x: 28, y: 57 }, { x: 56, y: 57 }], 0x6b8e65, 1);
-					panel(73, 53, 26, 16, 0x253f30);
-					g.fillStyle(0xd1ba79).fillCircle(92, 62, 3);
-					for (let x = 78; x < 91; x += 4) g.fillStyle(0x8eb176).fillRect(x, 57, 2, 3);
-					panel(125, 34, 31, 47, 0x466b74);
-					for (let y = 39; y < 78; y += 8) { panel(128, y, 25, 5, 0x183222); g.fillStyle(0x90b079).fillRect(148, y + 1, 2, 2); }
-					line(g, [{ x: 82, y: 52 }, { x: 85, y: 32 }], 0x93a07f, 1.5);
-					break;
-				case "storage":
-					for (const x of [13, 87]) {
-						panel(x, 37, 65, 45, 0x31412e);
-						line(g, [{ x, y: 36 }, { x, y: 81 }, { x: x + 65, y: 81 }, { x: x + 65, y: 36 }], 0x91a07a, 3);
-						for (const y of [40, 56, 72]) {
-							chest(x + 6, y, 24, 11, y === 40 ? 0x847651 : 0x64754c);
-							chest(x + 35, y, 23, 11);
-							line(g, [{ x, y: y + 12 }, { x: x + 65, y: y + 12 }], 0x8e9d78, 2);
-						}
-					}
-					break;
-				case "dormitory":
-					for (const x of [12, 96]) {
-						g.fillStyle(0x9a91a4).fillRect(x, 46, 3, 36).fillRect(x + 60, 46, 3, 36);
-						for (const y of [49, 71]) {
-							panel(x, y, 63, 5, 0x938b9e);
-							g.fillStyle(0xc2bba5).fillRect(x + 5, y - 4, 13, 5);
-							g.fillStyle(0x9d8eaf).fillRect(x + 20, y - 4, 37, 5);
-						}
-						line(g, [{ x: x + 52, y: 50 }, { x: x + 52, y: 82 }], 0x859575, 2);
-						for (let y = 56; y < 80; y += 7) line(g, [{ x: x + 48, y }, { x: x + 57, y }], 0x859575, 1.5);
-					}
-					chest(77, 70, 16, 11, 0x76654d);
-					break;
-			}
-			for (let n = 0; n < Math.min(5, level); n++) g.fillStyle(0xe3d4a9, .8).fillRect(152 - n * 5, 19, 3, 2);
+			cell.art.clear(); paintIsometricRoom(cell.art, cell.column, cell.row, cell.room);
+			const style = ROOM_STYLE[cell.room?.type ?? "workshop"]!;
+			cell.label.setText(cell.room ? `${style.label} · ${cell.room.level || ""}` : "СВОБОДНО").setColor(cell.room ? "#fff1dc" : "#afc0a4");
+			cell.status.setText(cell.room ? "" : "+ ПОСТРОИТЬ");
+			cell.lamp.setVisible(Boolean(cell.room)).setTint(style.light);
 		}
 
 		private clickFeedback(at: Point, layer: Phaser.GameObjects.Container): void {
@@ -1185,7 +754,8 @@ export function createWorld(
 		}
 
 		private createScav(scavId: string, index: number, at: Point): ScavActor {
-			const actor = this.add.container(at.x, at.y).setDepth(30);
+			const visual = projectShelterPoint(at);
+			const actor = this.add.container(visual.x, visual.y).setDepth(visual.y);
 			const body = this.add.container(0, 0);
 			const shadow = this.add.ellipse(0, 1, 20, 5, 0x041014, .6);
 			const selection = this.add.ellipse(0, 1, 27, 9).setStrokeStyle(1.5, C.gold).setVisible(false);
@@ -1216,9 +786,9 @@ export function createWorld(
 			const label = this.text(0, -64, "", 16, "#ffedc7").setOrigin(.5).setFontFamily("Manrope, sans-serif").setFontStyle("bold").setLetterSpacing(0).setBackgroundColor("#0b1b20").setPadding(7, 4).setVisible(false);
 			const order = this.add.circle(-10, -34, 3.5, C.sage).setStrokeStyle(1, 0x10242b).setVisible(false);
 			const hit = this.add.zone(0, -21, 32, 46).setInteractive({ useHandCursor: true });
-			const slot: ScavActor = { actor, body, legA, legB, hand, sprite, poses, animation: createScavAnimation(index * .37), appearance, gear, tool, label, order, selection, hovered: false, gearSignature: "", anchor: { ...at }, route: [], goal: "", assignment: null, role: "idle", dwellUntil: this.time.now + 2000 + index * 800, visit: 0, facing: 1, climbing: false, status: "ready", health: 100, working: false, walking: false, walkSpan: 0, phase: index * 1.71 };
-			hit.on("pointerover", (pointer: Phaser.Input.Pointer) => { if (this.acceptsPointer(pointer, "base")) { slot.hovered = true; selection.setVisible(true); label.setVisible(true); actor.setDepth(80); } });
-			hit.on("pointerout", () => { slot.hovered = false; const selected = snapshot().selectedScavId === scavId; selection.setVisible(selected); label.setVisible(selected); actor.setDepth(30); });
+			const slot: ScavActor = { actor, body, legA, legB, hand, sprite, poses, animation: createScavAnimation(index * .37), appearance, gear, tool, label, order, selection, hovered: false, gearSignature: "", position: { ...at }, anchor: { ...at }, route: [], goal: "", assignment: null, role: "idle", dwellUntil: this.time.now + 2000 + index * 800, visit: 0, facing: 1, climbing: false, status: "ready", health: 100, working: false, walking: false, walkSpan: 0, phase: index * 1.71 };
+			hit.on("pointerover", (pointer: Phaser.Input.Pointer) => { if (this.acceptsPointer(pointer, "base")) { slot.hovered = true; selection.setVisible(true); label.setVisible(true); actor.setDepth(850); } });
+			hit.on("pointerout", () => { slot.hovered = false; const selected = snapshot().selectedScavId === scavId; selection.setVisible(selected); label.setVisible(selected); actor.setDepth(actor.y); });
 			// Native pointer-up distinguishes a deliberate tap from a drag before opening the inspector.
 			actor.add([shadow, selection, body, label, order, hit]);
 			this.baseLayer.add(actor);
@@ -1242,7 +812,8 @@ export function createWorld(
 				if (cell.room?.id !== room?.id) { cell.lastCycles = null; cell.completedAt = -10000; cell.feedback.setVisible(false); }
 				cell.room = room;
 				const production = room ? state.roomProduction?.[room.id] : undefined;
-				cell.production = cell.station.setProduction(room, production ?? null);
+				cell.production = room ? getShelterProductionPresentation(room, production ?? null) : null;
+				if (cell.stationJob !== cell.production?.jobId) { cell.stationClock = 0; cell.stationJob = cell.production?.jobId ?? null; }
 				const productName = cell.production?.jobId ? cell.production.productName : "";
 				cell.productLabel.setText(productName.length > 29 ? `${productName.slice(0, 28)}…` : productName);
 				cell.working = Boolean(room?.status === "ready" && room.queue.length && room.workerIds.length && production?.rate && !production.reason);
@@ -1255,31 +826,21 @@ export function createWorld(
 				if (room) {
 					if (cell.lastCycles !== null && room.cycles > cell.lastCycles) {
 						cell.completedAt = this.time.now;
-						cell.feedback.setText(`+${room.cycles - cell.lastCycles} ГОТОВО`).setVisible(true).setAlpha(1).setY(43);
+						cell.feedback.setText(`+${room.cycles - cell.lastCycles} ГОТОВО`).setVisible(true).setAlpha(1).setY(projectShelterPoint({ ...cellPosition(cell.column, cell.row), x: cellPosition(cell.column, cell.row).x + 86, y: cellPosition(cell.column, cell.row).y + 93 }).y - 23);
 					}
 					cell.lastCycles = room.cycles;
 					const construction = room.construction;
 					const progress = construction ? construction.workDone / Math.max(1, construction.workRequired) : production?.progress ?? 0;
 					const color = construction ? 0xf6c58b : cell.operational === "blocked" ? 0xe9ad7f : 0xb2d692;
-					cell.progress.fillStyle(0x030e11).fillRect(1, 96, 170, 4);
-					cell.progress.fillStyle(color, .95).fillRect(1, 96, Phaser.Math.Clamp(progress, 0, 1) * 170, 4);
-					cell.progress.fillStyle(0xecf2d5, .24).fillRect(1, 96, Phaser.Math.Clamp(progress, 0, 1) * 170, 1);
-					for (let worker = 0; worker < Math.min(3, room.workerIds.length); worker++) {
-						const x = 162 - worker * 8;
-						cell.progress.fillStyle(cell.working ? 0xc7dcaa : 0x9eb7ad, .85).fillCircle(x, 7, 1.7).fillRoundedRect(x - 2.4, 9, 4.8, 4, 1);
-					}
+					const p = cellPosition(cell.column, cell.row), badge = projectShelterPoint({ x: p.x + 86, y: p.y + 93 });
+					cell.progress.fillStyle(0x071710).fillRect(badge.x - 35, badge.y + 4, 70, 3);
+					cell.progress.fillStyle(color, .95).fillRect(badge.x - 35, badge.y + 4, Phaser.Math.Clamp(progress, 0, 1) * 70, 3);
 					const reason = production?.reason?.toLocaleLowerCase("ru-RU") ?? "";
 					const briefReason = reason.includes("склад") || reason.includes("мест") ? "СКЛАД ПОЛОН" : reason.includes("рабоч") ? "НУЖЕН РАБОЧИЙ" : reason.includes("нужно") ? "НУЖНЫ РЕСУРСЫ" : production?.reason ?? "";
 					const status = construction ? `СТРОЙКА ${Math.floor(progress * 100)}%` : room.type === "storage" ? "ЗАПАСЫ" : room.type === "dormitory" ? "МЕСТА ОТРЯДА" : cell.working ? `${Math.floor((cell.production?.progress ?? 0) * 100)}% · ${cell.production?.stageLabel ?? "Сборка"}` : production?.reason ? briefReason : !room.workerIds.length ? "НУЖЕН РАБОЧИЙ" : production?.status === "Нет заказа" ? "БЕЗ ЗАКАЗА" : "ЖДЁТ ПАРТИЮ";
 					const clippedStatus = `${status.toLocaleUpperCase("ru-RU").slice(0, 17)}${status.length > 17 ? "…" : ""}`;
 					cell.status.setText(clippedStatus).setColor(construction ? "#ffd399" : cell.working ? "#d1efb0" : cell.operational === "blocked" ? "#edc294" : "#c1cbbc");
-					if (cell.working) {
-						cell.progress.fillStyle(0x0d2219).fillCircle(11, 90, 5);
-						polygon(cell.progress, [{ x: 9, y: 86 }, { x: 15, y: 90 }, { x: 9, y: 94 }], 0xc6e8a4);
-					} else if (cell.operational === "blocked") cell.progress.fillStyle(0xf0bd8f).fillRect(7, 86, 3, 8).fillRect(12, 86, 3, 8);
-					else if (construction) { line(cell.progress, [{ x: 7, y: 94 }, { x: 14, y: 87 }], 0xf4c687, 2.3); cell.progress.fillStyle(0xf4c687).fillRect(12, 85, 6, 3); }
-					else cell.progress.lineStyle(1.5, 0xb5c2b1, .85).strokeCircle(11, 90, 4);
-					cell.lamp.setAlpha(cell.backdrop ? construction ? .1 : cell.working ? .13 : .06 : construction ? .12 : cell.working ? .3 : .2);
+					cell.lamp.setAlpha(construction ? .1 : cell.working ? .18 : .06);
 				}
 			}
 			this.baseCaption.setText(`УБЕЖИЩЕ · УРОВЕНЬ ${state.level}`);
@@ -1295,11 +856,17 @@ export function createWorld(
 			return { x: start + (total > 1 ? (onLeft ? rank : rank - left) * span / (total - 1) : span / 2), y: 129 };
 		}
 
+		private placeActor(slot: ScavActor, at: Point): void {
+			slot.position = { ...at };
+			const visual = projectShelterPoint(at);
+			slot.actor.setPosition(visual.x, visual.y).setDepth(slot.hovered ? 850 : visual.y);
+		}
+
 		private sendActor(slot: ScavActor, goal: string, at: Point): void {
 			if (slot.goal === goal && Math.hypot(slot.anchor.x - at.x, slot.anchor.y - at.y) < 1) return;
 			slot.goal = goal; slot.anchor = { ...at };
-			slot.route = reducedMotion ? [] : planShelterRoute({ x: slot.actor.x, y: slot.actor.y }, at);
-			if (reducedMotion) slot.actor.setPosition(at.x, at.y);
+			slot.route = reducedMotion ? [] : planShelterRoute(slot.position, at);
+			if (reducedMotion) this.placeActor(slot, at);
 			slot.working = false;
 		}
 
@@ -1320,8 +887,8 @@ export function createWorld(
 				slot.assignment = room?.id ?? null; slot.status = scav.status; slot.health = scav.health;
 				if (this.drag?.scavId === scav.id && (scav.status === "raiding" || scav.health < 25 || this.drag.shelter !== state.shelter || this.drag.scav !== scav)) this.cancelScavDrag();
 				if (scav.status === "raiding") { slot.actor.setVisible(false); slot.route = []; slot.goal = "raiding"; slot.working = false; return; }
-				if (previousStatus === "raiding") slot.actor.setPosition(112, 129);
-				slot.actor.setVisible(true).setScale(1.05).setAlpha(this.drag?.scavId === scav.id ? .45 : scav.status === "wounded" ? .78 : 1);
+				if (previousStatus === "raiding") this.placeActor(slot, { x: 112, y: 129 });
+				slot.actor.setVisible(true).setScale(.78).setAlpha(this.drag?.scavId === scav.id ? .45 : scav.status === "wounded" ? .78 : 1);
 				if (scav.status === "wounded" && (!room || scav.health < 25)) {
 					const rest = rooms.find((candidate) => candidate.type === "medbay" && candidate.status === "ready") ?? rooms.find((candidate) => candidate.type === "dormitory" && candidate.status === "ready");
 					const p = rest ? cellPosition(rest.column, rest.row) : null;
@@ -1371,52 +938,37 @@ export function createWorld(
 
 		private animateShelter(time: number, delta: number): void {
 			const step = Math.min(Math.max(delta, 0), 100) / 1000;
-			// A single car owns vertical travel. Walking actors never consume a
-			// vertical route leg; one shared delta advances pickup, doors and riders.
+			// The shared platform owns travel along the central passage. Walking
+			// actors wait for pickup; one delta advances its gate and passenger.
 			const liftRequests: LiftRequest[] = [];
 			for (const [id, slot] of this.scavs) {
 				const next = slot.route[0];
 				const passenger = this.liftModel.passengerId === id;
-				if (slot.actor.visible && next && Math.abs(slot.actor.x - SHELTER_SHAFT_X) < .01 && (passenger || Math.abs(next.y - slot.actor.y) > .01) && (this.drag?.scavId !== id || passenger)) liftRequests.push({ id, from: slot.actor.y, to: next.y });
+				if (slot.actor.visible && next && Math.abs(slot.position.x - SHELTER_SHAFT_X) < .01 && (passenger || Math.abs(next.y - slot.position.y) > .01) && (this.drag?.scavId !== id || passenger)) liftRequests.push({ id, from: slot.position.y, to: next.y });
 			}
 			const lift = advanceShelterLift(this.liftModel, liftRequests, step * 1000);
 			this.liftModel = lift.state;
-			if (lift.state.passengerId) this.scavs.get(lift.state.passengerId)?.actor.setPosition(SHELTER_SHAFT_X, lift.state.y);
+			const rider = lift.state.passengerId ? this.scavs.get(lift.state.passengerId) : null;
+			if (rider) this.placeActor(rider, { x: SHELTER_SHAFT_X, y: lift.state.y });
 			for (const drop of lift.dropped) {
 				const slot = this.scavs.get(drop.id);
 				if (!slot?.actor.visible) continue;
-				slot.actor.setPosition(SHELTER_SHAFT_X, drop.to);
+				this.placeActor(slot, { x: SHELTER_SHAFT_X, y: drop.to });
 				slot.route = planShelterRoute({ x: SHELTER_SHAFT_X, y: drop.to }, slot.anchor);
 			}
 			this.ambient.clear();
-			if (!reducedMotion) {
-				for (let n = 0; n < 5; n++) {
-					const cycle = (time / 11000 + n / 5) % 1;
-					this.ambient.fillStyle(0xb1c2b8, .07 * (1 - cycle)).fillEllipse(651 - cycle * 24, 26 - cycle * 21, 3 + cycle * 17, 3 + cycle * 9);
-				}
-				for (let n = 0; n < 7; n++) {
-					const cycle = (time / 17000 + n / 7) % 1;
-					this.ambient.fillStyle(0xdac99c, .1 * Math.sin(cycle * Math.PI)).fillRect(227 + n * 74 + cycle * 11, 126 - cycle * 35, 1, 1);
-				}
-			}
-			const focusedRoom = this.viewState?.shelter?.rooms.find((room) => room.id === this.viewState?.selectedRoomId);
-			if (focusedRoom) {
-				const y = cellPosition(focusedRoom.column, focusedRoom.row).y + 83;
-				line(this.ambient, [{ x: 38, y }, { x: 802, y }], ROOM_STYLE[focusedRoom.type]?.light ?? C.gold, 1.3, .12);
-				this.ambient.fillStyle(C.light, .48).fillRect(414, y - 1, 12, 2);
-			}
 			for (const [id, slot] of this.scavs) {
 				let walkedDistance = 0;
 				if (slot.actor.visible && this.drag?.scavId !== id) {
 					this.patrolActor(slot, id, time);
 					const speed = slot.status === "wounded" ? 27 : 58;
-					const next = slot.route[0], vertical = this.liftModel.passengerId === id || Boolean(next && Math.abs(next.y - slot.actor.y) > .01);
+					const next = slot.route[0], vertical = this.liftModel.passengerId === id || Boolean(next && Math.abs(next.y - slot.position.y) > .01);
 					const hadRoute = slot.route.length > 0;
-					const distance = next ? Math.hypot(next.x - slot.actor.x, next.y - slot.actor.y) : 0;
-					const motion = advanceShelterRoute({ x: slot.actor.x, y: slot.actor.y }, slot.route, vertical ? 0 : Math.min(speed * step, distance));
-					if (!vertical) walkedDistance = Math.abs(motion.point.x - slot.actor.x);
+					const distance = next ? Math.hypot(next.x - slot.position.x, next.y - slot.position.y) : 0;
+					const motion = advanceShelterRoute(slot.position, slot.route, vertical ? 0 : Math.min(speed * step, distance));
+					if (!vertical) walkedDistance = Math.abs(motion.point.x - slot.position.x);
 					slot.route = motion.route;
-					if (hadRoute) slot.actor.setPosition(motion.point.x, motion.point.y);
+					if (hadRoute) this.placeActor(slot, motion.point);
 					slot.walking = hadRoute && !vertical; slot.climbing = this.liftModel.passengerId === id;
 					if (slot.walking && !vertical) slot.facing = motion.facing;
 					if (hadRoute && motion.arrived) { slot.dwellUntil = time + 6500 + (slot.phase % 4) * 1700; slot.walking = false; slot.climbing = false; }
@@ -1448,36 +1000,27 @@ export function createWorld(
 						slot.label.setY(Math.max(-64, (this.viewCamera.y + 8 / this.viewCamera.zoom - slot.actor.y) / scale + slot.label.height * slot.label.scaleY / 2));
 					}
 					if ((slot.hovered || this.viewState?.selectedScavId === id) && slot.route.length) {
-						line(this.ambient, [{ x: slot.actor.x, y: slot.actor.y }, ...slot.route], 0xe8c99d, 2, .26);
-						this.ambient.lineStyle(1.2, 0xe8c99d, .55).strokeEllipse(slot.anchor.x, slot.anchor.y, 17, 6);
+						line(this.ambient, [slot.position, ...slot.route].map(projectShelterPoint), 0xe8c99d, 2, .26);
+						const target = projectShelterPoint(slot.anchor);
+						this.ambient.lineStyle(1.2, 0xe8c99d, .55).strokeEllipse(target.x, target.y, 17, 6);
 					}
 				}
 			}
-			this.elevator.setY(this.liftModel.y - 49);
+			const liftPoint = projectShelterPoint({ x: SHELTER_SHAFT_X, y: this.liftModel.y });
+			this.elevator.setPosition(liftPoint.x, liftPoint.y).setDepth(liftPoint.y - 1);
 			this.liftDoors.clear();
-			if (!this.liftModel.doorOpen) {
-				this.liftDoors.fillStyle(0x647260, .5).fillRect(4, 7, 11, 42).fillRect(17, 7, 11, 42);
-				line(this.liftDoors, [{ x: 16, y: 7 }, { x: 16, y: 49 }], 0xb8b8a0, 1.4, .8);
-			} else this.liftDoors.fillStyle(0x607356).fillRect(2, 7, 3, 42).fillRect(27, 7, 3, 42);
-			this.liftDoors.fillStyle(this.liftModel.phase === "travel" ? 0xe0c17b : this.liftModel.doorOpen ? 0xb1d28a : 0x7f9384).fillCircle(27, 4, 1.5);
+			if (!this.liftModel.doorOpen) line(this.liftDoors, [{ x: -13, y: -21 }, { x: 13, y: -21 }], 0xb4b692, 1.6, .85);
+			this.liftDoors.fillStyle(this.liftModel.phase === "travel" ? 0xe0c17b : this.liftModel.doorOpen ? 0xb1d28a : 0x7f9384).fillCircle(13, -22, 2);
 			for (const cell of this.cells.values()) {
 				const g = cell.animation;
 				g.clear();
 				cell.productLabel.setVisible(Boolean(cell.production?.jobId) && (this.viewCamera.zoom >= 1.6 || cell.hovered || this.viewState?.selectedRoomId === cell.room?.id));
 				if (!cell.room) continue;
-				const elapsed = time - cell.completedAt;
-				cell.feedback.setVisible(elapsed >= 0 && elapsed < 1800).setAlpha(reducedMotion ? 1 : Phaser.Math.Clamp(1 - elapsed / 1800, 0, 1)).setY(43 - (reducedMotion ? 0 : Math.max(0, elapsed) / 120));
-				if (cell.room.status !== "ready") {
-					g.fillStyle(C.gold, .9).fillCircle(115, 62, 3);
-					line(g, [{ x: 115, y: 65 }, { x: 115, y: 79 }], 0x938063, 7);
-					line(g, [{ x: 117, y: 68 }, { x: 127, y: 62 + (reducedMotion ? 0 : Math.sin(time / 180) * 4) }], 0xccb287, 2);
-					if (!reducedMotion) for (let n = 0; n < 3; n++) {
-						const cycle = (time / 520 + n * .3) % 1;
-						line(g, [{ x: 128, y: 62 }, { x: 128 + cycle * (7 + n * 3), y: 62 + cycle * 13 }], 0xffd07c, 1, 1 - cycle);
-					}
-					continue;
-				}
-				cell.station.update(time, delta, reducedMotion);
+				const elapsed = time - cell.completedAt, p = cellPosition(cell.column, cell.row);
+				const badge = projectShelterPoint({ x: p.x + 86, y: p.y + 93 });
+				cell.feedback.setVisible(elapsed >= 0 && elapsed < 1800).setAlpha(reducedMotion ? 1 : Phaser.Math.Clamp(1 - elapsed / 1800, 0, 1)).setY(badge.y - 23 - (reducedMotion ? 0 : Math.max(0, elapsed) / 120));
+				if (cell.production) cell.stationClock = advanceShelterStationClock(cell.stationClock, delta, cell.production, reducedMotion);
+				paintIsometricProduction(g, cell.column, cell.row, cell.room, cell.production, cell.stationClock, reducedMotion);
 			}
 		}
 		private paintMap(): void {
