@@ -240,7 +240,7 @@ describe("multiplayer loot and durable headquarters economy", () => {
     } }), "192.0.2.42");
     await Promise.resolve();
     time += 61_000; service.tick();
-    const rejoined = await enter(first.session); expect(rejoined.state.self.id).toBe(first.session.id);
+    const rejoined = await enter(first.session); expect(rejoined.state.self.id).toBe(first.session.id!);
     expect(rejoined.state.self.cargo).toBe(50); expect(rejoined.state.self.lootItems).toEqual([item]);
     release(); const reply = (await pendingReply)!; expect(reply.status).toBe(200);
     const result = await reply.json() as LiveSnapshot; expect(result.self.cargo).toBe(0); expect(result.self.lootItems).toEqual([]);
