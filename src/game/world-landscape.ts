@@ -33,8 +33,8 @@ export function generateLandscape(world: LandscapeWorld, seed: string): { terrai
   const key = (point: LivePoint): number => point.y * width + point.x;
   for (const obstacle of world.obstacles) for (let y = obstacle.y; y < obstacle.y + obstacle.height; y++) for (let x = obstacle.x; x < obstacle.x + obstacle.width; x++) blocked[y * width + x] = 1;
   for (const poi of world.pois) for (let y = poi.y; y < poi.y + poi.height; y++) for (let x = poi.x; x < poi.x + poi.width; x++) footprints[y * width + x] = 1;
-  const paths: LiveLandscapePath[] = [{ id: 'river-east', name: 'Речка Ольховая', kind: 'river', width: 4.5,
-    points: riverCurve([{ x: 127, y: 42 }, { x: 117, y: 52 }, { x: 105, y: 60 }, { x: 96, y: 73 }, { x: 91, y: 89 }, { x: 96, y: 104 }, { x: 89, y: 127 }], width, height) }];
+  const paths: LiveLandscapePath[] = [{ id: 'river-east', name: 'Речка Ольховая', kind: 'river', width: 5,
+    points: riverCurve([{ x: 191, y: 54 }, { x: 174, y: 69 }, { x: 153, y: 87 }, { x: 137, y: 111 }, { x: 132, y: 130 }, { x: 141, y: 149 }, { x: 129, y: 171 }, { x: 135, y: 191 }], width, height) }];
   const river = paths[0]!;
   // The same bounded curve drives the visible path, bank raster and collision water.
   // Index expanded segment bounds by row before evaluating distances near the bank.
@@ -46,11 +46,13 @@ export function generateLandscape(world: LandscapeWorld, seed: string): { terrai
   const riverRows = Array.from({ length: height }, (_, y) => segments.filter(segment => y >= segment.minY && y <= segment.maxY));
   for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
     const wave = Math.sin(x / 11 + phase) * .11 + Math.cos(y / 13 - phase) * .13 + Math.sin((x + y) / 17 + phase) * .08;
-    const forest = ((x - 101) / 46) ** 2 + ((y - 31) / 50) ** 2 < 1 + wave || x < 10 + Math.sin(y / 12 + phase) * 6 && y > 19;
+    const forest = ((x - 149) / 57) ** 2 + ((y - 36) / 57) ** 2 < 1 + wave
+      || ((x - 106) / 23) ** 2 + ((y - 106) / 74) ** 2 < .75 + wave
+      || x < 12 + Math.sin(y / 17 + phase) * 7 && y > 30;
     ground[y * width + x] = forest ? 'f' : 'g';
     let riverDistance = Infinity;
     for (const segment of riverRows[y]!) if (x >= segment.minX && x <= segment.maxX) riverDistance = Math.min(riverDistance, segmentDistance({ x, y }, segment.a, segment.b));
-    const lake = ((x - 114) / 10) ** 2 + ((y - 61) / 7) ** 2;
+    const lake = ((x - 172) / 13) ** 2 + ((y - 91) / 10) ** 2;
     if (riverDistance < river.width / 2 + wave * .6 || lake < .9 + wave * .3) ground[y * width + x] = 'w';
     else if (riverDistance < river.width / 2 + 1.8 || lake < 1.5 + wave * .4) ground[y * width + x] = 's';
   }
@@ -110,10 +112,10 @@ export function generateLandscape(world: LandscapeWorld, seed: string): { terrai
     // Centre cells of a connection remain traversable even at a doorway or bridge.
     for (const point of points) if (ground[key(point)] === 'w') ground[key(point)] = code;
   };
-  const connect = (a: LivePoint, b: LivePoint, id: string, kind: 'road' | 'trail' = 'road'): LivePoint[] => {
+  const connect = (a: LivePoint, b: LivePoint, id: string, kind: 'road' | 'trail' = 'road', name?: string): LivePoint[] => {
     const cells = route(a, b), points = simplify(cells), pathWidth = kind === 'trail' ? 2 : 3.5;
     paint(cells, pathWidth, kind === 'trail' ? 'p' : 'r');
-    paths.push({ id, name: kind === 'trail' ? 'Пешеходная тропа' : 'Местная дорога', kind, width: pathWidth, points });
+    paths.push({ id, name: name ?? (kind === 'trail' ? 'Пешеходная тропа' : 'Местная дорога'), kind, width: pathWidth, points });
     return cells;
   };
   const nodes = world.pois.map(poi => poi.entrances[0]!).concat(world.extracts), linked = new Set([0]);
@@ -123,12 +125,52 @@ export function generateLandscape(world: LandscapeWorld, seed: string): { terrai
     for (const a of linked) for (let b = 0; b < nodes.length; b++) if (!linked.has(b) && distance(nodes[a]!, nodes[b]!) < minimum) { first = a; second = b; minimum = distance(nodes[a]!, nodes[b]!); }
     connect(nodes[first]!, nodes[second]!, `road-${connection++}`, world.pois[second]?.districtId === 'sawmill' ? 'trail' : 'road'); linked.add(second);
   }
-  // Additional connections form loops rather than forcing everyone through a single junction.
-  for (const [a, b] of [[0, 5], [1, 9], [4, 12], [6, 10], [9, 14], [10, 15]] as const) connect(nodes[a]!, nodes[b]!, `road-${connection++}`);
+  // The freight roads connect district clusters; extra forest paths create flank approaches.
+  for (const [a, b] of [[0, 5], [1, 9], [4, 12], [6, 10], [9, 14], [10, 15], [16, 21], [18, 22], [20, 25], [23, 27], [24, 29], [26, 30]] as const) connect(nodes[a]!, nodes[b]!, `road-${connection++}`);
   for (const poi of world.pois) for (let index = 1; index < poi.entrances.length; index++) connect(poi.entrances[0]!, poi.entrances[index]!, `access-${poi.id}-${index}`, 'trail');
-  const railPoints = [{ x: 1, y: 115 }, { x: 21, y: 105 }, { x: 35, y: 92 }, { x: 43, y: 73 }, { x: 60, y: 61 }, { x: 82, y: 51 }, { x: 104, y: 39 }, { x: 126, y: 24 }];
+  const nearestClear = (point: LivePoint): LivePoint => { for (let radius = 0; radius < 24; radius++) for (let y = point.y - radius; y <= point.y + radius; y++) for (let x = point.x - radius; x <= point.x + radius; x++) if (clear({ x, y }) && !footprints[y * width + x]) return { x, y }; throw new Error('Transport corridor has no clear port'); };
+  const bridgeRows: number[] = [];
+  for (const crossing of [
+    { id: 'bridge-mill', name: 'Лесопильная переправа', x: 150, y: 98, kind: 'road' as const },
+    { id: 'bridge-stone', name: 'Каменный мост', x: 134, y: 134, kind: 'road' as const },
+    { id: 'bridge-meadow', name: 'Луговой настил', x: 132, y: 173, kind: 'trail' as const },
+  ]) {
+    let deck: LivePoint[] | undefined;
+    for (let radius = 0; !deck && radius <= 25; radius++) for (const y of radius ? [crossing.y - radius, crossing.y + radius] : [crossing.y]) {
+      if (y < 3 || y > height - 4 || bridgeRows.some(row => Math.abs(row - y) < 18)) continue;
+      const riverCenter = river.points.reduce((near, point) => Math.abs(point.y - y) < Math.abs(near.y - y) ? point : near).x;
+      for (let x = Math.round(riverCenter) - 10; x <= Math.round(riverCenter) + 10 && !deck; x++) {
+        if (ground[y * width + x] !== 'w') continue;
+        const first = x; while (ground[y * width + x + 1] === 'w') x++;
+        if (x - first < 2 || x - first > 18) continue;
+        const candidate = Array.from({ length: x - first + 13 }, (_, index) => ({ x: first - 6 + index, y }));
+        if (candidate.every(clear) && candidate[0]!.x >= 1 && candidate.at(-1)!.x < width - 1 && nodes.some(point => point.x < candidate[0]!.x) && nodes.some(point => point.x > candidate.at(-1)!.x)) deck = candidate;
+      }
+      if (deck) break;
+    }
+    if (!deck) throw new Error('No clear banks for authored crossing');
+    bridgeRows.push(deck[0]!.y);
+    const pathWidth = crossing.kind === 'trail' ? 2 : 4;
+    paint(deck, pathWidth, crossing.kind === 'trail' ? 'p' : 'r');
+    paths.push({ id: crossing.id, name: crossing.name, kind: crossing.kind, width: pathWidth, points: [deck[0]!, deck.at(-1)!] });
+    for (const [index, end] of [deck[0]!, deck.at(-1)!].entries()) {
+      const sameBank = nodes.filter(point => index === 0 ? point.x < end.x : point.x > end.x).sort((a, b) => distance(a, end) - distance(b, end))[0]!;
+      connect(end, sameBank, `${crossing.id}-approach-${index}`, 'trail', `${crossing.name}: подход`);
+    }
+  }
+  const highways = [
+    { id: 'highway-north', name: 'Северный грузовой тракт', points: [{ x: 8, y: 25 }, { x: 55, y: 33 }, { x: 95, y: 48 }, { x: 125, y: 64 }, { x: 166, y: 48 }, { x: 184, y: 10 }] },
+    { id: 'highway-cargo', name: 'Грузовой проспект', points: [{ x: 10, y: 174 }, { x: 49, y: 145 }, { x: 70, y: 110 }, { x: 103, y: 87 }, { x: 137, y: 71 }] },
+    { id: 'trail-meadows', name: 'Обход через луга', points: [{ x: 47, y: 185 }, { x: 96, y: 166 }, { x: 116, y: 173 }, { x: 148, y: 175 }, { x: 180, y: 182 }] },
+  ];
+  for (const highway of highways) {
+    const cells: LivePoint[] = [];
+    for (let index = 1; index < highway.points.length; index++) cells.push(...route(nearestClear(highway.points[index - 1]!), nearestClear(highway.points[index]!)).slice(index === 1 ? 0 : 1));
+    const trail = highway.id.startsWith('trail'), pathWidth = trail ? 2 : 4;
+    paint(cells, pathWidth, trail ? 'p' : 'r'); paths.push({ id: highway.id, name: highway.name, kind: trail ? 'trail' : 'road', width: pathWidth, points: simplify(cells) });
+  }
+  const railPoints = [{ x: 1, y: 176 }, { x: 29, y: 159 }, { x: 59, y: 136 }, { x: 79, y: 108 }, { x: 98, y: 84 }, { x: 125, y: 67 }, { x: 155, y: 55 }, { x: 190, y: 32 }];
   const rail: LivePoint[] = [];
-  const nearestClear = (point: LivePoint): LivePoint => { for (let radius = 0; radius < 16; radius++) for (let y = point.y - radius; y <= point.y + radius; y++) for (let x = point.x - radius; x <= point.x + radius; x++) if (clear({ x, y })) return { x, y }; throw new Error('Rail corridor has no clear port'); };
   for (let index = 1; index < railPoints.length; index++) rail.push(...route(nearestClear(railPoints[index - 1]!), nearestClear(railPoints[index]!)).slice(index === 1 ? 0 : 1));
   paint(rail, 2, 't'); paths.push({ id: 'rail-freight', name: 'Грузовая ветка', kind: 'rail', width: 2, points: simplify(rail) });
 

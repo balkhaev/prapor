@@ -26,6 +26,15 @@ export interface LiveLandscapePath {
   id: string; name: string; kind: "road" | "trail" | "rail" | "river";
   width: number; points: LivePoint[];
 }
+/** Suggested exploration stops; these are guidance, not rewarded quest assignments. */
+export interface LiveWorldRoute {
+  id: string; name: string; description: string;
+  districtId: LiveDistrictId; purpose: LivePurpose; poiIds: string[];
+}
+export interface LiveRouteSummary {
+  id: string; name: string; description: string;
+  districtId: LiveDistrictId; purpose: LivePurpose; stops: string[];
+}
 export interface LiveObstacle extends LivePoint {
   width: number; height: number;
   kind?: "building" | "wall" | "container" | "barricade" | "tree" | "water";
@@ -59,6 +68,7 @@ export interface LiveWorld {
   /** Older world/fixture contracts can omit these; generated V2 worlds always provide both. */
   terrainRows?: string[];
   paths?: LiveLandscapePath[];
+  routes?: LiveWorldRoute[];
 }
 export interface LiveDistrict extends LivePoint {
   id: LiveDistrictId; name: string; description: string;
@@ -141,6 +151,7 @@ export interface LiveStatus {
   startedAt: number;
   maps: LiveMapSummary[];
   districts: Array<LiveDistrict & { online: number; npcs: number }>;
+  routes?: LiveRouteSummary[];
 }
 export interface LiveSnapshot {
   server: LiveStatus;
