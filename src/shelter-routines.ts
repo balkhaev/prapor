@@ -5,13 +5,15 @@ import {
 import type { ShelterLandscapeDecoration } from "./shelter-landscape";
 import type { ShelterPoint } from "./shelter-motion";
 
-export type ShelterRoutineActivity = "rest" | "warm" | "inspect" | "lookout" | "chat" | "stroll";
+export type ShelterRoutineActivity = "rest" | "warm" | "inspect" | "lookout" | "chat" | "stroll" | "carry" | "sweep" | "maintain";
+export type ShelterRoutineCargo = "crate" | "firewood";
 export interface ShelterRoutine {
 	point: ShelterPoint;
 	activity: ShelterRoutineActivity;
 	label: string;
 	dwellMs: number;
 	lookAt?: ShelterPoint;
+	cargo?: ShelterRoutineCargo;
 }
 export interface ShelterRoutineInput {
 	scavId: string;
@@ -24,19 +26,21 @@ export interface ShelterRoutineInput {
 	reservedTargets?: readonly ShelterPoint[];
 }
 
-const MAX_CANDIDATES = 64;
+const MAX_CANDIDATES = 128;
 const PERSON_SPACE = 18;
 const BUILDING_CLEARANCE = 8;
 const PROP_CLEARANCE = 7;
 const SOLID_PROPS = new Set<string>(["bench", "barrels", "camp", "logs", "woodpile", "stump", "tree", "rock", "bush", "lamp"]);
-const ACTIVITIES: readonly ShelterRoutineActivity[] = ["rest", "warm", "inspect", "lookout", "chat", "stroll"];
+const ACTIVITIES: readonly ShelterRoutineActivity[] = ["rest", "warm", "inspect", "lookout", "chat", "stroll", "carry", "sweep", "maintain"];
 const LABELS: Record<ShelterRoutineActivity, string> = {
 	rest: "Отдыхает", warm: "Греется у костра", inspect: "Проверяет припасы",
 	lookout: "Осматривает окрестности", chat: "Общается", stroll: "Прогуливается",
+	carry: "Раскладывает припасы", sweep: "Подметает двор", maintain: "Занимается мелким ремонтом",
 };
 const DWELL: Record<ShelterRoutineActivity, readonly [number, number]> = {
 	rest: [18000, 35000], warm: [14000, 29000], inspect: [9000, 17000],
 	lookout: [15000, 30000], chat: [18000, 33000], stroll: [4000, 8000],
+	carry: [8500, 14500], sweep: [10000, 18500], maintain: [12000, 20500],
 };
 const finitePoint = (point: ShelterPoint) => Number.isFinite(point.x) && Number.isFinite(point.y);
 const distance = (a: ShelterPoint, b: ShelterPoint) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -52,8 +56,8 @@ function distanceToSegment(point: ShelterPoint, from: ShelterPoint, to: ShelterP
 	const t = length ? Math.max(0, Math.min(1, ((point.x - from.x) * dx + (point.y - from.y) * dy) / length)) : 0;
 	return Math.hypot(point.x - from.x - t * dx, point.y - from.y - t * dy);
 }
-interface Candidate { point: ShelterPoint; activity: ShelterRoutineActivity; lookAt?: ShelterPoint; anchor: string }
-interface RoutinePlan { candidates: Candidate[]; seed: number; reachable: (candidate: Candidate) => boolean }
+interface Candidate { point: ShelterPoint; activity: ShelterRoutineActivity; lookAt?: ShelterPoint; anchor: string; cargo?: ShelterRoutineCargo }
+interface RoutinePlan { candidates: Candidate[]; seed: number; preferred: ShelterRoutineActivity; reachable: (candidate: Candidate) => boolean }
 
 function prepareRoutine(input: ShelterRoutineInput): RoutinePlan | null {
 	if (!finitePoint(input.from) || !input.sites.length) return null;
@@ -74,17 +78,17 @@ function prepareRoutine(input: ShelterRoutineInput): RoutinePlan | null {
 		&& reserved.every((other) => distance(point, other) >= PERSON_SPACE);
 	const candidates: Candidate[] = [];
 	const keys = new Set<string>();
-	const add = (point: ShelterPoint, activity: ShelterRoutineActivity, anchor: string, lookAt?: ShelterPoint) => {
+	const add = (point: ShelterPoint, activity: ShelterRoutineActivity, anchor: string, lookAt?: ShelterPoint, cargo?: ShelterRoutineCargo) => {
 		if (candidates.length >= MAX_CANDIDATES || !safePoint(point)) return;
 		const key = `${activity}:${pointKey(point)}`;
 		if (keys.has(key)) return;
-		keys.add(key); candidates.push({ point, activity, anchor, ...(lookAt ? { lookAt } : {}) });
+		keys.add(key); candidates.push({ point, activity, anchor, ...(lookAt ? { lookAt } : {}), ...(cargo ? { cargo } : {}) });
 	};
 	const visit = Number.isFinite(input.visit) ? Math.max(0, Math.floor(input.visit)) : 0;
 	const identity = `${input.scavId}:${input.personality ?? ""}`;
 	const seed = hash(`${identity}:${visit}`);
 	// Sorting props prevents a polling response's object order from changing the routine.
-	const anchors = decorations.filter((prop) => prop.owned && owned(prop.point) && ["camp", "bench", "barrels", "gate"].includes(prop.kind)
+	const anchors = decorations.filter((prop) => prop.owned && owned(prop.point) && ["camp", "bench", "barrels", "gate", "woodpile", "logs"].includes(prop.kind)
 		&& !rects.some((rect) => prop.point.x > rect.x && prop.point.x < rect.x + rect.width && prop.point.y > rect.y && prop.point.y < rect.y + rect.height))
 		.sort((a, b) => a.kind.localeCompare(b.kind) || a.point.y - b.point.y || a.point.x - b.point.x).slice(0, 12);
 	for (const prop of anchors) {
@@ -99,7 +103,14 @@ function prepareRoutine(input: ShelterRoutineInput): RoutinePlan | null {
 		for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
 			const point = { x: prop.point.x + dx! * radius, y: prop.point.y + dy! * radius };
 			add(point, activity, anchor, prop.point);
-			if (prop.kind !== "barrels" && partner) add(point, "chat", anchor, partner);
+			if (["barrels", "woodpile", "logs"].includes(prop.kind)) add(point, "carry", anchor, prop.point, prop.kind === "barrels" ? "crate" : "firewood");
+			if (prop.kind === "bench") add(point, "maintain", anchor, prop.point);
+			if (prop.kind === "camp" || prop.kind === "bench") {
+				// Sweep beside gathering places, outside both the prop and its walking margin.
+				const sweepPoint = { x: prop.point.x + dx! * (radius + 12), y: prop.point.y + dy! * (radius + 12) };
+				add(sweepPoint, "sweep", anchor, point);
+				if (partner) add(point, "chat", anchor, partner);
+			}
 		}
 	}
 	// Someone already waiting at a gathering spot gives a second person a natural partner.
@@ -114,6 +125,8 @@ function prepareRoutine(input: ShelterRoutineInput): RoutinePlan | null {
 		const offset = hash(`${identity}:${anchor}`), angle = offset / 4294967296 * Math.PI * 2;
 		add({ x: clearing.x + Math.cos(angle) * 9, y: clearing.y + Math.sin(angle) * 9 }, "stroll", anchor);
 		add(clearing, "stroll", anchor);
+		add({ x: clearing.x + Math.cos(angle) * 9, y: clearing.y + Math.sin(angle) * 9 }, "sweep", anchor, clearing);
+		add(clearing, "sweep", anchor, { x: clearing.x + 3, y: clearing.y + 2 });
 	}
 	if (!candidates.length) return null;
 	const reachable = (candidate: Candidate) => {
@@ -126,14 +139,19 @@ function prepareRoutine(input: ShelterRoutineInput): RoutinePlan | null {
 		}
 		return true;
 	};
-	return { candidates, seed, reachable };
+	// Each person has a stable order of available activities. A visit advances that
+	// order instead of randomly choosing the same stop and chore again and again.
+	const cycle = ACTIVITIES.filter((activity) => candidates.some((candidate) => candidate.activity === activity))
+		.sort((a, b) => hash(`${identity}:cycle:${a}`) - hash(`${identity}:cycle:${b}`) || a.localeCompare(b));
+	return { candidates, seed, preferred: cycle[visit % cycle.length]!, reachable };
 }
 
 function routineFor(candidate: Candidate, seed: number): ShelterRoutine {
 	const [min, max] = DWELL[candidate.activity], dwellSeed = hash(`${seed}:dwell:${candidate.anchor}`);
 	return {
-		point: { ...candidate.point }, activity: candidate.activity, label: LABELS[candidate.activity],
+		point: { ...candidate.point }, activity: candidate.activity, label: candidate.cargo === "firewood" ? "Складывает дрова" : LABELS[candidate.activity],
 		dwellMs: min + dwellSeed % (max - min + 1), ...(candidate.lookAt ? { lookAt: { ...candidate.lookAt } } : {}),
+		...(candidate.cargo ? { cargo: candidate.cargo } : {}),
 	};
 }
 
@@ -141,8 +159,7 @@ function routineFor(candidate: Candidate, seed: number): ShelterRoutine {
 export function getShelterRoutine(input: ShelterRoutineInput): ShelterRoutine | null {
 	const plan = prepareRoutine(input);
 	if (!plan) return null;
-	const { seed, candidates } = plan;
-	const preferred = ACTIVITIES[seed % ACTIVITIES.length]!;
+	const { seed, candidates, preferred } = plan;
 	const personalityPreference: Record<string, ShelterRoutineActivity> = { veteran: "warm", collector: "inspect", careful: "lookout", runner: "stroll" };
 	const favourite = personalityPreference[input.personality ?? ""];
 	const score = (candidate: Candidate) => {

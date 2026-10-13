@@ -1,17 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import type Phaser from "phaser";
-import { ROOM_DEFINITIONS, getRoomBounds, getRoomEntrance, getRoomLocalPoint, type RoomFacing, type RoomInstance } from "../src/game/shelter";
+import { ROOM_DEFINITIONS, getRoomBounds, getRoomEntrance, getRoomLocalPoint, getRoomLocalSize, type RoomFacing, type RoomInstance } from "../src/game/shelter";
 import { getShelterChimney, paintIsometricProduction, paintIsometricRoom } from "../src/shelter-isometric-art";
 import { projectShelterPoint, shelterRectPolygon } from "../src/shelter-isometric";
 import type { ProductionPresentation } from "../src/shelter-production";
 
 type Point = { x: number; y: number };
 function graphics() {
-	const points: Point[] = [], faces: { color: number; points: Point[] }[] = [];
-	let color = 0;
+	const points: Point[] = [], faces: { color: number; alpha: number; points: Point[] }[] = [];
+	let color = 0, alpha = 1;
 	const g = {
-		fillStyle(value: number) { color = value; return g; }, lineStyle() { return g; },
-		fillPoints(values: Point[]) { faces.push({ color, points: structuredClone(values) }); points.push(...values); return g; },
+		fillStyle(value: number, opacity = 1) { color = value; alpha = opacity; return g; }, lineStyle() { return g; },
+		fillPoints(values: Point[]) { faces.push({ color, alpha, points: structuredClone(values) }); points.push(...values); return g; },
 		strokePoints(values: Point[]) { points.push(...values); return g; },
 		lineBetween(x: number, y: number, x2: number, y2: number) { points.push({ x, y }, { x: x2, y: y2 }); return g; },
 		fillCircle(x: number, y: number) { points.push({ x, y }); return g; },
@@ -30,6 +30,17 @@ const mean = (points: Point[]) => ({ x: points.reduce((sum, point) => sum + poin
 const near = (a: Point, b: Point) => Math.abs(a.x - b.x) < 1e-6 && Math.abs(a.y - b.y) < 1e-6;
 
 describe("oriented cutaway building artwork", () => {
+	test("turned buildings cast their soft foundation shadows in the same world direction", () => {
+		for (const facing of [0, 1, 2, 3] as const) {
+			const building = room("workshop", facing), drawing = graphics(), { width, height } = getRoomLocalSize(building);
+			paintIsometricRoom(drawing.g, building.column, building.row, building);
+			const center = getRoomLocalPoint(building, width / 2 - .5, height / 2 - .5);
+			const shadow = drawing.faces[0]!, at = projectShelterPoint({ x: center.x + 5, y: center.y + 7 });
+			expect(shadow.alpha).toBeLessThan(.1);
+			expect(near(mean(shadow.points), { x: at.x, y: at.y - .12 })).toBe(true);
+		}
+	});
+
 	test("smoke anchors stay centred on the drawn open chimney after every turn", () => {
 		for (const facing of [0, 1, 2, 3] as const) {
 			const building = room("workshop", facing), drawing = graphics(), chimney = getShelterChimney(building)!;
