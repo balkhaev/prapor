@@ -188,7 +188,10 @@ test "$(docker inspect "prapor-game:$commit" --format '{{index .Config.Labels "o
 smoke="${scratch##*/}-smoke"
 trap 'docker rm -f "$smoke" >/dev/null 2>&1 || true' EXIT
 signature=''
+smoke_prefix="$smoke"
 for mode in absent inherited configured; do
+    # Auto-removal after docker stop can finish asynchronously. Each mode owns a name.
+    smoke="$smoke_prefix-$mode"
     if test "$mode" = configured; then
         docker run --rm -d --name "$smoke" --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true --tmpfs /app/data:uid=1000,gid=1000,mode=0700 --tmpfs /tmp:uid=1000,gid=1000,mode=1770 --mount type=bind,src=/data/prapor/secrets/resend_api_key,dst=/run/secrets/resend_api_key,readonly --mount type=bind,src=/data/prapor/secrets/google_client_secret,dst=/run/secrets/google_client_secret,readonly -e RESEND_API_KEY_FILE=/run/secrets/resend_api_key -e 'RESEND_FROM=ggpick <noreply@ggpick.club>' -e PUBLIC_BASE_URL=https://game.balkhaev.com -e GOOGLE_CLIENT_ID=764541788875-0bj0prqnptqop4u5b2v5qgf2i4ut7t26.apps.googleusercontent.com -e GOOGLE_CLIENT_SECRET_FILE=/run/secrets/google_client_secret -e GOOGLE_REDIRECT_URIS=https://game.delopusk.ru/callback/auth/google,https://game.balkhaev.com/callback/auth/google "prapor-game:$commit" >/dev/null
     elif test "$mode" = inherited; then
@@ -267,7 +270,8 @@ install -m 644 "$scratch/mirror/infra/mirror.nginx.conf" /data/prapor/mirror/ngi
 install -m 644 "$scratch/mirror/infra/mirror.compose.yaml" /data/prapor/mirror/compose.yaml.next
 mv /data/prapor/mirror/nginx.conf.next /data/prapor/mirror/nginx.conf
 mv /data/prapor/mirror/compose.yaml.next /data/prapor/mirror/compose.yaml
-docker compose -f /data/prapor/mirror/compose.yaml up -d --wait --wait-timeout 90
+# The config is a file bind mount replaced atomically above. Recreate to mount its new inode.
+docker compose -f /data/prapor/mirror/compose.yaml up -d --force-recreate --wait --wait-timeout 90
 install -m 644 "$scratch/mirror/infra/mirror.edge.yaml" /data/coolify/proxy/dynamic/prapor-game-mirror.yaml.next
 mv /data/coolify/proxy/dynamic/prapor-game-mirror.yaml.next /data/coolify/proxy/dynamic/prapor-game-mirror.yaml
 ready=0
@@ -276,6 +280,7 @@ for attempt in $(seq 1 30); do
     sleep 3
 done
 test "$ready" = 1 || { curl --fail --silent --show-error --max-time 10 --output /dev/null https://game.balkhaev.com/health; exit 1; }
+curl --fail --silent --show-error --max-time 10 --header 'Origin: https://game.balkhaev.com' --header 'Content-Type: application/json' --data '{"intent":"login"}' --output /dev/null https://game.balkhaev.com/api/auth/google
 '@
     Invoke-Management ($mirrorScript.Replace('__SCRATCH__', $remoteScratch))
     Write-Output "Published ${Commit}: https://game.delopusk.ru and https://game.balkhaev.com. Verify account and save flows on both domains."
