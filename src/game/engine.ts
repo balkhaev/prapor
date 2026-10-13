@@ -1,9 +1,7 @@
 import {
 	CONTRACTS,
 	MAP_BY_ID,
-	PERSONALITIES,
 	PERSONALITY_BY_ID,
-	SCAV_NAMES,
 	WEAPON_BY_ID,
 	type Attachment,
 	type BaseRoom,
@@ -21,9 +19,11 @@ export * from "./modules";
 import { initialShelter, ROOM_DEFINITIONS, RESOURCE_RECIPE_BY_ID, getShelterSites, getShelterFrontier, isShelterSiteCoordinate, MAX_SHELTER_SITES, SHELTER_COORDINATE_LIMIT, SHELTER_EXCAVATION, type ProductionJob, type RoomInstance, type ShelterCost, type ShelterRoomType, type ShelterSite, type ShelterExpansion, type ShelterState } from "./shelter";
 export * from "./shelter";
 import { getRaidFieldFrame, getRaidFieldOutcome, getRaidFieldPlan, type RaidFieldPlan } from "../raid-field";
+import { buildRecruitmentBoard, createRecruitmentState, getEarnedRecruitmentTier, getRecruitmentBoard, getScavProfileEffects, getScavTalentOffers, isRecruitDrawbackForRole, isRecruitTraitForRole, neutralScavProfile, RECOVERY_RECRUIT_ID, RECRUIT_BACKGROUNDS, RECRUIT_DRAWBACKS, RECRUIT_ROLES, RECRUIT_TRAITS, SCAV_TALENTS, stepRecruitmentSeed, type RecruitCandidate, type RecruitmentState, type RecruitRole, type RecruitTier, type ScavProfile } from "./recruitment";
+export * from "./recruitment";
 
 export const SAVE_KEY = "prapor.save.v1";
-export const SAVE_VERSION = 5;
+export const SAVE_VERSION = 6;
 export const MAX_OFFLINE_MS = 8 * 60 * 60 * 1000;
 export const MAX_ROOM_LEVEL = 5;
 
@@ -51,6 +51,7 @@ export interface Scav {
 	gear: Record<GearSlot, number>;
 	loadout: Loadout;
 	assignment: string | null;
+	profile: ScavProfile;
 	autoRaid: { mapId: string; enabled: boolean; minHealth: number; runs: number; waitingReason: string | null; maxDepth: number };
 }
 export interface Expedition {
@@ -122,6 +123,7 @@ export interface GameState {
 	blueprints: string[];
 	modules: ModuleInstance[];
 	shelter: ShelterState;
+	recruitment: RecruitmentState;
 	stats: {
 		raidsWon: number;
 		raidsCompleted: number;
@@ -270,6 +272,7 @@ function createScav(
 		gear: { armor: 0, backpack: 0 },
 		loadout: { armorItemId: null, backpackItemId: null, ammoType: "standard", medkit: false },
 		assignment: null,
+		profile: neutralScavProfile(),
 		autoRaid: { mapId: "courtyard", enabled: false, minHealth: 70, runs: 0, waitingReason: null, maxDepth: 1 },
 	};
 	state.scavs.push(scav);
@@ -297,6 +300,7 @@ export function createGame(now = Date.now()): GameState {
 		blueprints: ["light_vest", "scout_pack"],
 		modules: [],
 		shelter: initialShelter({ workshop: 1, medbay: 1, radio: 1, storage: 1 }),
+		recruitment: { rng: 1, generation: 1, tier: 0, boardTier: 0, boardSeed: 1, board: [], hiredCandidateIds: [] },
 		stats: {
 			raidsWon: 0,
 			raidsCompleted: 0,
@@ -324,6 +328,7 @@ export function createGame(now = Date.now()): GameState {
 		scav.weaponInstanceId = guns[index]!.id;
 	});
 	for (const modelId of ["handguard-sks-rail", "optic-reflex", "stock-sks-folding", "magazine-sks-7.62x39-quick"]) state.modules.push(createModule(state, modelId, now));
+	state.recruitment = createRecruitmentState(state);
 	return state;
 }
 
@@ -496,7 +501,7 @@ function roomWorkRate(state: GameState, room: RoomInstance): number {
 	if (room.status !== "ready") return 0;
 	const work = room.workerIds.reduce((sum, workerId) => {
 		const scav = state.scavs.find((item) => item.id === workerId);
-		return sum + (scav && scav.status !== "raiding" && scav.health >= 25 ? 700 + getWorkerAffinity(scav, room.type) * 10 : 0);
+		return sum + (scav && scav.status !== "raiding" && scav.health >= 25 ? (700 + getWorkerAffinity(scav, room.type) * 10) * getScavProfileEffects(scav).work : 0);
 	}, 0);
 	return Math.floor(work * (9 + room.level) / 10);
 }
@@ -696,6 +701,7 @@ function settleShelter(state: GameState, now: number, stoppedAtBoundary: Readonl
 		if (room.construction && room.construction.workDone >= room.construction.workRequired) {
 			room.level = room.construction.targetLevel; room.construction = null; room.status = "ready";
 			if (roomKeys.includes(room.type as BaseRoom)) state.base[room.type as BaseRoom] = Math.max(state.base[room.type as BaseRoom], room.level);
+			state.recruitment.tier = Math.max(state.recruitment.tier, getEarnedRecruitmentTier(state)) as RecruitTier;
 			addXp(state, 12 * room.level);
 			changed = true;
 		}
@@ -783,9 +789,10 @@ export function getLoadoutStats(state: GameState, scav: Scav) {
 	const pack = state.gearItems.find((item) => item.id === scav.loadout.backpackItemId);
 	const weapon = state.weapons.find((item) => item.id === scav.weaponInstanceId);
 	const weight = (armor ? getGearModel(armor).weight : 0) + (pack ? getGearModel(pack).weight : 0) + (weapon ? getWeaponStats(weapon).weight : 0) + (scav.loadout.medkit ? 1 : 0);
+	const profile = getScavProfileEffects(scav);
 	return { weight, protection: scav.gear.armor * 0.012 + (armor ? getGearModel(armor).protection * armor.durability / 100 : 0),
-		capacity: (pack ? 10 + (getGearModel(pack).capacity - 10) * (0.6 + pack.durability * 0.004) : 10) + scav.gear.backpack * 2,
-		speedMultiplier: 1 + weight * 0.017, ammoMultiplier: 1 + Math.max(0, weight - 5) * 0.025 };
+		capacity: (pack ? 10 + (getGearModel(pack).capacity - 10) * (0.6 + pack.durability * 0.004) : 10) + scav.gear.backpack * 2 + profile.capacity,
+		speedMultiplier: 1 + weight * 0.017, ammoMultiplier: (1 + Math.max(0, weight - 5) * 0.025) * profile.ammo };
 }
 export function getCargoWeight(cargo: Cargo): number {
 	return Math.round((cargo.weaponIds.length * 6 + cargo.modules.reduce((sum, part) => sum + getModuleDefinition(part).stats.weight, 0) + cargo.supplies.ammo * 0.1 + cargo.supplies.medicine + cargo.supplies.scrap * 0.5 + cargo.supplies.intel * 0.25) * 10) / 10;
@@ -893,7 +900,7 @@ export function getRaidDuration(
 		20,
 		Math.round(
 			map.duration * TACTICS[scav.tactic].durationMultiplier * getLoadoutStats(state, scav).speedMultiplier * ergoSpeed *
-				(1 - personality.speedBonus - (state.base.radio - 1) * 0.035)
+				(1 - personality.speedBonus - (state.base.radio - 1) * 0.035) * getScavProfileEffects(scav).duration
 		)
 	);
 }
@@ -915,6 +922,7 @@ export function getRaidChance(
 			scav.scouting / 900 +
 			(scav.level - 1) * 0.008 +
 			personality.survivalBonus +
+			getScavProfileEffects(scav).chance +
 			state.base.radio * 0.012 +
 			TACTICS[scav.tactic].chanceBonus + getLoadoutStats(state, scav).protection +
 			(scav.loadout.ammoType === "piercing" ? 0.055 : 0) + (state.blueprints.includes(`route:${map.id}`) ? 0.02 : 0) -
@@ -953,7 +961,8 @@ export function getModCost(
 	return { money: 90 + level * 140, scrap: 4 + level * 4 };
 }
 export function recruitCost(state: GameState): number {
-	return state.scavs.length === 0 ? 0 : 160 + state.scavs.length * 90;
+	const candidate = [...getRecruitmentBoard(state)].sort((a, b) => a.cost - b.cost || a.id.localeCompare(b.id))[0];
+	return candidate ? getRecruitCandidateQuote(state, candidate.id).money : 0;
 }
 export function getContractProgress(
 	state: GameState,
@@ -1073,7 +1082,7 @@ function startRaid(state: GameState, scav: Scav, map: RaidMap, now: number, isAu
 		weaponInstanceId: scav.weaponInstanceId!, startedAt: now,
 		endsAt: now + getRaidDuration(state, scav, map) * 1000,
 		chance: getRaidChance(state, scav, map),
-		lootBonus: getPersonality(scav).lootBonus + scav.scouting / 450 + TACTICS[scav.tactic].lootBonus + scav.gear.backpack * 0.12,
+		lootBonus: getPersonality(scav).lootBonus + scav.scouting / 450 + TACTICS[scav.tactic].lootBonus + scav.gear.backpack * 0.12 + getScavProfileEffects(scav).loot,
 		seed: takeSeed(state), isAuto, tactic: scav.tactic,
 		armorLevel: scav.gear.armor, backpackLevel: scav.gear.backpack,
 		expedition: { stage: 1, status: "travel", branch: "scavenge", cargo: { money: 0, supplies: emptySupplies(), weaponIds: [], modules: [] },
@@ -1094,6 +1103,7 @@ function startRaid(state: GameState, scav: Scav, map: RaidMap, now: number, isAu
 	scav.autoRaid.waitingReason = null;
 	state.raids.push(raid);
 	if (!state.stats.mapsVisited.includes(map.id)) state.stats.mapsVisited.push(map.id);
+	state.recruitment.tier = Math.max(state.recruitment.tier, getEarnedRecruitmentTier(state)) as RecruitTier;
 	return { ok: true, message: `${scav.name} отправился: ${map.name}.`, raidId: raid.id };
 }
 
@@ -1190,29 +1200,52 @@ export function equipWeapon(
 	return ok(`${scav.name} получил ${getWeaponDefinition(weapon).name}.`);
 }
 
-export function recruitScav(state: GameState): ActionResult {
-	if (state.scavs.length >= getScavCapacity(state))
-		return fail("Отряд полон. Улучши радиорубку для нового места.");
-	const cost = recruitCost(state);
-	if (state.money < cost) return fail(`Для найма нужно ${cost} ₽.`);
-	state.money -= cost;
-	const random = generator(takeSeed(state));
-	const unusedNames = SCAV_NAMES.filter(
-		(name) => !state.scavs.some((scav) => scav.name === name)
-	);
-	const names = unusedNames.length ? unusedNames : SCAV_NAMES;
-	const scav = createScav(
-		state,
-		names[Math.floor(random() * names.length)]!,
-		PERSONALITIES[Math.floor(random() * PERSONALITIES.length)]!.id,
-		22 + Math.floor(random() * 19),
-		23 + Math.floor(random() * 21)
-	);
-	const available = state.weapons.find(
-		(weapon) => getWeaponStats(weapon).ready && !state.scavs.some((item) => item.weaponInstanceId === weapon.id)
-	);
-	if (available) scav.weaponInstanceId = available.id;
-	else if (cost === 0) {
+export function getRecruitCandidateQuote(state: GameState, candidateId: string) {
+	const candidates = getRecruitmentBoard(state), candidate = candidates.find((item) => item.id === candidateId);
+	const recovery = state.scavs.length === 0 ? [...candidates].sort((a, b) => a.cost - b.cost || a.id.localeCompare(b.id))[0]?.id : null;
+	const money = candidate ? candidate.id === recovery ? 0 : candidate.cost : 0;
+	const weaponId = state.weapons.find((weapon) => getWeaponStats(weapon).ready && !state.scavs.some((item) => item.weaponInstanceId === weapon.id))?.id ?? null;
+	let reason: string | null = null;
+	if (!candidate) reason = "Этот кандидат уже ушёл. Выбери оставшееся предложение.";
+	else if (state.scavs.length >= getScavCapacity(state)) reason = "Отряд полон. Освободи место или построй жилую комнату.";
+	else if (!Number.isFinite(money) || money < 0 || !Number.isFinite(state.money)) reason = "Некорректная стоимость найма.";
+	else if (state.money < money) reason = `Для найма нужно ${money} ₽.`;
+	return { money, reason, weaponId };
+}
+export function getRecruitmentRefreshQuote(state: GameState) {
+	const tier = Math.max(state.recruitment.tier, getEarnedRecruitmentTier(state)) as RecruitTier;
+	const money = 80 + tier * 30, intel = 1 + tier;
+	let reason: string | null = null;
+	if (state.recruitment.generation >= 1e9) reason = "Достигнут предел запросов к связным.";
+	else if (state.scavs.length === 0) reason = "Сначала прими бесплатного бойца для восстановления отряда.";
+	else if (state.scavs.length >= getScavCapacity(state)) reason = "Сначала освободи место в отряде или построй жилую комнату.";
+	else if (!Number.isFinite(state.money) || !Number.isFinite(state.supplies.intel)) reason = "Некорректные ресурсы для запроса.";
+	else if (state.money < money || state.supplies.intel < intel) reason = `Новый поиск: ${money} ₽ и ${intel} разведданных.`;
+	return { money, intel, tier, reason };
+}
+export function refreshRecruitment(state: GameState): ActionResult {
+	const quote = getRecruitmentRefreshQuote(state); if (quote.reason) return fail(quote.reason);
+	const generation = state.recruitment.generation + 1, boardSeed = state.recruitment.rng;
+	const board = buildRecruitmentBoard(boardSeed, generation, quote.tier);
+	state.money -= quote.money; state.supplies.intel -= quote.intel;
+	state.recruitment = { generation, tier: quote.tier, boardTier: quote.tier, boardSeed, rng: stepRecruitmentSeed(boardSeed), board, hiredCandidateIds: [] };
+	return ok(`Связные нашли трёх кандидатов за ${quote.money} ₽ и ${quote.intel} разведданных. Предложения закреплены до следующего поиска.`);
+}
+export function hireRecruitCandidate(state: GameState, candidateId: string): ActionResult {
+	const quote = getRecruitCandidateQuote(state, candidateId); if (quote.reason) return fail(quote.reason);
+	const candidate = getRecruitmentBoard(state).find((item) => item.id === candidateId)!;
+	const personality: Record<RecruitRole, string> = { assault: "veteran", scout: "runner", technician: "collector" };
+	state.money -= quote.money;
+	const scav = createScav(state, candidate.name, personality[candidate.role], candidate.combat, candidate.scouting);
+	// Recovery grants the old neutral recruit; no elite traits can be farmed by a wipe.
+	scav.profile = quote.money === 0 ? neutralScavProfile() : { backgroundId: candidate.backgroundId, traitId: candidate.traitId, drawbackId: candidate.drawbackId, talents: [], candidateId: candidate.id };
+	if (candidate.id !== RECOVERY_RECRUIT_ID) {
+		state.recruitment.board = state.recruitment.board.filter((item) => item.id !== candidate.id);
+		state.recruitment.hiredCandidateIds.push(candidate.id);
+	}
+	state.recruitment.tier = Math.max(state.recruitment.tier, getEarnedRecruitmentTier(state)) as RecruitTier;
+	if (quote.weaponId) scav.weaponInstanceId = quote.weaponId;
+	else if (quote.money === 0) {
 		if (state.weapons.length < getStorageCapacity(state)) scav.weaponInstanceId = createWeapon(state, "pm", state.lastUpdated, 80).id;
 		else {
 			// A full ruined arsenal must not block the recovery kit or discard owned guns.
@@ -1226,14 +1259,41 @@ export function recruitScav(state: GameState): ActionResult {
 			scav.weaponInstanceId = emergency.id;
 		}
 	}
-	if (cost === 0) {
+	if (quote.money === 0) {
 		// A wiped roster can begin one recovery run immediately; this never stacks.
-		state.money = Math.max(state.money, 15);
-		state.supplies.ammo = Math.max(state.supplies.ammo, 3);
+		const firstRun = getRaidQuote(state, scav, MAP_BY_ID.courtyard!);
+		state.money = Math.max(state.money, firstRun.money);
+		state.supplies.ammo = Math.max(state.supplies.ammo, 3, firstRun.ammo);
 	}
-	return ok(
-		`${scav.name} присоединился к отряду${cost === 0 ? " бесплатно" : ""}.`
-	);
+	return ok(`${scav.name} присоединился к отряду${quote.money === 0 ? " бесплатно: комплект восстановления" : ` за ${quote.money} ₽`}.`);
+}
+/** Compatibility entry point; explicit UI always hires a concrete persisted offer. */
+export function recruitScav(state: GameState): ActionResult {
+	const candidate = [...getRecruitmentBoard(state)].sort((a, b) => a.cost - b.cost || a.id.localeCompare(b.id))[0];
+	return candidate ? hireRecruitCandidate(state, candidate.id) : fail("Связные ждут нового запроса. Все предложения этой подборки использованы.");
+}
+export function getDismissScavReason(state: GameState, scavId: string): string | null {
+	const scav = state.scavs.find((item) => item.id === scavId);
+	if (!scav) return "Боец не найден.";
+	if (scav.status === "raiding" || state.raids.some((raid) => raid.scavId === scav.id)) return "Боец сейчас в рейде. Дождись возвращения.";
+	if (scav.assignment !== null) return "Сначала освободи бойца от работы в комнате.";
+	if (scav.autoRaid.enabled) return "Сначала отключи автоматические рейды бойца.";
+	if (state.scavs.length <= 1) return "Последнего бойца отпускать нельзя: убежищу нужен отряд.";
+	return null;
+}
+export function dismissScav(state: GameState, scavId: string): ActionResult {
+	const reason = getDismissScavReason(state, scavId); if (reason) return fail(reason);
+	const scav = state.scavs.find((item) => item.id === scavId)!;
+	state.scavs = state.scavs.filter((item) => item.id !== scav.id);
+	return ok(`${scav.name} покинул отряд. Всё оружие и снаряжение осталось на складе.`);
+}
+export function chooseScavTalent(state: GameState, scavId: string, talentId: string): ActionResult {
+	const scav = state.scavs.find((item) => item.id === scavId); if (!scav) return fail("Боец не найден.");
+	if (scav.status === "raiding" || state.raids.some((raid) => raid.scavId === scav.id)) return fail("Выбери развитие после возвращения из рейда.");
+	const offers = getScavTalentOffers(scav), talent = offers?.offers.find((offer) => offer.id === talentId);
+	if (!offers || !talent) return fail("Этот навык сейчас не предлагается.");
+	scav.profile.talents.push(talent.id);
+	return ok(`${scav.name}: ${talent.label}. Выбор для уровня ${offers.level} закреплён.`);
 }
 
 export function upgradeBase(state: GameState, room: BaseRoom): ActionResult {
@@ -1246,6 +1306,7 @@ export function upgradeBase(state: GameState, room: BaseRoom): ActionResult {
 	state.money -= cost.money;
 	state.supplies.scrap -= cost.scrap;
 	state.base[room]++;
+	state.recruitment.tier = Math.max(state.recruitment.tier, getEarnedRecruitmentTier(state)) as RecruitTier;
 	addXp(state, 12 * state.base[room]);
 	return ok("Помещение улучшено. База стала сильнее.");
 }
@@ -1610,6 +1671,7 @@ function finishExpedition(state: GameState, raid: Raid, success: boolean, now: n
 	}
 	report.events = [...expedition.trail, { at: now, label: success ? "Эвакуация" : report.lostScav ? "Связь потеряна" : "Отход", text: report.description + (success ? ` Доставлено ${report.money} ₽.` : ""), kind: success ? "success" : "danger" }];
 	state.history.unshift(report); state.history.length = Math.min(state.history.length, 40);
+	state.recruitment.tier = Math.max(state.recruitment.tier, getEarnedRecruitmentTier(state)) as RecruitTier;
 	return report;
 }
 
@@ -1754,6 +1816,7 @@ function finishRaid(state: GameState, raid: Raid): RaidReport {
 	report.events = createRaidEvents(raid, report, map);
 	state.history.unshift(report);
 	state.history.length = Math.min(state.history.length, 40);
+	state.recruitment.tier = Math.max(state.recruitment.tier, getEarnedRecruitmentTier(state)) as RecruitTier;
 	return report;
 }
 
@@ -2007,7 +2070,7 @@ function parseExpedition(value: unknown, version: number): Expedition | null {
 		discoveries: array(source.discoveries, Object.keys(BLUEPRINTS).length, (value) => known(value, BLUEPRINTS)),
 		loadout: { armorModelId, armorCondition: number(loadout.armorCondition, 100), packModelId, packCondition: number(loadout.packCondition, 100), ammoType: loadout.ammoType, medkit: bool(loadout.medkit) },
 		autoDepth: number(source.autoDepth, 3, 1, true), baseChance: number(source.baseChance, 1), baseDuration: number(source.baseDuration, 600, 20),
-		capacity: number(source.capacity, 40, 10), ammoMultiplier: number(source.ammoMultiplier, 4, 0.2), trail: parseEvents(source.trail, 9) };
+		capacity: number(source.capacity, version >= 6 ? 46 : 40, version >= 6 ? 8 : 10), ammoMultiplier: number(source.ammoMultiplier, 4, 0.2), trail: parseEvents(source.trail, 9) };
 	unique(expedition.perks); unique(expedition.offers); unique(expedition.discoveries);
 	if (expedition.perks.length !== expedition.stage - 1 || expedition.offers.some((perk) => expedition.perks.includes(perk))
 		|| (expedition.status === "choice" && expedition.stage < 3 ? expedition.offers.length !== 2 : expedition.offers.length !== 0)
@@ -2102,9 +2165,67 @@ function parseShelter(value: unknown): GameState["shelter"] {
 	if (roomKeys.some((key) => !rooms.some((room) => room.id === `room-${key}` && room.type === key && room.level >= 1))) throw new Error("foundation-room");
 	return { rooms, sites, expansions };
 }
+function parseScavProfile(value: unknown): ScavProfile {
+	const source = record(value); fields(source, ["backgroundId", "traitId", "drawbackId", "talents", "candidateId"]);
+	const profile: ScavProfile = {
+		backgroundId: source.backgroundId === null ? null : known(source.backgroundId, RECRUIT_BACKGROUNDS),
+		traitId: source.traitId === null ? null : known(source.traitId, RECRUIT_TRAITS),
+		drawbackId: source.drawbackId === null ? null : known(source.drawbackId, RECRUIT_DRAWBACKS),
+		talents: array(source.talents, 3, (talent) => known(talent, SCAV_TALENTS)),
+		candidateId: source.candidateId === null ? null : string(source.candidateId),
+	};
+	unique(profile.talents);
+	if (profile.backgroundId === null) {
+		if (profile.traitId !== null || profile.drawbackId !== null || profile.candidateId !== null) throw new Error("neutral-profile");
+	} else {
+		const role = RECRUIT_BACKGROUNDS[profile.backgroundId]!.role;
+		if (profile.traitId === null || profile.drawbackId === null || profile.candidateId === null
+			|| !isRecruitTraitForRole(profile.traitId, role) || !isRecruitDrawbackForRole(profile.drawbackId, role)) throw new Error("recruit-profile");
+	}
+	return profile;
+}
+function parseRecruitCandidate(value: unknown): RecruitCandidate {
+	const source = record(value); fields(source, ["id", "name", "role", "backgroundId", "traitId", "drawbackId", "combat", "scouting", "cost"]);
+	return { id: string(source.id), name: string(source.name, 30), role: known(source.role, RECRUIT_ROLES) as RecruitRole,
+		backgroundId: known(source.backgroundId, RECRUIT_BACKGROUNDS), traitId: known(source.traitId, RECRUIT_TRAITS), drawbackId: known(source.drawbackId, RECRUIT_DRAWBACKS),
+		combat: number(source.combat, 100, 1, true), scouting: number(source.scouting, 100, 1, true), cost: number(source.cost, 10000, 1, true) };
+}
+function parseRecruitment(value: unknown): RecruitmentState {
+	const source = record(value); fields(source, ["rng", "generation", "tier", "boardSeed", "boardTier", "board", "hiredCandidateIds"]);
+	const recruitment: RecruitmentState = { rng: number(source.rng, 4294967295, 1, true), boardSeed: number(source.boardSeed, 4294967295, 1, true),
+		generation: number(source.generation, 1e9, 1, true), tier: number(source.tier, 2, 0, true) as RecruitTier, boardTier: number(source.boardTier, 2, 0, true) as RecruitTier,
+		board: array(source.board, 3, parseRecruitCandidate), hiredCandidateIds: array(source.hiredCandidateIds, 3, (candidateId) => string(candidateId)) };
+	if (recruitment.boardTier > recruitment.tier || recruitment.rng !== stepRecruitmentSeed(recruitment.boardSeed)) throw new Error("recruit-generation");
+	const generated = buildRecruitmentBoard(recruitment.boardSeed, recruitment.generation, recruitment.boardTier);
+	const consumed = [...recruitment.board.map((candidate) => candidate.id), ...recruitment.hiredCandidateIds];
+	unique(consumed);
+	if (consumed.length !== generated.length || consumed.some((candidateId) => !generated.some((candidate) => candidate.id === candidateId))) throw new Error("recruit-ledger");
+	for (const candidate of recruitment.board) {
+		const expected = generated.find((offer) => offer.id === candidate.id)!;
+		if (Object.keys(expected).some((key) => candidate[key as keyof RecruitCandidate] !== expected[key as keyof RecruitCandidate])) throw new Error("recruit-offer");
+	}
+	return recruitment;
+}
+function validateScavRecruitment(state: GameState, scav: Scav) {
+	const profile = scav.profile;
+	for (let index = 0; index < profile.talents.length; index++) {
+		const previous = { ...scav, profile: { ...profile, talents: profile.talents.slice(0, index) } };
+		if (!getScavTalentOffers(previous)?.offers.some((offer) => offer.id === profile.talents[index])) throw new Error("scav-talent-offer");
+	}
+	if (profile.candidateId === null) return;
+	const match = /^recruit-([1-9]\d*)-([012])-([1-9]\d*)$/.exec(profile.candidateId);
+	if (!match) throw new Error("scav-recruit-id");
+	const generation = Number(match[1]), slot = Number(match[2]), seed = Number(match[3]);
+	if (generation > state.recruitment.generation || seed > 4294967295 || generation > 1e9) throw new Error("scav-recruit-generation");
+	if (generation === state.recruitment.generation && (seed !== state.recruitment.boardSeed || !state.recruitment.hiredCandidateIds.includes(profile.candidateId))) throw new Error("scav-recruit-owner");
+	const provenance = [0, 1, 2].filter((tier) => tier <= state.recruitment.tier)
+		.some((tier) => { const offer = buildRecruitmentBoard(seed, generation, tier as RecruitTier)[slot]!;
+			return offer.backgroundId === profile.backgroundId && offer.traitId === profile.traitId && offer.drawbackId === profile.drawbackId; });
+	if (!provenance) throw new Error("scav-recruit-provenance");
+}
 function parseScav(value: unknown, version: number): Scav {
 	const source = record(value);
-	fields(source, ["id", "name", "personality", "level", "xp", "health", "combat", "scouting", "weaponInstanceId", "status", "raids", ...(version >= 2 ? ["tactic", "gear", "autoRaid"] : []), ...(version >= 3 ? ["loadout"] : []), ...(version === 5 ? ["assignment"] : [])]);
+	fields(source, ["id", "name", "personality", "level", "xp", "health", "combat", "scouting", "weaponInstanceId", "status", "raids", ...(version >= 2 ? ["tactic", "gear", "autoRaid"] : []), ...(version >= 3 ? ["loadout"] : []), ...(version >= 5 ? ["assignment"] : []), ...(version >= 6 ? ["profile"] : [])]);
 	if (!["ready", "raiding", "wounded"].includes(source.status as string))
 		throw new Error("status");
 	let gear: Scav["gear"] = { armor: 0, backpack: 0 };
@@ -2138,7 +2259,8 @@ function parseScav(value: unknown, version: number): Scav {
 		tactic: version === 1 ? "balanced" : known(source.tactic, TACTICS) as RaidTactic,
 		gear,
 		loadout: version >= 3 ? parseLoadout(source.loadout) : { armorItemId: null, backpackItemId: null, ammoType: "standard", medkit: false },
-		assignment: version === 5 && source.assignment !== null ? string(source.assignment) : null,
+		assignment: version >= 5 && source.assignment !== null ? string(source.assignment) : null,
+		profile: version >= 6 ? parseScavProfile(source.profile) : neutralScavProfile(),
 		autoRaid,
 	};
 }
@@ -2201,9 +2323,9 @@ export function parseSave(raw: string): GameState | null {
 	try {
 		if (typeof raw !== "string" || raw.length > 1_000_000) return null;
 		const source = record(JSON.parse(raw));
-		if (source.schemaVersion !== 1 && source.schemaVersion !== 2 && source.schemaVersion !== 3 && source.schemaVersion !== 4 && source.schemaVersion !== SAVE_VERSION) return null;
+		if (source.schemaVersion !== 1 && source.schemaVersion !== 2 && source.schemaVersion !== 3 && source.schemaVersion !== 4 && source.schemaVersion !== 5 && source.schemaVersion !== SAVE_VERSION) return null;
 		const version = source.schemaVersion;
-		fields(source, ["schemaVersion", "createdAt", "lastUpdated", "money", "supplies", "xp", "level", "base", "scavs", "weapons", "raids", "history", "claimedContracts", "discoveredWeapons", "stats", "clock", "rng", "nextId", ...(version >= 3 ? ["gearItems", "blueprints"] : []), ...(version >= 4 ? ["modules"] : []), ...(version === 5 ? ["shelter"] : [])]);
+		fields(source, ["schemaVersion", "createdAt", "lastUpdated", "money", "supplies", "xp", "level", "base", "scavs", "weapons", "raids", "history", "claimedContracts", "discoveredWeapons", "stats", "clock", "rng", "nextId", ...(version >= 3 ? ["gearItems", "blueprints"] : []), ...(version >= 4 ? ["modules"] : []), ...(version >= 5 ? ["shelter"] : []), ...(version >= 6 ? ["recruitment"] : [])]);
 		const base = record(source.base);
 		const stats = record(source.stats);
 		const clock = record(source.clock);
@@ -2232,9 +2354,9 @@ export function parseSave(raw: string): GameState | null {
 				radio: number(base.radio, 5, 1, true),
 				storage: number(base.storage, 5, 1, true),
 			},
-			scavs: array(source.scavs, version === 5 ? 15 : 7, (value) => parseScav(value, version)),
-			weapons: array(source.weapons, version === 5 ? 350 : 65, (value) => parseWeapon(value, version)),
-			raids: array(source.raids, version === 5 ? 15 : 7, (value) => parseRaid(value, version)),
+			scavs: array(source.scavs, version >= 5 ? 15 : 7, (value) => parseScav(value, version)),
+			weapons: array(source.weapons, version >= 5 ? 350 : 65, (value) => parseWeapon(value, version)),
+			raids: array(source.raids, version >= 5 ? 15 : 7, (value) => parseRaid(value, version)),
 			history: array(source.history, 40, (value) => parseReport(value, version)),
 			claimedContracts: array(
 				source.claimedContracts,
@@ -2254,7 +2376,8 @@ export function parseSave(raw: string): GameState | null {
 			gearItems: version >= 3 ? array(source.gearItems, 28, parseGear) : [],
 			blueprints: version >= 3 ? array(source.blueprints, Object.keys(BLUEPRINTS).length, (value) => known(value, BLUEPRINTS)) : ["light_vest", "scout_pack"],
 			modules: version >= 4 ? array(source.modules, 1000, parseModule) : [],
-			shelter: version === 5 ? parseShelter(source.shelter) : initialShelter(base as Record<string, number>),
+			shelter: version >= 5 ? parseShelter(source.shelter) : initialShelter(base as Record<string, number>),
+			recruitment: version >= 6 ? parseRecruitment(source.recruitment) : { rng: 1, generation: 1, tier: 0, boardTier: 0, boardSeed: 1, board: [], hiredCandidateIds: [] },
 			stats: {
 				raidsWon: number(stats.raidsWon, 1e9, 0, true),
 				raidsCompleted: number(stats.raidsCompleted, 1e9, 0, true),
@@ -2277,6 +2400,8 @@ export function parseSave(raw: string): GameState | null {
 			rng: number(source.rng, 4294967295, 1, true),
 			nextId: number(source.nextId, 1e12, 1, true),
 		};
+		if (version < 6) state.recruitment = createRecruitmentState(state);
+		if (state.recruitment.tier > getEarnedRecruitmentTier(state)) throw new Error("recruit-network-evidence");
 		// Only retained evidence can seed per-sector counters from an old save.
 		if (version < 4) for (const weapon of state.weapons) {
 			fillFactoryKit(state, weapon);
@@ -2311,6 +2436,8 @@ export function parseSave(raw: string): GameState | null {
 			)
 		);
 		unique(state.scavs.flatMap((scav) => [scav.loadout.armorItemId, scav.loadout.backpackItemId].filter((value): value is string => value !== null)));
+		unique(state.scavs.flatMap((scav) => scav.profile.candidateId ? [scav.profile.candidateId] : []));
+		if (state.recruitment.board.some((candidate) => state.scavs.some((scav) => scav.profile.candidateId === candidate.id))) throw new Error("recruit-already-hired");
 		if (
 			state.lastUpdated < state.createdAt ||
 			state.weapons.length > getStorageCapacity(state) ||
@@ -2329,6 +2456,7 @@ export function parseSave(raw: string): GameState | null {
 		)
 			throw new Error("stats");
 		for (const scav of state.scavs) {
+			validateScavRecruitment(state, scav);
 			if (!scav.id.startsWith("scav-") || scav.autoRaid.runs > scav.raids) throw new Error("scav-id");
 			if (
 				scav.weaponInstanceId &&

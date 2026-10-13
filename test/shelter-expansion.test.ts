@@ -124,10 +124,13 @@ describe("expansion save integrity", () => {
 	test("old v5 shelter fields default to the original foundation without changing gameplay progress", () => {
 		const original = funded();
 		const value = JSON.parse(saveGame(original));
+		value.schemaVersion = 5;
+		delete value.recruitment;
+		for (const scav of value.scavs) delete scav.profile;
 		delete value.shelter.sites; delete value.shelter.expansions;
 		expect(parseSave(JSON.stringify(value))).toEqual(original);
 		const migrated = restored(original);
-		expect(migrated.schemaVersion).toBe(5);
+		expect(migrated.schemaVersion).toBe(original.schemaVersion);
 		expect(migrated.shelter.sites).toHaveLength(12);
 	});
 

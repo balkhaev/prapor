@@ -10,6 +10,8 @@ import {
 	loadGame,
 	parseSave,
 	recruitScav,
+	getRecruitmentBoard,
+	refreshRecruitment,
 	saveGame,
 	setAutoRaid,
 	setRaidTactic,
@@ -32,7 +34,10 @@ function squad(size: number, seed = 0x70a90211): GameState {
 	state.xp = 90 * 11 ** 2;
 	state.level = 12;
 	state.scavs.length = Math.min(size, state.scavs.length);
-	while (state.scavs.length < size) expect(recruitScav(state).ok).toBe(true);
+	while (state.scavs.length < size) {
+		if (!getRecruitmentBoard(state).length) expect(refreshRecruitment(state).ok).toBe(true);
+		expect(recruitScav(state).ok).toBe(true);
+	}
 	for (const scav of state.scavs) {
 		if (!scav.weaponInstanceId) {
 			const template = state.weapons[0]!;

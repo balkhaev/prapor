@@ -2,7 +2,7 @@ import { MAPS, RARITY_COLORS, type WeaponCategory } from './game/data';
 import { RUN_PERKS, getShelterSites, getShelterFrontier, isShelterSiteCoordinate, type GameState, type RunPerk } from './game/engine';
 import { MODULE_SLOTS, type ModuleSlot } from './game/modules';
 
-export type SessionPage = 'home'|'raids'|'arsenal'|'base'|'contracts'|'journal';
+export type SessionPage = 'home'|'raids'|'arsenal'|'base'|'contracts'|'journal'|'recruits';
 export interface GameSession {
 	version: 1;
 	page: SessionPage;
@@ -39,7 +39,7 @@ const slots = MODULE_SLOTS;
 export function readGameSession(value:unknown,state:GameState):GameSession {
 	const source=object(value), valid=source.version===1?source:{}, filters=object(valid.filters);
 	const roomId=id(valid.roomId,state.shelter.rooms)??state.shelter.rooms[0]?.id??null;
-	let page=choose(valid.page,['home','raids','arsenal','base','contracts','journal'] as const,'home');
+	let page=choose(valid.page,['home','raids','arsenal','base','contracts','journal','recruits'] as const,'home');
 	let view=choose(valid.view,['base','map','raid'] as const,'base');
 	const raidId=id(valid.raidId,state.raids), report=state.history.find(item=>item.raidId===valid.raidId);
 	const journal=Array.isArray(valid.journal)?valid.journal.filter((item):item is string=>typeof item==='string'&&state.history.some(report=>report.id===item)).slice(0,30):[];
