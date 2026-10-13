@@ -77,6 +77,11 @@ export function preloadModularWeaponArt(weaponIds: readonly string[] = MODULAR_W
 }
 
 const atlasId = (prefix: string, id: ModularWeaponArtId) => `${prefix}-atlas-${id}`;
+function rasterClipKey(outline: string, fillRule: string): string {
+	let hash = 2166136261;
+	for (const character of `${fillRule}/${outline}`) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619);
+	return (hash >>> 0).toString(36);
+}
 export function modularWeaponRasterDefs(prefix: string, modelIds: readonly (string | undefined)[], embedded = true): string {
 	const ids = new Set(modelIds.flatMap((modelId) => {
 		const model = modelId ? MODULE_BY_ID[modelId] : undefined, id = model ? modularWeaponArtFamily(model) : undefined;
@@ -95,7 +100,7 @@ export function modularWeaponRasterPart(prefix: string, modelId: string | undefi
 	const index = MODULAR_WEAPON_ART_SLOTS.indexOf(slot as typeof MODULAR_WEAPON_ART_SLOTS[number]);
 	const atlas = id ? atlases.get(id) : undefined;
 	if (!model || !id || !atlas || index < 0) return "";
-	const source = atlas.cells[index]!, clip = `${prefix}-raster-${slot}`;
+	const source = atlas.cells[index]!, clip = `${prefix}-raster-${slot}-${rasterClipKey(outline, fillRule)}`;
 	// Exact module geometry remains authoritative: barrel length, magazine feed,
 	// stock holes and attachment contacts cannot be changed by a generated image.
 	return `<defs><clipPath id="${clip}"><path d="${outline}" fill-rule="${fillRule}" clip-rule="${fillRule}"/></clipPath></defs><g data-generated-part="${id}/${slot}" clip-path="url(#${clip})" opacity=".82"><svg x="${bounds[0]}" y="${bounds[1]}" width="${bounds[2]}" height="${bounds[3]}" viewBox="${source.join(" ")}" preserveAspectRatio="none"><use href="#${atlasId(prefix, id)}"/></svg></g>`;

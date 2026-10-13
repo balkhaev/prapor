@@ -53,7 +53,7 @@ describe("expanded modular weapon profiles", () => {
 		for (const appearance of ["tactical", "skeleton", "precision", "padded"]) {
 			install(p90, `stock-p90-${appearance}`);
 			const stock = part(weaponActorArt(p90).svg, "stock");
-			expect(outline(stock)).toMatch(/^M\d+ 128h\d+v90/);
+			expect(outline(stock)).toMatch(/^M\d+ 128h\d+l14 12v63l-14 15/);
 		}
 		expect(part(weaponActorArt(mp7).svg, "receiver")).toContain('data-mechanism="grip-feed-well"');
 	});

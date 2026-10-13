@@ -3,7 +3,8 @@ import { weaponActorArt } from "./armory-art";
 import { modularWeaponArtRevision } from "./modular-weapon-art";
 import { WEAPON_BY_ID } from "./game/data";
 import type { WeaponInstance } from "./game/engine";
-import { scavAttachment, type ScavDirection } from "./scav-isometric";
+import type { ScavDirection } from "./scav-isometric";
+import { weaponCarryTransform } from "./weapon-attachment";
 import { getHostileVisualLoadout, weaponVisualSignature, type ScavVisualLoadout } from "./scav-loadout";
 import { scavGearHeight, scavGearTexture } from "./scav-gear-art";
 
@@ -80,7 +81,7 @@ export class ScavEquipment {
 			loadout = this.hostileLoadout;
 		}
 		const torso = options.torso && Number.isFinite(options.torso.x) && Number.isFinite(options.torso.y) ? options.torso : { x: 0, y: -28 };
-		const rear = direction[0] === "n", right = direction[1] === "e";
+		const rear = direction[0] === "n";
 		this.paintGear(this.armor, loadout.armorModelId, direction, torso);
 		this.paintGear(this.pack, loadout.packModelId, direction, torso);
 		const head = options.head && [options.head.x, options.head.y].every(Number.isFinite) ? options.head : { x: torso.x, y: torso.y - 16 };
@@ -94,17 +95,14 @@ export class ScavEquipment {
 		const texture = ensureWeaponTexture(this.scene, loadout.weapon);
 		if (!texture) { this.weapon.setVisible(false); return; }
 		const { art, key } = texture, category = WEAPON_BY_ID[loadout.weapon.weaponId]?.category ?? "rifle";
-		const length = category === "pistol" ? 15 : category === "smg" ? 26 : category === "sniper" ? 39 : category === "shotgun" ? 35 : 34;
-		const scale = length / art.referenceWidth, hand = scavAttachment(direction, Boolean(options.working));
-		const slung = mode === "slung";
-		const x = slung ? torso.x + (right ? -1.5 : 1.5) : hand.x + torso.x;
-		const y = slung ? torso.y + 1 : hand.y + torso.y + 28;
-		const bearing = slung ? right ? -80 : -100 : options.aim ?? hand.angle;
-		const localAngle = Math.atan2((art.muzzle.y - art.grip.y) * .75, (art.muzzle.x - art.grip.x) * (right ? 1 : -1)) * 180 / Math.PI;
-		this.weapon.setTexture(key).setOrigin(art.grip.x / art.width, art.grip.y / art.height).setPosition(x, y)
-			.setScale(scale * (right ? 1 : -1), scale * .75).setAngle(bearing - localAngle - (options.bodyAngle ?? 0)).setTint(options.hostile ? 0xb9ad99 : 0xffffff).setVisible(true);
-		this.muzzle = { x: art.muzzle.x - art.grip.x, y: art.muzzle.y - art.grip.y };
-		this.body.bringToTop(this.weapon);
+		const placement = weaponCarryTransform(art, category, direction, { ...options, torso });
+		this.weapon.setTexture(key).setOrigin(placement.origin.x, placement.origin.y).setPosition(placement.position.x, placement.position.y)
+			.setScale(placement.scale.x, placement.scale.y).setAngle(placement.angle).setTint(options.hostile ? 0xb9ad99 : 0xffffff).setVisible(true);
+		this.muzzle = placement.muzzle;
+		// A rear-facing actor covers the stock with its torso; the barrel remains
+		// visible beyond the hands. A slung weapon rests on top of the worn gear.
+		if (placement.behind) this.body.sendToBack(this.weapon);
+		else this.body.bringToTop(this.weapon);
 	}
 
 	/** World coordinates include the view container so raid effects can undo its camera transform. */
