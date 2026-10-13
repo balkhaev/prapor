@@ -44,6 +44,10 @@ export function shelterBuildingHitPolygon(rect: ShelterRect): ShelterPoint[] {
 	const roof = corners.map((point) => ({ x: point.x, y: point.y - SHELTER_BUILDING_MAX_VISUAL_HEIGHT }));
 	return [roof[0]!, roof[1]!, ground[1]!, ground[2]!, ground[3]!, roof[3]!];
 }
+/** Rendering and roof selection share the same depth, including long turned rooms. */
+export function shelterBuildingDepth(rect: ShelterRect): number {
+	return projectShelterPoint({ x: rect.x + rect.width / 2, y: rect.y + 18 }).y - 20;
+}
 
 /** A camera/overlay rectangle encloses the diamond; pointer hits still use its inverse projection. */
 export function projectShelterBounds(rect: ShelterRect): ShelterRect {
