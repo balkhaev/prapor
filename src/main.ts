@@ -178,6 +178,10 @@ const e = (value: unknown) =>
 			]!
 	);
 const n = (value: number) => Math.floor(value).toLocaleString("ru-RU");
+const socialStoriesLabel = (value: number) => {
+	const form = value % 100 >= 11 && value % 100 <= 14 ? "историй ждут" : value % 10 === 1 ? "история ждёт" : value % 10 >= 2 && value % 10 <= 4 ? "истории ждут" : "историй ждут";
+	return `${n(value)} ${form} ответа`;
+};
 const seconds = (value: number) =>
 	`${Math.floor(Math.max(0, value) / 60)}:${String(Math.floor(Math.max(0, value) % 60)).padStart(2, "0")}`;
 const paths: Record<string, string> = {
@@ -1543,7 +1547,7 @@ function commandOverview(summary = getCommandSummary(state)) {
 	const system = (name: string, symbol: string, detail: string, attributes: string, label = `${name}: ${detail}`, attention = false) => `<button class="command-system" ${attributes} aria-label="${e(label)}"><span class="system-symbol" aria-hidden="true">${icon(symbol,20)}</span><span><strong>${e(name)}</strong><b>${e(detail)}</b></span>${attention ? '<i class="system-attention"></i>' : ""}</button>`;
 	const tools = [
 		system("Производство", "scrap", `${summary.queuedJobs} заказов · ${staffed} рабочих`, `data-command-room="${productionTarget?.roomId ?? ""}" data-command-tab="${productionTarget?.tab ?? "production"}" data-focus-key="command-production"`),
-		system("Отношения", "squad", socialEvents.length ? `${socialEvents.length} историй ждут ответа` : "Свои люди и общие истории", 'data-page="squad" data-focus-key="command-social"', undefined, socialEvents.length > 0),
+		system("Отношения", "squad", socialEvents.length ? socialStoriesLabel(socialEvents.length) : "Свои люди и общие истории", 'data-page="squad" data-focus-key="command-social"', undefined, socialEvents.length > 0),
 		system("Арсенал", "arsenal", `${state.weapons.length} пушек · ${state.modules.length} модулей`, 'data-page="arsenal"'),
 		system("Поручения", "contracts", ready.length ? `${ready.length} наград готово` : `${state.claimedContracts.length} выполнено`, 'data-page="contracts"', undefined, ready.length > 0),
 		system("Снабжение", "backpack", "Закупки и материалы", 'data-action="open-market"'),
