@@ -1,6 +1,6 @@
 import Phaser from "phaser";
 import { type Raid, type RaidReport, type WeaponInstance } from "./game/engine";
-import { getRaidFieldFrame, getRaidFieldObjective, getRaidFieldPlan, projectRaidFieldPoint, readRaidFieldCamera, type RaidFieldCameraState } from "./raid-field";
+import { getRaidFieldFrame, getRaidFieldObjective, getRaidFieldPlan, getRaidFieldPlanId, projectRaidFieldPoint, readRaidFieldCamera, type RaidFieldCameraState } from "./raid-field";
 import { advanceRaidFeedback, followRaidCamera, getRaidActionLabel, getRaidRoutePreview, type RaidFeedbackState, type RaidShotCue } from "./raid-feedback";
 import { advanceScavAnimation, createScavAnimation, type ScavAnimationState } from "./shelter-animation";
 import { SCAV_ORIGIN, SCAV_POSES, SCAV_REFERENCE_HEIGHT, scavAppearance, scavAvailableAppearance, scavDirection, scavFrame, scavTexture, scavTorsoAnchor, scavHeadAnchor, type ScavDirection } from "./scav-isometric";
@@ -8,6 +8,8 @@ import { SCAV_APPEARANCES } from "./game/scav-appearances";
 import { ScavEquipment } from "./scav-equipment";
 import { getHostileVisualLoadout, getRaidVisualLoadout } from "./scav-loadout";
 import type { ShelterCamera, ShelterViewport } from "./shelter-camera";
+import { getSquadRaidFieldFrame, type SquadRaidFieldFrame, type SquadRaidFieldShot } from "./squad-raid-field";
+import type { ScavVisualLoadout } from "./scav-loadout";
 
 type Point = { x: number; y: number };
 type Plan = ReturnType<typeof getRaidFieldPlan>;
@@ -57,6 +59,10 @@ export class RaidStreetRenderer {
 	private projection = { originX: 800, originY: 110, tileWidth: 64, tileHeight: 32, elevationScale: 26 };
 	private bounds = { width: 1800, height: 1000 };
 	private pawn: Pawn | null = null;
+	private squadPawns = new Map<string, Pawn>();
+	private squadLabels = new Map<string, { root: Phaser.GameObjects.Container; text: Phaser.GameObjects.Text; bar: Phaser.GameObjects.Graphics }>();
+	private squadFrame: SquadRaidFieldFrame | null = null;
+	private cachedGroup: Raid[] = [];
 	private enemies: Pawn[] = [];
 	private occluders: Occluder[] = [];
 	private loot = new Map<string, { root: Phaser.GameObjects.Container; mark: Phaser.GameObjects.Graphics; label: Phaser.GameObjects.Text }>();
@@ -92,9 +98,10 @@ export class RaidStreetRenderer {
 	}
 	private project(point: { x: number; y: number; z?: number }): Point { return projectRaidFieldPoint(point, this.projection); }
 	private quad(x: number, y: number, width = 1, height = 1, z = 0): Point[] { return [{ x, y, z }, { x: x + width, y, z }, { x: x + width, y: y + height, z }, { x, y: y + height, z }].map((p) => this.project(p)); }
-	selectRaid(id: string | null): void { if (id !== this.selectedId) { this.selectedId = id; this.cachedRaid = null; this.carriedWeapon = null; this.report = null; this.following = true; this.pendingCamera = null; this.feedback = null; this.alertRoot.setVisible(false); } }
+	selectRaid(id: string | null): void { if (id !== this.selectedId) { this.selectedId = id; this.cachedRaid = null; this.cachedGroup = []; this.squadFrame = null; this.carriedWeapon = null; this.report = null; this.following = true; this.pendingCamera = null; this.feedback = null; this.alertRoot.setVisible(false); } }
 	reset(): void {
 		this.world.removeAll(true); this.plan = null; this.planInput = ""; this.builtRaidId = null; this.selectedId = null; this.cachedRaid = null; this.carriedWeapon = null; this.report = null; this.pawn = null; this.enemies = []; this.loot.clear(); this.occluders = []; this.pendingCamera = null;
+		this.squadPawns.clear(); this.squadLabels.clear(); this.squadFrame = null; this.cachedGroup = [];
 		this.groundMinimap.clear(); this.mini.clear(); this.progress.clear(); this.title.setText("УЛИЦЫ · НАБЛЮДЕНИЕ");
 		this.feedback = null; this.alertRoot.setVisible(false); this.actionBadge.setText(""); this.detail.setText("");
 		this.paintHudPlate();
@@ -175,12 +182,14 @@ export class RaidStreetRenderer {
 	}
 	private follow(deltaMs: number, snap = false): void {
 		if (!this.pawn) return;
-		this.camera = followRaidCamera(this.camera, this.pawn.root, this.viewport, deltaMs, snap, this.reducedMotion);
+		const focus = this.squadFrame ? this.project(this.squadFrame.focus) : this.pawn.root;
+		this.camera = followRaidCamera(this.camera, focus, this.viewport, deltaMs, snap, this.reducedMotion);
 	}
 
 	private build(plan: Plan, raid: Raid, appearance: number): void {
 		const newRaid = this.builtRaidId !== raid.id;
 		this.world.removeAll(true); this.occluders = []; this.loot.clear(); this.enemies = [];
+		this.squadPawns.clear(); this.squadLabels.clear();
 		this.plan = plan;
 		this.projection.originX = plan.height * 32 + 160;
 		this.bounds = { width: (plan.width + plan.height) * 32 + 320, height: (plan.width + plan.height) * 16 + 290 };
@@ -313,10 +322,10 @@ export class RaidStreetRenderer {
 		pawn.appearance = appearance;
 		pawn.body.setData("appearance", appearance);
 	}
-	private animatePawn(pawn: Pawn, point: Point, frame: Frame, delta: number, hostile = false, visualAppearance = pawn.appearance): void {
+	private animatePawn(pawn: Pawn, point: Point, frame: Frame, delta: number, hostile = false, visualAppearance = pawn.appearance, memberLoadout?: ScavVisualLoadout, assistTarget?: Point | null): void {
 		const before = pawn.point, distance = before ? Math.hypot(point.x - before.x, point.y - before.y) : 0;
 		const searching = !hostile && frame.action === "search", fighting = frame.action === "skirmish" || frame.action === "cover", crouching = searching || fighting;
-		const target = hostile ? this.pawn?.point ?? null : frame.enemyPositions[0] ? this.project(frame.enemyPositions[0]) : null;
+		const target = assistTarget ?? (hostile ? this.pawn?.point ?? null : frame.enemyPositions[0] ? this.project(frame.enemyPositions[0]) : null);
 		const pathDirection = this.project({ x: frame.position.x + frame.direction.x, y: frame.position.y + frame.direction.y });
 		if (target && fighting) pawn.direction = scavDirection(target.x - point.x, target.y - point.y, pawn.direction);
 		else if (!hostile) pawn.direction = scavDirection(pathDirection.x - point.x, pathDirection.y - point.y, pawn.direction);
@@ -331,13 +340,77 @@ export class RaidStreetRenderer {
 		const aim = target && fighting ? Math.atan2(target.y - point.y, target.x - point.x) * 180 / Math.PI : null;
 		const torso = scavTorsoAnchor(pawn.poses.map((image) => ({ weight: image.visible ? image.alpha : 0, torso: (image.frame.customData as { custom?: { torso?: Point } }).custom?.torso })));
 		const head = scavHeadAnchor(pawn.poses.map((image) => ({ weight: image.visible ? image.alpha : 0, head: (image.frame.customData as { custom?: { head?: Point } }).custom?.head })));
-		const loadout = hostile ? this.hostileLoadouts.get(visualAppearance) ?? getHostileVisualLoadout(visualAppearance) : this.visualLoadout ?? { armorModelId: null, packModelId: null, weapon: null };
+		const loadout = hostile ? this.hostileLoadouts.get(visualAppearance) ?? getHostileVisualLoadout(visualAppearance) : memberLoadout ?? this.visualLoadout ?? { armorModelId: null, packModelId: null, weapon: null };
 		if (hostile) this.hostileLoadouts.set(visualAppearance, loadout);
 		pawn.equipment.update(loadout, pawn.direction, { working: crouching, mode: searching ? "slung" : "held", aim, bodyAngle: pawn.body.angle, hostile, torso, head });
 	}
 	private gunMuzzle(pawn: Pawn): Point {
 		const point = pawn.equipment.muzzlePoint();
 		return { x: point.x / this.camera.zoom + this.camera.x, y: point.y / this.camera.zoom + this.camera.y };
+	}
+	private updateSquad(frame: SquadRaidFieldFrame, delta: number): void {
+		const boxes: { x: number; y: number; width: number; height: number }[] = [];
+		for (const [index, member] of frame.members.entries()) {
+			this.requestScavAtlas(member.appearance);
+			const appearance = scavAvailableAppearance(member.appearance, (texture) => this.scene.textures.exists(texture));
+			const pawn = this.squadPawns.get(member.scavId) ?? (index === 0 ? this.pawn! : this.makePawn(appearance, false));
+			this.squadPawns.set(member.scavId, pawn); this.setPawnAppearance(pawn, appearance);
+			const point = this.project(member.position), target = member.helpingId ? frame.members.find((candidate) => candidate.scavId === member.helpingId) : null;
+			const helping = member.action === "rescue" || member.action === "escort", targetPoint = helping && target ? this.project(target.position) : null;
+			const action: Frame["action"] = member.action === "rescue" || member.action === "wounded" ? member.walking ? "move" : "search"
+				: member.action === "hesitation" || member.action === "fallen" ? "cover" : member.action === "escort" ? frame.frame.action : member.action;
+			const direction = targetPoint && !member.walking ? { x: target!.position.x - member.position.x, y: target!.position.y - member.position.y } : member.direction;
+			this.animatePawn(pawn, point, { ...frame.frame, position: member.position, direction, walking: member.walking, action }, delta, false, member.appearance, member.loadout, targetPoint);
+			pawn.root.setVisible(true).setAlpha(member.lostScav ? .7 : 1);
+			if (member.action === "wounded" || member.action === "fallen") {
+				pawn.poses.forEach((image, poseIndex) => image.setAlpha(poseIndex === (member.lostScav ? 0 : 3) ? 1 : 0).setVisible(poseIndex === (member.lostScav ? 0 : 3)));
+				pawn.body.setScale(1, member.lostScav ? .8 : .83).setAngle(member.lostScav ? -78 : -9);
+			} else if (member.action === "escort" && member.helpedById) pawn.body.setScale(1, .94).setAngle(-4);
+			if (member.lostWeapon) pawn.equipment.weapon.setVisible(false);
+			let label = this.squadLabels.get(member.scavId);
+			if (!label) {
+				const text = this.text(0, 0, "", 10).setOrigin(.5, 1).setBackgroundColor("#0c211beb").setPadding(5, 3), bar = this.scene.add.graphics();
+				const root = this.scene.add.container(0, 0, [bar, text]).setDepth(9002); this.world.add(root);
+				label = { root, text, bar }; this.squadLabels.set(member.scavId, label);
+			}
+			const icon = member.lostScav ? "×" : member.helpedById ? "+" : member.helpingId ? "↗" : member.coordination === "rivals" ? "!" : String(index + 1);
+			label.text.setText(`${icon} ${member.name}\n${member.statusText}`).setColor(member.lostScav ? "#c7a89b" : member.action === "wounded" || member.action === "hesitation" ? "#edb696" : member.helpingId || member.helpedById ? "#c7e6bc" : "#ede2c8");
+			let labelY = point.y - 58;
+			const width = label.text.width, height = label.text.height;
+			for (let iteration = 0; iteration < 4; iteration++) {
+				const blocked = boxes.some((box) => Math.abs(point.x - box.x) < (width + box.width) / 2 + 4 && labelY > box.y - box.height - 5 && labelY - height < box.y + 5);
+				if (!blocked) break;
+				labelY -= height + 7;
+			}
+			boxes.push({ x: point.x, y: labelY, width, height }); label.root.setPosition(point.x, labelY);
+			label.bar.clear();
+			if (labelY < point.y - 60) line(label.bar, [{ x: 0, y: 4 }, { x: 0, y: point.y - 48 - labelY }], 0xa7b598, 1, .4);
+			// HP is the known departure value; the simulation confirms damage at the checkpoint.
+			const tint = member.lostScav ? 0xaa7460 : member.action === "wounded" ? 0xdb976f : member.coordination === "rivals" ? 0xc49b77 : 0xb4d5a5;
+			label.bar.fillStyle(0x172c23, .9).fillRoundedRect(-19, 1, 38, 3, 1).fillStyle(tint, .9).fillRoundedRect(-19, 1, member.lostScav ? 0 : 38 * member.health / 100, 3, 1);
+		}
+	}
+	private drawSquadShot(shot: SquadRaidFieldShot, frame: SquadRaidFieldFrame): void {
+		if (this.reducedMotion || this.report) return;
+		const shooter = shot.hostile ? this.enemies[shot.enemyIndex] : this.squadPawns.get(shot.actorId);
+		const target = shot.hostile ? frame.members.find((member) => member.scavId === shot.targetId)?.position : frame.frame.enemyPositions[shot.enemyIndex];
+		if (!shooter || !target) return;
+		const muzzle = this.gunMuzzle(shooter), point = this.project(target), radius = 2 + shot.strength * 3;
+		line(this.effects, [muzzle, { x: point.x, y: point.y - 23 }], shot.hostile ? 0xe1ac82 : 0xf1d5a0, 1.2, shot.strength * .75);
+		this.effects.fillStyle(0xffe1ac, shot.strength).fillCircle(muzzle.x, muzzle.y, radius);
+	}
+	private drawSquadSupport(frame: SquadRaidFieldFrame): void {
+		for (const member of frame.members) {
+			const point = this.project(member.position), tint = member.lostScav ? 0xaa7460 : member.action === "wounded" || member.action === "hesitation" ? 0xdfa17e : member.helpingId ? 0xb7d5ad : 0xc6d1ad;
+			this.effects.lineStyle(1.2, tint, .65).strokeEllipse(point.x, point.y + 1, 25, 12);
+			if (member.helpingId) {
+				const target = frame.members.find((candidate) => candidate.scavId === member.helpingId);
+				if (target) {
+					const to = this.project(target.position); line(this.effects, [point, to], member.action === "cover" ? 0xa7c1b4 : 0xc6dfa5, 1.4, .6);
+					if (member.action === "rescue") this.effects.lineStyle(1.8, 0xd4e6b7, .9).lineBetween(to.x - 5, to.y - 48, to.x + 5, to.y - 48).lineBetween(to.x, to.y - 53, to.x, to.y - 43);
+				}
+			}
+		}
 	}
 
 	private drawMiniGround(): void {
@@ -357,8 +430,14 @@ export class RaidStreetRenderer {
 		if (travelled.length > 1) line(g, travelled.map((point) => ({ x: 9 + point.x * sx, y: 9 + point.y * sy })), 0xc8b17b, 1.5, .7);
 		for (const spot of this.plan.lootSpots) if (frame.visitedLootIds.includes(spot.id)) g.fillStyle(0x9aad78).fillRect(7 + spot.x * sx, 7 + spot.y * sy, 3, 3);
 		for (const enemy of frame.enemyPositions) g.fillStyle(0xde9875).fillCircle(9 + enemy.x * sx, 9 + enemy.y * sy, 2.2);
-		g.fillStyle(0xffda93).fillCircle(9 + frame.position.x * sx, 9 + frame.position.y * sy, 3);
-		g.lineStyle(1, 0xffe2ac, .5).strokeCircle(9 + frame.position.x * sx, 9 + frame.position.y * sy, 5);
+		if (this.squadFrame) for (const [index, member] of this.squadFrame.members.entries()) {
+			const tint = member.lostScav ? 0xaa7460 : index === 0 ? 0xffda93 : index === 1 ? 0xc1d4bc : 0xb5d5df;
+			g.fillStyle(tint).fillCircle(9 + member.position.x * sx, 9 + member.position.y * sy, member.lostScav ? 1.7 : 2.3);
+			if (member.helpingId) g.lineStyle(1, tint, .7).strokeCircle(9 + member.position.x * sx, 9 + member.position.y * sy, 4);
+		} else {
+			g.fillStyle(0xffda93).fillCircle(9 + frame.position.x * sx, 9 + frame.position.y * sy, 3);
+			g.lineStyle(1, 0xffe2ac, .5).strokeCircle(9 + frame.position.x * sx, 9 + frame.position.y * sy, 5);
+		}
 	}
 
 	private drawActionMarker(frame: Frame, point: Point): void {
@@ -414,17 +493,21 @@ export class RaidStreetRenderer {
 	}
 
 	update(snapshot: RaidStreetSnapshot, now: number, delta: number): void {
-		const id = snapshot.selectedRaidId !== undefined ? snapshot.selectedRaidId ?? snapshot.raids[0]?.id ?? null : this.selectedId ?? snapshot.raids[0]?.id ?? null;
+		const requestedId = snapshot.selectedRaidId !== undefined ? snapshot.selectedRaidId ?? snapshot.raids[0]?.id ?? null : this.selectedId ?? snapshot.raids[0]?.id ?? null;
+		const requestedRaid = snapshot.raids.find((raid) => raid.id === requestedId);
+		const cachedMember = this.cachedRaid?.squad?.members.some((member) => member.raidId === requestedId);
+		const id = requestedRaid?.squad?.leaderRaidId ?? (cachedMember ? this.cachedRaid!.squad!.leaderRaidId : requestedId);
 		if (id !== this.selectedId) this.selectRaid(id);
 		const activeRaid = snapshot.raids.find((raid) => raid.id === id);
 		const raid = activeRaid ?? (this.cachedRaid?.id === id ? this.cachedRaid : null);
 		if (!raid) { this.world.setVisible(false); this.mini.clear(); this.groundMinimap.clear(); this.progress.clear(); this.title.setText("УЛИЦЫ · НАБЛЮДЕНИЕ"); this.caption.setText("Отправь бойца в рейд и выбери «Наблюдать»"); this.actionBadge.setText(""); this.detail.setText(""); this.feedback = null; this.alertRoot.setVisible(false); this.paintHudPlate(); return; }
 		this.world.setVisible(true);
 		this.cachedRaid = raid;
-		this.report = activeRaid ? null : snapshot.history?.find((report) => report.raidId === id) ?? (this.report?.raidId === id ? this.report : null);
+		this.report = activeRaid ? null : snapshot.history?.find((report) => report.raidId === id || report.squad?.leaderRaidId === id) ?? (this.report?.raidId === id ? this.report : null);
+		if (activeRaid) this.cachedGroup = snapshot.raids.filter((candidate) => raid.squad?.members.some((member) => member.raidId === candidate.id));
 		this.carriedWeapon = snapshot.weapons?.find((weapon) => weapon.id === raid.weaponInstanceId) ?? this.carriedWeapon;
 		this.visualLoadout = getRaidVisualLoadout(raid, this.carriedWeapon);
-		const input = `${raid.mapId}:${raid.seed}:${raid.expedition?.stage ?? 1}:${raid.expedition?.branch ?? "scavenge"}:${raid.tactic}`;
+		const input = getRaidFieldPlanId(raid);
 		const plan = this.plan && this.planInput === input ? this.plan : getRaidFieldPlan(raid); this.planInput = input;
 		const scav = snapshot.scavs?.find((candidate) => candidate.id === raid.scavId);
 		const identity = [...raid.scavId].reduce((value, character) => Math.imul(value, 31) + character.charCodeAt(0) | 0, 0);
@@ -433,15 +516,19 @@ export class RaidStreetRenderer {
 		const appearance = scavAvailableAppearance(requestedAppearance, (texture) => this.scene.textures.exists(texture));
 		if (this.plan?.id !== plan.id || this.builtRaidId !== raid.id) this.build(plan, raid, appearance);
 		this.setPawnAppearance(this.pawn!, appearance);
-		const frame = getRaidFieldFrame(raid, this.report ? raid.endsAt : now, plan);
+		this.squadFrame = getSquadRaidFieldFrame(raid, activeRaid ? snapshot.raids : this.cachedGroup, now, plan, this.report);
+		const frame = this.squadFrame?.frame ?? getRaidFieldFrame(raid, this.report ? raid.endsAt : now, plan);
 		const objective = getRaidFieldObjective(raid, this.report ? raid.endsAt : now, plan);
 		const feedback = advanceRaidFeedback(this.feedback, { raidId: raid.id, planId: plan.id, frame, deltaMs: delta, reducedMotion: this.reducedMotion, settled: Boolean(this.report) });
 		this.feedback = feedback.state;
 		const point = this.project(frame.position);
 		const firstFrame = !this.pawn!.point;
-		this.animatePawn(this.pawn!, point, frame, Math.min(100, Math.max(0, delta)));
-		this.pawn!.root.setVisible(!this.report?.lostScav);
-		if (this.report?.lostWeapon) this.pawn!.equipment.weapon.setVisible(false);
+		if (this.squadFrame) this.updateSquad(this.squadFrame, Math.min(100, Math.max(0, delta)));
+		else {
+			this.animatePawn(this.pawn!, point, frame, Math.min(100, Math.max(0, delta)));
+			this.pawn!.root.setVisible(!this.report?.lostScav);
+			if (this.report?.lostWeapon) this.pawn!.equipment.weapon.setVisible(false);
+		}
 		while (this.enemies.length > frame.enemyPositions.length) this.enemies.pop()!.root.destroy(true);
 		frame.enemyPositions.forEach((enemy, index) => {
 			const requestedEnemy = SCAV_APPEARANCES[(Math.imul(plan.seed, 31) + Math.imul(index + 1, 7919) >>> 0) % SCAV_APPEARANCES.length]!.id;
@@ -453,7 +540,8 @@ export class RaidStreetRenderer {
 			this.animatePawn(actor, this.project(enemy), frame, Math.min(100, Math.max(0, delta)), true, requestedEnemy);
 		});
 		for (const occluder of this.occluders) {
-			const behind = point.y < occluder.y && point.y > occluder.y - occluder.height && Math.abs(point.x - occluder.x) < occluder.width * .45;
+			const points = this.squadFrame ? this.squadFrame.members.filter((member) => !member.lostScav).map((member) => this.project(member.position)) : [point];
+			const behind = points.some((candidate) => candidate.y < occluder.y && candidate.y > occluder.y - occluder.height && Math.abs(candidate.x - occluder.x) < occluder.width * .45);
 			occluder.object.setAlpha(behind ? .45 : 1);
 		}
 		for (const [id, loot] of this.loot) {
@@ -484,8 +572,11 @@ export class RaidStreetRenderer {
 				line(this.effects, [{ x: point.x - 13, y: point.y - 19 }, { x: point.x - 13, y: point.y - 34 }, { x: point.x + 13, y: point.y - 34 }, { x: point.x + 13, y: point.y - 19 }], 0xb8d3bc, 2, .75);
 			}
 		}
-		this.drawShot(feedback.shot, frame, point);
-		if (this.pawn!.root.visible) {
+		if (this.squadFrame) {
+			this.drawSquadSupport(this.squadFrame);
+			for (const shot of this.squadFrame.shots) this.drawSquadShot(shot, this.squadFrame);
+		} else this.drawShot(feedback.shot, frame, point);
+		if (!this.squadFrame && this.pawn!.root.visible) {
 			const actionTint = frame.action === "skirmish" ? 0xe1a782 : frame.action === "search" ? 0xf0d295 : frame.action === "cover" ? 0xaac7b0 : 0xb5ccb1;
 			this.effects.lineStyle(1.3, actionTint, .6).strokeEllipse(point.x, point.y + 1, 29, 14); polygon(this.effects, [{ x: point.x, y: point.y - 57 }, { x: point.x - 4, y: point.y - 64 }, { x: point.x + 4, y: point.y - 64 }], actionTint);
 		}
@@ -496,12 +587,16 @@ export class RaidStreetRenderer {
 		const status = this.report ? this.report.success ? "РЕЙД ЗАВЕРШЁН · ДОБЫЧА НА БАЗЕ" : "РЕЙД ЗАВЕРШЁН · СМОТРИ ОТЧЁТ"
 			: objective.settling ? "КОНТРОЛЬНАЯ ТОЧКА · ОЖИДАЕТСЯ СВОДКА" : frame.paused ? "ЖДЁТ ПРИКАЗА · ДОБЫЧА ПРИ НЁМ"
 			: `${objective.label}${frame.action === "search" ? ` · ${Math.floor(frame.segmentProgress * 100)}%` : frame.enemyPositions.length ? ` · КОНТАКТ ${frame.enemyPositions.length}` : ""}`;
-		this.title.setText(`${raid.scavName} · ${plan.theme.label}`); this.caption.setText(status);
-		this.actionBadge.setText(this.report ? "СВОДКА ПОЛУЧЕНА" : getRaidActionLabel(frame.action)).setColor(frame.action === "skirmish" ? "#e9b58e" : frame.action === "search" ? "#efd399" : "#bad0b2");
+		const action = this.squadFrame?.activeAction;
+		const actorName = action ? this.squadFrame!.members.find((member) => member.scavId === action.actorId)?.name ?? "Боец" : "";
+		const targetName = action ? this.squadFrame!.members.find((member) => member.scavId === action.targetId)?.name ?? "товарища" : "";
+		const actionText = action ? action.kind === "rescue" ? `${actorName} спасает ${targetName}` : action.kind === "cover" ? `${actorName} прикрывает ${targetName}` : `${actorName} медлит из-за конфликта` : "";
+		this.title.setText(this.squadFrame ? `ОТРЯД · ${this.squadFrame.members.length} ДИКИХ · ${plan.theme.label}` : `${raid.scavName} · ${plan.theme.label}`); this.caption.setText(actionText || status);
+		this.actionBadge.setText(this.report ? "СВОДКА ПОЛУЧЕНА" : this.compactHud && actionText ? actionText : `${this.squadFrame ? `ОТРЯД ${this.squadFrame.members.length} · ` : ""}${action?.kind === "rescue" ? "СПАСЕНИЕ" : action?.kind === "hesitation" ? "РАЗЛАД" : getRaidActionLabel(frame.action)}`).setColor(action?.kind === "rescue" ? "#cee1b0" : frame.action === "skirmish" ? "#e9b58e" : frame.action === "search" ? "#efd399" : "#bad0b2");
 		this.detail.setText(`Этап ${raid.expedition?.stage ?? 1} · Участок ${objective.segment}/${objective.segments}${!frame.paused && !this.report ? ` · ${objective.remainingSeconds} с` : ""}`);
 		this.paintHudPlate();
 		this.updateAlert();
 		this.progress.clear(); this.progress.fillStyle(0x0c1c16, .92).fillRoundedRect(0, 0, Math.min(350, this.viewport.width - 224), 10, 3).fillStyle(0xcbb580).fillRoundedRect(0, 0, Math.min(350, this.viewport.width - 224) * frame.progress, 10, 3);
 	}
-	destroy(): void { this.layer.destroy(true); this.loot.clear(); this.hostileLoadouts.clear(); this.enemies = []; this.occluders = []; this.pawn = null; this.cachedRaid = null; this.visualLoadout = null; }
+	destroy(): void { this.layer.destroy(true); this.loot.clear(); this.hostileLoadouts.clear(); this.squadPawns.clear(); this.squadLabels.clear(); this.squadFrame = null; this.cachedGroup = []; this.enemies = []; this.occluders = []; this.pawn = null; this.cachedRaid = null; this.visualLoadout = null; }
 }

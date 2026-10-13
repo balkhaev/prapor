@@ -81,8 +81,8 @@ function generator(seed: number): () => number {
 	let value = seed || 1;
 	return () => { value = Math.imul(value, 1664525) + 1013904223 >>> 0; return value / 4294967296; };
 }
-function fieldIdentity(raid: Raid): string {
-	return `${raid.mapId}:${raid.seed >>> 0}:${raid.expedition?.stage ?? 1}:${raid.expedition?.branch ?? "scavenge"}:${raid.tactic}`;
+export function getRaidFieldPlanId(raid: Raid): string {
+	return `${raid.mapId}:${(raid.squad?.routeSeed ?? raid.seed) >>> 0}:${raid.expedition?.stage ?? 1}:${raid.expedition?.branch ?? "scavenge"}:${raid.squad?.members[0]?.tactic ?? raid.tactic}`;
 }
 const center = (x: number, y: number): RaidFieldPoint => ({ x: x + .5, y: y + .5 });
 const distance = (a: RaidFieldPoint, b: RaidFieldPoint) => Math.hypot(b.x - a.x, b.y - a.y);
@@ -155,7 +155,8 @@ function chooseCategory(mapId: string, branch: ExpeditionBranch, index: number, 
 
 /** Derives the paid expedition's street layout. It neither reads nor consumes simulation RNG. */
 export function getRaidFieldPlan(raid: Raid): RaidFieldPlan {
-	const identity = fieldIdentity(raid), seed = hash(identity), random = generator(seed);
+	const identity = getRaidFieldPlanId(raid), seed = hash(identity), random = generator(seed);
+	const tactic = raid.squad?.members[0]?.tactic ?? raid.tactic;
 	const mapId = Object.hasOwn(THEMES, raid.mapId) ? raid.mapId : "courtyard", theme = THEMES[mapId]!;
 	const width = 24, height = 20, vertical = [2, 8 + Math.floor(random() * 2), 15, 21], horizontal = [2, 8, 13 + Math.floor(random() * 2), 18];
 	const plan: RaidFieldPlan = { id: identity, seed, mapId, theme: { ...theme }, width, height,
@@ -202,8 +203,8 @@ export function getRaidFieldPlan(raid: Raid): RaidFieldPlan {
 		const split = path.length > 1 ? Math.max(1, Math.min(path.length - 1, Math.floor(path.length * .58))) : 0, mid = path[split] ?? cursor;
 		add("move", path.slice(0, split + 1), Math.max(2, split * .55), i ? "Следующая улица" : "Выход на улицы", `Движение через район «${theme.label}» к точке «${spot.label}».`);
 		const enemy = nearestWalkable(plan, { x: mid.x + (random() < .5 ? 2 : -2), y: mid.y - 2 });
-		const encounter = branch === "combat" || raid.tactic === "bold" ? "skirmish" : "cover";
-		add(encounter, [{ ...mid }], encounter === "skirmish" ? 4 : raid.tactic === "cautious" ? 4.8 : 2.8,
+		const encounter = branch === "combat" || tactic === "bold" ? "skirmish" : "cover";
+		add(encounter, [{ ...mid }], encounter === "skirmish" ? 4 : tactic === "cautious" ? 4.8 : 2.8,
 			encounter === "skirmish" ? "Контакт у перекрёстка" : "Наблюдение из укрытия",
 			encounter === "skirmish" ? "Боец удерживает позицию. Итог столкновения станет известен на контрольной точке." : "Боец пережидает патруль и проверяет проход; открытый участок ещё впереди.", null, [enemy]);
 		add("move", path.slice(split), Math.max(1.5, (path.length - split - 1) * .55), "Переход к объекту", `Подход к точке «${spot.label}» по свободному проходу.`);
@@ -241,7 +242,7 @@ function pointOnPath(path: RaidFieldPoint[], fraction: number): { position: Raid
 
 /** Reveals only observations whose scheduled time has arrived, never settlement RNG/results. */
 export function getRaidFieldFrame(raid: Raid, now: number, suppliedPlan?: RaidFieldPlan): RaidFieldFrame {
-	const plan = suppliedPlan?.id === fieldIdentity(raid) ? suppliedPlan : getRaidFieldPlan(raid);
+	const plan = suppliedPlan?.id === getRaidFieldPlanId(raid) ? suppliedPlan : getRaidFieldPlan(raid);
 	const waiting = raid.expedition?.status === "choice";
 	const duration = Math.max(1, raid.endsAt - raid.startedAt), progress = waiting ? 1 : clamp((Number.isFinite(now) ? now : raid.startedAt) - raid.startedAt, 0, duration) / duration;
 	const index = Math.max(0, plan.segments.findIndex((segment) => progress < segment.end));
@@ -268,7 +269,7 @@ export function getRaidFieldFrame(raid: Raid, now: number, suppliedPlan?: RaidFi
 
 /** Current observations only: an inspected street spot is not yet confirmed checkpoint cargo. */
 export function getRaidFieldObjective(raid: Raid, now: number, suppliedPlan?: RaidFieldPlan): RaidFieldObjective {
-	const plan = suppliedPlan?.id === fieldIdentity(raid) ? suppliedPlan : getRaidFieldPlan(raid);
+	const plan = suppliedPlan?.id === getRaidFieldPlanId(raid) ? suppliedPlan : getRaidFieldPlan(raid);
 	const frame = getRaidFieldFrame(raid, now, plan), segment = plan.segments[frame.segmentIndex]!;
 	const duration = Math.max(1, raid.endsAt - raid.startedAt);
 	const settling = frame.progress >= 1 && raid.expedition?.status !== "choice";
@@ -287,7 +288,7 @@ export function getRaidFieldObjective(raid: Raid, now: number, suppliedPlan?: Ra
 
 /** Used only when the real checkpoint settles. Modifiers add no RNG draws or success knowledge. */
 export function getRaidFieldOutcome(raid: Raid, suppliedPlan?: RaidFieldPlan): RaidFieldOutcome {
-	const plan = suppliedPlan?.id === fieldIdentity(raid) ? suppliedPlan : getRaidFieldPlan(raid);
+	const plan = suppliedPlan?.id === getRaidFieldPlanId(raid) ? suppliedPlan : getRaidFieldPlan(raid);
 	const categories = plan.lootSpots.map((spot) => spot.category), resourceBonus: Supplies = { ammo: 0, medicine: 0, scrap: 0, intel: 0 };
 	const preferredSlots: ModuleSlot[] = [];
 	const target = categories[Math.floor(generator(plan.seed ^ 0x52ac193b)() * categories.length)]!;
@@ -300,5 +301,5 @@ export function getRaidFieldOutcome(raid: Raid, suppliedPlan?: RaidFieldPlan): R
 	}
 	const moneyMultiplier = .94 + (plan.seed % 15) / 100;
 	return { moneyMultiplier, resourceBonus, preferredSlots,
-		narrative: `${plan.theme.label}: осмотрены ${plan.lootSpots.map((spot) => `«${spot.label}»`).join(" и ")}. ${raid.expedition?.branch === "combat" || raid.tactic === "bold" ? "Проход через огневой контакт." : "Переходы под прикрытием укрытий."}` };
+		narrative: `${plan.theme.label}: осмотрены ${plan.lootSpots.map((spot) => `«${spot.label}»`).join(" и ")}. ${raid.expedition?.branch === "combat" || (raid.squad?.members[0]?.tactic ?? raid.tactic) === "bold" ? "Проход через огневой контакт." : "Переходы под прикрытием укрытий."}` };
 }

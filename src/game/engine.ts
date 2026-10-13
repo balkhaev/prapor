@@ -26,11 +26,13 @@ import { createScavStory, getScavStoryEffects, noteScavProduction, noteScavRaid,
 export * from "./scav-stories";
 import { createSquadSocialState, ensureSquadPairs, removeSquadMember, getRoomSocialEffects, getRaidSocialSupport, creditSquadWork, getSocialProductionWorkers, noteSquadProduction, discardSquadWork, noteSquadDispatch, noteSquadRaid, parseSquadSocialState, validateSquadSocialState, rebaseSquadSocialClock, resolveSocialEvent as resolveSquadSocialEvent, getSquadSocialEvents, type SquadSocialState } from "./squad-bonds";
 export * from "./squad-bonds";
+import { getSquadRaidQuote, getRaidGroup, createSquadRaidSnapshot, planSquadRaidActions, squadInjuryMultiplier, parseSquadRaidSnapshot, validateSquadRaids, type SquadRaidSnapshot, type SquadRaidReport } from "./squad-raids";
+export * from "./squad-raids";
 import { createAchievementState, parseAchievementState, validateAchievementState, rebaseAchievementClock, noteAchievementBuild, noteAchievementTransfer, noteAchievementInstalled, noteAchievementDispatch, noteAchievementCheckpoint, noteAchievementContinue, noteAchievementExtract, noteAchievementRaidFinished, noteAchievementLoot, noteAchievementSupply, prepareAchievementPayment, noteAchievementPaid, prepareAchievementCraft, noteAchievementCrafted, prepareAchievementRecycle, noteAchievementRecycled, creditAchievementWork, noteAchievementUpgrade, noteAchievementUpgradeDone, noteAchievementAssignment, noteAchievementSocialDecision, noteAchievementJobDone, noteAchievementCancelled, pruneAchievementPeople, pruneAchievementInventory, type AchievementState } from "./achievements";
 export * from "./achievements";
 
 export const SAVE_KEY = "prapor.save.v1";
-export const SAVE_VERSION = 9;
+export const SAVE_VERSION = 10;
 export const MAX_OFFLINE_MS = 8 * 60 * 60 * 1000;
 export const MAX_ROOM_LEVEL = 5;
 
@@ -92,6 +94,8 @@ export interface Raid {
 	backpackLevel: number;
 	/** Null only for a migrated sortie: its original seed and payout settle once. */
 	expedition: Expedition | null;
+	/** Each physical sortie stays independent; this links its coordinated party. */
+	squad?: SquadRaidSnapshot;
 }
 export interface RaidReport {
 	id: string;
@@ -115,6 +119,7 @@ export interface RaidReport {
 	discoveries: string[];
 	lostCargo: Cargo | null;
 	moduleIds: string[];
+	squad?: SquadRaidReport;
 }
 export interface GameState {
 	schemaVersion: number;
@@ -1154,11 +1159,11 @@ export function getRaidPhase(raid: Raid, now: number): { label: string; progress
 }
 
 /** Internal dispatch never advances time: automatic repeat uses the simulation cursor. */
-function startRaid(state: GameState, scav: Scav, map: RaidMap, now: number, isAuto: boolean): ActionResult {
+function startRaid(state: GameState, scav: Scav, map: RaidMap, now: number, isAuto: boolean, frozenQuote?: ReturnType<typeof getRaidQuote>): ActionResult {
 	if (scav.status === "raiding") return fail("Дикий уже в рейде.");
 	const reason = raidBlockReason(state, scav, map, isAuto ? scav.autoRaid.minHealth : 25);
 	if (reason) return fail(reason);
-	const quote = getRaidQuote(state, scav, map);
+	const quote = frozenQuote ?? getRaidQuote(state, scav, map);
 	const stats = getLoadoutStats(state, scav);
 	const armor = state.gearItems.find((item) => item.id === scav.loadout.armorItemId);
 	const helmet = state.gearItems.find((item) => item.id === scav.loadout.helmetItemId);
@@ -1167,8 +1172,8 @@ function startRaid(state: GameState, scav: Scav, map: RaidMap, now: number, isAu
 		id: id(state, "raid"), scavId: scav.id, scavName: scav.name, mapId: map.id,
 		scavAppearance: scav.appearance ?? defaultScavAppearance(scav.personality),
 		weaponInstanceId: scav.weaponInstanceId!, startedAt: now,
-		endsAt: now + getRaidDuration(state, scav, map) * 1000,
-		chance: getRaidChance(state, scav, map),
+		endsAt: now + quote.duration * 1000,
+		chance: quote.chance,
 		lootBonus: getPersonality(scav).lootBonus + scav.scouting / 450 + TACTICS[scav.tactic].lootBonus + scav.gear.backpack * 0.12 + getScavProfileEffects(scav).loot,
 		seed: takeSeed(state), isAuto, tactic: scav.tactic,
 		armorLevel: scav.gear.armor, backpackLevel: scav.gear.backpack,
@@ -1265,6 +1270,37 @@ export function dispatchRaid(
 	const scav = state.scavs.find((item) => item.id === scavId);
 	if (!scav) return fail("Боец не вернулся с последнего рейда.");
 	return startRaid(state, scav, map, now, false);
+}
+
+/** Commit the whole party only after every person and every combined cost is valid. */
+export function dispatchSquadRaid(state: GameState, scavIds: readonly string[], mapId: string, now = Date.now()): ActionResult {
+	if (!isTime(now)) return fail("Некорректное время рейда.");
+	const before = getSquadRaidQuote(state, scavIds, mapId);
+	if (before.reason) return fail(before.reason);
+	rebaseClock(state, now);
+	// A ready person's repeat order must not seize them in the same click that launches a party.
+	const policies = state.scavs.filter((scav) => scavIds.includes(scav.id)).map((scav) => ({ scav, enabled: scav.autoRaid.enabled }));
+	for (const { scav } of policies) scav.autoRaid.enabled = false;
+	try { simulateAdvance(state, now, new Set(scavIds)); }
+	finally { for (const { scav, enabled } of policies) scav.autoRaid.enabled = enabled; }
+	const quote = getSquadRaidQuote(state, scavIds, mapId);
+	if (quote.reason) return fail(quote.reason);
+	const map = ownValue(MAP_BY_ID, mapId)!;
+	// Freeze every personal quote before the first dispatch changes the sector's radio support.
+	const prepared = scavIds.map((scavId) => { const scav = state.scavs.find((person) => person.id === scavId)!; return { scav, quote: getRaidQuote(state, scav, map) }; });
+	const raids: Raid[] = [];
+	for (const [index, item] of prepared.entries()) {
+		const result = startRaid(state, item.scav, map, now, false, { ...item.quote, chance: quote.members[index]!.chance });
+		if (!result.ok) throw new Error("Prevalidated squad dispatch failed");
+		const raid = state.raids.find((other) => other.id === result.raidId)!;
+		raid.endsAt = now + quote.duration * 1000;
+		raids.push(raid);
+	}
+	const squad = createSquadRaidSnapshot(state, raids, raids[0]!.seed);
+	for (const raid of raids) raid.squad = structuredClone(squad);
+	squad.actions = planSquadRaidActions(raids[0]!);
+	for (const raid of raids) raid.squad = structuredClone(squad);
+	return { ok: true, raidId: raids[0]!.id, message: `Отряд ${prepared.map((item) => item.scav.name).join(" / ")} вышел вместе: ${map.name}.` };
 }
 
 export function equipWeapon(
@@ -1533,7 +1569,7 @@ export function claimContract(
 	return ok(`«${contract.name}»: награда получена.`);
 }
 
-export function getExpeditionChoices(state: GameState, raid: Raid, selectedPerk?: RunPerk) {
+function getIndividualExpeditionChoices(state: GameState, raid: Raid, selectedPerk?: RunPerk) {
 	const expedition = raid.expedition;
 	if (!expedition || expedition.stage >= 3) return [];
 	const map = ownValue(MAP_BY_ID, raid.mapId)!;
@@ -1565,11 +1601,28 @@ export function getExpeditionChoices(state: GameState, raid: Raid, selectedPerk?
 	});
 }
 
+export function getExpeditionChoices(state: GameState, raid: Raid, selectedPerk?: RunPerk) {
+	if (!raid.squad) return getIndividualExpeditionChoices(state, raid, selectedPerk);
+	const group = getRaidGroup(state, raid);
+	const funded = { ...state, money: Number.MAX_SAFE_INTEGER, supplies: { ...state.supplies, ammo: Number.MAX_SAFE_INTEGER, intel: Number.MAX_SAFE_INTEGER } };
+	const members = group.map((member) => getIndividualExpeditionChoices(funded, member, selectedPerk));
+	return (members[0] ?? []).map((first, index) => {
+		const rows = members.map((choices) => choices[index]!);
+		const money = rows.reduce((sum, row) => sum + row.money, 0), ammo = rows.reduce((sum, row) => sum + row.ammo, 0), intel = rows.reduce((sum, row) => sum + row.intel, 0);
+		let reason = rows.find((row) => row.reason)?.reason ?? null;
+		if (!reason && group.length !== raid.squad!.members.length) reason = "Отряд неполный: нужен отход.";
+		if (!reason && state.money < money) reason = `Для отряда нужно ${money} ₽ на следующий этап.`;
+		if (!reason && state.supplies.ammo < ammo) reason = `Для отряда нужно ${ammo} патронов.`;
+		if (!reason && state.supplies.intel < intel) reason = `Для отряда нужно ${intel} разведданных.`;
+		return { ...first, money, ammo, intel, chance: rows.reduce((product, row) => product * row.chance, 1), duration: Math.max(...rows.map((row) => row.duration)), reason };
+	});
+}
+
 function continueAtCheckpoint(state: GameState, raid: Raid, branch: ExpeditionBranch, perk: RunPerk, now: number): ActionResult {
 	const expedition = raid.expedition;
 	if (!expedition || expedition.status !== "choice") return fail("Боец ещё не дошёл до контрольной точки.");
 	if (!expedition.offers.includes(perk)) return fail("Выбери один из найденных приёмов для этого выхода.");
-	const quote = getExpeditionChoices(state, raid, perk).find((item) => item.branch === branch);
+	const quote = getIndividualExpeditionChoices(state, raid, perk).find((item) => item.branch === branch);
 	if (!quote) return fail("Маршрут завершён: осталось эвакуироваться.");
 	if (quote.reason) return fail(quote.reason);
 	noteAchievementContinue(state, raid);
@@ -1586,6 +1639,21 @@ export function continueExpedition(state: GameState, raidId: string, branch: Exp
 	advance(state, now);
 	const raid = state.raids.find((item) => item.id === raidId);
 	if (!raid) return fail("Этот выход уже завершён.");
+	if (raid.squad) {
+		const group = getRaidGroup(state, raid);
+		if (group.length !== raid.squad.members.length || group.some((member) => member.expedition?.status !== "choice" || !member.expedition.offers.includes(perk))) return fail("Весь отряд должен дойти до общей контрольной точки.");
+		const quote = getExpeditionChoices(state, raid, perk).find((choice) => choice.branch === branch);
+		if (!quote) return fail("Маршрут завершён: осталось эвакуироваться.");
+		if (quote.reason) return fail(quote.reason);
+		for (const member of group) { const result = continueAtCheckpoint(state, member, branch, perk, now); if (!result.ok) throw new Error("Prevalidated squad continuation failed"); member.endsAt = now + quote.duration * 1000; }
+		const squad = structuredClone(raid.squad);
+		squad.stage = raid.expedition!.stage; squad.branch = branch; squad.actions = [];
+		for (const member of squad.members) { const peer = group.find((other) => other.id === member.raidId)!; member.chance = peer.chance; member.health = state.scavs.find((person) => person.id === member.scavId)!.health; }
+		for (const member of group) member.squad = structuredClone(squad);
+		squad.actions = planSquadRaidActions(group[0]!);
+		for (const member of group) member.squad = structuredClone(squad);
+		return ok(`Весь отряд продолжает вместе: этап ${squad.stage}, ${quote.label.toLowerCase()}.`);
+	}
 	return continueAtCheckpoint(state, raid, branch, perk, now);
 }
 export function extractRaid(state: GameState, raidId: string, now = Date.now()): ActionResult {
@@ -1593,6 +1661,15 @@ export function extractRaid(state: GameState, raidId: string, now = Date.now()):
 	advance(state, now);
 	const raid = state.raids.find((item) => item.id === raidId);
 	if (!raid?.expedition || raid.expedition.status !== "choice") return fail("Эвакуация доступна на контрольной точке.");
+	if (raid.squad) {
+		const group = getRaidGroup(state, raid);
+		if (group.length !== raid.squad.members.length || group.some((member) => member.expedition?.status !== "choice")) return fail("Весь отряд должен дойти до общей контрольной точки.");
+		for (const member of group) noteAchievementExtract(state, member, now);
+		state.raids = state.raids.filter((other) => !group.includes(other));
+		const reports = group.map((member) => finishExpedition(state, member, true, now));
+		attachSquadReports(state, raid.squad, reports);
+		return ok(`Отряд эвакуирован вместе: ${reports.reduce((sum, report) => sum + report.money, 0)} ₽ и доставленный груз.`);
+	}
 	noteAchievementExtract(state, raid, now);
 	state.raids = state.raids.filter((item) => item.id !== raidId);
 	const report = finishExpedition(state, raid, true, now);
@@ -1621,7 +1698,7 @@ function wearEquippedGear(state: GameState, scav: Scav, stage: number, failed: b
 	}
 }
 /** Resolve a checkpoint exactly once. A successful manual checkpoint remains an active raid. */
-function reachCheckpoint(state: GameState, raid: Raid, now: number): RaidReport | null {
+function reachCheckpoint(state: GameState, raid: Raid, now: number, party?: { injuryMultiplier: number; rescuedBy: string | null }): RaidReport | null {
 	const expedition = raid.expedition!;
 	const map = ownValue(MAP_BY_ID, raid.mapId)!;
 	const scav = state.scavs.find((item) => item.id === raid.scavId)!;
@@ -1644,7 +1721,11 @@ function reachCheckpoint(state: GameState, raid: Raid, now: number): RaidReport 
 	const helmet = expedition.loadout.helmetModelId ? ownValue(GEAR_MODEL_BY_ID, expedition.loadout.helmetModelId) : undefined;
 	const protection = (armor?.protection ?? 0) * expedition.loadout.armorCondition / 100 + (helmet?.protection ?? 0) * (expedition.loadout.helmetCondition ?? 0) / 100;
 	const injury = TACTICS[raid.tactic].injuryMultiplier * (1 - raid.armorLevel * 0.1) * (1 - protection * 2)
-		* (expedition.perks.includes("fieldMedic") ? 0.5 : 1) * (expedition.loadout.medkit ? 0.75 : 1);
+		* (expedition.perks.includes("fieldMedic") ? 0.5 : 1) * (expedition.loadout.medkit ? 0.75 : 1) * (party?.injuryMultiplier ?? 1);
+	if (raid.squad) {
+		const actions = raid.squad.actions.filter((action) => action.actorId === scav.id || action.targetId === scav.id);
+		expedition.trail.push({ at: now, label: `Отряд · этап ${expedition.stage}`, text: actions.map((action) => action.text).join(" ").slice(0, 400), kind: actions.some((action) => action.kind === "hesitation") ? "danger" : "neutral" });
+	}
 	weapon.durability = Math.max(0, weapon.durability - Math.ceil((5 + random() * (7 + map.danger * 8) + expedition.stage * 2)
 		* (expedition.perks.includes("gunsmith") ? 0.5 : 1)));
 	if (weapon.modules.receiver) weapon.modules.receiver.durability = weapon.durability;
@@ -1654,7 +1735,7 @@ function reachCheckpoint(state: GameState, raid: Raid, now: number): RaidReport 
 		expedition.trail.push({ at: now, label: `Засада · этап ${expedition.stage}`, text: (`Маршрут «${EXPEDITION_BRANCHES[expedition.branch].label}» сорван. Невынесенный груз потерян.${discoveriesText ? ` По рации передано: ${discoveriesText}.` : ""}${streetText}`).slice(0, 400), kind: "danger" });
 		scav.health = Math.max(0, scav.health - Math.ceil((32 + random() * 35 + expedition.stage * 4) * injury));
 		state.raids = state.raids.filter((item) => item.id !== raid.id);
-		return finishExpedition(state, raid, false, now);
+		return finishExpedition(state, raid, false, now, party?.rescuedBy ?? null);
 	}
 	scav.health = Math.max(25, scav.health - Math.ceil((3 + random() * (8 + map.danger * 10) + expedition.stage * 2) * injury));
 	const branch = EXPEDITION_BRANCHES[expedition.branch];
@@ -1705,7 +1786,36 @@ function reachCheckpoint(state: GameState, raid: Raid, now: number): RaidReport 
 	return finishExpedition(state, raid, true, now);
 }
 
-function finishExpedition(state: GameState, raid: Raid, success: boolean, now: number): RaidReport {
+function attachSquadReports(state: GameState, snapshot: SquadRaidSnapshot, reports: RaidReport[]) {
+	const squad: SquadRaidReport = { ...structuredClone(snapshot), usedMedkits: snapshot.actions.filter((action) => action.kind === "rescue").map((action) => action.actorId), outcomes: snapshot.members.map((member) => {
+		const report = reports.find((result) => result.raidId === member.raidId)!;
+		return { scavId: member.scavId, raidId: member.raidId, success: report.success, lostScav: report.lostScav, lostWeapon: report.lostWeapon, health: state.scavs.find((scav) => scav.id === member.scavId)?.health ?? 0, rescuedBy: snapshot.actions.find((action) => action.kind === "rescue" && action.targetId === member.scavId)?.actorId ?? null };
+	}) };
+	for (const report of reports) report.squad = structuredClone(squad);
+}
+function reachSquadCheckpoint(state: GameState, raid: Raid, now: number): RaidReport[] {
+	const squad = raid.squad!, group = getRaidGroup(state, raid), reports: RaidReport[] = [];
+	for (const member of group) {
+		const report = reachCheckpoint(state, member, now, { injuryMultiplier: squadInjuryMultiplier(squad, member.scavId), rescuedBy: squad.actions.find((action) => action.kind === "rescue" && action.targetId === member.scavId)?.actorId ?? null });
+		if (report) reports.push(report);
+	}
+	if (reports.length) {
+		// A disrupted formation retreats together. Those who passed retain only their own real cargo.
+		for (const member of group) if (state.raids.includes(member)) {
+			state.raids = state.raids.filter((other) => other.id !== member.id);
+			const last = member.expedition!.trail.at(-1)!;
+			last.text = `${last.text} Один из бойцов попал в засаду. Остальные прекращают продвижение и возвращаются вместе с отрядом.`.slice(0, 400);
+			reports.push(finishExpedition(state, member, true, now));
+		}
+		attachSquadReports(state, squad, reports);
+	} else {
+		const offers = group[0]!.expedition!.offers;
+		for (const member of group) member.expedition!.offers = [...offers];
+	}
+	return reports;
+}
+
+function finishExpedition(state: GameState, raid: Raid, success: boolean, now: number, rescuedBy: string | null = null): RaidReport {
 	const expedition = raid.expedition!;
 	const map = ownValue(MAP_BY_ID, raid.mapId)!;
 	const scav = state.scavs.find((item) => item.id === raid.scavId)!;
@@ -1754,6 +1864,7 @@ function finishExpedition(state: GameState, raid: Raid, success: boolean, now: n
 	} else {
 		report.lostWeapon = random() < 0.2 + map.danger * 0.22 + (expedition.stage - 1) * 0.08;
 		report.lostScav = random() < (map.danger * 0.08 + (expedition.stage - 1) * 0.018) * TACTICS[raid.tactic].fatalityMultiplier;
+		if (rescuedBy) { report.lostScav = false; report.lostWeapon = false; scav.health = clamp(scav.health, 5, 24); }
 		if (report.lostWeapon || report.lostScav) {
 			report.lostWeapon = true; state.weapons = state.weapons.filter((item) => item.id !== raid.weaponInstanceId); scav.weaponInstanceId = null;
 		}
@@ -1761,7 +1872,7 @@ function finishExpedition(state: GameState, raid: Raid, success: boolean, now: n
 			state.scavs = state.scavs.filter((item) => item.id !== scav.id); state.stats.lostScavs++;
 			state.gearItems = state.gearItems.filter((item) => ![scav.loadout.armorItemId, scav.loadout.helmetItemId, scav.loadout.backpackItemId].includes(item.id));
 		}
-		report.description = `Выход сорван на этапе ${expedition.stage}. Невынесенный груз потерян. ${report.lostScav ? "Боец пропал." : report.lostWeapon ? "Боец вернулся без оружия." : "Боец вернулся раненым."}`;
+		report.description = `Выход сорван на этапе ${expedition.stage}. Невынесенный груз потерян. ${rescuedBy ? `Товарищ ${raid.squad?.members.find((member) => member.scavId === rescuedBy)?.scavName ?? "из отряда"} спас бойца и его оружие личной аптечкой.` : report.lostScav ? "Боец пропал." : report.lostWeapon ? "Боец вернулся без оружия." : "Боец вернулся раненым."}`;
 	}
 	if (report.discoveries.length) report.description += " Переданные чертежи сохранены.";
 	noteAchievementRaidFinished(state, raid, report);
@@ -2006,6 +2117,12 @@ function simulateAdvance(state: GameState, now: number, stoppedAtBoundary: Reado
 		const due = state.raids.filter((raid) => raid.endsAt <= cursor && raid.expedition?.status !== "choice")
 			.sort((a, b) => a.endsAt - b.endsAt || a.id.localeCompare(b.id));
 		for (const raid of due) {
+			if (!state.raids.includes(raid) || raid.expedition?.status === "choice") continue;
+			if (raid.squad) {
+				const reports = reachSquadCheckpoint(state, raid, cursor);
+				for (const report of reports) { summary.completed.push(report); summary.completedCount++; if (summary.completed.length > 40) summary.completed.shift(); }
+				continue;
+			}
 			let report: RaidReport | null;
 			if (raid.expedition) report = reachCheckpoint(state, raid, cursor);
 			else { state.raids = state.raids.filter((item) => item.id !== raid.id); report = finishRaid(state, raid); }
@@ -2450,7 +2567,7 @@ function parseScav(value: unknown, version: number): Scav {
 }
 function parseRaid(value: unknown, version: number): Raid {
 	const source = record(value);
-	fields(source, ["id", "scavId", "scavName", "scavAppearance", "mapId", "weaponInstanceId", "startedAt", "endsAt", "chance", "lootBonus", "seed", ...(version >= 2 ? ["isAuto", "tactic", "armorLevel", "backpackLevel"] : []), ...(version >= 3 ? ["expedition"] : [])]);
+	fields(source, ["id", "scavId", "scavName", "scavAppearance", "mapId", "weaponInstanceId", "startedAt", "endsAt", "chance", "lootBonus", "seed", ...(version >= 2 ? ["isAuto", "tactic", "armorLevel", "backpackLevel"] : []), ...(version >= 3 ? ["expedition"] : []), ...(version >= 10 ? ["squad"] : [])]);
 	const startedAt = number(source.startedAt);
 	const endsAt = number(source.endsAt);
 	const expedition = version >= 3 ? parseExpedition(source.expedition, version) : null;
@@ -2473,11 +2590,12 @@ function parseRaid(value: unknown, version: number): Raid {
 		armorLevel: version === 1 ? 0 : number(source.armorLevel, 3, 0, true),
 		backpackLevel: version === 1 ? 0 : number(source.backpackLevel, 3, 0, true),
 		expedition,
+		...(version >= 10 && Object.hasOwn(source, "squad") ? { squad: parseSquadRaidSnapshot(source.squad) as SquadRaidSnapshot } : {}),
 	};
 }
 function parseReport(value: unknown, version: number): RaidReport {
 	const source = record(value);
-	fields(source, ["id", "raidId", "scavName", "scavAppearance", "mapId", "at", "success", "lostScav", "lostWeapon", "money", "supplies", "weaponId", "weaponAutoSold", "description", ...(version >= 2 ? ["isAuto", "tactic", "events"] : []), ...(version >= 3 ? ["depth", "discoveries", "lostCargo"] : []), ...(version >= 4 ? ["moduleIds"] : [])]);
+	fields(source, ["id", "raidId", "scavName", "scavAppearance", "mapId", "at", "success", "lostScav", "lostWeapon", "money", "supplies", "weaponId", "weaponAutoSold", "description", ...(version >= 2 ? ["isAuto", "tactic", "events"] : []), ...(version >= 3 ? ["depth", "discoveries", "lostCargo"] : []), ...(version >= 4 ? ["moduleIds"] : []), ...(version >= 10 ? ["squad"] : [])]);
 	return {
 		id: string(source.id),
 		raidId: string(source.raidId),
@@ -2501,6 +2619,7 @@ function parseReport(value: unknown, version: number): RaidReport {
 		isAuto: version === 1 ? false : bool(source.isAuto),
 		tactic: version === 1 ? "balanced" : known(source.tactic, TACTICS) as RaidTactic,
 		events: version === 1 ? [] : parseEvents(source.events, version >= 3 ? 10 : 4),
+		...(version >= 10 && Object.hasOwn(source, "squad") ? { squad: parseSquadRaidSnapshot(source.squad, true) as SquadRaidReport } : {}),
 	};
 }
 
@@ -2509,7 +2628,7 @@ export function parseSave(raw: string): GameState | null {
 	try {
 		if (typeof raw !== "string" || raw.length > 1_000_000) return null;
 		const source = record(JSON.parse(raw));
-		if (source.schemaVersion !== 1 && source.schemaVersion !== 2 && source.schemaVersion !== 3 && source.schemaVersion !== 4 && source.schemaVersion !== 5 && source.schemaVersion !== 6 && source.schemaVersion !== 7 && source.schemaVersion !== 8 && source.schemaVersion !== SAVE_VERSION) return null;
+		if (source.schemaVersion !== 1 && source.schemaVersion !== 2 && source.schemaVersion !== 3 && source.schemaVersion !== 4 && source.schemaVersion !== 5 && source.schemaVersion !== 6 && source.schemaVersion !== 7 && source.schemaVersion !== 8 && source.schemaVersion !== 9 && source.schemaVersion !== SAVE_VERSION) return null;
 		const version = source.schemaVersion;
 		fields(source, ["schemaVersion", "createdAt", "lastUpdated", "money", "supplies", "xp", "level", "base", "scavs", "weapons", "raids", "history", "claimedContracts", "discoveredWeapons", "stats", "clock", "rng", "nextId", ...(version >= 3 ? ["gearItems", "blueprints"] : []), ...(version >= 4 ? ["modules"] : []), ...(version >= 5 ? ["shelter"] : []), ...(version >= 6 ? ["recruitment"] : []), ...(version >= 7 ? ["memorials"] : []), ...(version >= 8 ? ["social"] : []), ...(version >= 9 ? ["achievements"] : [])]);
 		const base = record(source.base);
@@ -2756,6 +2875,7 @@ export function parseSave(raw: string): GameState | null {
 		)
 			throw new Error("id-sequence");
 		validateSquadSocialState(state);
+		validateSquadRaids(state);
 		validateAchievementState(state);
 		return state;
 	} catch {

@@ -22,7 +22,7 @@ export interface SquadBond {
 	pending: SquadEventSource | null; decisions: SquadDecision[];
 	/** At most one unfinished paid job per pair. Only actual credited work earns this. */
 	workCredit: { jobId: string; roomId: string; workDone: number } | null;
-	/** Actual overlapping solo sorties, counted only when both participants return alive. */
+	/** Overlapping physical sorties, including a party, counted only when both return alive. */
 	overlap: { raidIds: [string, string]; startedAt: [number, number]; mapId: string; at: number; returned: { raidId: string; at: number; success: boolean }[] } | null;
 }
 export interface ScavLossReaction {
@@ -90,7 +90,7 @@ const options: Record<SquadEventKind, readonly ChoiceDefinition[]> = {
 	],
 	crossed_routes: [
 		{ id: "debrief", label: "Сверить две карты", description: "Сопоставить записи с перекрывающихся выходов и разобрать, где пригодились чужие подсказки.", money: 0, supplies: supplies({ intel: 1 }), score: 12 },
-		{ id: "signal", label: "Придумать личный позывной", description: "Оставить на карте знак: на этой частоте отвечает свой. Каждая вылазка по-прежнему одиночная.", money: 0, supplies: supplies(), score: 6 },
+		{ id: "signal", label: "Придумать личный позывной", description: "Оставить на карте знак: на этой частоте отвечает свой. Даже вдали от убежища можно узнать голос товарища.", money: 0, supplies: supplies(), score: 6 },
 	],
 };
 function calculatedScore(pair: Pick<SquadBond, "compatibility" | "workTogether" | "sortiesTogether" | "difficultSorties" | "decisions">) {
@@ -310,7 +310,7 @@ function pairNarrative(state: GameState, pair: SquadBond) {
 	const pending = pair.pending!, sector = pending.mapId ? MAP_BY_ID[pending.mapId]!.name : null;
 	return pending.eventId === "first_shift" ? { title: "Две кружки у станка", text: `${a!.name} и ${b!.name} завершили три оплаченные партии вместе. Теперь замечают, кто оставляет инструменты на краю стола, а кто перепроверяет чужую деталь. После смены один задержался у двери: есть повод поговорить.` }
 		: pending.eventId === "friction" ? { title: "Чужие руки, общий станок", text: `${a!.name} и ${b!.name} снова спорят о порядке работы. Это уже мешает смене: усталость превращает разные привычки в личные претензии. Нужен разговор, в котором услышат обоих.` }
-		: { title: "На знакомой частоте", text: `${a!.name} и ${b!.name} дважды вернулись живыми с перекрывающихся одиночных выходов${sector ? ` в «${sector}»` : " в один сектор"}. По радио передавали ориентиры и ждали чужой ответ. Теперь у них есть общая история, которую не видно в ведомости добычи.` };
+		: { title: "На знакомой частоте", text: `${a!.name} и ${b!.name} дважды вернулись живыми с выходов в один сектор в одно время${sector ? ` — «${sector}»` : ""}. Знакомые ориентиры и чужой ответ на рации стали частью их общей истории, которую не видно в ведомости добычи.` };
 }
 export function getSquadSocialEvents(state: GameState, scav?: string | Pick<Scav, "id">): SquadSocialEvent[] {
 	const filterId = scav ? actorId(scav) : null, events: SquadSocialEvent[] = [];

@@ -1,4 +1,6 @@
-import { getCargoWeight, getWeaponDefinition, getWeaponStats, type GameState, type Raid, type RaidReport } from './game/engine';
+import { getCargoWeight, getWeaponDefinition, getWeaponStats, SQUAD_ROLE_LABELS, type GameState, type Raid, type RaidReport } from './game/engine';
+import { raidRepresentatives } from './squad-raid-ui';
+import { getSquadRaidFieldFrame } from './squad-raid-field';
 import { MAP_BY_ID, RARITY_COLORS, RARITY_LABELS, WEAPON_BY_ID, type Supplies } from './game/data';
 import { MODULE_BY_ID, MODULE_SLOT_LABELS, modulePlatformLabel, type ModuleInstance, type ModuleModel } from './game/modules';
 import { scavPortrait } from './art';
@@ -10,6 +12,42 @@ const n = (value: number) => Math.floor(value).toLocaleString('ru-RU');
 const time = (seconds: number) => `${Math.floor(Math.max(0, seconds) / 60)}:${String(Math.floor(Math.max(0, seconds) % 60)).padStart(2,'0')}`;
 const clock = (at: number) => new Date(at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 const plans = new Map<string, RaidFieldPlan>();
+function renderSquadLiveMembers(state: GameState, raid: Raid, report: RaidReport | null, now: number): string {
+ const party=getSquadRaidFieldFrame(raid,state.raids,now,undefined,report);
+ if(!party)return '';
+ return `<section class="squad-live-members" aria-label="Бойцы совместного рейда"><div class="squad-mission-roster">${party.members.map(member=>{
+  const scav=state.scavs.find(person=>person.id===member.scavId), memorial=state.memorials.find(person=>person.id===member.scavId);
+  const health=report?member.health:scav?.health??member.health;
+  return `<div data-party-member="${e(member.scavId)}"><span class="squad-pick-face">${scavPortrait(scav?.personality??memorial?.personality??'veteran',member.name,member.appearance)}</span><span><strong>${e(member.name)}</strong><small>${e(SQUAD_ROLE_LABELS[member.role])} · <b data-party-health="${e(member.scavId)}">${member.lostScav?'Погиб':`${Math.floor(health)} здоровья`}</b></small><small data-party-action="${e(member.scavId)}">${e(member.statusText)}</small></span>${scav?`<button class="text-button" data-scav="${e(member.scavId)}" aria-label="Личное дело ${e(member.name)}">→</button>`:''}</div>`;
+ }).join('')}</div><p class="squad-live-action ${party.activeAction?.kind==='hesitation'?'rival':''}" data-party-current>${e(party.activeAction?.text??(report?'Исход каждого участника сохранён в отчёте.':party.frame.paused?'Все на связи. Приказ касается всего состава.':'Двигаются одним маршрутом. Смотри, кто идёт впереди и кто прикрывает.'))}</p></section>`;
+}
+function renderSquadCargo(state: GameState, raid: Raid, report: RaidReport | null): string {
+ const squad=report?.squad??raid.squad;
+ if(!squad)return renderCargo(raid,report);
+ return squad.members.map(member=>{
+  const current=state.raids.find(item=>item.id===member.raidId);
+  const receipt=report?state.history.find(item=>item.raidId===member.raidId)??null:null;
+  if(!current&&!receipt)return `<p class="field-hint">${e(member.scavName)}: личный отчёт больше не входит в последние записи.</p>`;
+  const view=current??{...raid,id:member.raidId,scavId:member.scavId,scavName:member.scavName,scavAppearance:member.appearance,weaponInstanceId:member.weaponInstanceId,seed:member.seed,tactic:member.tactic};
+  return `<div class="squad-member-cargo"><h4>${e(member.scavName)} · свой рюкзак</h4>${renderCargo(view,receipt)}</div>`;
+ }).join('');
+}
+function raidTitle(raid: Raid): string { return raid.squad?.members.map(member=>member.scavName).join(' · ')??raid.scavName; }
+function squadReportPhase(report: RaidReport): string {
+ return report.squad?.outcomes.some(outcome=>outcome.lostScav)?'Отряд вернулся с потерями':report.squad?.outcomes.some(outcome=>!outcome.success)?'Отряд отступил':report.squad?'Совместный выход завершён':report.success?'Выход завершён':'Связь с маршрутом потеряна';
+}
+function reportSucceeded(report: RaidReport): boolean { return report.squad ? report.squad.outcomes.every(outcome=>outcome.success) : report.success; }
+function reportStatus(report: RaidReport): string {
+ return report.squad ? report.squad.outcomes.some(outcome=>outcome.lostScav)?'ПОТЕРИ':reportSucceeded(report)?'ВЕРНУЛИСЬ':'ОТСТУПИЛИ' : report.success?'ВЕРНУЛСЯ':'ЗАВЕРШЁН';
+}
+function renderRaidResult(state: GameState, report: RaidReport): string {
+ if(!report.squad)return `<div class="live-result ${report.success?'':'failed'}"><span class="eyebrow">${report.success?'Доставлено на базу':'Под риском был весь груз'}</span><strong>${report.success?`${n(report.money)} ₽`:'Добыча потеряна'}</strong><p>${e(report.description)}</p><button class="text-button" data-page="journal">Открыть отчёт →</button></div>`;
+ const receipts=report.squad.members.flatMap(member=>state.history.filter(item=>item.raidId===member.raidId));
+ const money=receipts.reduce((sum,item)=>sum+item.money,0), losses=report.squad.outcomes.filter(outcome=>outcome.lostScav).length, rescued=report.squad.outcomes.filter(outcome=>outcome.rescuedBy).length;
+ const complete=receipts.length===report.squad.members.length;
+ const text=[losses?`Погибло: ${losses}.`:'Все вернулись живыми.',rescued?`Спасено товарищами: ${rescued}.`:'',reportSucceeded(report)?'Общий маршрут завершён.':'Отряд прекратил продвижение и отступил вместе.','Каждый доставил только свой сохранённый груз.'].filter(Boolean).join(' ');
+ return `<div class="live-result ${reportSucceeded(report)?'':'failed'}"><span class="eyebrow">${complete?'Доставлено всем отрядом':'По оставшимся личным отчётам'}</span><strong>${n(money)} ₽</strong><p>${e(text)}</p><button class="text-button" data-page="journal">Личные отчёты участников →</button></div>`;
+}
 function planFor(raid: Raid) {
 	const key = `${raid.id}:${raid.seed}:${raid.mapId}:${raid.expedition?.stage ?? 0}:${raid.expedition?.branch ?? 'legacy'}:${raid.tactic}`;
 	let plan = plans.get(key);
@@ -78,10 +116,10 @@ export function renderLiveRaidPanel(state: GameState, raid: Raid | null, candida
 	const report = candidate?.raidId === raid.id ? candidate : null;
 	const scav = state.scavs.find(item => item.id === raid.scavId), weapon = state.weapons.find(item => item.id === raid.weaponInstanceId);
 	const now = Date.now(), frame = getRaidFieldFrame(raid, report ? raid.endsAt : now, planFor(raid)), stats = weapon ? getWeaponStats(weapon) : null;
-	const phase = report ? report.success ? 'Выход завершён' : 'Связь с маршрутом потеряна' : frame.label;
+	const phase = report ? squadReportPhase(report) : frame.label;
 	const mission = report ? 'Итог выхода' : raid.expedition?.status === 'choice' ? 'Нужен твой приказ' : `Этап ${raid.expedition?.stage ?? 1} · В пути`;
-	const selector = `<div class="live-watch-picker"><label for="live-raid-select">Наблюдать</label><select id="live-raid-select" data-live-raid-select data-focus-key="live-raid-picker" aria-label="Наблюдаемый рейд">${!state.raids.some(item => item.id === raid.id) ? `<option value="${raid.id}">${e(raid.scavName)} · Выход завершён</option>` : ''}${state.raids.map(item => `<option value="${item.id}" ${item.id === raid.id ? 'selected' : ''}>${e(item.scavName)} · ${e(MAP_BY_ID[item.mapId]?.name ?? 'Сектор')}${item.expedition?.status === 'choice' ? ' · ПРИКАЗ' : ''}</option>`).join('')}</select></div>`;
-	return `<header class="live-raid-head"><div><span class="eyebrow">${e(MAP_BY_ID[raid.mapId]?.name ?? 'Сектор')} · ${e(planFor(raid).theme.label)}</span><h2>${e(raid.scavName)}</h2></div><button class="icon-button" data-live-close aria-label="Вернуться в убежище">×</button></header>${selector}<div class="live-raid-status ${report ? report.success ? 'finished' : 'failed' : frame.action === 'skirmish' ? 'danger' : ''}" data-live-status><div><span class="live-signal"></span><strong data-live-phase>${e(phase)}</strong><b data-live-time>${report ? report.success ? 'ВЕРНУЛСЯ' : 'ЗАВЕРШЁН' : raid.expedition?.status === 'choice' ? 'ПРИКАЗ' : time((raid.endsAt-now)/1000)}</b></div><p data-live-detail>${e(report?.description ?? frame.detail)}</p><span class="live-raid-progress"><i data-live-progress style="width:${report ? 100 : Math.round(frame.progress*100)}%"></i></span><small data-live-mission>${mission}</small></div><div class="live-raid-scroll"><div class="live-kit"><span class="scav-avatar">${scavPortrait(scav?.personality ?? 'veteran', raid.scavName)}</span><div><strong>${e(weapon ? getWeaponDefinition(weapon).name : report?.lostWeapon ? 'Оружие потеряно' : 'Комплект бойца')}</strong><small><span data-live-health>${scav ? `Здоровье ${Math.floor(scav.health)} / 100` : report?.lostScav ? 'Боец потерян' : 'Выход закончен'}</span> · ${raid.tactic === 'cautious' ? 'Осторожно' : raid.tactic === 'bold' ? 'Напористо' : 'Сбалансированно'}</small><small class="live-kit-ready" data-live-ready>${stats ? stats.ready ? `Пушка исправна · ${Math.floor(weapon!.durability)}%` : e(stats.issues.join(' · ')) : ''}</small></div></div>${renderObjective(raid,report,now)}${!report && raid.expedition?.status === 'choice' ? `<div class="live-decision">${decision}<button class="button secondary" data-raid-orders="${raid.id}">Развернуть приказы →</button></div>` : !report ? `<button class="button ghost live-orders" data-raid-orders="${raid.id}">Комплект и приказы →</button>` : ''}${report ? `<div class="live-result ${report.success ? '' : 'failed'}"><span class="eyebrow">${report.success ? 'Доставлено на базу' : 'Под риском был весь груз'}</span><strong>${report.success ? `${n(report.money)} ₽` : 'Добыча потеряна'}</strong><p>${e(report.description)}</p><button class="text-button" data-page="journal">Открыть отчёт →</button></div>` : ''}<div data-live-cargo>${renderCargo(raid,report)}</div><div class="live-raid-events-head"><h3>Связь с улицей</h3><span>Текущий этап</span></div><div class="live-raid-feed" data-live-feed>${renderLiveRaidFeed(raid, report, now)}</div>${renderVisits(raid,report ? raid.endsAt : now)}${renderJourney(raid,report)}<div class="live-camera-note">Рука — осмотреть квартал. «За бойцом» — вернуться к отряду.</div></div>`;
+	const selector = `<div class="live-watch-picker"><label for="live-raid-select">Наблюдать</label><select id="live-raid-select" data-live-raid-select data-focus-key="live-raid-picker" aria-label="Наблюдаемый рейд">${!state.raids.some(item => item.id === raid.id) ? `<option value="${raid.id}">${e(raid.scavName)} · Выход завершён</option>` : ''}${raidRepresentatives(state.raids).map(item => `<option value="${item.id}" ${item.id === raid.id ? 'selected' : ''}>${e(raidTitle(item))} · ${e(MAP_BY_ID[item.mapId]?.name ?? 'Сектор')}${item.expedition?.status === 'choice' ? ' · ПРИКАЗ' : ''}</option>`).join('')}</select></div>`;
+	return `<header class="live-raid-head"><div><span class="eyebrow">${e(MAP_BY_ID[raid.mapId]?.name ?? 'Сектор')} · ${e(planFor(raid).theme.label)}</span><h2>${e(raidTitle(raid))}</h2></div><button class="icon-button" data-live-close aria-label="Вернуться в убежище">×</button></header>${selector}<div class="live-raid-status ${report ? reportSucceeded(report) ? 'finished' : 'failed' : frame.action === 'skirmish' ? 'danger' : ''}" data-live-status><div><span class="live-signal"></span><strong data-live-phase>${e(phase)}</strong><b data-live-time>${report ? reportStatus(report) : raid.expedition?.status === 'choice' ? 'ПРИКАЗ' : time((raid.endsAt-now)/1000)}</b></div><p data-live-detail>${e(report?.description ?? frame.detail)}</p><span class="live-raid-progress"><i data-live-progress style="width:${report ? 100 : Math.round(frame.progress*100)}%"></i></span><small data-live-mission>${mission}</small></div><div class="live-raid-scroll ${raid.squad?"has-party":""}">${raid.squad?renderSquadLiveMembers(state,raid,report,now):""}<div class="live-kit"><span class="scav-avatar">${scavPortrait(scav?.personality ?? 'veteran', raid.scavName, raid.scavAppearance)}</span><div><strong>${e(weapon ? getWeaponDefinition(weapon).name : report?.lostWeapon ? 'Оружие потеряно' : 'Комплект бойца')}</strong><small><span data-live-health>${scav ? `Здоровье ${Math.floor(scav.health)} / 100` : report?.lostScav ? 'Боец потерян' : 'Выход закончен'}</span> · ${raid.tactic === 'cautious' ? 'Осторожно' : raid.tactic === 'bold' ? 'Напористо' : 'Сбалансированно'}</small><small class="live-kit-ready" data-live-ready>${stats ? stats.ready ? `Пушка исправна · ${Math.floor(weapon!.durability)}%` : e(stats.issues.join(' · ')) : ''}</small></div></div>${renderObjective(raid,report,now)}${!report && raid.expedition?.status === 'choice' ? `<div class="live-decision">${decision}<button class="button secondary" data-raid-orders="${raid.id}">Развернуть приказы →</button></div>` : !report ? `<button class="button ghost live-orders" data-raid-orders="${raid.id}">Комплект и приказы →</button>` : ''}${report ? renderRaidResult(state,report) : ""}<div data-live-cargo>${raid.squad?renderSquadCargo(state,raid,report):renderCargo(raid,report)}</div><div class="live-raid-events-head"><h3>Связь с улицей</h3><span>Текущий этап</span></div><div class="live-raid-feed" data-live-feed>${renderLiveRaidFeed(raid, report, now)}</div>${renderVisits(raid,report ? raid.endsAt : now)}${renderJourney(raid,report)}<div class="live-camera-note">Рука — осмотреть квартал. «За бойцом» — вернуться к отряду.</div></div>`;
 }
 function renderLiveRaidFeed(raid: Raid, report: RaidReport | null, now: number) {
 	const events = getRaidFieldFrame(raid, report ? raid.endsAt : now, planFor(raid)).observedEvents.slice(-3).reverse();
@@ -91,14 +129,20 @@ export function updateLiveRaidPanel(root: HTMLElement, raid: Raid, candidate: Ra
 	const report = candidate?.raidId === raid.id ? candidate : null, now = Date.now();
 	const frame = getRaidFieldFrame(raid, report ? raid.endsAt : now, planFor(raid)), goal = getRaidFieldObjective(raid, now, planFor(raid));
 	const set = (selector: string, text: string) => { const element = root.querySelector<HTMLElement>(selector); if(element && element.textContent !== text) element.textContent = text; };
-	set('[data-live-phase]', report ? report.success ? 'Выход завершён' : 'Связь с маршрутом потеряна' : frame.label);
+	set('[data-live-phase]', report ? squadReportPhase(report) : frame.label);
 	set('[data-live-detail]', report?.description ?? frame.detail);
-	set('[data-live-time]', report ? report.success ? 'ВЕРНУЛСЯ' : 'ЗАВЕРШЁН' : raid.expedition?.status === 'choice' ? 'ПРИКАЗ' : time((raid.endsAt-now)/1000));
+	set('[data-live-time]', report ? reportStatus(report) : raid.expedition?.status === 'choice' ? 'ПРИКАЗ' : time((raid.endsAt-now)/1000));
 	set('[data-live-mission]', report ? 'Итог выхода' : raid.expedition?.status === 'choice' ? 'Нужен твой приказ' : `Этап ${raid.expedition?.stage ?? 1} · В пути`);
 	set('[data-live-goal]', goal.label); set('[data-live-goal-detail]', goal.detail);
 	set('[data-live-route]', `Осмотрено ${goal.visited.length} / ${goal.totalSearches} · Участок ${goal.segment} / ${goal.segments}`);
 	set('[data-live-action-time]', goal.remainingSeconds ? time(goal.remainingSeconds) : 'НА СВЯЗИ');
 	if (state) {
+		const party = getSquadRaidFieldFrame(raid,state.raids,now,undefined,report);
+		if (party) {
+			for (const member of party.members) { const actor=state.scavs.find(person=>person.id===member.scavId); set(`[data-party-health="${member.scavId}"]`,member.lostScav?"Погиб":`${Math.floor(report?member.health:actor?.health??member.health)} здоровья`); set(`[data-party-action="${member.scavId}"]`,member.statusText); }
+			set("[data-party-current]",party.activeAction?.text??(report?"Исход каждого участника сохранён в отчёте.":party.frame.paused?"Все на связи. Приказ касается всего состава.":"Двигаются одним маршрутом. Смотри, кто идёт впереди и кто прикрывает."));
+			root.querySelector("[data-party-current]")?.classList.toggle("rival",party.activeAction?.kind==="hesitation");
+		}
 		const scav = state.scavs.find(item => item.id === raid.scavId), weapon = state.weapons.find(item => item.id === raid.weaponInstanceId), stats = weapon ? getWeaponStats(weapon) : null;
 		set('[data-live-health]', scav ? `Здоровье ${Math.floor(scav.health)} / 100` : report?.lostScav ? 'Боец потерян' : 'Выход закончен');
 		set('[data-live-ready]', stats ? stats.ready ? `Пушка исправна · ${Math.floor(weapon!.durability)}%` : stats.issues.join(' · ') : '');
@@ -113,6 +157,6 @@ export function updateLiveRaidPanel(root: HTMLElement, raid: Raid, candidate: Ra
 	set('[data-live-visits-title]', `Осмотренные точки · ${goal.visited.length}`);
 	const visitsKey = `${planFor(raid).id}:${goal.visited.length}`;
 	if(visitList && visitList.dataset.frame !== visitsKey) { visitList.innerHTML = visitedPoints(raid,report ? raid.endsAt : now); visitList.dataset.frame = visitsKey; }
-	const cargo = root.querySelector<HTMLElement>('[data-live-cargo]'), cargoKey = JSON.stringify(getConfirmedRaidCargo(raid,report));
-	if(cargo && cargo.dataset.cargo !== cargoKey) { cargo.innerHTML = renderCargo(raid,report); cargo.dataset.cargo = cargoKey; }
+	const cargo = root.querySelector<HTMLElement>('[data-live-cargo]'), cargoKey = raid.squad ? JSON.stringify(raid.squad.members.map(member=>{const current=state?.raids.find(item=>item.id===member.raidId);const receipt=report?state?.history.find(item=>item.raidId===member.raidId):null;return [member.raidId,current?.expedition?.cargo,receipt?.id];})) : JSON.stringify(getConfirmedRaidCargo(raid,report));
+	if(cargo && cargo.dataset.cargo !== cargoKey) { cargo.innerHTML = raid.squad&&state?renderSquadCargo(state,raid,report):renderCargo(raid,report); cargo.dataset.cargo = cargoKey; }
 }
