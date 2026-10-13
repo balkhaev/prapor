@@ -31,6 +31,29 @@
       .build-header p { margin: 0; color: #aeb8a5; font-size: 12px; line-height: 1.5; }
       .build-header button { padding: 9px 12px; color: #eee6cf; background: #283426; border: 1px solid #576149; border-radius: 5px; font: 11px Manrope, sans-serif; cursor: pointer; }
       .build-header button:disabled { opacity: .55; cursor: default; }
+      .weapon-inspection { margin-top: 14px; padding: 14px 18px; border: 1px solid #45503d; border-radius: 10px; background: #202c21; }
+      .weapon-inspection summary { cursor: pointer; font-size: 13px; font-weight: 700; color: #d6cfaf; }
+      .weapon-inspection summary::marker { color: #b5a57c; }
+      #weapon-closeup .weapon-build-art { display: block; width: 100%; height: auto; max-height: 280px; margin-top: 14px; }
+      .build-parts { display: flex; flex-wrap: wrap; gap: 7px; padding: 0; margin: 5px 0 8px; list-style: none; }
+      .build-parts li { padding: 7px 10px; background: #17221b; border: 1px solid #53604a; border-radius: 5px; color: #aeb8a5; font-size: 11px; }
+      .module-library { margin: 24px 0 14px; }
+      .library-controls { display: grid; grid-template-columns: 180px minmax(160px, 1fr) auto; align-items: end; gap: 12px; margin: 18px 0 12px; }
+      .library-controls input[type=search] { width: 100%; height: 37px; padding: 0 10px; background: #182319; color: #eee6cf; border: 1px solid #576149; border-radius: 5px; font: 12px Manrope, sans-serif; }
+      .library-controls .check { flex-direction: row; align-items: center; min-height: 37px; }
+      .library-count { color: #aeb8a5; font-size: 12px; margin: 12px 0; }
+      .module-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+      .module-card { display: flex; flex-direction: column; padding: 13px; background: #17221b; border: 1px solid #45503d; border-radius: 8px; }
+      .module-card.installed { border-color: #b5a57c; }
+      .module-card .module-art { width: 100%; height: 92px; display: block; }
+      .module-card h3 { margin: 8px 0; font-size: 13px; }
+      .module-card p { font-size: 11px; color: #aeb8a5; line-height: 1.6; margin: 0 0 12px; }
+      .module-card .module-metrics { color: #d6cfaf; font-size: 10px; }
+      .module-card small { margin: 7px 0 0; font-size: 10px; color: #aeb8a5; }
+      .module-card button, #library-more { margin-top: auto; padding: 9px 12px; background: #2b3829; border: 1px solid #677252; border-radius: 5px; color: #eee6cf; cursor: pointer; font: 11px Manrope, sans-serif; }
+      .module-card button:disabled { opacity: .55; cursor: default; }
+      #library-more { margin-top: 15px; }
+      .library-help { color: #aeb8a5; font-size: 11px; line-height: 1.6; }
       .gallery-heading { display: flex; justify-content: space-between; align-items: center; margin: 22px 3px 12px; gap: 20px; }
       .gallery-heading p { margin: 0; color: #8d9b83; font: 11px 'IBM Plex Mono', monospace; }
       .gallery-heading strong { color: #d6cfaf; font-weight: 500; }
@@ -40,6 +63,8 @@
       .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
       @media (max-width: 850px) { main { padding: 22px 22px 20px; } .controls { grid-template-columns: repeat(3, minmax(100px, 1fr)); } .build-controls { grid-template-columns: repeat(2, minmax(100px, 1fr)); } .weapon-field { grid-column: auto; } .back { margin-top: 0; } .heading { gap: 14px; } }
       @media (max-width: 520px) { main { padding: 20px 16px; } .heading { flex-direction: column-reverse; gap: 18px; margin-bottom: 19px; } .back { padding: 7px 10px; } .controls { grid-template-columns: repeat(2, minmax(90px, 1fr)); gap: 10px; padding: 13px; } .weapon-field { grid-column: 1 / 3; } .build-header { align-items: flex-start; } .gallery-heading { margin-top: 18px; } .intro { font-size: 12px; } }
+      @media (max-width: 850px) { .module-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } .library-controls { grid-template-columns: 1fr 1fr; } .library-controls .check { grid-column: 1 / -1; } }
+      @media (max-width: 520px) { .library-controls { grid-template-columns: 1fr; } .module-card { padding: 10px; } }
     </style>
   </head>
   <body>
@@ -68,10 +93,23 @@
         <label>Дульная насадка<select id="muzzle"></select></label>
         <label>Рукоять<select id="foregrip"></select></label>
       </form>
+      <details class="weapon-inspection" id="weapon-inspection"><summary>Осмотреть сборку крупно</summary><div id="weapon-closeup"></div><ul class="build-parts" id="build-parts" aria-label="Установленные детали"></ul></details>
       <div class="gallery-heading"><p><strong>Состав · 32 бойца</strong></p><p id="load-status" role="status" aria-live="polite">Загружаем модели…</p></div>
       <section id="gallery" role="img" aria-label="Все 32 диких в выбранной экипировке и ракурсе"></section>
       <ol id="accessible-roster" class="sr-only" aria-label="Список бойцов"></ol>
       <p class="note">Броня, шлем, рюкзак и детали оружия меняются независимо. Для прицела, рукояти и дульной насадки нужны подходящие крепления. Примерка не изменяет бойцов или снаряжение в убежище.</p>
+      <details class="weapon-inspection module-library" id="module-library">
+        <summary>Каталог оружейных модулей · <span id="library-total"></span> моделей</summary>
+        <p class="library-help">Рассмотрите детали отдельно и примерьте их к текущей сборке. Цевьё с планками открывает прицелы и рукояти; дульное устройство требует подходящей резьбы.</p>
+        <div class="library-controls">
+          <label>Тип детали<select id="library-slot"><option value="all">Все детали</option></select></label>
+          <label>Поиск по каталогу<input id="library-search" type="search" placeholder="Название, платформа или свойства"></label>
+          <label class="check"><input id="library-compatible" type="checkbox" checked>Для выбранного оружия</label>
+        </div>
+        <p class="library-count" id="library-count" role="status" aria-live="polite"></p>
+        <div class="module-cards" id="module-cards"></div>
+        <button id="library-more" type="button">Показать ещё детали</button>
+      </details>
     </main>
     <script type="module" src="/src/scav-preview.ts"></script>
   </body>

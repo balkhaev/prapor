@@ -1,7 +1,9 @@
 import Phaser from "phaser";
 import { PERSONALITY_BY_ID, WEAPONS } from "./game/data";
 import type { WeaponInstance } from "./game/engine";
-import { FACTORY_KITS, MODULE_BY_ID, MODULE_MODELS, MODULE_SLOTS, RECEIVER_INFO, type ModuleInstance, type ModuleSlot } from "./game/modules";
+import { FACTORY_KITS, MODULE_BY_ID, MODULE_MODELS, MODULE_SLOTS, MODULE_SLOT_LABELS, RECEIVER_INFO, type ModuleInstance, type ModuleModel, type ModuleSlot } from "./game/modules";
+import { moduleArt, weaponBuildArt } from "./armory-art";
+import { moduleFitsWeaponFamily, moduleModelMatches, moduleMountLabel } from "./module-catalog";
 import { GEAR_MODELS } from "./game/systems";
 import { SCAV_EQUIPMENT_ATLASES } from "./scav-gear-art";
 import { SCAV_APPEARANCES } from "./game/scav-appearances";
@@ -16,6 +18,15 @@ const controls = { direction: select("direction"), pose: select("pose"), armor: 
 const moduleControls = Object.fromEntries(MODULE_SLOTS.map((slot) => [slot, select(slot)])) as Record<ModuleSlot, HTMLSelectElement>;
 const resetWeapon = document.querySelector<HTMLButtonElement>("#reset-weapon")!;
 const weaponSummary = document.querySelector<HTMLElement>("#weapon-summary")!;
+const closeup = document.querySelector<HTMLElement>("#weapon-closeup")!;
+const buildParts = document.querySelector<HTMLElement>("#build-parts")!;
+const library = document.querySelector<HTMLDetailsElement>("#module-library")!;
+const librarySlot = select("library-slot"), librarySearch = document.querySelector<HTMLInputElement>("#library-search")!;
+const libraryCompatible = document.querySelector<HTMLInputElement>("#library-compatible")!;
+const libraryCount = document.querySelector<HTMLElement>("#library-count")!, moduleCards = document.querySelector<HTMLElement>("#module-cards")!;
+const libraryMore = document.querySelector<HTMLButtonElement>("#library-more")!;
+let libraryLimit = 24, inspectedSlot: ModuleSlot | undefined;
+const escape = (value: string) => value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
 type Point = { x: number; y: number };
 type Model = { id: number; root: Phaser.GameObjects.Container; body: Phaser.GameObjects.Container; poses: Phaser.GameObjects.Image[]; equipment: ScavEquipment; name: Phaser.GameObjects.Text; personality: Phaser.GameObjects.Text; badge: Phaser.GameObjects.Text };
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -33,13 +44,44 @@ function factoryWeapon(weaponId: string): WeaponInstance {
 }
 
 function compatibleOptions(slot: ModuleSlot, weapon: WeaponInstance) {
-	const info = RECEIVER_INFO[weapon.weaponId]!;
 	const mounts = Object.entries(weapon.modules).filter(([installedSlot]) => installedSlot !== slot).flatMap(([, item]) => MODULE_BY_ID[item!.modelId]?.providesMounts ?? []);
-	return MODULE_MODELS.filter((model) => model.slot === slot && (!model.weaponId || model.weaponId === weapon.weaponId)
-		&& (model.platforms.includes("*") || model.platforms.includes(info.platform))
-		&& (model.calibers.includes("*") || model.calibers.includes(info.caliber))
+	return MODULE_MODELS.filter((model) => model.slot === slot && moduleFitsWeaponFamily(model, weapon.weaponId)
 		&& (!model.requiresMount || mounts.includes(model.requiresMount)));
 }
+
+function fittingReason(model: ModuleModel, weapon: WeaponInstance | null): string | null {
+	if (!weapon) return "Выбери основу оружия";
+	if (!moduleFitsWeaponFamily(model, weapon.weaponId)) return "Другая платформа или калибр";
+	const mounts = Object.entries(weapon.modules).filter(([slot]) => slot !== model.slot).flatMap(([, item]) => MODULE_BY_ID[item!.modelId]?.providesMounts ?? []);
+	return model.requiresMount && !mounts.includes(model.requiresMount) ? `Нужно крепление: ${moduleMountLabel(model.requiresMount).toLowerCase()}` : null;
+}
+
+function renderLibrary(weapon: WeaponInstance | null): void {
+	if (!library.open) return;
+	const models = MODULE_MODELS.filter((model) => moduleModelMatches(model, { slot: librarySlot.value as ModuleSlot | "all", rarity: "all", platform: "all", search: librarySearch.value })
+		&& (!libraryCompatible.checked || !weapon || moduleFitsWeaponFamily(model, weapon.weaponId)));
+	libraryCount.textContent = `${models.length} моделей по фильтру · показано ${Math.min(libraryLimit, models.length)} · всего ${MODULE_MODELS.length}`;
+	moduleCards.innerHTML = models.slice(0, libraryLimit).map((model) => {
+		const installed = weapon?.modules[model.slot]?.modelId === model.id, reason = fittingReason(model, weapon);
+		const stat = (label: string, value: number) => value ? `${label} ${value > 0 ? "+" : ""}${value}` : "";
+		const metrics = [`Вес ${model.stats.weight.toFixed(2)} кг`, stat("Урон", model.stats.damage), stat("Удобство", model.stats.ergonomics), stat("Отдача", model.stats.recoil)].filter(Boolean).join(" · ");
+		return `<article class="module-card ${installed ? "installed" : ""}">${moduleArt(model)}<h3>${escape(model.label)}</h3><p>${escape(model.description)}</p><p class="module-metrics">${escape(metrics)}</p><button type="button" data-try-module="${model.id}" ${reason || installed ? "disabled" : ""}>${installed ? "Установлено" : "Примерить"}</button>${reason ? `<small>${escape(reason)}</small>` : ""}</article>`;
+	}).join("") || '<p class="library-help">Под этот фильтр деталей нет. Измени поиск или тип детали.</p>';
+	libraryMore.hidden = models.length <= libraryLimit;
+}
+
+document.querySelector<HTMLElement>("#library-total")!.textContent = String(MODULE_MODELS.length);
+for (const slot of MODULE_SLOTS) librarySlot.add(new Option(MODULE_SLOT_LABELS[slot], slot));
+library.addEventListener("toggle", () => renderLibrary(selectedWeapon()));
+for (const input of [librarySlot, librarySearch, libraryCompatible]) input.addEventListener(input === librarySearch ? "input" : "change", () => { libraryLimit = 24; renderLibrary(selectedWeapon()); });
+libraryMore.addEventListener("click", () => { libraryLimit += 24; renderLibrary(selectedWeapon()); });
+moduleCards.addEventListener("click", (event) => {
+	const button = (event.target as Element | null)?.closest<HTMLButtonElement>("button[data-try-module]");
+	const model = button?.dataset.tryModule ? MODULE_BY_ID[button.dataset.tryModule] : undefined, weapon = selectedWeapon();
+	if (!model || !weapon || fittingReason(model, weapon)) return;
+	weapon.modules[model.slot] = part(model.id, model.slot); inspectedSlot = model.slot;
+	updateSelections(true);
+});
 
 for (const [input, slot] of [[controls.armor, "armor"], [controls.helmet, "helmet"], [controls.pack, "backpack"]] as const) {
 	for (const model of GEAR_MODELS.filter((model) => model.slot === slot)) input.add(new Option(model.label, model.id));
@@ -83,6 +125,12 @@ function updateSelections(rebuildOptions = false): void {
 	weaponSummary.textContent = !weapon ? "Без оружия" : missing.length ? `Неполная сборка · установлено ${count} / 8 деталей` : `Текущая сборка · установлено ${count} / 8 деталей`;
 	const labels = [controls.direction, controls.pose, controls.armor, controls.helmet, controls.pack, controls.weapon].map((input) => input.selectedOptions[0]!.textContent);
 	gallery.setAttribute("aria-label", `32 диких. ${labels.join(". ")}. ${weaponSummary.textContent}.`);
+	closeup.innerHTML = weapon ? weaponBuildArt(weapon, inspectedSlot) : '<p class="library-help">Выбери основу оружия, чтобы рассмотреть сборку.</p>';
+	buildParts.innerHTML = weapon ? MODULE_SLOTS.flatMap((slot) => {
+		const modelId = weapon.modules[slot]?.modelId, model = modelId ? MODULE_BY_ID[modelId] : undefined;
+		return model ? [`<li>${escape(model.label)}</li>`] : [];
+	}).join("") : "";
+	renderLibrary(weapon);
 }
 updateSelections(true);
 for (const [name, input] of Object.entries(controls)) input.addEventListener("change", () => updateSelections(name === "weapon"));
@@ -92,6 +140,7 @@ for (const slot of MODULE_SLOTS) moduleControls[slot].addEventListener("change",
 	const modelId = moduleControls[slot].value;
 	if (modelId && compatibleOptions(slot, weapon).some((model) => model.id === modelId)) weapon.modules[slot] = part(modelId, slot);
 	else delete weapon.modules[slot];
+	inspectedSlot = slot;
 	updateSelections(true);
 });
 resetWeapon.addEventListener("click", () => {
