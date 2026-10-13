@@ -8,6 +8,7 @@ import "./shelter-logistics.css";
 import "./flea.css";
 import "./territory.css";
 import { territorySummary, territoryBuildings, territoryPlan, buildingCatalogue, buildingCatalogueReason, buildingPlacementControls, buildingRelocationControls, type BuildingPlacement } from "./territory-ui";
+import { getTerritoryPlanPoint } from "./territory-plan-input";
 import {
 	ATTACHMENT_LABELS,
 	CATEGORY_LABELS,
@@ -454,7 +455,7 @@ function updateCameraControls() {
 	controls.querySelector<HTMLButtonElement>('[data-camera="pan"]')?.classList.toggle("active", cameraView.panMode);
 	document.querySelector(".world-card")?.classList.toggle("camera-hand-mode", cameraView.panMode);
 	document.querySelector("#camera-scale")!.textContent = `${Math.round(cameraView.zoom * 100)}%`;
-	document.querySelector("#scene-hint")!.textContent = worldView === "raid" ? cameraView.panMode ? "Осмотри улицу · За бойцом — вернуть камеру" : "Живой маршрут · Рука — осмотр улицы" : worldView === "map" ? "Нажми на сектор, чтобы выбрать маршрут" : cameraView.panMode ? "Перетаскивай вид · Обзор — вся база" : "Перетащи постройку · ↻ или R — поворот";
+	document.querySelector("#scene-hint")!.textContent = worldView === "raid" ? cameraView.panMode ? "Осмотри улицу · За бойцом — вернуть камеру" : "Живой маршрут · Рука — осмотр улицы" : worldView === "map" ? "Нажми на сектор, чтобы выбрать маршрут" : cameraView.panMode ? "Перетаскивай вид · Обзор — вся база" : "Перетаскивай постройки по двору · за оградой — расширение";
 	document.querySelector('.world-card')?.classList.toggle('raid-view', worldView === "raid");
 	document.querySelector('.command-main')?.classList.toggle('raid-watching', worldView === "raid");
 	const raidTab = document.querySelector<HTMLButtonElement>('[data-view="raid"]'); if (raidTab) raidTab.disabled = !state.raids.length && !lastWatchedRaid;
@@ -1672,17 +1673,6 @@ async function placeDraggedBuilding(roomId: string, x: number, y: number, rotati
 	if (result.ok) selectedRoomId = roomId;
 	act(result, "build");
 }
-async function turnBuilding(roomId: string) {
-	const room = state.shelter.rooms.find(item => item.id === roomId);
-	if (!room || !serverReady || gameCommandPending) return;
-	world?.cancelBuildingDrag();
-	const facing = ((getRoomFacing(room) + 1) % 4) as 0 | 1 | 2 | 3;
-	const at = getRoomPosition(room), reason = getRoomFreePlacementReason(state, roomId, at.x, at.y, room.rotation, facing);
-	if (reason) { beginBuildingPlacement(room.type, roomId); buildingPlacement!.facing = facing; paintBuildingPlacement(); toast(`${reason} Выбери место для повёрнутой постройки.`, false); return; }
-	const result = await gameAction({ type: "faceRoom", args: [roomId, facing] });
-	if (result.ok) selectedRoomId = roomId;
-	act(result, "build");
-}
 function closeTools() {
 	const closedPage = page;
 	if (closedPage === 'achievements') freshAchievements.clear();
@@ -1801,9 +1791,9 @@ function buildSitePanel(column: number, row: number) {
 		const expansion = state.shelter.expansions.find(site => site.column === column && site.row === row);
 		const quote = getExcavationQuote(state, column, row);
 		const progress = expansion ? expansion.workDone / expansion.workRequired : 0;
-		return `<div class="room-management-head"><span class="eyebrow">За периметром · участок ${column}, ${row}</span><h2>${expansion ? "Готовим территорию" : "Расширить базу"}</h2><p>Присоедини соседний участок: он станет частью двора. Объединяй свободную землю под большие постройки и выбирай их расположение.</p></div><div class="room-management-body">${expansion ? `<div class="production-readout"><strong>Подготовка ${Math.floor(progress * 100)}%</strong><span class="progress"><i style="width:${progress * 100}%"></i></span><p>${seconds((expansion.workRequired - expansion.workDone) / 1_000_000)} до готовности. Работы продолжаются офлайн.</p></div>` : `<div class="loadout-stats"><span>Подготовка ${seconds(quote.duration)}</span><span>+1 участок территории</span></div><button class="button secondary" data-action="excavate-wall" data-column="${column}" data-row="${row}" ${quote.reason ? "disabled" : ""}>Присоединить участок · ${costLabel(quote)}</button><p class="quote-note">${e(quote.reason ?? "Материалы списываются один раз при начале работ.")}</p>`}</div>`;
+		return `<div class="room-management-head"><span class="eyebrow">За периметром</span><h2>${expansion ? "Готовим территорию" : "Расширить базу"}</h2><p>Присоедини соседнюю землю: она станет частью двора. Расширяй базу под большие постройки и выбирай их расположение.</p></div><div class="room-management-body">${expansion ? `<div class="production-readout"><strong>Подготовка ${Math.floor(progress * 100)}%</strong><span class="progress"><i style="width:${progress * 100}%"></i></span><p>${seconds((expansion.workRequired - expansion.workDone) / 1_000_000)} до готовности. Работы продолжаются офлайн.</p></div>` : `<div class="loadout-stats"><span>Подготовка ${seconds(quote.duration)}</span><span>Больше места во дворе</span></div><button class="button secondary" data-action="excavate-wall" data-column="${column}" data-row="${row}" ${quote.reason ? "disabled" : ""}>Присоединить землю · ${costLabel(quote)}</button><p class="quote-note">${e(quote.reason ?? "Материалы списываются один раз при начале работ.")}</p>`}</div>`;
 	}
-	return `<div class="room-management-head"><span class="eyebrow">Свободная земля · ${column}, ${row}</span><h2>Новая постройка</h2><p>Выбери здание, затем укажи место на территории. Контур покажет всю его площадь. Здания можно переставлять после завершения строительства.</p></div><div class="room-management-body">${buildingCatalogue(state)}</div>`;
+	return `<div class="room-management-head"><span class="eyebrow">Свободная земля</span><h2>Новая постройка</h2><p>Выбери здание, затем укажи место на территории. Контур покажет всю его площадь. Здания можно переставлять после завершения строительства.</p></div><div class="room-management-body">${buildingCatalogue(state)}</div>`;
 }
 function productionReadout(room: RoomInstance) {
 	return `<div class="production-readout" data-production-readout="${room.id}">${productionReadoutContent(room, getRoomProductionState(state, room))}</div>`;
@@ -2333,6 +2323,23 @@ document.addEventListener("click", async (event) => {
 		return;
 	}
 	if (target.hasAttribute('data-open-live')) { setView('live'); return; }
+	if (target.dataset.action === "choose-plan-ground" || buildingPlacement && target.dataset.shelterRoom && target.closest("[data-territory-plan]")) {
+		if (buildingPlacement) {
+			if (event.detail === 0) { closeTools(); worldViewport.focus({ preventScroll: true }); return; }
+			const map = target.closest<HTMLElement>("[data-territory-plan]");
+			if (map) {
+				const rect = map.getBoundingClientRect();
+				const point = getTerritoryPlanPoint({ x: rect.left, y: rect.top, width: rect.width, height: rect.height },
+					{ x: Number(map.dataset.planOriginX), y: Number(map.dataset.planOriginY), width: Number(map.dataset.planWidth), height: Number(map.dataset.planHeight) }, event.clientX, event.clientY);
+				if (point) chooseFreeBuildingSite(point.x, point.y);
+			}
+		} else {
+			const catalogue = panel.querySelector<HTMLElement>(".territory-catalogue");
+			catalogue?.scrollIntoView({ block: "start", behavior: scrollBehavior() });
+			(catalogue?.querySelector<HTMLButtonElement>('button[data-action="place-building"]:not(:disabled)') ?? catalogue)?.focus({ preventScroll: true });
+		}
+		return;
+	}
 	if (target.dataset.workerHandle) { beginKeyboardAssignment(target.dataset.workerHandle); return; }
 	if (target.dataset.action === "gameplay-next") { followGameplayAction(target); return; }
 	if (target.dataset.action === "toggle-sound") { void toggleGameSound(); return; }
@@ -2506,10 +2513,6 @@ document.addEventListener("click", async (event) => {
 			break;
 		}
 		case "placement-cancel": cancelBuildingPlacement(); render(); break;
-		case "placement-rotate":
-			if (buildingPlacement && !buildingPlacementBusy) { buildingPlacement.facing = (((buildingPlacement.facing ?? 0) + 1) % 4) as 0 | 1 | 2 | 3; paintBuildingPlacement(); }
-			break;
-		case "turn-building": await turnBuilding(id); break;
 		case "placement-confirm": await confirmBuildingPlacement(); break;
 		case "placement-plan": page = "base"; render(); break;
 		case "open-market":
@@ -3187,7 +3190,6 @@ world = createWorld(
 		getBuildingPlacementReason: (id, x, y, rotation, facing) => getRoomFreePlacementReason(state, id, x, y, rotation, facing),
 		getFreeBuildPlacementReason: (placement, x, y) => placement.roomId ? getRoomFreePlacementReason(state, placement.roomId, x, y, placement.rotation, placement.facing) : getFreeBuildRoomQuote(state, placement.type as ShelterRoomType, x, y, placement.rotation, placement.facing).reason,
 		onPlaceBuilding: (id, x, y, rotation, facing) => { void placeDraggedBuilding(id, x, y, rotation, facing); },
-		onTurnBuilding: (id) => { void turnBuilding(id); },
 		onBuildingDragState,
 		onFreeBuildSite: ({ x, y }) => chooseFreeBuildingSite(x, y),
 		getAssignmentReason: (scavId, roomId) => getWorkerAssignmentReason(state, scavId, roomId),

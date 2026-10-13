@@ -37,7 +37,11 @@ describe("territory presentation and restored controls", () => {
 		expect(plan.match(new RegExp(`data-shelter-room="${hangar.id}"`, "g"))).toHaveLength(1);
 		const building = plan.match(new RegExp(`<button[^>]*data-shelter-room="${hangar.id}"[^>]*>`))![0];
 		expect(building).toContain("free-plan-building");
-		expect(building).not.toContain("grid-column:");
+		expect(plan).not.toContain("grid-column:");
+		expect(plan).not.toContain("territory-cell");
+		expect(plan.match(/data-action="choose-plan-ground"/g)).toHaveLength(1);
+		expect(building).toContain('data-plan-building-x="57.25"');
+		expect(building).toContain('data-plan-building-y="285.75"');
 		expect(getRoomBounds(hangar).x).toBe(57.25);
 		expect(getRoomBounds(hangar).y).toBe(285.75);
 		for (const site of getRoomSites(hangar)) expect(plan).not.toContain(`data-shelter-column="${site.column}" data-shelter-row="${site.row}"`);
@@ -76,17 +80,17 @@ describe("territory presentation and restored controls", () => {
 		expect(valid).toContain("Строительство: Ангар");
 		expect(valid).not.toContain("Участок");
 		expect(button(valid, "placement-confirm")).not.toContain("disabled");
-		expect(button(valid, "placement-rotate")).not.toContain("disabled");
+		expect(button(valid, "placement-rotate")).toBe("");
 		const blocked = buildingPlacementControls(placement, '<occupied "lot">');
 		expect(blocked).toContain("&lt;occupied &quot;lot&quot;&gt;");
 		expect(blocked).not.toContain('<occupied "lot">');
 		expect(button(blocked, "placement-confirm")).toContain("disabled");
 		expect(button(buildingPlacementControls({ ...placement, site: null, point: null }, null), "placement-confirm")).toContain("disabled");
-		expect(button(buildingPlacementControls({ ...placement, type: "storage" }, null), "placement-rotate")).not.toContain("disabled");
+		expect(button(buildingPlacementControls({ ...placement, type: "storage" }, null), "placement-rotate")).toBe("");
 		for (const facing of [0, 1, 2, 3] as const) {
 			const html = buildingPlacementControls({ ...placement, facing }, null);
 			expect(html).toContain(["вход во двор", "вход влево", "вход к задней границе", "вход вправо"][facing]!);
-			expect(button(html, "placement-rotate")).not.toContain("disabled");
+			expect(button(html, "placement-rotate")).toBe("");
 		}
 	});
 
@@ -98,6 +102,8 @@ describe("territory presentation and restored controls", () => {
 		expect(presentation.active).toBe(false); expect(presentation.paused).toBe(false);
 		expect(presentation.jobId).toBeNull(); expect(presentation.reason).toBeNull();
 		expect(button(buildingRelocationControls(hangar), "move-building")).not.toContain("disabled");
+		expect(button(buildingRelocationControls(hangar), "turn-building")).toBe("");
+		expect(buildingRelocationControls(hangar)).not.toContain("↻");
 		expect(button(buildingRelocationControls({ ...hangar, status: "upgrading" }), "move-building")).toContain("disabled");
 		expect(saveGame(state)).toBe(before);
 	});
