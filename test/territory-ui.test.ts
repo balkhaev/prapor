@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	advance, buildRoom, createGame, excavateShelter, getRoomSites, getRoomProductionState,
-	ROOM_DEFINITIONS, saveGame, type ShelterRoomType,
+	ROOM_DEFINITIONS, saveGame, placeRoom, getRoomBounds, type ShelterRoomType,
 } from "../src/game/engine";
 import { readGameSession } from "../src/game-session";
 import { roomMiniArt } from "../src/command-art";
@@ -26,14 +26,20 @@ function withHangar(rotation: 0 | 1 = 0) {
 const button = (html: string, action: string) => html.match(new RegExp(`<button[^>]*data-action="${action}"[^>]*>`))?.[0] ?? "";
 
 describe("territory presentation and restored controls", () => {
-	test("the plan shows a large building once and counts every occupied lot", () => {
-		const { state, hangar } = withHangar(), before = saveGame(state);
+	test("the plan shows actual building area and fractional positions without snapping", () => {
+		const { state, hangar } = withHangar();
+		expect(placeRoom(state, hangar.id, 57.25, 285.75, state.lastUpdated).ok).toBe(true);
+		const before = saveGame(state);
 		const plan = territoryPlan(state, hangar.id), summary = territorySummary(state);
 		expect(plan.match(new RegExp(`data-shelter-room="${hangar.id}"`, "g"))).toHaveLength(1);
-		expect(plan).toContain("grid-column:2/span 3;grid-row:2/span 2");
+		const building = plan.match(new RegExp(`<button[^>]*data-shelter-room="${hangar.id}"[^>]*>`))![0];
+		expect(building).toContain("free-plan-building");
+		expect(building).not.toContain("grid-column:");
+		expect(getRoomBounds(hangar).x).toBe(57.25);
+		expect(getRoomBounds(hangar).y).toBe(285.75);
 		for (const site of getRoomSites(hangar)) expect(plan).not.toContain(`data-shelter-column="${site.column}" data-shelter-row="${site.row}"`);
-		expect(summary).toContain("<strong>2</strong>");
-		expect(summary).toContain("свободно из 12");
+		expect(summary).toContain("<strong>35%</strong>");
+		expect(summary).toContain("свободной земли");
 		expect(plan).toContain('aria-label="План территории базы"');
 		expect(saveGame(state)).toBe(before);
 	});
@@ -52,7 +58,7 @@ describe("territory presentation and restored controls", () => {
 	test("catalogue communicates the future footprint and disables locked construction", () => {
 		const state = createGame(NOW); state.money = 5_000; state.supplies.scrap = 40;
 		const locked = buildingCatalogue(state).match(/<article[^>]*>.*?<h3>Ангар<\/h3>.*?<\/article>/s)?.[0] ?? "";
-		expect(locked).toContain("3 × 2 участков");
+		expect(locked).toContain("Крупная постройка");
 		expect(locked).toContain("Откроется на уровне 4");
 		expect(locked.match(/<button[^>]*data-room-type="hangar"[^>]*>/)?.[0]).toContain("disabled");
 		state.level = 4; state.xp = 810;
@@ -61,16 +67,17 @@ describe("territory presentation and restored controls", () => {
 	});
 
 	test("placement confirms only a valid selection and explains errors as escaped text", () => {
-		const placement = { type: "hangar" as const, rotation: 1 as const, site: { column: 0, row: 1 } };
+		const placement = { type: "hangar" as const, rotation: 1 as const, site: null, point: { x: 40.125, y: 280.75 } };
 		const valid = buildingPlacementControls(placement, null);
-		expect(valid).toContain("Ангар · 2 × 3");
+		expect(valid).toContain("Строительство: Ангар");
+		expect(valid).not.toContain("Участок");
 		expect(button(valid, "placement-confirm")).not.toContain("disabled");
 		expect(button(valid, "placement-rotate")).not.toContain("disabled");
 		const blocked = buildingPlacementControls(placement, '<occupied "lot">');
 		expect(blocked).toContain("&lt;occupied &quot;lot&quot;&gt;");
 		expect(blocked).not.toContain('<occupied "lot">');
 		expect(button(blocked, "placement-confirm")).toContain("disabled");
-		expect(button(buildingPlacementControls({ ...placement, site: null }, null), "placement-confirm")).toContain("disabled");
+		expect(button(buildingPlacementControls({ ...placement, site: null, point: null }, null), "placement-confirm")).toContain("disabled");
 		expect(button(buildingPlacementControls({ ...placement, type: "storage" }, null), "placement-rotate")).toContain("disabled");
 	});
 

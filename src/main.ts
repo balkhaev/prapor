@@ -82,7 +82,11 @@ import {
 	getExcavationQuote,
 	getRoomFootprint,
 	getShelterRoomAt,
-	getRoomPlacementReason,
+	getRoomPosition,
+	getRoomBounds,
+	getShelterRoomAtPoint,
+	getRoomFreePlacementReason,
+	getFreeBuildRoomQuote,
 	getRoomUpgradeQuote,
 	getWorkerAssignmentReason,
 	getWorkerAffinity,
@@ -130,7 +134,7 @@ import { FIELD_KITS, getFieldKitStock, getProductionReserve, getFieldKitProducti
 import { fieldKitStockPanel, productionReserveEditor, readProductionReserveDraft, readRoomStockTargetDraft, roomStockTargetEditor, roomUpgradeRecipeBenefits, shelterRecipeCard, type ReserveDraft } from "./shelter-logistics-ui";
 import { MIN_SHELTER_ZOOM, MAX_SHELTER_ZOOM } from "./shelter-camera";
 import { getShelterProductionPresentation, getShelterProductionStages, SHELTER_PRODUCTION_STAGES, type ProductionPresentation } from "./shelter-production";
-import { projectShelterBounds, shelterRoomPolygon, shelterRoomPosition, SHELTER_ROOM_WIDTH, SHELTER_ROOM_HEIGHT } from "./shelter-isometric";
+import { projectShelterBounds, projectShelterPoint, shelterRoomPosition } from "./shelter-isometric";
 import { renderLiveRaidPanel, updateLiveRaidPanel, getWatchedReport } from "./raid-ui";
 import { createAuthoritativeClient } from "./authoritative-client";
 import type { GameCommand, GameSnapshot } from "./game/commands";
@@ -257,6 +261,7 @@ let selectedRoomId: string | null = state.shelter.rooms[0]?.id ?? null;
 let selectedShelterSite: { column: number; row: number } | null = null;
 let buildingPlacement: BuildingPlacement | null = null;
 let buildingPlacementBusy = false;
+let buildingDragPreview: { roomId: string; x: number; y: number; rotation: 0 | 1; reason: string | null; active: boolean } | null = null;
 let roomModuleSlot: ModuleSlot | "all" = "optic";
 let roomModuleSearch = "";
 let contextMode: "overview" | "room" | "build" = "overview";
@@ -343,10 +348,10 @@ function scheduleSessionSave() {
 }
 function holdWorldInput() { worldInputBlockedUntil = Date.now() + 350; }
 function canWorldDrag() {
-	if (buildingPlacement) return false;
+	if (buildingPlacement || buildingDragPreview?.active) return false;
 	return !liveMode?.isActive() && !accountDialogOpen && !accountChanging && serverReady && !saveConflict && !protectedSave && worldView === "base" && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal") && !(window.innerWidth <= 850 && contextMode !== "overview");
 }
-function canWorldCamera() { return !liveMode?.isActive() && !accountDialogOpen && !accountChanging && serverReady && !saveConflict && !protectedSave && (canWorldDrag() || ((worldView === "raid" || Boolean(buildingPlacement) && worldView === "base") && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal"))) && !workerPlacement && !crewPointer; }
+function canWorldCamera() { return !buildingDragPreview?.active && !liveMode?.isActive() && !accountDialogOpen && !accountChanging && serverReady && !saveConflict && !protectedSave && (canWorldDrag() || ((worldView === "raid" || Boolean(buildingPlacement) && worldView === "base") && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal"))) && !workerPlacement && !crewPointer; }
 function canWorldInteract() {
 	return !liveMode?.isActive() && !accountDialogOpen && !accountChanging && serverReady && !saveConflict && !protectedSave && !workerPlacement && !crewPointer?.started && Date.now() >= worldInputBlockedUntil && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal") && !(window.innerWidth <= 850 && contextMode !== "overview");
 }
@@ -411,7 +416,7 @@ worldViewport.setAttribute("role", "region");
 worldViewport.setAttribute("aria-describedby", "camera-help");
 worldViewport.insertAdjacentHTML("afterend", '<p id="camera-help" class="visually-hidden">Вид убежища: плюс и минус меняют масштаб, ноль возвращает обзор, стрелки сдвигают вид. Рука позволяет перетаскивать убежище. Чтобы назначить бойца, перетащи его портрет или выбери комнату с клавиатуры.</p>');
 document.querySelector(".world-card")!.insertAdjacentHTML("beforeend", '<div id="worker-room-targets" class="worker-room-targets" role="group" aria-label="Выбери рабочую комнату" hidden></div><div id="worker-placement" class="worker-placement" hidden><div><strong id="worker-placement-title"></strong><span id="worker-placement-hint"></span></div><button class="icon-button" data-worker-cancel aria-label="Отменить назначение">×</button></div>');
-document.querySelector(".world-card")!.insertAdjacentHTML("beforeend", '<div id="building-placement" class="building-placement" role="group" aria-label="Размещение постройки" hidden></div>');
+document.querySelector(".world-card")!.insertAdjacentHTML("beforeend", '<div id="building-drag-status" class="building-drag-status" role="status" hidden></div><div id="building-placement" class="building-placement" role="group" aria-label="Размещение постройки" hidden></div>');
 app.insertAdjacentHTML("beforeend", '<div id="worker-drag-ghost" class="worker-drag-ghost" aria-hidden="true" hidden></div><div id="worker-drop-status" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>');
 const costLabel = (cost: { money: number; scrap: number }) =>
 	`${n(cost.money)} ₽ · ${cost.scrap} дет.`;
@@ -444,7 +449,7 @@ function updateCameraControls() {
 	controls.querySelector<HTMLButtonElement>('[data-camera="pan"]')?.classList.toggle("active", cameraView.panMode);
 	document.querySelector(".world-card")?.classList.toggle("camera-hand-mode", cameraView.panMode);
 	document.querySelector("#camera-scale")!.textContent = `${Math.round(cameraView.zoom * 100)}%`;
-	document.querySelector("#scene-hint")!.textContent = worldView === "raid" ? cameraView.panMode ? "Осмотри улицу · За бойцом — вернуть камеру" : "Живой маршрут · Рука — осмотр улицы" : worldView === "map" ? "Нажми на сектор, чтобы выбрать маршрут" : cameraView.panMode ? "Перетаскивай вид · Обзор — вся база" : cameraView.zoom > 1.05 ? "Осмотр · Рука — сдвиг · Обзор — вся база" : "Постройки — управление · за оградой — расширение";
+	document.querySelector("#scene-hint")!.textContent = worldView === "raid" ? cameraView.panMode ? "Осмотри улицу · За бойцом — вернуть камеру" : "Живой маршрут · Рука — осмотр улицы" : worldView === "map" ? "Нажми на сектор, чтобы выбрать маршрут" : cameraView.panMode ? "Перетаскивай вид · Обзор — вся база" : cameraView.zoom > 1.05 ? "Осмотр · Рука — сдвиг · Обзор — вся база" : "Перетащи постройку по двору · за оградой — расширение";
 	document.querySelector('.world-card')?.classList.toggle('raid-view', worldView === "raid");
 	document.querySelector('.command-main')?.classList.toggle('raid-watching', worldView === "raid");
 	const raidTab = document.querySelector<HTMLButtonElement>('[data-view="raid"]'); if (raidTab) raidTab.disabled = !state.raids.length && !lastWatchedRaid;
@@ -581,6 +586,7 @@ async function refreshServerProgress(): Promise<boolean> {
     }
 }
 async function loadServerProgress() {
+    world?.cancelBuildingDrag();
     cancelBuildingPlacement();
     if (!authoritative)
         return;
@@ -868,14 +874,14 @@ function positionWorkerRoomTargets() {
 	layer.style.width = `${canvasRect.width}px`; layer.style.height = `${canvasRect.height}px`;
 	layer.querySelectorAll<HTMLButtonElement>("[data-worker-room]").forEach((button) => {
 		const room = state.shelter.rooms.find((item) => item.id === button.dataset.workerRoom); if (!room) return;
-		const logical = { ...shelterRoomPosition(room.column, room.row), width: SHELTER_ROOM_WIDTH, height: SHELTER_ROOM_HEIGHT };
+		const logical = getRoomBounds(room);
 		const rect = world!.projectShelterRect(logical);
 		button.hidden = !rect;
 		if (!rect) return;
 		button.style.left = `${rect.left - canvasRect.left}px`; button.style.top = `${rect.top - canvasRect.top}px`;
 		button.style.width = `${rect.width}px`; button.style.height = `${rect.height}px`;
 		const bounds = projectShelterBounds(logical);
-		button.style.clipPath = `polygon(${shelterRoomPolygon(room.column, room.row).map((point) => `${(point.x - bounds.x) / bounds.width * 100}% ${(point.y - bounds.y) / bounds.height * 100}%`).join(",")})`;
+		button.style.clipPath = `polygon(${[{ x: logical.x, y: logical.y }, { x: logical.x + logical.width, y: logical.y }, { x: logical.x + logical.width, y: logical.y + logical.height }, { x: logical.x, y: logical.y + logical.height }].map(projectShelterPoint).map((point) => `${(point.x - bounds.x) / bounds.width * 100}% ${(point.y - bounds.y) / bounds.height * 100}%`).join(",")})`;
 		button.dataset.cameraVisible = String(rect.visible);
 	});
 }
@@ -978,6 +984,11 @@ function cancelPlacementForBlur() { cancelWorkerPlacement(false, true); world?.c
 function handleCameraKey(event: KeyboardEvent) {
 	const target = event.target instanceof Element ? event.target : null;
 	if (event.ctrlKey || event.metaKey || event.altKey || !canWorldCamera() || !world || (target !== worldViewport && !target?.closest(".camera-controls"))) return;
+	if (buildingPlacement && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
+		const distance = event.shiftKey ? 1 : 8;
+		event.preventDefault(); event.stopImmediatePropagation();
+		nudgeBuildingPlacement(event.key === "ArrowLeft" ? -distance : event.key === "ArrowRight" ? distance : 0, event.key === "ArrowUp" ? -distance : event.key === "ArrowDown" ? distance : 0); return;
+	}
 	const moves: Record<string, [number, number]> = { ArrowLeft: [-48, 0], ArrowRight: [48, 0], ArrowUp: [0, -48], ArrowDown: [0, 48] };
 	if (event.key === "+" || event.key === "=") cameraAction("in");
 	else if (event.key === "-" || event.key === "_") cameraAction("out");
@@ -1450,6 +1461,7 @@ function renderInspector() {
 	setOverlayState();
 }
 function setOverlayState() {
+	if (buildingDragPreview?.active && !canBuildingDrag()) world?.cancelBuildingDrag();
 	paintBuildingPlacement();
 	const modalOpen = accountDialogOpen || accountChanging || Boolean(document.querySelector("#modal-root .modal"));
 	const drawerOpen = Boolean(selectedScav);
@@ -1499,7 +1511,7 @@ function openRoom(room: BaseRoom) {
 	else { page = "base"; render(); setView("base"); window.scrollTo(0, 0); }
 }
 function openShelterRoom(id: string, requestedTab?: CommandRoomTab) {
-	if (buildingPlacement) { const room = state.shelter.rooms.find(item => item.id === id); if (room) chooseBuildingSite(room.column, room.row); return; }
+	if (buildingPlacement) { const room = state.shelter.rooms.find(item => item.id === id); if (room) { const position = getRoomPosition(room); chooseFreeBuildingSite(position.x, position.y); } return; }
 	const room = state.shelter.rooms.find((item) => item.id === id); if (!room) return;
 	if (contextMode !== "room" || selectedRoomId !== id) gameSound.play("select");
 	const roomOrigin = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -1563,10 +1575,14 @@ function closeCommandContext() {
 	else if (commandOrigin?.dataset.focusKey) focusCommandControl(commandOrigin.dataset.focusKey);
 	else document.querySelector<HTMLButtonElement>('[data-page="base"]')?.focus({ preventScroll: true });
 }
+function placementPoint() {
+	if (!buildingPlacement) return null;
+	return buildingPlacement.point ?? (buildingPlacement.site ? shelterRoomPosition(buildingPlacement.site.column, buildingPlacement.site.row) : null);
+}
 function placementReason(): string | null {
-	if (!buildingPlacement?.site) return null;
-	const { type, roomId, rotation, site } = buildingPlacement;
-	return roomId ? getRoomPlacementReason(state, roomId, site.column, site.row, rotation) : getBuildRoomQuote(state, type, site.column, site.row, rotation).reason;
+	const point = placementPoint(); if (!buildingPlacement || !point) return null;
+	const { type, roomId, rotation } = buildingPlacement;
+	return roomId ? getRoomFreePlacementReason(state, roomId, point.x, point.y, rotation) : getFreeBuildRoomQuote(state, type, point.x, point.y, rotation).reason;
 }
 function paintBuildingPlacement() {
 	const banner = document.querySelector<HTMLElement>("#building-placement");
@@ -1577,8 +1593,8 @@ function paintBuildingPlacement() {
 	const focus = banner.contains(document.activeElement) && document.activeElement instanceof HTMLElement ? document.activeElement.dataset.action : null;
 	banner.innerHTML = buildingPlacementControls(buildingPlacement, placementReason());
 	if (buildingPlacementBusy) banner.querySelectorAll<HTMLButtonElement>("button").forEach(button => { button.disabled = true; });
-	const size = getRoomFootprint(buildingPlacement);
-	world?.setBuildingPlacement({ type: buildingPlacement.type, roomId: buildingPlacement.roomId, rotation: buildingPlacement.rotation, ...size, ...(buildingPlacement.site ?? {}) });
+	const size = getRoomFootprint(buildingPlacement), point = placementPoint();
+	world?.setBuildingPlacement({ type: buildingPlacement.type, roomId: buildingPlacement.roomId, rotation: buildingPlacement.rotation, ...size, ...(point ?? {}) });
 	if (focus) banner.querySelector<HTMLElement>(`[data-action="${focus}"]`)?.focus({ preventScroll: true });
 }
 function cancelBuildingPlacement() {
@@ -1586,38 +1602,70 @@ function cancelBuildingPlacement() {
 	paintBuildingPlacement();
 }
 function beginBuildingPlacement(type: ShelterRoomType, roomId?: string) {
-	cancelWorkerPlacement();
+	cancelWorkerPlacement(); world?.cancelBuildingDrag();
 	const room = roomId ? state.shelter.rooms.find(item => item.id === roomId) : null;
 	if (roomId && (!room || room.status !== "ready")) { toast("Дождись готовности постройки.", false); return; }
 	closeInspector();
 	page = "home"; contextMode = "overview"; selectedShelterSite = null;
-	buildingPlacement = { type, ...(roomId ? { roomId } : {}), rotation: room?.rotation ?? 0, site: null };
+	buildingPlacement = { type, ...(roomId ? { roomId } : {}), rotation: room?.rotation ?? 0, site: null, point: room ? getRoomPosition(room) : null };
 	render(); setView("base"); world?.setPanMode(false);
 	paintBuildingPlacement(); worldViewport.focus({ preventScroll: true });
 }
 function chooseBuildingSite(column: number, row: number) {
+	const point = shelterRoomPosition(column, row);
+	chooseFreeBuildingSite(point.x, point.y);
+}
+function chooseFreeBuildingSite(x: number, y: number) {
 	if (!buildingPlacement || buildingPlacementBusy) return;
-	buildingPlacement.site = { column, row };
+	buildingPlacement.point = { x, y }; buildingPlacement.site = null;
 	if (page !== "home") closeTools();
 	paintBuildingPlacement();
 	const reason = placementReason();
 	if (reason) toast(reason, false);
 	else document.querySelector<HTMLButtonElement>('[data-action="placement-confirm"]')?.focus({ preventScroll: true });
 }
+function nudgeBuildingPlacement(dx: number, dy: number) {
+	if (!buildingPlacement || buildingPlacementBusy) return;
+	const first = getShelterSites(state.shelter)[0] ?? { column: 0, row: 0 };
+	const point = placementPoint() ?? shelterRoomPosition(first.column, first.row);
+	buildingPlacement.point = { x: point.x + dx, y: point.y + dy }; buildingPlacement.site = null;
+	paintBuildingPlacement();
+}
 async function confirmBuildingPlacement() {
-	if (!buildingPlacement?.site || buildingPlacementBusy) return;
+	const point = placementPoint();
+	if (!buildingPlacement || !point || buildingPlacementBusy) return;
 	const reason = placementReason(); if (reason) { toast(reason, false); paintBuildingPlacement(); return; }
-	const draft = buildingPlacement, { column, row } = draft.site!;
+	const draft = buildingPlacement;
 	buildingPlacementBusy = true; paintBuildingPlacement();
 	try {
-		const result = await gameAction(draft.roomId ? { type: "moveRoom", args: [draft.roomId, column, row, draft.rotation] } : { type: "buildRoom", args: [draft.type, column, row, draft.rotation] });
+		const result = await gameAction(draft.roomId ? { type: "placeRoom", args: [draft.roomId, point.x, point.y, draft.rotation] } : { type: "constructRoom", args: [draft.type, point.x, point.y, draft.rotation] });
 		if (result.ok) {
 			cancelBuildingPlacement();
-			selectedRoomId = draft.roomId ?? getShelterRoomAt(state.shelter, column, row)?.id ?? null;
+			selectedRoomId = draft.roomId ?? getShelterRoomAtPoint(state.shelter, point.x + 1, point.y + 1)?.id ?? null;
 			selectedShelterSite = null; contextMode = "room"; roomContextTab = "upgrade";
 		}
 		act(result, "build");
 	} finally { buildingPlacementBusy = false; paintBuildingPlacement(); }
+}
+function canBuildingDrag() {
+	return canWorldInteract() && !buildingPlacement && !workerPlacement && !crewPointer && !gameCommandPending;
+}
+function onBuildingDragState(preview: typeof buildingDragPreview) {
+	buildingDragPreview = preview;
+	const readout = document.querySelector<HTMLElement>("#building-drag-status");
+	if (!readout) return;
+	readout.hidden = !preview?.active;
+	document.body.classList.toggle("dragging-building", Boolean(preview?.active));
+	if (!preview?.active) return;
+	const room = state.shelter.rooms.find(item => item.id === preview.roomId);
+	readout.textContent = preview.reason ?? `${room ? ROOM_DEFINITIONS[room.type].label : "Постройка"}: отпусти, чтобы разместить здесь`;
+	readout.classList.toggle("invalid", Boolean(preview.reason));
+}
+async function placeDraggedBuilding(roomId: string, x: number, y: number, rotation: 0 | 1) {
+	if (!serverReady || gameCommandPending) return;
+	const result = await gameAction({ type: "placeRoom", args: [roomId, x, y, rotation] });
+	if (result.ok) selectedRoomId = roomId;
+	act(result, "build");
 }
 function closeTools() {
 	const closedPage = page;
@@ -1732,7 +1780,7 @@ function commandOverview(summary = getCommandSummary(state)) {
 }
 function renderShelter() {
 	const planOpen = Boolean(buildingPlacement) || Boolean(panel.querySelector<HTMLDetailsElement>(".territory-layout-tools")?.open);
-	panel.innerHTML = `${territorySummary(state)}<div class="section-head"><h2>Постройки во дворе</h2><span class="muted">Выбери здание для управления</span></div>${territoryBuildings(state, selectedRoomId)}<details class="territory-layout-tools" ${planOpen ? "open" : ""}><summary><span>Планировка и расширение<small>Места для строительства и новая земля</small></span><b>+</b></summary>${territoryPlan(state, selectedRoomId)}<p class="field-hint">Выбери свободное место или присоедини землю за оградой. При размещении сетка помогает проверить площадь постройки.</p></details><div class="section-head"><h2>Построить на базе</h2><span class="muted">Место выбираешь на территории</span></div>${buildingCatalogue(state)}${productionReserveEditor(state, "base", productionReserveDraft)}${fieldKitStockPanel(state)}${discoveriesSection()}`;
+	panel.innerHTML = `${territorySummary(state)}<div class="section-head"><h2>Постройки во дворе</h2><span class="muted">Выбери здание для управления</span></div>${territoryBuildings(state, selectedRoomId)}<details class="territory-layout-tools" ${planOpen ? "open" : ""}><summary><span>Планировка и расширение<small>Места для строительства и новая земля</small></span><b>+</b></summary>${territoryPlan(state, selectedRoomId)}<p class="field-hint">Выбери свободное место или присоедини землю за оградой. Перетаскивай постройки прямо во дворе. Контур покажет, подходит ли место.</p></details><div class="section-head"><h2>Построить на базе</h2><span class="muted">Место выбираешь на территории</span></div>${buildingCatalogue(state)}${productionReserveEditor(state, "base", productionReserveDraft)}${fieldKitStockPanel(state)}${discoveriesSection()}`;
 }
 function buildSitePanel(column: number, row: number) {
 	const open = getShelterSites(state.shelter).some(site => site.column === column && site.row === row);
@@ -1788,7 +1836,7 @@ function managedRoomPanel(room: RoomInstance) {
 	const tab = info.production ? roomContextTab : "upgrade";
 	const tabs = info.production ? [["staff","Люди"],["production","Производство"],["upgrade","Развитие"]] : [["upgrade","Развитие"]];
 	const content = tab === "staff" ? roomWorkersPanel(room) : tab === "production" ? `${productionReserveEditor(state, room.id, productionReserveDraft, true)}<section class="room-panel-section"><h3>Очередь · ${room.queue.length} / 5</h3>${roomQueuePanel(room)}</section><section class="room-panel-section"><h3>${room.type === "workshop" ? "Комплекты для выхода" : "Рецепты"}</h3>${roomResourcesPanel(room)}</section>${room.type === "workshop" ? `<section class="room-panel-section"><h3>Оружейные модули</h3>${roomModulesPanel(room)}</section>` : ""}` : room.status === "building" ? '<div class="room-queue-empty">Строительство началось. Дождись готовности, затем назначь работников или развивай комнату.</div>' : `<section class="room-panel-section"><h3>Уровень ${room.level} → ${Math.min(5,room.level+1)}</h3><p>Улучшение ускоряет партии и добавляет рабочие места. Люди и оплаченная очередь сохранятся.</p>${roomUpgradeRecipeBenefits(room)}<div class="loadout-stats"><span>Время ${seconds(upgrade.duration)}</span></div><button class="button secondary" data-action="upgrade-room" data-id="${room.id}" ${upgrade.reason ? "disabled" : ""}>Улучшить · ${costLabel(upgrade)}</button><small class="quote-note" data-room-upgrade-note="${room.id}">${e(upgrade.reason ?? "Оплата при начале улучшения")}</small></section>`;
-	return `<header class="command-context-head"><div><span class="eyebrow">Участок ${room.column}, ${room.row} · ур. ${room.level || "—"}</span><h2>${e(info.label)}</h2></div><button class="icon-button" data-action="close-context" data-focus-key="context-close" aria-label="Закрыть комнату">×</button></header><div class="command-room-banner" data-room-summary="${room.id}" data-room-kind="${roomSummary.kind}" style="--room-accent:${info.color}">${roomMiniArt(room.type,`selected-${room.id}`).replace("<svg ", '<svg aria-hidden="true" ')}<div><strong data-room-status="${room.id}">${e(production.status)}</strong><small data-room-eta="${room.id}">${production.remainingSeconds == null ? "" : `${seconds(production.remainingSeconds)} до готовности`}</small><div class="command-room-meta"><span>${info.production ? `${icon("people",12)} ${room.workerIds.length}/${getRoomWorkerCapacity(room)}` : `${icon("check",12)} Без персонала`}</span>${info.production ? `<span>${icon("scrap",12)} Заказов: ${room.queue.length}</span>` : ""}</div><span class="progress"><i data-room-progress="${room.id}" style="width:${production.progress*100}%"></i></span><button class="text-button room-view-action" data-camera-room="${room.id}" data-focus-key="camera-room-${room.id}">Осмотреть комнату ${icon("arrow",13)}</button></div></div><div class="context-tabs" role="group" aria-label="Управление комнатой">${tabs.map(([id,label]) => `<button data-room-context-tab="${id}" data-focus-key="context-tab-${id}" aria-pressed="${tab===id}" class="${tab===id?"active":""}">${label}</button>`).join("")}</div><div class="command-dock-scroll" id="room-management" tabindex="-1">${productionReadout(room)}<p class="command-room-reason" data-room-reason="${room.id}">${e(production.reason ?? (room.status !== "ready" ? "Работа приостановлена до готовности комнаты" : roomSummary.cta ? roomSummary.detail : ""))}</p>${content}${buildingRelocationControls(room)}${!info.production ? `<p class="field-hint">${e(info.description)} Работники не требуются.</p>` : ""}</div>`;
+	return `<header class="command-context-head"><div><span class="eyebrow">Свободная планировка · ур. ${room.level || "—"}</span><h2>${e(info.label)}</h2></div><button class="icon-button" data-action="close-context" data-focus-key="context-close" aria-label="Закрыть комнату">×</button></header><div class="command-room-banner" data-room-summary="${room.id}" data-room-kind="${roomSummary.kind}" style="--room-accent:${info.color}">${roomMiniArt(room.type,`selected-${room.id}`).replace("<svg ", '<svg aria-hidden="true" ')}<div><strong data-room-status="${room.id}">${e(production.status)}</strong><small data-room-eta="${room.id}">${production.remainingSeconds == null ? "" : `${seconds(production.remainingSeconds)} до готовности`}</small><div class="command-room-meta"><span>${info.production ? `${icon("people",12)} ${room.workerIds.length}/${getRoomWorkerCapacity(room)}` : `${icon("check",12)} Без персонала`}</span>${info.production ? `<span>${icon("scrap",12)} Заказов: ${room.queue.length}</span>` : ""}</div><span class="progress"><i data-room-progress="${room.id}" style="width:${production.progress*100}%"></i></span><button class="text-button room-view-action" data-camera-room="${room.id}" data-focus-key="camera-room-${room.id}">Осмотреть комнату ${icon("arrow",13)}</button></div></div><div class="context-tabs" role="group" aria-label="Управление комнатой">${tabs.map(([id,label]) => `<button data-room-context-tab="${id}" data-focus-key="context-tab-${id}" aria-pressed="${tab===id}" class="${tab===id?"active":""}">${label}</button>`).join("")}</div><div class="command-dock-scroll" id="room-management" tabindex="-1">${productionReadout(room)}<p class="command-room-reason" data-room-reason="${room.id}">${e(production.reason ?? (room.status !== "ready" ? "Работа приостановлена до готовности комнаты" : roomSummary.cta ? roomSummary.detail : ""))}</p>${content}${buildingRelocationControls(room)}${!info.production ? `<p class="field-hint">${e(info.description)} Работники не требуются.</p>` : ""}</div>`;
 }
 function roomWorkersPanel(room: RoomInstance) {
 	const capacity = getRoomWorkerCapacity(room), skill = ROOM_DEFINITIONS[room.type].workerSkill;
@@ -2946,6 +2994,11 @@ document.addEventListener("keydown", (event) => {
 		event.preventDefault();fleaView.tab=tabs[next]!;render();panel.querySelector<HTMLButtonElement>(`[data-flea-tab="${fleaView.tab}"]`)?.focus({preventScroll:true});scheduleSessionSave();return;
 	}
 	if ((workerPlacement || crewPointer) && event.key === "Escape") { event.preventDefault(); cancelWorkerPlacement(true, true); return; }
+	if (buildingDragPreview?.active && event.key === "Escape") { event.preventDefault(); world?.cancelBuildingDrag(); return; }
+	if (buildingPlacement && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key) && !(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLSelectElement)) {
+		const distance = event.shiftKey ? 1 : 8;
+		event.preventDefault(); nudgeBuildingPlacement(event.key === "ArrowLeft" ? -distance : event.key === "ArrowRight" ? distance : 0, event.key === "ArrowUp" ? -distance : event.key === "ArrowDown" ? distance : 0); return;
+	}
 	if (buildingPlacement && !buildingPlacementBusy && event.key === "Escape") { event.preventDefault(); cancelBuildingPlacement(); if (page !== "home") closeTools(); return; }
 	if (buildingPlacement && !buildingPlacementBusy && event.key.toLowerCase() === "r" && !(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLSelectElement)) {
 		event.preventDefault(); buildingPlacement.rotation = buildingPlacement.rotation === 0 ? 1 : 0; paintBuildingPlacement(); return;
@@ -3067,6 +3120,7 @@ world = createWorld(
 		shelter: state.shelter,
 		selectedRoomId,
 		selectedSite: selectedShelterSite,
+		identityKey: serverSnapshot?.identity.id ?? "connecting",
 		roomProduction: Object.fromEntries(state.shelter.rooms.map((room) => [room.id, getRoomProductionState(state, room)])),
 		selectedScavId: selectedScav,
 		selectedMapId: selectedMap,
@@ -3087,6 +3141,12 @@ world = createWorld(
 		canCamera: canWorldCamera,
 		onCameraChange: onWorldCameraChange,
 		canDrag: canWorldDrag,
+		canBuildingDrag,
+		getBuildingPlacementReason: (id, x, y, rotation) => getRoomFreePlacementReason(state, id, x, y, rotation),
+		getFreeBuildPlacementReason: (placement, x, y) => placement.roomId ? getRoomFreePlacementReason(state, placement.roomId, x, y, placement.rotation) : getFreeBuildRoomQuote(state, placement.type as ShelterRoomType, x, y, placement.rotation).reason,
+		onPlaceBuilding: (id, x, y, rotation) => { void placeDraggedBuilding(id, x, y, rotation); },
+		onBuildingDragState,
+		onFreeBuildSite: ({ x, y }) => chooseFreeBuildingSite(x, y),
 		getAssignmentReason: (scavId, roomId) => getWorkerAssignmentReason(state, scavId, roomId),
 		onAssignScav: assignPlacedWorker,
 		onDragState: onWorldDragState,
@@ -3103,11 +3163,11 @@ const readyContracts = () =>
 			getContractProgress(state, contract) >= contract.target
 	).length;
 const rosterStatus = () => `${state.scavs.map((scav) => `${scav.id}:${scav.status}:${scav.autoRaid.enabled}:${scav.assignment}:${scav.story.pending?.eventId}:${scav.story.bond}:${scav.story.stress}`).join(";")}|${state.raids.map((raid) => `${raid.id}:${raid.expedition?.stage}:${raid.expedition?.status}`).join(";")}|${getSocialPresentationKey(state)}`;
-const shelterStatus = () => `${state.shelter.sites.map((p) => `${p.column}:${p.row}`).join(";")}|${state.shelter.expansions.map((p) => `${p.column}:${p.row}:${Math.floor(p.workDone / p.workRequired * 100)}`).join(";")}|` + state.shelter.rooms.map((room) => `${room.id}:${room.column}:${room.row}:${room.rotation ?? 0}:${room.status}:${room.level}:${room.queue.map((job) => job.id).join(",")}:${room.workerIds.join(",")}:${room.recipeId}:${room.repeat}:${room.pending}:${room.cycles}`).join(";");
+const shelterStatus = () => `${state.shelter.sites.map((p) => `${p.column}:${p.row}`).join(";")}|${state.shelter.expansions.map((p) => `${p.column}:${p.row}:${Math.floor(p.workDone / p.workRequired * 100)}`).join(";")}|` + state.shelter.rooms.map((room) => `${room.id}:${room.column}:${room.row}:${room.position?.x ?? ""}:${room.position?.y ?? ""}:${room.rotation ?? 0}:${room.status}:${room.level}:${room.queue.map((job) => job.id).join(",")}:${room.workerIds.join(",")}:${room.recipeId}:${room.repeat}:${room.pending}:${room.cycles}`).join(";");
 const achievementPresentationKey = () => getAchievementViews(state).map(view => `${view.id}:${view.unlocked}:${view.active}:${view.steps.map(step => Number(step.done)).join('')}`).join('|');
 const inventoryPresentationKey = () => JSON.stringify({ weapons:state.weapons, modules:state.modules, gear:state.gearItems, scavs:state.scavs.map(({health, ...scav})=>({...scav, healthy:isScavMedicallyReady({...scav,health})})), recruitment:state.recruitment,loot:state.lootItems,pendingLoot:state.pendingLoot,kits:getFieldKitStock(state) });
 function interacting() {
-	return Boolean(workerPlacement || crewPointer) || (document.activeElement?.tagName === "SELECT" && !document.activeElement.hasAttribute("data-live-raid-select")) || document.activeElement?.tagName === "INPUT" || Boolean(document.querySelector("#modal-root .modal"));
+	return Boolean(workerPlacement || crewPointer || buildingDragPreview?.active) || (document.activeElement?.tagName === "SELECT" && !document.activeElement.hasAttribute("data-live-raid-select")) || document.activeElement?.tagName === "INPUT" || Boolean(document.querySelector("#modal-root .modal"));
 }
 function refreshAfterAdvance() {
 	if (interacting()) deferredRender = true;

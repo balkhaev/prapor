@@ -10,6 +10,8 @@ export interface ProductionJob {
 }
 export interface RoomInstance {
 	id: string; type: ShelterRoomType; column: number; row: number; level: number;
+	/** Absolute ground coordinates; column/row identify the land lot containing the origin. */
+	position?: { x: number; y: number };
 	/** Quarter turn; old saves and compact structures default to the original orientation. */
 	rotation?: 0 | 1;
 	status: "building" | "ready" | "upgrading";
@@ -25,6 +27,12 @@ export interface ShelterState { rooms: RoomInstance[]; sites: ShelterSite[]; exp
 export const SHELTER_COLUMNS = 4;
 export const SHELTER_ROWS = 3;
 export const SHELTER_COORDINATE_LIMIT = 128;
+export const SHELTER_POSITION_LIMIT = 30_000;
+export const SHELTER_ROOM_CLEARANCE = 8;
+export const SHELTER_LAND_ORIGIN = { x: 30, y: 132 } as const;
+export const SHELTER_LAND_STRIDE = { x: 192, y: 132 } as const;
+/** Keep the opening through the north fence clear; legacy buildings begin at y=148. */
+export const SHELTER_GATE_APPROACH = { x: 288, y: 132, width: 60, height: 16 } as const;
 export const MAX_SHELTER_SITES = 256;
 export const SHELTER_EXCAVATION = { money: 60, scrap: 2, duration: 20 } as const;
 type ShelterLayout = { rooms?: readonly RoomInstance[]; sites?: readonly ShelterSite[]; expansions?: readonly ShelterExpansion[] };
@@ -59,18 +67,43 @@ export const ROOM_DEFINITIONS: Record<ShelterRoomType, {
 	radio: { label: "Радиорубка", description: "Готовит разведданные за рубли. Нужны наблюдательные бойцы.", color: "#8eafbd", cost: { money: 180, scrap: 6 }, buildSeconds: 70, workerSkill: "scouting", production: true },
 	storage: { label: "Склад", description: "Дополнительные места для оружия, деталей и припасов. Рабочие не требуются.", color: "#a2a98a", cost: { money: 220, scrap: 8 }, buildSeconds: 80, workerSkill: "balanced", production: false },
 	dormitory: { label: "Жилой блок", description: "Два новых места для отряда на первом уровне, затем ещё по одному. Рабочие не требуются.", color: "#c1ae94", cost: { money: 240, scrap: 8 }, buildSeconds: 90, workerSkill: "balanced", production: false },
-	hangar: { label: "Ангар", description: "Большая постройка 3×2, доступная с 4-го уровня. На каждом уровне: +18 мест для оружия, +48 для деталей и дополнительный запас припасов. Рабочие не требуются.", color: "#87a0ad", cost: { money: 900, scrap: 30 }, buildSeconds: 180, workerSkill: "balanced", production: false, footprint: { width: 3, height: 2 }, unlockLevel: 4 },
+	hangar: { label: "Ангар", description: "Просторная постройка, доступная с 4-го уровня. На каждом уровне: +18 мест для оружия, +48 для деталей и дополнительный запас припасов. Рабочие не требуются.", color: "#87a0ad", cost: { money: 900, scrap: 30 }, buildSeconds: 180, workerSkill: "balanced", production: false, footprint: { width: 3, height: 2 }, unlockLevel: 4 },
 };
 export function getRoomFootprint(room: Pick<RoomInstance, "type" | "rotation">): { width: number; height: number } {
 	const footprint = ROOM_DEFINITIONS[room.type].footprint ?? { width: 1, height: 1 };
 	return room.rotation === 1 ? { width: footprint.height, height: footprint.width } : { ...footprint };
 }
-export function getRoomSites(room: Pick<RoomInstance, "type" | "rotation" | "column" | "row">): ShelterSite[] {
-	const { width, height } = getRoomFootprint(room);
-	return Array.from({ length: height }, (_, row) => Array.from({ length: width }, (_, column) =>
-		({ column: room.column + column, row: room.row + row }))).flat();
+type PositionedRoom = Pick<RoomInstance, "column" | "row" | "position">;
+type RoomGeometry = PositionedRoom & Pick<RoomInstance, "type" | "rotation">;
+export function isShelterRoomPosition(x: number, y: number): boolean {
+	return Number.isFinite(x) && Number.isFinite(y) && Math.abs(x) <= SHELTER_POSITION_LIMIT && y >= 0 && y <= SHELTER_POSITION_LIMIT;
 }
-/** Every occupied site resolves to the same stable structure, including its non-origin cells. */
+export function getRoomPosition(room: PositionedRoom): { x: number; y: number } {
+	return room.position ? { ...room.position } : { x: 40 + room.column * SHELTER_LAND_STRIDE.x, y: 148 + room.row * SHELTER_LAND_STRIDE.y };
+}
+export function getRoomPositionSite(x: number, y: number): ShelterSite {
+	return { column: Math.floor((x - SHELTER_LAND_ORIGIN.x) / SHELTER_LAND_STRIDE.x), row: Math.floor((y - SHELTER_LAND_ORIGIN.y) / SHELTER_LAND_STRIDE.y) };
+}
+export function getRoomBounds(room: RoomGeometry): { x: number; y: number; width: number; height: number } {
+	const footprint = getRoomFootprint(room);
+	return { ...getRoomPosition(room), width: footprint.width * SHELTER_LAND_STRIDE.x - 20, height: footprint.height * SHELTER_LAND_STRIDE.y - 32 };
+}
+export function shelterBoundsOverlap(a: { x: number; y: number; width: number; height: number }, b: { x: number; y: number; width: number; height: number }, clearance = 0): boolean {
+	return a.x < b.x + b.width + clearance && a.x + a.width + clearance > b.x && a.y < b.y + b.height + clearance && a.y + a.height + clearance > b.y;
+}
+/** Land intersects the actual ground rectangle; several separated buildings can share a lot. */
+export function getRoomSites(room: RoomGeometry): ShelterSite[] {
+	const rect = getRoomBounds(room), origin = getRoomPositionSite(rect.x, rect.y);
+	const endColumn = Math.ceil((rect.x + rect.width - SHELTER_LAND_ORIGIN.x) / SHELTER_LAND_STRIDE.x) - 1;
+	const endRow = Math.ceil((rect.y + rect.height - SHELTER_LAND_ORIGIN.y) / SHELTER_LAND_STRIDE.y) - 1;
+	return Array.from({ length: endRow - origin.row + 1 }, (_, row) => Array.from({ length: endColumn - origin.column + 1 }, (_, column) =>
+		({ column: origin.column + column, row: origin.row + row }))).flat();
+}
+/** Hit testing uses the exact building rectangle, never the containing land lot. */
+export function getShelterRoomAtPoint(shelter: ShelterLayout, x: number, y: number): RoomInstance | undefined {
+	return shelter.rooms?.find(room => { const rect = getRoomBounds(room); return x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height; });
+}
+/** Legacy land lookup returns its first intersecting building; point selection is exact. */
 export function getShelterRoomAt(shelter: ShelterLayout, column: number, row: number): RoomInstance | undefined {
 	return shelter.rooms?.find(room => getRoomSites(room).some(site => site.column === column && site.row === row));
 }

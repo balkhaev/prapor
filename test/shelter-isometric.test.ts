@@ -5,7 +5,7 @@ import {
 } from "../src/shelter-camera";
 import {
 	projectShelterBounds, projectShelterPoint, SHELTER_ROOM_HEIGHT, SHELTER_ROOM_WIDTH,
-	shelterRoomPolygon, shelterRoomPosition, unprojectShelterPoint,
+	shelterRectPolygon, shelterRoomPolygon, shelterRoomPosition, unprojectShelterPoint,
 } from "../src/shelter-isometric";
 import { getShelterLayoutCell, getShelterWalkingRoute } from "../src/shelter-layout";
 import { clientToShelterPoint } from "../src/shelter-motion";
@@ -19,6 +19,28 @@ function expectPoint(actual: { x: number; y: number }, expected: { x: number; y:
 }
 
 describe("isometric shelter presentation", () => {
+	test("free building footprints preserve fractional origins and dimensions in projection", () => {
+		const rect = { x: 318.375, y: 286.625, width: 364, height: 232 };
+		const projected = shelterRectPolygon(rect);
+		const original = [{ x: rect.x, y: rect.y }, { x: rect.x + rect.width, y: rect.y }, { x: rect.x + rect.width, y: rect.y + rect.height }, { x: rect.x, y: rect.y + rect.height }];
+		projected.forEach((point, index) => expectPoint(unprojectShelterPoint(point), original[index]!));
+		expectPoint(center(projectShelterBounds(rect)), projectShelterPoint(center(rect)));
+	});
+
+	test("a grabbed building follows an unsnapped pointer under zoom, pan and a scaled canvas", () => {
+		const origin = { x: 261.25, y: 198.875 }, grab = { x: origin.x + 93.375, y: origin.y + 41.5 };
+		const destination = { x: 397.825, y: 282.35 }, pointer = { x: destination.x + grab.x - origin.x, y: destination.y + grab.y - origin.y };
+		for (const size of [{ width: 943, height: 358 }, { width: 360, height: 640 }, { width: 840, height: 520 }]) {
+			const viewport = shelterViewportForSize(size.width, size.height), canvas = { left: 71, top: 48, ...size };
+			const camera = panShelterCamera(focusShelterRect({ zoom: 1, x: 0, y: 0 }, projectShelterBounds({ ...destination, width: 172, height: 100 }), 2.5, viewport), 9.7, -13.25, viewport);
+			const visual = shelterToViewport(projectShelterPoint(pointer), camera, viewport);
+			const client = { x: canvas.left + visual.x * canvas.width / viewport.width, y: canvas.top + visual.y * canvas.height / viewport.height };
+			const point = clientToShelterPoint(client.x, client.y, canvas, viewport.width, viewport.height)!;
+			const ground = unprojectShelterPoint(viewportToShelter(point, camera, viewport));
+			expectPoint({ x: ground.x - (grab.x - origin.x), y: ground.y - (grab.y - origin.y) }, destination);
+		}
+	});
+
 	test("both ground axes share the raid's 2:1 angle and the complete layout fits the existing world", () => {
 		const source = { x: 420, y: 300 }, before = { ...source }, floor = projectShelterPoint(source);
 		const east = projectShelterPoint({ ...source, x: source.x + 100 }), south = projectShelterPoint({ ...source, y: source.y + 100 });

@@ -26,7 +26,7 @@ export function unprojectShelterPoint(point: ShelterPoint): ShelterPoint {
 	return { x: (horizontal + depth) / (2 * HORIZONTAL_SCALE), y: DEPTH_ORIGIN + (depth - horizontal) / (2 * DEPTH_SCALE) };
 }
 
-function projectRect(rect: ShelterRect): ShelterPoint[] {
+export function shelterRectPolygon(rect: ShelterRect): ShelterPoint[] {
 	return [
 		{ x: rect.x, y: rect.y },
 		{ x: rect.x + rect.width, y: rect.y },
@@ -37,7 +37,7 @@ function projectRect(rect: ShelterRect): ShelterPoint[] {
 
 /** A camera/overlay rectangle encloses the diamond; pointer hits still use its inverse projection. */
 export function projectShelterBounds(rect: ShelterRect): ShelterRect {
-	const corners = projectRect(rect);
+	const corners = shelterRectPolygon(rect);
 	const left = Math.min(...corners.map((point) => point.x));
 	const top = Math.min(...corners.map((point) => point.y));
 	return { x: left, y: top, width: Math.max(...corners.map((point) => point.x)) - left, height: Math.max(...corners.map((point) => point.y)) - top };
@@ -54,5 +54,5 @@ export function shelterRoomRect(column: number, row: number, width = 1, height =
 
 /** Ground corners run clockwise from the room's rear corner, in absolute projected world pixels. */
 export function shelterRoomPolygon(column: number, row: number, width = 1, height = 1): ShelterPoint[] {
-	return projectRect(shelterRoomRect(column, row, width, height));
+	return shelterRectPolygon(shelterRoomRect(column, row, width, height));
 }

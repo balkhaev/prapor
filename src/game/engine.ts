@@ -16,7 +16,7 @@ import { BLUEPRINTS, EXPEDITION_BRANCHES, GEAR_MODEL_BY_ID, MARKET_OFFERS, RUN_P
 export * from "./systems";
 import { FACTORY_KITS, getResolvedModuleMounts, MODULE_BY_ID, MODULE_MODELS, MODULE_SLOTS, MODULE_SLOT_LABELS, modulePlatformLabel, RECEIVER_INFO, type ModuleInstance, type ModuleSlot } from "./modules";
 export * from "./modules";
-import { initialShelter, ROOM_DEFINITIONS, RESOURCE_RECIPE_BY_ID, getShelterSites, getShelterFrontier, getRoomFootprint, getRoomSites, getShelterRoomAt, isShelterSiteCoordinate, MAX_SHELTER_SITES, SHELTER_COORDINATE_LIMIT, SHELTER_EXCAVATION, type ProductionJob, type RoomInstance, type ShelterCost, type ShelterRoomType, type ShelterSite, type ShelterExpansion, type ShelterState } from "./shelter";
+import { initialShelter, ROOM_DEFINITIONS, RESOURCE_RECIPE_BY_ID, getShelterSites, getShelterFrontier, getRoomFootprint, getRoomSites, getRoomPosition, getRoomPositionSite, getRoomBounds, shelterBoundsOverlap, isShelterRoomPosition, isShelterSiteCoordinate, MAX_SHELTER_SITES, SHELTER_COORDINATE_LIMIT, SHELTER_POSITION_LIMIT, SHELTER_ROOM_CLEARANCE, SHELTER_GATE_APPROACH, SHELTER_EXCAVATION, type ProductionJob, type RoomInstance, type ShelterCost, type ShelterRoomType, type ShelterSite, type ShelterExpansion, type ShelterState } from "./shelter";
 export * from "./shelter";
 import { getRaidFieldFrame, getRaidFieldOutcome, getRaidFieldPlan, type RaidFieldPlan } from "../raid-field";
 import { buildRecruitmentBoard, chooseRecruitCandidateAppearance, createRecruitmentState, getEarnedRecruitmentTier, getRecruitmentBoard, getScavProfileEffects, getScavTalentOffers, isRecruitDrawbackForRole, isRecruitTraitForRole, neutralScavProfile, RECOVERY_RECRUIT_ID, RECRUIT_BACKGROUNDS, RECRUIT_DRAWBACKS, RECRUIT_ROLES, RECRUIT_TRAITS, SCAV_TALENTS, stepRecruitmentSeed, type RecruitCandidate, type RecruitmentState, type RecruitRole, type RecruitTier, type ScavProfile } from "./recruitment";
@@ -50,7 +50,7 @@ import { getBarterQuote } from "./barter";
 export * from "./barter";
 
 export const SAVE_KEY = "prapor.save.v1";
-export const SAVE_VERSION = 20;
+export const SAVE_VERSION = 21;
 export const MAX_PENDING_LOOT_DELIVERIES = 128;
 export const PENDING_LOOT_RAID_LIMIT = 96;
 export const MAX_OFFLINE_MS = 8 * 60 * 60 * 1000;
@@ -749,17 +749,29 @@ export function getRoomProductionState(state: GameState, room: RoomInstance) {
 }
 /** Pure validation shared by construction, moving and rotating. Only owned, unoccupied territory is usable. */
 function footprintPlacementReason(state: GameState, type: ShelterRoomType, column: number, row: number, rotation: 0 | 1, ignoredRoomId?: string): string | null {
-	if (rotation !== 0 && rotation !== 1) return "Некорректный поворот постройки.";
 	if (!isShelterSiteCoordinate(column, row)) return row < 0 ? "Со стороны улицы расширять базу нельзя." : "Участок вне доступной территории.";
-	const sites = getRoomSites({ type, column, row, rotation });
+	const position = getRoomPosition({ column, row });
+	return freeFootprintPlacementReason(state.shelter, type, position.x, position.y, rotation, ignoredRoomId);
+}
+/** Buildings occupy continuous rectangles. The owned land union must cover every part of it. */
+function freeFootprintPlacementReason(shelter: Pick<ShelterState, "sites" | "rooms">, type: ShelterRoomType, x: number, y: number, rotation: 0 | 1, ignoredRoomId?: string): string | null {
+	if (rotation !== 0 && rotation !== 1) return "Некорректный поворот постройки.";
+	if (!isShelterRoomPosition(x, y)) return "Постройка вне доступной территории.";
+	const site = getRoomPositionSite(x, y), candidate = { type, ...site, position: { x, y }, rotation };
+	const sites = getRoomSites(candidate);
 	if (sites.some(site => !isShelterSiteCoordinate(site.column, site.row))) return "Постройка выходит за пределы доступной территории.";
-	const owned = new Set(getShelterSites(state.shelter).map(site => `${site.column}:${site.row}`));
+	const owned = new Set(getShelterSites(shelter).map(site => `${site.column}:${site.row}`));
 	if (sites.some(site => !owned.has(`${site.column}:${site.row}`))) return "Расширь территорию базы: вся постройка должна помещаться на подготовленных участках.";
-	if (sites.some(site => {
-		const room = getShelterRoomAt(state.shelter, site.column, site.row);
-		return room && room.id !== ignoredRoomId;
-	})) return "Здесь уже стоит другая постройка.";
+	const rect = getRoomBounds(candidate);
+	if (shelterBoundsOverlap(rect, SHELTER_GATE_APPROACH)) return "Оставь свободным вход на базу.";
+	if (shelter.rooms.some(room => room.id !== ignoredRoomId && shelterBoundsOverlap(rect, getRoomBounds(room), SHELTER_ROOM_CLEARANCE))) return "Здесь слишком близко другая постройка. Оставь немного места между ними.";
 	return null;
+}
+export function getRoomFreePlacementReason(state: GameState, roomId: string, x: number, y: number, rotation?: 0 | 1): string | null {
+	const room = roomById(state, roomId);
+	if (!room) return "Постройка не найдена.";
+	if (room.status !== "ready") return "Дождись завершения строительства или улучшения.";
+	return freeFootprintPlacementReason(state.shelter, room.type, x, y, rotation === undefined ? room.rotation ?? 0 : rotation, room.id);
 }
 /** Pure preview; production jobs and assigned workers do not prevent a ready structure from moving. */
 export function getRoomPlacementReason(state: GameState, roomId: string, column: number, row: number, rotation?: 0 | 1): string | null {
@@ -774,6 +786,17 @@ export function moveRoom(state: GameState, roomId: string, column: number, row: 
 	const reason = getRoomPlacementReason(state, roomId, column, row, rotation); if (reason) return fail(reason);
 	const room = roomById(state, roomId)!;
 	room.column = column; room.row = row;
+	delete room.position;
+	if (rotation !== undefined) room.rotation = rotation;
+	return ok(`${ROOM_DEFINITIONS[room.type].label}: постройка перемещена.`);
+}
+/** Free movement preserves paid production, workers and the stable building ID. */
+export function placeRoom(state: GameState, roomId: string, x: number, y: number, now = Date.now(), rotation?: 0 | 1): ActionResult {
+	if (!isTime(now)) return fail("Некорректное время.");
+	advance(state, now);
+	const reason = getRoomFreePlacementReason(state, roomId, x, y, rotation); if (reason) return fail(reason);
+	const room = roomById(state, roomId)!;
+	room.position = { x, y }; Object.assign(room, getRoomPositionSite(x, y));
 	if (rotation !== undefined) room.rotation = rotation;
 	return ok(`${ROOM_DEFINITIONS[room.type].label}: постройка перемещена.`);
 }
@@ -784,7 +807,8 @@ export function rotateRoom(state: GameState, roomId: string, now = Date.now()): 
 	const { width, height } = getRoomFootprint(room);
 	if (width === height) return fail("Эту постройку поворачивать не требуется.");
 	const rotation = room.rotation === 1 ? 0 : 1;
-	const reason = getRoomPlacementReason(state, roomId, room.column, room.row, rotation); if (reason) return fail(reason);
+	const position = getRoomPosition(room);
+	const reason = getRoomFreePlacementReason(state, roomId, position.x, position.y, rotation); if (reason) return fail(reason);
 	room.rotation = rotation;
 	return ok(`${ROOM_DEFINITIONS[room.type].label}: постройка повёрнута.`);
 }
@@ -793,8 +817,21 @@ export function getBuildRoomQuote(state: GameState, type: ShelterRoomType, colum
 	let reason: string | null = null;
 	if (!definition) reason = "Помещение не найдено.";
 	else if (state.level < (definition.unlockLevel ?? 1)) reason = `Откроется на ${definition.unlockLevel}-м уровне.`;
+	else if (state.shelter.rooms.length >= MAX_SHELTER_SITES) reason = "Достигнут предел построек базы.";
 	else {
 		reason = footprintPlacementReason(state, type, column, row, rotation);
+		if (!reason && (state.money < definition.cost.money || state.supplies.scrap < definition.cost.scrap)) reason = `Нужно ${definition.cost.money} ₽ и ${definition.cost.scrap} деталей.`;
+	}
+	return { money: definition?.cost.money ?? 0, scrap: definition?.cost.scrap ?? 0, duration: definition?.buildSeconds ?? 0, reason };
+}
+export function getFreeBuildRoomQuote(state: GameState, type: ShelterRoomType, x: number, y: number, rotation: 0 | 1 = 0) {
+	const definition = ownValue(ROOM_DEFINITIONS, type);
+	let reason: string | null = null;
+	if (!definition) reason = "Помещение не найдено.";
+	else if (state.level < (definition.unlockLevel ?? 1)) reason = `Откроется на ${definition.unlockLevel}-м уровне.`;
+	else if (state.shelter.rooms.length >= MAX_SHELTER_SITES) reason = "Достигнут предел построек базы.";
+	else {
+		reason = freeFootprintPlacementReason(state.shelter, type, x, y, rotation);
 		if (!reason && (state.money < definition.cost.money || state.supplies.scrap < definition.cost.scrap)) reason = `Нужно ${definition.cost.money} ₽ и ${definition.cost.scrap} деталей.`;
 	}
 	return { money: definition?.cost.money ?? 0, scrap: definition?.cost.scrap ?? 0, duration: definition?.buildSeconds ?? 0, reason };
@@ -823,6 +860,16 @@ export function buildRoom(state: GameState, type: ShelterRoomType, column: numbe
 	const quote = getBuildRoomQuote(state, type, column, row, rotation); if (quote.reason) return fail(quote.reason);
 	state.money -= quote.money; state.supplies.scrap -= quote.scrap;
 	state.shelter.rooms.push({ id: id(state, "room"), type, column, row, ...(rotation ? { rotation } : {}), level: 0, status: "building",
+		construction: { workDone: 0, workRequired: quote.duration * 1_000_000, targetLevel: 1, cost: { money: quote.money, scrap: quote.scrap } },
+		workerIds: [], queue: [], recipeId: null, repeat: false, pending: false, cycles: 0 });
+	return ok(`${ROOM_DEFINITIONS[type].label}: строительство началось.`);
+}
+export function constructRoom(state: GameState, type: ShelterRoomType, x: number, y: number, now = Date.now(), rotation: 0 | 1 = 0): ActionResult {
+	if (!isTime(now) || !Object.hasOwn(ROOM_DEFINITIONS, type)) return fail("Некорректное помещение или время.");
+	advance(state, now);
+	const quote = getFreeBuildRoomQuote(state, type, x, y, rotation); if (quote.reason) return fail(quote.reason);
+	state.money -= quote.money; state.supplies.scrap -= quote.scrap;
+	state.shelter.rooms.push({ id: id(state, "room"), type, ...getRoomPositionSite(x, y), position: { x, y }, ...(rotation ? { rotation } : {}), level: 0, status: "building",
 		construction: { workDone: 0, workRequired: quote.duration * 1_000_000, targetLevel: 1, cost: { money: quote.money, scrap: quote.scrap } },
 		workerIds: [], queue: [], recipeId: null, repeat: false, pending: false, cycles: 0 });
 	return ok(`${ROOM_DEFINITIONS[type].label}: строительство началось.`);
@@ -2907,7 +2954,7 @@ function parseShelter(value: unknown, version: number): GameState["shelter"] {
 	if (expansions.some((site) => !frontier.has(`${site.column}:${site.row}`))) throw new Error("disconnected-expansion");
 	const rooms = array(source.rooms, MAX_SHELTER_SITES, (value): RoomInstance => {
 		const roomSource = record(value);
-		fields(roomSource, ["id", "type", "column", "row", "level", "status", "construction", "workerIds", "queue", "recipeId", "repeat", "pending", "cycles", ...(version >= 14 ? ["stockTarget"] : []), ...(version >= 19 ? ["rotation"] : [])]);
+		fields(roomSource, ["id", "type", "column", "row", "level", "status", "construction", "workerIds", "queue", "recipeId", "repeat", "pending", "cycles", ...(version >= 14 ? ["stockTarget"] : []), ...(version >= 19 ? ["rotation"] : []), ...(version >= 21 ? ["position"] : [])]);
 		const type = known(roomSource.type, ROOM_DEFINITIONS) as ShelterRoomType;
 		if (version < 19 && type === "hangar") throw new Error("room-unreleased");
 		if (!["ready", "building", "upgrading"].includes(roomSource.status as string)) throw new Error("room-status");
@@ -2917,12 +2964,19 @@ function parseShelter(value: unknown, version: number): GameState["shelter"] {
 			recipeId: roomSource.recipeId === null ? null : known(roomSource.recipeId, RESOURCE_RECIPE_BY_ID), repeat: bool(roomSource.repeat), pending: bool(roomSource.pending), cycles: number(roomSource.cycles, 1e9, 0, true),
 			...(version >= 14 && Object.hasOwn(roomSource, "stockTarget") ? { stockTarget: number(roomSource.stockTarget, 1e6, 0, true) } : {}),
 			...(version >= 19 && Object.hasOwn(roomSource, "rotation") ? { rotation: number(roomSource.rotation, 1, 0, true) as 0 | 1 } : {}) };
+		if (version >= 21 && Object.hasOwn(roomSource, "position")) {
+			const position = record(roomSource.position); fields(position, ["x", "y"]);
+			room.position = { x: number(position.x, SHELTER_POSITION_LIMIT, -SHELTER_POSITION_LIMIT), y: number(position.y, SHELTER_POSITION_LIMIT) };
+			const site = getRoomPositionSite(room.position.x, room.position.y);
+			if (site.column !== room.column || site.row !== room.row) throw new Error("room-position-site");
+		}
 		const legacyId = /^room-(-?\d+)-(\d+)$/.exec(room.id);
 		const knownLegacyId = legacyId && isShelterSiteCoordinate(Number(legacyId[1]), Number(legacyId[2]))
 			&& room.id === `room-${Number(legacyId[1])}-${Number(legacyId[2])}`;
 		if (version < 19 ? room.id !== `room-${room.column}-${room.row}` && room.id !== `room-${room.type}`
 			: !knownLegacyId && !/^room-[1-9]\d*$/.test(room.id) && !(roomKeys.includes(room.type as BaseRoom) && room.id === `room-${room.type}`)) throw new Error("room-id");
 		if (getRoomSites(room).some(site => !siteKeys.has(`${site.column}:${site.row}`))) throw new Error("room-outside-territory");
+		if (shelterBoundsOverlap(getRoomBounds(room), SHELTER_GATE_APPROACH)) throw new Error("room-blocks-entrance");
 		if (room.workerIds.length > getRoomWorkerCapacity(room) || room.queue.some((job, index) => index > 0 && job.workDone !== 0)
 			|| (room.type !== "workshop" && room.queue.length > 1)
 			|| (room.recipeId !== null && ownValue(RESOURCE_RECIPE_BY_ID, room.recipeId)!.roomType !== room.type)
@@ -2945,7 +2999,7 @@ function parseShelter(value: unknown, version: number): GameState["shelter"] {
 		if (room.status === "building" ? room.level !== 0 || room.workerIds.length > 0 || room.queue.length > 0 || room.recipeId !== null : room.level < 1) throw new Error("room-level");
 		return room;
 	});
-	unique(rooms.flatMap(room => getRoomSites(room).map(site => `${site.column}:${site.row}`)));
+	for (let index = 0; index < rooms.length; index++) if (rooms.slice(index + 1).some(room => shelterBoundsOverlap(getRoomBounds(rooms[index]!), getRoomBounds(room), SHELTER_ROOM_CLEARANCE))) throw new Error("room-overlap");
 	if (roomKeys.some((key) => !rooms.some((room) => room.id === `room-${key}` && room.type === key && room.level >= 1))) throw new Error("foundation-room");
 	let logistics: ShelterState["logistics"];
 	if (version >= 14 && Object.hasOwn(source, "logistics")) {
@@ -3320,7 +3374,6 @@ export function parseSave(raw: string, options: { publicSnapshot?: boolean } = {
 		unique(state.discoveredWeapons);
 		unique(state.blueprints);
 		unique(state.shelter.rooms.map((room) => room.id));
-		unique(state.shelter.rooms.flatMap(room => getRoomSites(room).map(site => `${site.column}:${site.row}`)));
 		unique(state.shelter.rooms.flatMap((room) => room.workerIds));
 		unique(state.stats.mapsVisited);
 		unique(state.history.map((report) => report.raidId));

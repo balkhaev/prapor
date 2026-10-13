@@ -1,6 +1,6 @@
 import type Phaser from "phaser";
 import type { ModuleSlot } from "./game/modules";
-import { ROOM_DEFINITIONS, getRoomFootprint, type RoomInstance } from "./game/shelter";
+import { ROOM_DEFINITIONS, getRoomFootprint, getRoomPosition, type RoomInstance } from "./game/shelter";
 import { projectShelterPoint, shelterRoomPosition, shelterRoomRect } from "./shelter-isometric";
 import type { ProductionPresentation } from "./shelter-production";
 
@@ -45,8 +45,8 @@ class RoomPainter {
 	private readonly origin: Point;
 	readonly width: number;
 	readonly height: number;
-	constructor(readonly g: Phaser.GameObjects.Graphics, column: number, row: number, width = 1, height = 1) {
-		this.origin = shelterRoomPosition(column, row);
+	constructor(readonly g: Phaser.GameObjects.Graphics, column: number, row: number, width = 1, height = 1, position?: Point) {
+		this.origin = position ?? shelterRoomPosition(column, row);
 		const rect = shelterRoomRect(column, row, width, height);
 		this.width = rect.width; this.height = rect.height;
 	}
@@ -430,7 +430,7 @@ function construction(a: RoomPainter): void {
 /** Draw a small cutaway building in the shared projected world space. */
 export function paintIsometricRoom(g: Phaser.GameObjects.Graphics, column: number, row: number, room: RoomInstance | null): void {
 	if (!room) { paintIsometricLand(g, column, row, true); return; }
-	const footprint = getRoomFootprint(room), a = new RoomPainter(g, column, row, footprint.width, footprint.height);
+	const footprint = getRoomFootprint(room), a = new RoomPainter(g, column, row, footprint.width, footprint.height, getRoomPosition(room));
 	const finish = buildingFinish(room.type);
 	foundation(a, finish);
 	if (room.status === "building") { construction(a); return; }
@@ -495,7 +495,7 @@ function productionIndicator(a: RoomPainter, p: ProductionPresentation, time: nu
 /** Visual progress comes from the engine; a paused station has no moving parts. */
 export function paintIsometricProduction(g: Phaser.GameObjects.Graphics, column: number, row: number, room: RoomInstance, presentation: ProductionPresentation | null, time: number, reducedMotion: boolean): void {
 	if (room.status !== "ready" || !presentation?.jobId) return;
-	const a = new RoomPainter(g, column, row), p = presentation;
+	const footprint = getRoomFootprint(room), a = new RoomPainter(g, column, row, footprint.width, footprint.height, getRoomPosition(room)), p = presentation;
 	const animate = p.active && !reducedMotion;
 	const clock = reducedMotion ? 0 : Math.max(0, time);
 	switch (room.type) {
