@@ -210,6 +210,7 @@ let saveUiTimer: ReturnType<typeof setTimeout> | null = null;
 let accountDialogOpen = false;
 let accountChanging = false;
 let accountStartupChecked = false;
+let accountGeneration = 0;
 let signedInUser: AccountUser | null = null;
 let playerAccount: AccountUser | null = null;
 let cloudSync: ReturnType<typeof createCloudSaveSync> | null = null;
@@ -518,7 +519,8 @@ function activatePlayerSave(user: AccountUser | null, store: ReturnType<typeof c
 
 async function connectAccount(user: AccountUser, source: 'login' | 'register' | 'session') {
 	if (!ownsSaveLease || saveConflict) throw new Error('writer-lock-required');
-	if (accountChanging) return;
+	if (accountChanging) throw new Error('account-operation-pending');
+	accountGeneration++;
 	accountChanging = true; signedInUser = user; accountUI.setUser(user); setOverlayState();
 	try {
 		if (cloudSync?.isConnected()) await cloudSync.flush();
@@ -532,7 +534,8 @@ async function connectAccount(user: AccountUser, source: 'login' | 'register' | 
 		const baseline = readCloudBaseline(user);
 		const localRevision = cached?.revision ?? saveStore.getMetadata().revision;
 		const hasCache = sameAccount || cached?.state !== null && cached?.state !== undefined;
-		let candidate = source === 'session' && cached?.state ? { state: cached.state, session: cached.session, summary: cached.summary } : localCandidate;
+		let candidate = cached?.state ? { state: cached.state, session: cached.session, summary: cached.summary }
+			: playerAccount && !sameAccount ? { state: createGame(), session: null, summary: null } : localCandidate;
 		if (source === 'session' && !sameAccount && cached?.state) {
 			activatePlayerSave(user, store, { ...candidate, protectedRaw: cached.protectedRaw });
 		}
@@ -541,7 +544,7 @@ async function connectAccount(user: AccountUser, source: 'login' | 'register' | 
 			accountUI.setStatus('Локальная запись защищена. Экспортируй её или импортируй исправную через настройки игры.', 'warning');
 			return;
 		}
-		const remote = await accountApi.getSave();
+		const remote = await accountApi.getSave(user.id);
 		let choice: 'server' | 'local' | 'cancel' = 'local';
 		if (remote.save !== null) {
 			const knownLocal = source === 'session' && hasCache && baseline?.serverRevision === remote.revision;
@@ -550,7 +553,7 @@ async function connectAccount(user: AccountUser, source: 'login' | 'register' | 
 			else if (cleanRemote) choice = 'server';
 			else choice = await accountUI.chooseProgress({ serverSavedAt: remote.savedAt, localSavedAt: cached?.savedAt ?? localSavedAt,
 				message: 'У аккаунта и этого устройства есть свои записи. Выбери убежище для продолжения. Слияния двух игр нет.',
-				serverSummary: 'Убежище, сохранённое в аккаунте', localSummary: sameAccount || source === 'session' ? 'Локальная запись этого аккаунта' : 'Текущее гостевое убежище' });
+				serverSummary: 'Убежище, сохранённое в аккаунте', localSummary: hasCache ? 'Локальная запись этого аккаунта' : playerAccount && !sameAccount ? 'Новое убежище' : 'Текущее гостевое убежище' });
 		}
 		if (choice === 'cancel') { accountUI.setStatus('Убежище не подключено. Нажми «Подключить убежище», когда будешь готов.', 'warning'); return; }
 		if (choice === 'server') {
@@ -568,12 +571,17 @@ async function connectAccount(user: AccountUser, source: 'login' | 'register' | 
 }
 
 async function initializeAccount() {
+	const epoch = accountGeneration;
+	accountChanging = true; setOverlayState();
 	accountUI.setStatus('Проверяем связь с аккаунтом…');
 	try {
 		const { user } = await accountApi.session();
+		if (epoch !== accountGeneration) return;
+		accountChanging = false;
 		if (user) await connectAccount(user, 'session');
 		else accountUI.setStatus('Гостевая игра: прогресс хранится в этом браузере.');
-	} catch (error) { accountUI.setStatus(accountErrorMessage(error), 'warning'); }
+	} catch (error) { if (epoch === accountGeneration || accountGeneration === epoch + 1) accountUI.setStatus(accountErrorMessage(error), 'warning'); }
+	finally { accountChanging = false; setOverlayState(); }
 }
 
 function showCloudStatus(status: CloudSyncStatus, savedAt?: number | string) {
@@ -2706,11 +2714,14 @@ const accountUI = mountAccountUI({
 	onAuthenticated: connectAccount,
 	onDialogChange: open => { accountDialogOpen = open; setOverlayState(); },
 	onBeforeLogout: async () => {
-		if (!ownsSaveLease || !persist()) return false;
+		if (accountChanging || !ownsSaveLease || saveConflict) { accountUI.setStatus('Дождись подключения записи или обнови игру перед выходом.', 'warning'); return false; }
+		if (protectedSave) return true;
+		if (!persist()) { accountUI.setStatus('Не удалось подтвердить локальную запись. Экспортируй прогресс в настройках перед выходом.', 'warning'); return false; }
 		if (cloudSync?.isConnected()) await cloudSync.flush();
 		return true;
 	},
 	onLogout: () => {
+		accountGeneration++;
 		cloudSync?.disconnect(); signedInUser = null;
 		const guestStore = createPlayerSaveStore(null), guest = guestStore.open();
 		activatePlayerSave(null, guestStore, { state: guest.state ?? createGame(), session: guest.session, summary: guest.summary, protectedRaw: guest.protectedRaw });
@@ -2723,7 +2734,8 @@ document.querySelector('.settings')!.before(accountRoot.querySelector('.account-
 cloudSync = createCloudSaveSync({
 	readLocal: () => playerAccount && !protectedSave && !saveConflict && ownsSaveLease ? { save: saveStore.exportCurrent(state, captureSession()), revision: saveStore.getMetadata().revision } : null,
 	upload: async (revision, save) => {
-		const result = await accountApi.putSave(revision, save);
+		if (!playerAccount) throw new AccountApiError(401, 'account_changed');
+		const result = await accountApi.putSave(playerAccount.id, revision, save);
 		if (result.savedAt === null) throw new AccountApiError(0, 'invalid_response');
 		return { revision: result.revision, savedAt: result.savedAt };
 	},

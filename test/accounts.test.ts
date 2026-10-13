@@ -11,11 +11,13 @@ import { exportGameSave } from "../src/game-save";
 const ORIGIN = "https://game.delopusk.ru";
 const PASSWORD = "strong password 123";
 let folder: string, dbPath: string, service: AccountService;
+const accountIds = new Map<string, string>();
 let time = 1_800_000_000_000;
 const options = () => ({ dbPath, secureCookies: true, allowedOrigins: [ORIGIN, "https://game.balkhaev.com"], now: () => time });
 function request(path: string, method = "GET", body?: unknown, cookie?: string, headers: Record<string, string> = {}): Request {
   return new Request(`${ORIGIN}${path}`, { method, headers: {
     ...(method !== "GET" ? { origin: ORIGIN, "content-type": "application/json" } : {}),
+    ...(path === "/api/save" && cookie && accountIds.has(cookie) ? { "x-prapor-account": accountIds.get(cookie)! } : {}),
     ...(cookie ? { cookie } : {}), ...headers,
   }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
 }
@@ -28,12 +30,15 @@ async function register(username = "Scav_1"): Promise<{ cookie: string; recovery
   const result = await call("/api/auth/register", "POST", { username, password: PASSWORD });
   expect(result.status).toBe(201);
   const body = await result.json() as { user: { id: string }; recoveryCode: string };
-  return { cookie: result.headers.get("set-cookie")!.split(";")[0]!, recoveryCode: body.recoveryCode, id: body.user.id };
+  const cookie = result.headers.get("set-cookie")!.split(";")[0]!;
+  accountIds.set(cookie, body.user.id);
+  return { cookie, recoveryCode: body.recoveryCode, id: body.user.id };
 }
 beforeEach(async () => {
   folder = await mkdtemp(join(tmpdir(), "prapor-account-test-"));
   dbPath = join(folder, "accounts.sqlite");
   time = 1_800_000_000_000;
+  accountIds.clear();
   service = createAccountService(options());
 });
 afterEach(async () => { service.close(); await rm(folder, { recursive: true, force: true }); });
@@ -150,6 +155,22 @@ describe("account authentication security", () => {
 });
 
 describe("account save ownership and durability", () => {
+  test("an old account request cannot access or overwrite the account selected by a changed cookie", async () => {
+    const first = await register("First"), second = await register("Second");
+    const save = saveGame(createGame(time));
+    expect((await call("/api/save", "PUT", { revision: 0, save }, second.cookie)).status).toBe(200);
+    for (const expectedId of [first.id, ""]) {
+      const get = await call("/api/save", "GET", undefined, second.cookie, { "x-prapor-account": expectedId });
+      expect(get.status).toBe(401);
+      expect(await get.json()).toEqual({ code: "account_changed" });
+      const put = await call("/api/save", "PUT", { revision: 1, save }, second.cookie, { "x-prapor-account": expectedId });
+      expect(put.status).toBe(401);
+      expect(await put.json()).toEqual({ code: "account_changed" });
+    }
+    expect(await (await call("/api/save", "GET", undefined, second.cookie)).json()).toEqual({ revision: 1, savedAt: time, save });
+    expect(await (await call("/api/save", "GET", undefined, first.cookie)).json()).toEqual({ revision: 0, savedAt: null, save: null });
+  });
+
   test("strict game validation, compare-and-swap and per-account isolation survive a restart", async () => {
     const first = await register("First"), second = await register("Second");
     expect(await (await call("/api/save", "GET", undefined, first.cookie)).json()).toEqual({ revision: 0, savedAt: null, save: null });
@@ -178,7 +199,7 @@ describe("account save ownership and durability", () => {
     const account = await register();
     let controller!: ReadableStreamDefaultController<Uint8Array>;
     const body = new ReadableStream<Uint8Array>({ start(value) { controller = value; } });
-    const pending = service.fetch(new Request(`${ORIGIN}/api/save`, { method: "PUT", headers: { origin: ORIGIN, "content-type": "application/json", cookie: account.cookie }, body }), "192.0.2.8");
+    const pending = service.fetch(new Request(`${ORIGIN}/api/save`, { method: "PUT", headers: { origin: ORIGIN, "content-type": "application/json", cookie: account.cookie, "x-prapor-account": account.id }, body }), "192.0.2.8");
     const recovered = await call("/api/auth/recover", "POST", { username: "Scav_1", recoveryCode: account.recoveryCode, password: "another password 123" });
     expect(recovered.status).toBe(200);
     controller.enqueue(new TextEncoder().encode(JSON.stringify({ revision: 0, save: saveGame(createGame(time)) })));

@@ -426,6 +426,7 @@ export function mountAccountUI(options: AccountUIOptions): AccountUI {
 			finishClose();
 			root.removeEventListener("click", clickListener);
 			launcher.removeEventListener("click", open);
+			launcher.remove();
 			root.removeEventListener("submit", handleSubmit);
 			root.removeEventListener("change", handleChange);
 			dialog.removeEventListener("keydown", handleKey);

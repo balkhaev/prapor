@@ -206,6 +206,8 @@ export function createAccountService(options: AccountOptions): AccountService {
       if (path === "/api/save") {
         const user = currentUser(request);
         if (!user) throw new ApiError(401, "unauthorized");
+        // Cookies can change in another tab or while a previous account request is in flight.
+        if (request.headers.get("x-prapor-account") !== user.id) throw new ApiError(401, "account-changed");
         const current = readSave.get(user.id);
         if (!current) throw new ApiError(503, "service-unavailable");
         if (request.method === "GET") return response({ revision: current.revision, savedAt: current.saved_at, save: current.save });

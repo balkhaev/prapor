@@ -33,6 +33,7 @@ function messageForError(status: number, code: string, retryAfter: number | null
 	if (status === 409) return "В аккаунте появилось более новое сохранение. Выбери убежище для продолжения, прежде чем сохранять снова.";
 	if (status === 401 && ["invalid_credentials", "invalid_login"].includes(code)) return "Позывной или пароль не подошли. Проверь их и попробуй снова.";
 	if (status === 401 && ["invalid_recovery", "invalid_recovery_code"].includes(code)) return "Позывной или код восстановления не подошли. Проверь их и попробуй снова.";
+	if (status === 401 && code === "account_changed") return "В этом браузере выполнен вход в другой аккаунт. Обнови страницу, чтобы продолжить с правильным сохранением. Локальный прогресс сохранён.";
 	if (status === 401) return "Сессия завершилась. Войди в аккаунт ещё раз.";
 	if (status === 403) return "Запрос отклонён. Обнови страницу и попробуй снова.";
 	if (status === 413) return "Сохранение слишком большое. Твой прогресс остаётся на этом устройстве.";
@@ -60,7 +61,7 @@ function readReceipt(value: unknown): Pick<AccountSave, "revision" | "savedAt"> 
 	return { revision: value.revision as number, savedAt: value.savedAt as AccountSavedAt };
 }
 
-async function request(path: string, method = "GET", body?: Record<string, unknown>): Promise<Record<string, unknown>> {
+async function request(path: string, method = "GET", body?: Record<string, unknown>, extraHeaders: Record<string, string> = {}): Promise<Record<string, unknown>> {
 	const controller = new AbortController();
 	const timeout = globalThis.setTimeout(() => controller.abort(), 20_000);
 	try {
@@ -70,7 +71,7 @@ async function request(path: string, method = "GET", body?: Record<string, unkno
 			mode: "same-origin",
 			cache: "no-store",
 			redirect: "error",
-			headers: body ? { "Content-Type": "application/json", Accept: "application/json" } : { Accept: "application/json" },
+			headers: { ...(body ? { "Content-Type": "application/json", Accept: "application/json" } : { Accept: "application/json" }), ...extraHeaders },
 			body: body ? JSON.stringify(body) : undefined,
 			signal: controller.signal,
 		});
@@ -113,13 +114,13 @@ export const accountApi = {
 	async logout(): Promise<void> {
 		await request("/api/auth/logout", "POST", {});
 	},
-	async getSave(): Promise<AccountSave> {
-		const result = await request("/api/save");
+	async getSave(userId: string): Promise<AccountSave> {
+		const result = await request("/api/save", "GET", undefined, { "X-Prapor-Account": userId });
 		if (!(typeof result.save === "string" || result.save === null)) throw new AccountApiError(0, "invalid_response");
 		return { ...readReceipt(result), save: result.save };
 	},
-	async putSave(revision: number, save: string): Promise<AccountSaveReceipt> {
-		const result = readReceipt(await request("/api/save", "PUT", { revision, save }));
+	async putSave(userId: string, revision: number, save: string): Promise<AccountSaveReceipt> {
+		const result = readReceipt(await request("/api/save", "PUT", { revision, save }, { "X-Prapor-Account": userId }));
 		if (result.savedAt === null) throw new AccountApiError(0, "invalid_response");
 		return { revision: result.revision, savedAt: result.savedAt };
 	},

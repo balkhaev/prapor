@@ -1,0 +1,53 @@
+# Managed by prapor infra/deploy.ps1.
+name: prapor-production
+services:
+  game:
+    image: ${PRAPOR_IMAGE:?Set the checked release image}
+    pull_policy: never
+    container_name: prapor-game
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp:size=32m,mode=1777]
+    mem_limit: 768m
+    cpus: 1.0
+    stop_grace_period: 30s
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: "3000"
+      ACCOUNT_DB_PATH: /app/data/accounts.sqlite
+      APP_ORIGINS: https://game.delopusk.ru,https://game.balkhaev.com
+      TRUSTED_PROXIES: 172.18.0.2
+      AUTH_HASH_CONCURRENCY: "2"
+      RELEASE_COMMIT: ${PRAPOR_COMMIT:?Set the checked release commit}
+    volumes:
+      - /data/prapor/data:/app/data
+    expose: ["3000"]
+    networks: [coolify]
+    healthcheck:
+      test: [CMD, bun, -e, "const response = await fetch('http://127.0.0.1:3000/health'); process.exit(response.ok ? 0 : 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    labels:
+      prapor.managed: "true"
+      traefik.enable: "true"
+      traefik.docker.network: coolify
+      traefik.http.services.prapor-game.loadbalancer.server.port: "3000"
+      traefik.http.routers.prapor-game-https.rule: Host(`game.delopusk.ru`)
+      traefik.http.routers.prapor-game-https.entrypoints: https
+      traefik.http.routers.prapor-game-https.service: prapor-game
+      traefik.http.routers.prapor-game-https.tls.certresolver: letsencrypt
+      traefik.http.routers.prapor-game-http.rule: Host(`game.delopusk.ru`)
+      traefik.http.routers.prapor-game-http.entrypoints: http
+      traefik.http.routers.prapor-game-http.service: prapor-game
+      traefik.http.routers.prapor-game-http.middlewares: prapor-game-https
+      traefik.http.middlewares.prapor-game-https.redirectscheme.scheme: https
+      traefik.http.middlewares.prapor-game-https.redirectscheme.permanent: "true"
+networks:
+  coolify:
+    external: true
