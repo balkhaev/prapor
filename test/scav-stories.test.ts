@@ -70,7 +70,7 @@ function successfulRaid(state: GameState, scav: Scav, depth = 1) {
 function legacy(state: GameState, version: number) {
 	const source = JSON.parse(saveGame(state));
 	source.schemaVersion = version;
-	delete source.memorials; delete source.social;
+	delete source.memorials; delete source.social; delete source.achievements;
 	for (const scav of source.scavs) {
 		delete scav.story;
 		if (version < 6) delete scav.appearance;
