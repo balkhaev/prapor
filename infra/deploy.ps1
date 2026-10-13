@@ -110,6 +110,30 @@ tar -xf "$scratch/source.tar" -C "$scratch/source"
 docker compose --env-file "$scratch/release.env" -f "$scratch/source/infra/production.compose.yaml" config -q
 docker build --label "org.opencontainers.image.revision=$commit" --tag "prapor-game:$commit" "$scratch/source"
 test "$(docker inspect "prapor-game:$commit" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$commit"
+smoke="${scratch##*/}-smoke"
+trap 'docker rm -f "$smoke" >/dev/null 2>&1 || true' EXIT
+signature=''
+for mode in absent inherited; do
+    if test "$mode" = inherited; then
+        docker run --rm -d --name "$smoke" --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true --tmpfs /app/data:uid=1000,gid=1000,mode=0700 --tmpfs /tmp:uid=1000,gid=1000,mode=1770 -e NODE_ENV=production -e DEVHUB_ORIGIN=http://evil.invalid -e DEVHUB_ROOT=/missing -e DEVHUB_PORT=1 -e DEVHUB_EMBEDDED=true "prapor-game:$commit" >/dev/null
+    else
+        docker run --rm -d --name "$smoke" --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true --tmpfs /app/data:uid=1000,gid=1000,mode=0700 --tmpfs /tmp:uid=1000,gid=1000,mode=1770 "prapor-game:$commit" >/dev/null
+    fi
+    sleep 2
+    current=$(docker exec "$smoke" bun -e '
+const health = await fetch("http://127.0.0.1:3000/health");
+if (health.status !== 200 || (await health.json()).ok !== true) throw new Error("Health failed");
+const page = await fetch("http://127.0.0.1:3000/");
+const text = await page.text();
+if (page.status !== 200 || !text.includes("/assets/")) throw new Error("Built page failed");
+const names=["content-security-policy","x-frame-options","x-content-type-options","referrer-policy","cache-control","cross-origin-resource-policy"];
+if (page.headers.get("x-frame-options") !== "DENY" || !page.headers.get("content-security-policy")?.includes("frame-ancestors")) throw new Error("Security headers failed");
+console.log(Bun.hash(JSON.stringify(names.map(name=>[name,health.headers.get(name),page.headers.get(name)]))).toString());
+')
+    if test "$mode" = absent; then signature="$current"; else test "$signature" = "$current"; fi
+    docker stop -t 5 "$smoke" >/dev/null
+done
+printf '%s\n' 'Standalone artifact smoke passed without/with inherited DEVHUB variables.'
 app_uid=$(docker run --rm --entrypoint id "prapor-game:$commit" -u)
 app_gid=$(docker run --rm --entrypoint id "prapor-game:$commit" -g)
 install -d -m 755 /data/prapor
