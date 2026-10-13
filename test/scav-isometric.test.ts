@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { SCAV_APPEARANCES } from "../src/game/scav-appearances";
+import { SCAV_PORTRAIT_DATA } from "../src/scav-portrait-data";
+import { scavPortrait } from "../src/art";
 import {
 	SCAV_DIRECTIONS, SCAV_ORIGIN, SCAV_POSES, SCAV_REFERENCE_HEIGHT,
-	scavAppearance, scavAttachment, scavDirection, scavFrame, scavTexture,
+	scavAppearance, scavAttachment, scavAvailableAppearance, scavDirection, scavFrame, scavPreloadAppearances, scavTexture, scavTorsoAnchor,
 } from "../src/scav-isometric";
 
 describe("directional isometric scav presentation", () => {
@@ -53,6 +56,86 @@ describe("directional isometric scav presentation", () => {
 		expect(SCAV_REFERENCE_HEIGHT).toBeGreaterThan(0);
 	});
 
+	test("all 32 saved appearance IDs override personality and retain their own atlas", () => {
+		expect(SCAV_APPEARANCES).toHaveLength(32);
+		for (const { id } of SCAV_APPEARANCES) {
+			expect(scavAppearance("careful", -19, id)).toBe(id);
+			expect(scavAppearance(undefined, 197, id)).toBe(id);
+			expect(scavTexture(id)).toBe(`scav-iso-${id}`);
+		}
+		for (const invalid of [-1, 32, 4.5, NaN, Infinity]) {
+			expect(scavAppearance("collector", 9, invalid)).toBe(1);
+		}
+	});
+
+	test("startup loads only compatibility models plus distinct models in the saved roster", () => {
+		expect(scavPreloadAppearances()).toEqual([0, 1, 2, 3]);
+		expect(scavPreloadAppearances([{ personality: "runner", appearance: 19 }, { personality: "runner", appearance: 19 }, { personality: "veteran", appearance: 8 }, { personality: "collector", appearance: 800 }])).toEqual([0, 1, 2, 3, 19, 8]);
+	});
+
+	test("new model atlases use a matching personality model until loading finishes", () => {
+		const ready = new Set(["scav-iso-0", "scav-iso-1", "scav-iso-2", "scav-iso-3"]);
+		const loaded = (texture: string) => ready.has(texture);
+		for (const { id, personality } of SCAV_APPEARANCES) {
+			expect(scavAvailableAppearance(id, loaded)).toBe(scavAppearance(personality));
+			ready.add(scavTexture(id));
+			expect(scavAvailableAppearance(id, loaded)).toBe(id);
+		}
+	});
+
+	test("equipment anchors follow the blended pose and ignore unavailable or invalid measurements", () => {
+		expect(scavTorsoAnchor([{ weight: .25, torso: { x: 0, y: -30 } }, { weight: .75, torso: { x: 4, y: -26 } }])).toEqual({ x: 3, y: -27 });
+		expect(scavTorsoAnchor([{ weight: 0, torso: { x: 100, y: 100 } }, { weight: .5 }, { weight: NaN, torso: { x: 0, y: -30 } }, { weight: 1, torso: { x: 2, y: -28 } }])).toEqual({ x: 2, y: -28 });
+		expect(scavTorsoAnchor([])).toBeUndefined();
+	});
+
+	test("portraits escape names and invalid appearances keep their compatibility portrait", () => {
+		const portrait = scavPortrait("collector", '<img src=x onerror="evil">&\'Свой', NaN);
+		expect(portrait).toContain("&lt;img src=x onerror=&quot;evil&quot;&gt;&amp;&#39;Свой");
+		expect(portrait).not.toContain('<img');
+		expect(portrait).not.toContain("NaN");
+		expect(portrait).not.toContain("Infinity");
+	});
+
+	test("generated portraits crop the exact same model atlas within its native sheet", () => {
+		expect(Object.keys(SCAV_PORTRAIT_DATA).map(Number).sort((a, b) => a - b)).toEqual(SCAV_APPEARANCES.map((look) => look.id));
+		for (const [rawAppearance, crop] of Object.entries(SCAV_PORTRAIT_DATA)) {
+			const appearance = Number(rawAppearance);
+			expect(appearance).toBeGreaterThanOrEqual(0); expect(appearance).toBeLessThan(32);
+			expect(crop!.x).toBeGreaterThanOrEqual(0); expect(crop!.y).toBeGreaterThanOrEqual(0);
+			expect(crop!.size).toBeGreaterThan(0);
+			expect(crop!.x + crop!.size).toBeLessThanOrEqual(crop!.sheetWidth);
+			expect(crop!.y + crop!.size).toBeLessThanOrEqual(crop!.sheetHeight);
+			const portrait = scavPortrait("careful", "Свой", appearance);
+			expect(portrait).toContain(`/art/scav-isometric-${appearance}.png`);
+			expect(portrait).not.toContain("NaN"); expect(portrait).not.toContain("Infinity");
+		}
+	});
+
+	test("each removable armor and backpack has a valid frame in every body direction", () => {
+		const atlas = JSON.parse(readFileSync(new URL("../public/art/scav-equipment.json", import.meta.url), "utf8")) as {
+			frames: Record<string, { frame: { x: number; y: number; w: number; h: number }; sourceSize: { w: number; h: number } }>;
+			meta: { image: string; size: { w: number; h: number }; equipmentHeightByModel: Record<string, number> };
+		};
+		const png = readFileSync(new URL("../public/art/scav-equipment.png", import.meta.url));
+		const models = ["light_vest", "plate_armor", "scout_pack", "cargo_pack"];
+		expect(atlas.meta.image).toBe("scav-equipment.png");
+		expect(atlas.meta.size).toEqual({ w: png.readUInt32BE(16), h: png.readUInt32BE(20) });
+		expect(Object.keys(atlas.frames).sort()).toEqual(models.flatMap((model) => SCAV_DIRECTIONS.map((direction) => `${model}-${direction}`)).sort());
+		for (const model of models) {
+			expect(atlas.meta.equipmentHeightByModel[model]).toBeGreaterThan(0);
+			for (const direction of SCAV_DIRECTIONS) {
+				const { frame, sourceSize } = atlas.frames[`${model}-${direction}`]!;
+				expect([frame.x, frame.y, frame.w, frame.h].every(Number.isInteger)).toBe(true);
+				expect(frame.x).toBeGreaterThanOrEqual(0); expect(frame.y).toBeGreaterThanOrEqual(0);
+				expect(frame.w).toBeGreaterThan(0); expect(frame.h).toBeGreaterThan(0);
+				expect(frame.x + frame.w).toBeLessThanOrEqual(atlas.meta.size.w);
+				expect(frame.y + frame.h).toBeLessThanOrEqual(atlas.meta.size.h);
+				expect(sourceSize).toEqual({ w: 512, h: 512 });
+			}
+		}
+	});
+
 	test("tool and weapon anchors stay at the hands and point into the selected ground quadrant", () => {
 		for (const direction of SCAV_DIRECTIONS) for (const working of [false, true]) {
 			const attachment = scavAttachment(direction, working);
@@ -75,7 +158,7 @@ describe("directional isometric scav presentation", () => {
 			meta: { image: string; size: { w: number; h: number }; characterHeight: number; feet: { x: number; y: number }; directions: string[] };
 		};
 		const expectedFrames = SCAV_POSES.flatMap((pose) => SCAV_DIRECTIONS.map((direction) => scavFrame(pose, direction))).sort();
-		for (let appearance = 0; appearance < 4; appearance++) {
+		for (const { id: appearance } of SCAV_APPEARANCES) {
 			const basename = `scav-isometric-${appearance}`;
 			const atlas = JSON.parse(readFileSync(new URL(`../public/art/${basename}.json`, import.meta.url), "utf8")) as Atlas;
 			const png = readFileSync(new URL(`../public/art/${basename}.png`, import.meta.url));

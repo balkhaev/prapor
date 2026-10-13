@@ -1,0 +1,348 @@
+{
+  "frames": {
+    "light_vest-se": {
+      "frame": {
+        "x": 70,
+        "y": 48,
+        "w": 209,
+        "h": 237
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 152,
+        "y": 138,
+        "w": 209,
+        "h": 237
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "light_vest-sw": {
+      "frame": {
+        "x": 378,
+        "y": 44,
+        "w": 207,
+        "h": 241
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 152,
+        "y": 136,
+        "w": 207,
+        "h": 241
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "light_vest-ne": {
+      "frame": {
+        "x": 687,
+        "y": 50,
+        "w": 201,
+        "h": 235
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 156,
+        "y": 138,
+        "w": 201,
+        "h": 235
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "light_vest-nw": {
+      "frame": {
+        "x": 992,
+        "y": 50,
+        "w": 201,
+        "h": 237
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 156,
+        "y": 138,
+        "w": 201,
+        "h": 237
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "plate_armor-se": {
+      "frame": {
+        "x": 61,
+        "y": 337,
+        "w": 227,
+        "h": 263
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 142,
+        "y": 124,
+        "w": 227,
+        "h": 263
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "plate_armor-sw": {
+      "frame": {
+        "x": 367,
+        "y": 337,
+        "w": 229,
+        "h": 262
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 142,
+        "y": 125,
+        "w": 229,
+        "h": 262
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "plate_armor-ne": {
+      "frame": {
+        "x": 675,
+        "y": 339,
+        "w": 230,
+        "h": 261
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 141,
+        "y": 126,
+        "w": 230,
+        "h": 261
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "plate_armor-nw": {
+      "frame": {
+        "x": 972,
+        "y": 339,
+        "w": 235,
+        "h": 261
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 138,
+        "y": 126,
+        "w": 235,
+        "h": 261
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "scout_pack-se": {
+      "frame": {
+        "x": 59,
+        "y": 648,
+        "w": 209,
+        "h": 223
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 152,
+        "y": 144,
+        "w": 209,
+        "h": 223
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "scout_pack-sw": {
+      "frame": {
+        "x": 368,
+        "y": 645,
+        "w": 222,
+        "h": 228
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 145,
+        "y": 142,
+        "w": 222,
+        "h": 228
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "scout_pack-ne": {
+      "frame": {
+        "x": 677,
+        "y": 649,
+        "w": 210,
+        "h": 226
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 151,
+        "y": 143,
+        "w": 210,
+        "h": 226
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "scout_pack-nw": {
+      "frame": {
+        "x": 991,
+        "y": 650,
+        "w": 210,
+        "h": 226
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 151,
+        "y": 143,
+        "w": 210,
+        "h": 226
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "cargo_pack-se": {
+      "frame": {
+        "x": 55,
+        "y": 882,
+        "w": 236,
+        "h": 279
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 138,
+        "y": 116,
+        "w": 236,
+        "h": 279
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "cargo_pack-sw": {
+      "frame": {
+        "x": 361,
+        "y": 882,
+        "w": 236,
+        "h": 280
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 138,
+        "y": 116,
+        "w": 236,
+        "h": 280
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "cargo_pack-ne": {
+      "frame": {
+        "x": 670,
+        "y": 889,
+        "w": 237,
+        "h": 304
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 138,
+        "y": 104,
+        "w": 237,
+        "h": 304
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "cargo_pack-nw": {
+      "frame": {
+        "x": 973,
+        "y": 887,
+        "w": 238,
+        "h": 307
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 137,
+        "y": 102,
+        "w": 238,
+        "h": 307
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    }
+  },
+  "meta": {
+    "image": "scav-equipment.png",
+    "size": {
+      "w": 1254,
+      "h": 1254
+    },
+    "scale": "1",
+    "directions": [
+      "se",
+      "sw",
+      "ne",
+      "nw"
+    ],
+    "equipmentHeightByModel": {
+      "light_vest": 237.0,
+      "plate_armor": 261.5,
+      "scout_pack": 226.0,
+      "cargo_pack": 292.0
+    },
+    "origin": {
+      "x": 256,
+      "y": 256
+    }
+  }
+}
