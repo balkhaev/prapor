@@ -5,6 +5,7 @@ import { advanceShelterRoute, clientToShelterPoint } from "./shelter-motion";
 import { clampShelterCamera, getMinShelterZoom, shelterOverviewCamera, focusShelterRect, panShelterCamera, projectShelterRect, resizeShelterCamera, shelterViewportForSize, viewportToShelter, zoomShelterCamera, type ShelterCamera, type ShelterRect, type ShelterViewport, type ClientRect } from "./shelter-camera";
 import { getShelterLayoutCell, getShelterCorridorSegments, getShelterWalkingRoute, getShelterWorldBounds } from "./shelter-layout";
 import { advanceScavAnimation, createScavAnimation, type ScavAnimationState } from "./shelter-animation";
+import { SCAV_DIRECTIONS, SCAV_ORIGIN, SCAV_REFERENCE_HEIGHT, scavAppearance, scavAttachment, scavDirection, scavFrame, scavTexture, type ScavDirection, type ScavPose } from "./scav-isometric";
 import { advanceShelterStationClock, getShelterProductionPresentation, type ProductionPresentation } from "./shelter-production";
 import { projectShelterPoint, unprojectShelterPoint, projectShelterBounds, shelterRoomPolygon, shelterRoomPosition } from "./shelter-isometric";
 import { paintIsometricRoom, paintIsometricProduction } from "./shelter-isometric-art";
@@ -33,6 +34,7 @@ export interface WorldSnapshot {
 	scavs?: {
 		id: string;
 		name?: string;
+		personality?: string;
 		status: "ready" | "raiding" | "wounded";
 		health: number;
 		gear?: { armor: number; backpack: number };
@@ -55,6 +57,7 @@ type ScavActor = {
 	poses: { idle: Phaser.GameObjects.Image; walkA: Phaser.GameObjects.Image; walkB: Phaser.GameObjects.Image; work: Phaser.GameObjects.Image } | null;
 	animation: ScavAnimationState;
 	appearance: number;
+	direction: ScavDirection;
 	gear: Phaser.GameObjects.Graphics;
 	tool: Phaser.GameObjects.Graphics;
 	label: Phaser.GameObjects.Text;
@@ -313,7 +316,7 @@ export function createWorld(
 
 		preload(): void {
 			this.load.spritesheet("shelter-room-atlas", "/art/shelter-rooms.png", { frameWidth: 768, frameHeight: 256 });
-			this.load.atlas("scav-workers", "/art/scav-workers.png", "/art/scav-workers.json");
+			for (let appearance = 0; appearance < 4; appearance++) this.load.atlas(scavTexture(appearance), `/art/scav-isometric-${appearance}.png`, `/art/scav-isometric-${appearance}.json`);
 			this.load.atlas("raid-props", "/art/raid-props.png", "/art/raid-props.json");
 		}
 
@@ -377,7 +380,7 @@ export function createWorld(
 				raidId: requestedRaidId, raidCamera: this.raidStreet?.getCameraState(),
 				actors: actors.map(([id, slot]) => ({ id, x: slot.position.x, y: slot.position.y,
 					assignment: slot.assignment, role: slot.role, goal: slot.goal, anchor: { ...slot.anchor },
-					visit: slot.visit, facing: slot.facing, dwellMs: Math.max(0, slot.dwellUntil - this.time.now), animation: { ...slot.animation } })) };
+					visit: slot.visit, facing: slot.facing, direction: slot.direction, dwellMs: Math.max(0, slot.dwellUntil - this.time.now), animation: { ...slot.animation } })) };
 		}
 
 		restorePresentationState(value: unknown): void {
@@ -422,6 +425,7 @@ export function createWorld(
 				if (finite(saved.visit)) slot.visit = Math.max(0, Math.min(1_000_000, Math.floor(saved.visit)));
 				if (finite(saved.dwellMs)) slot.dwellUntil = this.time.now + Math.max(0, Math.min(60_000, saved.dwellMs));
 				slot.facing = saved.facing === -1 ? -1 : 1;
+				if (SCAV_DIRECTIONS.includes(saved.direction as ScavDirection)) slot.direction = saved.direction as ScavDirection;
 				const animation = object(saved.animation);
 				if (animation) { const next = { ...slot.animation }; for (const key of Object.keys(next) as (keyof ScavAnimationState)[]) if (key !== "observedJob" && finite(animation[key]) && Math.abs(animation[key]) < 1e7) (next as unknown as Record<string, unknown>)[key] = animation[key]; next.observedJob = typeof animation.observedJob === "string" ? animation.observedJob : null; slot.animation = next; }
 			}
@@ -888,16 +892,19 @@ export function createWorld(
 			graphic.fillStyle(0x15252b).fillRect(1, -35, 2, 2).fillRect(0, -30, 3, 1);
 			const gear = this.add.graphics();
 			const tool = this.add.graphics().setPosition(6, -21);
-			const appearance = index % 4;
-			const makePose = (pose: string) => this.add.image(0, 0, "scav-workers", `${pose}-${appearance}`).setOrigin(.5, 332 / 340).setScale(44 / 319);
-			const poses = this.textures.exists("scav-workers") ? { idle: makePose("idle"), walkA: makePose("walk-a").setVisible(false), walkB: makePose("walk-b").setVisible(false), work: makePose("work").setVisible(false) } : null;
+			const appearance = scavAppearance(snapshot().scavs?.find((scav) => scav.id === scavId)?.personality, index);
+			const texture = scavTexture(appearance);
+			const atlasData = this.textures.get(texture).customData as { meta?: { characterHeight?: number } };
+			const characterHeight = Number(atlasData.meta?.characterHeight) || SCAV_REFERENCE_HEIGHT;
+			const makePose = (pose: ScavPose) => this.add.image(0, 0, texture, scavFrame(pose, "se")).setOrigin(SCAV_ORIGIN.x, SCAV_ORIGIN.y).setScale(48 / characterHeight);
+			const poses = this.textures.exists(texture) ? { idle: makePose("idle"), walkA: makePose("walk-a").setVisible(false), walkB: makePose("walk-b").setVisible(false), work: makePose("work").setVisible(false) } : null;
 			const sprite = poses?.idle ?? null;
 			if (sprite) { legA.setVisible(false); legB.setVisible(false); graphic.setVisible(false); hand.setVisible(false); tool.setPosition(13, -21); }
 			body.add([legA, legB, graphic, ...(poses ? [poses.idle, poses.walkA, poses.walkB, poses.work] : []), gear, hand, tool]);
 			const label = this.text(0, -64, "", 16, "#ffedc7").setOrigin(.5).setFontFamily("Manrope, sans-serif").setFontStyle("bold").setLetterSpacing(0).setBackgroundColor("#0b1b20").setPadding(7, 4).setVisible(false);
 			const order = this.add.circle(-10, -34, 3.5, C.sage).setStrokeStyle(1, 0x10242b).setVisible(false);
 			const hit = this.add.zone(0, -21, 32, 46).setInteractive({ useHandCursor: true });
-			const slot: ScavActor = { actor, body, legA, legB, hand, sprite, poses, animation: createScavAnimation(index * .37), appearance, gear, tool, label, order, selection, hovered: false, gearSignature: "", position: { ...at }, anchor: { ...at }, route: [], goal: "", assignment: null, role: "idle", dwellUntil: this.time.now + 2000 + index * 800, visit: 0, facing: 1, climbing: false, status: "ready", health: 100, working: false, walking: false, walkSpan: 0, phase: index * 1.71 };
+			const slot: ScavActor = { actor, body, legA, legB, hand, sprite, poses, animation: createScavAnimation(index * .37), appearance, direction: "se", gear, tool, label, order, selection, hovered: false, gearSignature: "", position: { ...at }, anchor: { ...at }, route: [], goal: "", assignment: null, role: "idle", dwellUntil: this.time.now + 2000 + index * 800, visit: 0, facing: 1, climbing: false, status: "ready", health: 100, working: false, walking: false, walkSpan: 0, phase: index * 1.71 };
 			hit.on("pointerover", (pointer: Phaser.Input.Pointer) => { if (this.acceptsPointer(pointer, "base")) { slot.hovered = true; selection.setVisible(true); label.setVisible(true); actor.setDepth(1_000_001); } });
 			hit.on("pointerout", () => { slot.hovered = false; const selected = snapshot().selectedScavId === scavId; selection.setVisible(selected); label.setVisible(selected); actor.setDepth(actor.y); });
 			// Native pointer-up distinguishes a deliberate tap from a drag before opening the inspector.
@@ -1072,25 +1079,37 @@ export function createWorld(
 					if (hadRoute) this.placeActor(slot, motion.point);
 					slot.walking = hadRoute; slot.climbing = false;
 					if (slot.walking && Math.abs(motion.point.x - before.x) > .001) slot.facing = motion.facing;
+					if (walkedDistance > .001) {
+						const previous = projectShelterPoint(before), current = projectShelterPoint(motion.point);
+						slot.direction = scavDirection(current.x - previous.x, current.y - previous.y, slot.direction);
+					}
 					if (hadRoute && motion.arrived) { slot.dwellUntil = time + 6500 + (slot.phase % 4) * 1700; slot.walking = false; slot.climbing = false; if (slot.status === "raiding") slot.actor.setVisible(false); }
 				} else { slot.walking = false; slot.climbing = false; }
 				const room = this.viewState?.shelter?.rooms.find((candidate) => candidate.id === slot.assignment);
 				const production = room ? this.viewState?.roomProduction?.[room.id] : undefined;
 				const presentation = room ? this.cells.get(`${room.column}:${room.row}`)?.production ?? null : null;
 				slot.working = Boolean(slot.status !== "raiding" && slot.health >= 25 && !slot.route.length && this.drag?.scavId !== id && presentation?.active);
-				if (slot.working) slot.facing = 1;
+				if (slot.working) { slot.facing = 1; slot.direction = "ne"; }
 				const animation = advanceScavAnimation(slot.animation, { distance: walkedDistance, elapsedMs: step * 1000, walking: slot.walking || walkedDistance > 0, working: slot.working, facing: slot.facing, role: slot.role, workDone: (room?.queue[0]?.workDone ?? 0) / 1_000_000, workRate: production?.rate ?? 0, jobId: presentation?.jobId ?? null, stage: presentation?.stage, stageProgress: presentation?.stageProgress, reducedMotion, paused: !slot.actor.visible || this.drag?.scavId === id });
 				slot.animation = animation.state;
 				const pose = animation.pose;
-				if (slot.poses) for (const key of ["idle", "walkA", "walkB", "work"] as const) slot.poses[key].setVisible(pose.weights[key] > .001).setAlpha(pose.weights[key]);
+				if (slot.poses) for (const [key, frame] of [["idle", "idle"], ["walkA", "walk-a"], ["walkB", "walk-b"], ["work", "work"]] as const) {
+					const image = slot.poses[key], nextFrame = scavFrame(frame, slot.direction);
+					if (image.frame.name !== nextFrame) image.setFrame(nextFrame);
+					image.setVisible(pose.weights[key] > .001).setAlpha(pose.weights[key]);
+				}
 				// All visual transforms pivot at the common feet baseline. Physics,
 				// hit zones and drag coordinates use the same projected feet position.
-				slot.body.setPosition(0, 0).setScale(pose.scaleX, pose.scaleY).setAngle(pose.angle * pose.scaleX);
+				slot.body.setPosition(0, 0).setScale(slot.sprite ? 1 : pose.scaleX, pose.scaleY).setAngle(pose.angle * (slot.direction[1] === "e" ? 1 : -1));
 				const stride = (slot.animation.stride % 1) * Math.PI * 2;
 				slot.legA.setAngle(Math.sin(stride) * 9 * slot.animation.walkBlend);
 				slot.legB.setAngle(-Math.sin(stride) * 9 * slot.animation.walkBlend);
 				slot.hand.setAngle(pose.handAngle);
-				slot.tool.setPosition(pose.toolX - (slot.sprite ? 0 : 7), pose.toolY).setAngle(pose.toolAngle).setVisible(slot.working);
+				if (slot.sprite) {
+					const hand = scavAttachment(slot.direction, true);
+					slot.tool.setPosition(hand.x + (pose.toolX - 13) * (hand.flipX ? -1 : 1), hand.y + pose.toolY + 21).setScale(hand.flipX ? -1 : 1, 1).setAngle(pose.toolAngle + (hand.behind ? -24 : 24)).setVisible(slot.working);
+					if (hand.behind) slot.body.sendToBack(slot.tool); else slot.body.bringToTop(slot.tool);
+				} else slot.tool.setPosition(pose.toolX - 7, pose.toolY).setAngle(pose.toolAngle).setVisible(slot.working);
 				if (slot.actor.visible) {
 					this.ambient.fillStyle(slot.working ? 0xc4d3a4 : 0x9bbebb, slot.working ? .2 : .12).fillEllipse(slot.actor.x, slot.actor.y + 1, 19, 3);
 					if (slot.label.visible) {
