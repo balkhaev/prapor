@@ -1,13 +1,17 @@
 import type { LivePoint, LiveWorld } from "../src/game/live";
-import { isLiveWalkable } from "../src/game/live-maps";
 
 interface Node { cell: number; score: number; cost: number }
 /** Immutable collision data and bounded A*. Runtime entities keep the resulting route. */
 export function createLiveNavigation(world: LiveWorld) {
-  const cells = world.width * world.height, walls = new Uint8Array(cells);
-  for (let y = 0; y < world.height; y++) for (let x = 0; x < world.width; x++) walls[y * world.width + x] = isLiveWalkable(world, { x, y }) ? 0 : 1;
+  const cells = world.width * world.height, walls = new Uint8Array(cells), sightWalls = new Uint8Array(cells);
+  for (const obstacle of world.obstacles) for (let y = obstacle.y; y < obstacle.y + obstacle.height; y++) for (let x = obstacle.x; x < obstacle.x + obstacle.width; x++) {
+    walls[y * world.width + x] = 1;
+    if (obstacle.kind !== 'water') sightWalls[y * world.width + x] = 1;
+  }
+  if (world.terrainRows) for (let y = 0; y < world.height; y++) for (let x = 0; x < world.width; x++) if (world.terrainRows[y]?.[x] === 'w') walls[y * world.width + x] = 1;
   const key = (point: LivePoint): number => point.y * world.width + point.x;
   const walkable = (point: LivePoint): boolean => Number.isInteger(point.x) && Number.isInteger(point.y) && point.x >= 0 && point.y >= 0 && point.x < world.width && point.y < world.height && walls[key(point)] === 0;
+  const rayClear = (point: LivePoint): boolean => Number.isInteger(point.x) && Number.isInteger(point.y) && point.x >= 0 && point.y >= 0 && point.x < world.width && point.y < world.height && sightWalls[key(point)] === 0;
   const findPath = (start: LivePoint, target: LivePoint, occupied: ReadonlySet<number> = new Set()): LivePoint[] | null => {
     if (!walkable(start) || !walkable(target) || occupied.has(key(target))) return null;
     const initial = key(start), end = key(target);
@@ -67,11 +71,11 @@ export function createLiveNavigation(world: LiveWorld) {
     let maxX = deltaX / 2, maxY = deltaY / 2;
     while (x !== b.x || y !== b.y) {
       if (Math.abs(maxX - maxY) < 1e-10) {
-        if (!walkable({ x: x + sx, y }) || !walkable({ x, y: y + sy })) return false;
+        if (!rayClear({ x: x + sx, y }) || !rayClear({ x, y: y + sy })) return false;
         x += sx; y += sy; maxX += deltaX; maxY += deltaY;
       } else if (maxX < maxY) { x += sx; maxX += deltaX; }
       else { y += sy; maxY += deltaY; }
-      if (!walkable({ x, y })) return false;
+      if (!rayClear({ x, y })) return false;
     }
     return true;
   };

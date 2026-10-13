@@ -1,4 +1,4 @@
-import type { LiveCommand, LiveDrop, LiveEntity, LiveEvent, LiveObstacle, LivePoint, LiveSnapshot, LiveTerrain, LiveWorld } from './game/live';
+import { LIVE_TERRAIN_CODES, type LiveCommand, type LiveDrop, type LiveEntity, type LiveEvent, type LiveLandscapePath, type LiveObstacle, type LivePoint, type LiveSnapshot, type LiveTerrain, type LiveWorld } from './game/live';
 import { scavDirection, type ScavDirection } from './scav-isometric';
 import { liveDropLabel, liveLootTotals } from './live-loot-ui';
 
@@ -35,6 +35,8 @@ export class LiveScene {
   private seenEvents = new Set<string>();
   private terrain: LiveTerrain[] = [];
   private overviewTerrain: HTMLCanvasElement | null = null;
+  private terrainTexture: HTMLCanvasElement | null = null;
+  private terrainColor: Record<LiveTerrain, readonly [number, number, number]> = { road: [80, 86, 78], concrete: [111, 115, 101], forest: [49, 70, 47], water: [43, 73, 76], yard: [96, 98, 69], grass: [75, 91, 53], path: [139, 127, 87], rail: [89, 91, 81], sand: [158, 150, 112] };
 
   constructor(private host: HTMLElement, private command: (command: LiveCommand) => void, private select: (id: string) => void) {
     const context = this.canvas.getContext('2d');
@@ -161,18 +163,69 @@ export class LiveScene {
     const zones = [...world.zones].reverse();
     this.terrain = [];
     for (let y = 0; y < world.height; y++) for (let x = 0; x < world.width; x++) {
+      const code = world.terrainRows?.[y]?.[x] as keyof typeof LIVE_TERRAIN_CODES | undefined;
+      if (code) { this.terrain.push(LIVE_TERRAIN_CODES[code]); continue; }
       const zone = zones.find(zone => x >= zone.x && x < zone.x + zone.width && y >= zone.y && y < zone.y + zone.height);
       const district = world.districts.find(district => x >= district.x && x < district.x + district.width && y >= district.y && y < district.y + district.height);
       this.terrain.push(zone?.terrain ?? (district?.theme === 'forest' ? 'forest' : district?.theme === 'industrial' ? 'yard' : 'concrete'));
     }
-    const cache = document.createElement('canvas'); cache.width = (world.width + world.height) * 4; cache.height = (world.width + world.height) * 2;
-    const c = cache.getContext('2d');
-    if (c) for (let y = 0; y < world.height; y++) for (let x = 0; x < world.width; x++) {
-      const px = world.height * 4 + (x - y) * 4, py = (x + y) * 2;
-      c.fillStyle = this.ground(this.terrain[y * world.width + x]!, (x * 17 + y * 29) % 5);
-      c.beginPath(); c.moveTo(px, py); c.lineTo(px + 4, py + 2); c.lineTo(px, py + 4); c.lineTo(px - 4, py + 2); c.closePath(); c.fill();
+    const texture = document.createElement('canvas'), resolution = 6;
+    texture.width = world.width * resolution; texture.height = world.height * resolution;
+    const ground = texture.getContext('2d');
+    if (ground) {
+      const pixels = ground.createImageData(texture.width, texture.height);
+      const phase = [...world.seed].reduce((hash, char) => (Math.imul(hash, 31) + char.charCodeAt(0)) | 0, 0) / 65536;
+      for (let y = 0; y < texture.height; y++) for (let x = 0; x < texture.width; x++) {
+        const wx = x / resolution, wy = y / resolution, terrain = this.terrain[Math.floor(wy) * world.width + Math.floor(wx)]!, rgb = this.terrainColor[terrain];
+        const field = Math.sin(wx * .13 + wy * .04 + phase) * 4 + Math.sin(wy * .16 - wx * .06 + phase * 2) * 3;
+        const grain = ((Math.imul(x + 31, 19349663) ^ Math.imul(y + 77, 73856093)) >>> 0) % 11 - 5;
+        const shade = terrain === 'water' ? Math.sin(wx * .48 - wy * .25 + phase) * 3 + grain * .2 : field + grain * (terrain === 'concrete' || terrain === 'road' ? .4 : .65);
+        const index = (y * texture.width + x) * 4;
+        pixels.data[index] = rgb[0] + shade; pixels.data[index + 1] = rgb[1] + shade; pixels.data[index + 2] = rgb[2] + shade; pixels.data[index + 3] = 255;
+      }
+      ground.putImageData(pixels, 0, 0);
+      ground.save(); ground.scale(resolution, resolution); this.paintLandscape(world, ground); ground.restore();
     }
-    this.overviewTerrain = cache;
+    this.terrainTexture = texture;
+    const overview = document.createElement('canvas'); overview.width = (world.width + world.height) * 4; overview.height = (world.width + world.height) * 2;
+    const overviewContext = overview.getContext('2d');
+    if (overviewContext) { overviewContext.save(); overviewContext.transform(4, 2, -4, 2, world.height * 4, 0); overviewContext.drawImage(texture, 0, 0, world.width, world.height); overviewContext.restore(); }
+    this.overviewTerrain = overview;
+  }
+  /** Presentation follows the server raster; no scenery changes collision or rewards. */
+  private paintLandscape(world: LiveWorld, c: CanvasRenderingContext2D): void {
+    const stroke = (path: LiveLandscapePath, color: string, width: number) => {
+      c.beginPath(); path.points.forEach((point, index) => index ? c.lineTo(point.x + .5, point.y + .5) : c.moveTo(point.x + .5, point.y + .5)); c.strokeStyle = color; c.lineWidth = width; c.stroke();
+    };
+    c.save(); c.lineJoin = 'round'; c.lineCap = 'round';
+    // Roads may cross a river only on cells the authoritative raster marks as road.
+    for (const kind of ['road', 'trail', 'rail', 'river'] as const) {
+      const paths = world.paths?.filter(path => path.kind === kind) ?? [];
+      if (!paths.length) continue;
+      c.save();
+      const accepted = kind === 'road' ? ['road', 'concrete'] : kind === 'trail' ? ['path', 'sand', 'yard'] : kind === 'rail' ? ['rail'] : ['water'];
+      c.beginPath();
+      for (let y = 0; y < world.height; y++) for (let x = 0; x < world.width; x++) if (accepted.includes(this.terrain[y * world.width + x]!)) c.rect(x, y, 1, 1);
+      c.clip();
+      for (const path of paths) {
+        if (path.kind === 'road') {
+          stroke(path, '#a09b752e', path.width + .6); stroke(path, '#545b52', path.width * .9);
+          if (path.width >= 3) { c.setLineDash([1.8, 2.8]); stroke(path, '#c4bd8877', .11); c.setLineDash([]); }
+        } else if (path.kind === 'trail') { stroke(path, '#b3a26b55', path.width); stroke(path, '#b7a57555', path.width * .5); }
+        else if (path.kind === 'river') { stroke(path, '#37585a77', path.width * .8); stroke(path, '#90b2a62d', path.width * .33); }
+        else {
+          stroke(path, '#5f6557', path.width); stroke(path, '#a1a294', .98); stroke(path, '#475346', .66);
+          for (let index = 1; index < path.points.length; index++) {
+            const a = path.points[index - 1]!, b = path.points[index]!, length = Math.hypot(b.x - a.x, b.y - a.y);
+            if (!length) continue;
+            const nx = (b.y - a.y) / length * .65, ny = -(b.x - a.x) / length * .65;
+            for (let offset = .8; offset < length; offset += 1.7) { const x = a.x + .5 + (b.x - a.x) * offset / length, y = a.y + .5 + (b.y - a.y) * offset / length; c.beginPath(); c.moveTo(x - nx, y - ny); c.lineTo(x + nx, y + ny); c.strokeStyle = '#423f31'; c.lineWidth = .16; c.stroke(); }
+          }
+        }
+      }
+      c.restore();
+    }
+    c.restore();
   }
   private paintContainer(drop: LiveDrop): void {
     const p = this.project(drop), c = this.context, scale = this.tile / 54;
@@ -202,14 +255,11 @@ export class LiveScene {
       if (known && drop.items?.length && scale > .9) this.label(`≈ ${liveLootTotals(drop.items).guide.toLocaleString('ru-RU')} ₽`, p.x, p.y + 31, '#c6bd9a', 7);
     }
   }
-  private ground(terrain: LiveTerrain, shade: number): string {
-    const palettes: Record<LiveTerrain, string[]> = { road: ['#55584e', '#505447', '#55594e', '#4e554b', '#575b50'], concrete: ['#707365', '#6b7062', '#686e61', '#6e7365', '#707568'], forest: ['#334937', '#354d36', '#3b5037', '#3a4b32', '#405139'], water: ['#3b5b5d', '#355153', '#3c5757', '#3b5351', '#3e5a58'], yard: ['#5f6247', '#5a6145', '#5c6649', '#626a4b', '#64694c'] };
-    return palettes[terrain][shade]!;
-  }
   private obstacle(obstacle: LiveObstacle, index: number): void {
     const c = this.context, kind = obstacle.kind ?? 'building';
     const p = this.project({ x: obstacle.x + obstacle.width / 2 - .5, y: obstacle.y + obstacle.height / 2 - .5 });
-    if (this.snapshot?.world.zones.some(zone => zone.terrain === 'water' && obstacle.x >= zone.x && obstacle.y >= zone.y && obstacle.x + obstacle.width <= zone.x + zone.width && obstacle.y + obstacle.height <= zone.y + zone.height)) {
+    if (kind === 'water') return;
+    if (!this.snapshot?.world.terrainRows && this.snapshot?.world.zones.some(zone => zone.terrain === 'water' && obstacle.x >= zone.x && obstacle.y >= zone.y && obstacle.x + obstacle.width <= zone.x + zone.width && obstacle.y + obstacle.height <= zone.y + zone.height)) {
       this.polygon(this.quad(obstacle.x - .5, obstacle.y - .5, obstacle.width, obstacle.height), '#294c50', '#a2ad8266');
       const center = this.project({ x: obstacle.x + obstacle.width / 2, y: obstacle.y + obstacle.height / 2 });
       this.label('ОЗЕРО', center.x, center.y, '#b6ccc0', this.overview ? 7 : 10); return;
@@ -217,20 +267,38 @@ export class LiveScene {
     if (kind === 'tree') {
       const scale = this.tile / 54;
       c.fillStyle = '#10211966'; c.beginPath(); c.ellipse(p.x, p.y, 16 * scale, 8 * scale, 0, 0, Math.PI * 2); c.fill();
-      c.fillStyle = '#6e6850'; c.fillRect(p.x - 2 * scale, p.y - 28 * scale, 4 * scale, 28 * scale);
-      for (let tier = 0; tier < 3; tier++) { const y = p.y - (18 + tier * 14) * scale, w = (20 - tier * 4) * scale; this.polygon([{ x: p.x - w, y }, { x: p.x, y: y - 27 * scale }, { x: p.x + w, y }], ['#324f36', '#476443', '#60704b'][tier]!, '#263c2d'); }
+      const height = 42 + (obstacle.x * 7 + obstacle.y * 13) % 19;
+      c.fillStyle = '#6e6850'; c.fillRect(p.x - 2 * scale, p.y - height * .65 * scale, 4 * scale, height * .65 * scale);
+      if ((obstacle.x + obstacle.y * 3) % 5 === 0) {
+        for (const [dx, dy, radius] of [[-9, -31, 13], [8, -36, 14], [0, -46, 13]]) { c.fillStyle = dy! < -40 ? '#65804d' : '#49683f'; c.beginPath(); c.ellipse(p.x + dx! * scale, p.y + dy! * scale, radius! * scale, radius! * .75 * scale, 0, 0, Math.PI * 2); c.fill(); }
+      } else for (let tier = 0; tier < 3; tier++) { const y = p.y - (height * .32 + tier * height * .23) * scale, w = (20 - tier * 4) * scale; this.polygon([{ x: p.x - w, y }, { x: p.x, y: y - height * .48 * scale }, { x: p.x + w, y }], ['#314d34', '#476743', '#5c7549'][tier]!, '#263c2d'); }
       return;
     }
     const elevation = this.tile * (kind === 'wall' ? .6 : kind === 'barricade' ? .26 : kind === 'container' ? .65 : 1.05);
     const base = this.quad(obstacle.x - .5, obstacle.y - .5, obstacle.width, obstacle.height), top = this.quad(obstacle.x - .5, obstacle.y - .5, obstacle.width, obstacle.height, elevation);
-    const colors = kind === 'container' ? index % 2 ? ['#576465', '#344e51', '#6d7974'] : ['#76634b', '#584c37', '#9a8058'] : kind === 'barricade' ? ['#817452', '#62543d', '#aa9470'] : kind === 'wall' ? ['#81877a', '#596154', '#a0a28b'] : ['#707762', '#4b584c', '#92937b'];
+    const localPoi = this.snapshot?.world.pois.find(poi => obstacle.x >= poi.x && obstacle.y >= poi.y && obstacle.x < poi.x + poi.width && obstacle.y < poi.y + poi.height);
+    const rural = localPoi?.districtId === 'village' || localPoi?.districtId === 'sawmill';
+    const colors = kind === 'container' ? [['#576e6c', '#345354', '#7b9086'], ['#92705b', '#664b3a', '#b59070'], ['#777955', '#4c523c', '#9b9a76']][index % 3]! : kind === 'barricade' ? ['#817452', '#62543d', '#aa9470'] : kind === 'wall' ? rural ? ['#918066', '#6a5b44', '#b1a078'] : ['#81877a', '#596154', '#a0a28b'] : rural ? ['#988c69', '#6e6247', '#787a59'] : ['#707b70', '#4e5e55', '#949684'];
     this.polygon([base[1]!, base[2]!, top[2]!, top[1]!], colors[0]!, '#acaf8644'); this.polygon([base[2]!, base[3]!, top[3]!, top[2]!], colors[1]!, '#84907666'); this.polygon(top, colors[2]!, '#b4b39177');
     if (kind === 'container') {
       c.strokeStyle = '#273c3a88'; c.lineWidth = 1;
       for (let fraction = .15; fraction < 1; fraction += .15) { const a = { x: top[1]!.x + (top[2]!.x - top[1]!.x) * fraction, y: top[1]!.y + (top[2]!.y - top[1]!.y) * fraction }, b = { x: base[1]!.x + (base[2]!.x - base[1]!.x) * fraction, y: base[1]!.y + (base[2]!.y - base[1]!.y) * fraction }; c.beginPath(); c.moveTo(a.x, a.y); c.lineTo(b.x, b.y); c.stroke(); }
     } else if (kind === 'building') {
-      c.strokeStyle = '#505a4b88'; c.beginPath(); c.moveTo(top[0]!.x, top[0]!.y); c.lineTo(top[2]!.x, top[2]!.y); c.stroke();
-      const vent = this.quad(obstacle.x + obstacle.width * .25, obstacle.y + obstacle.height * .25, .7, .7, elevation + 3); this.polygon(vent, '#697662', '#b1b292');
+      if (rural || obstacle.width >= obstacle.height * 1.5) {
+        const ridgeA = this.project({ x: obstacle.x - .5, y: obstacle.y + obstacle.height / 2 - .5 }, elevation + this.tile * .2), ridgeB = this.project({ x: obstacle.x + obstacle.width - .5, y: obstacle.y + obstacle.height / 2 - .5 }, elevation + this.tile * .2);
+        this.polygon([top[0]!, top[1]!, ridgeB, ridgeA], rural ? '#96906d' : '#8c9480', '#aaa98d66');
+        this.polygon([ridgeA, ridgeB, top[2]!, top[3]!], rural ? '#6e7553' : '#687463', '#aaa98d66');
+      } else {
+        c.strokeStyle = '#505a4b88'; c.beginPath(); c.moveTo(top[0]!.x, top[0]!.y); c.lineTo(top[2]!.x, top[2]!.y); c.stroke();
+        const vent = this.quad(obstacle.x + obstacle.width * .25, obstacle.y + obstacle.height * .25, .7, .7, elevation + 3); this.polygon(vent, '#697662', '#b1b292');
+      }
+      if (this.tile > 20) {
+        const windows = Math.min(5, Math.max(1, Math.floor(obstacle.width / 2)));
+        for (let i = 0; i < windows; i++) {
+          const t = (i + 1) / (windows + 1), x = base[3]!.x + (base[2]!.x - base[3]!.x) * t, y = base[3]!.y + (base[2]!.y - base[3]!.y) * t - elevation * .58;
+          this.polygon([{ x: x - this.tile * .1, y: y - this.tile * .045 }, { x: x + this.tile * .1, y: y + this.tile * .045 }, { x: x + this.tile * .1, y: y + this.tile * .2 }, { x: x - this.tile * .1, y: y + this.tile * .11 }], '#2a4038', '#a7af9666');
+        }
+      }
     }
     if (obstacle.label && !this.overview && this.tile > 28) this.label(obstacle.label.toUpperCase(), p.x, p.y - elevation + 3, '#efe1b2', 8);
   }
@@ -253,17 +321,17 @@ export class LiveScene {
     if (this.overviewTerrain && (this.overview || this.tile < 16)) {
       const anchor = this.project({ x: -.5, y: -.5 });
       c.drawImage(this.overviewTerrain, anchor.x - world.height * this.tile / 2, anchor.y, (world.width + world.height) * this.tile / 2, (world.width + world.height) * this.tile / 4);
-    } else for (let y = minY; y <= maxY; y++) for (let x = minX; x <= maxX; x++) {
-      const p = this.project({ x, y }); if (p.x < -this.tile || p.x > this.width + this.tile || p.y < -this.tile || p.y > this.height + this.tile) continue;
-      const terrain = this.terrain[y * world.width + x]!;
-      const shade = (x * 17 + y * 29) % 5;
-      this.polygon(this.quad(x - .5, y - .5), this.ground(terrain, shade), '#90916c18');
-      if (terrain === 'road' && (x + y) % 4 === 0) { c.strokeStyle = '#d9d19b55'; const a = this.project({ x: x - .25, y }), b = this.project({ x: x + .25, y }); c.beginPath(); c.moveTo(a.x, a.y); c.lineTo(b.x, b.y); c.stroke(); }
-      if (world.districts.find(district => x >= district.x && x < district.x + district.width && y >= district.y && y < district.y + district.height)?.id === 'depot' && terrain === 'yard') { c.strokeStyle = '#353f38aa'; c.lineWidth = Math.max(.5, this.tile / 40); for (const offset of [-.22, .22]) { const a = this.project({ x: x + offset, y: y - .5 }), b = this.project({ x: x + offset, y: y + .5 }); c.beginPath(); c.moveTo(a.x, a.y); c.lineTo(b.x, b.y); c.stroke(); } }
-      if (terrain === 'water' && (x + y) % 3 === 0) { const a = this.project({ x, y }); c.strokeStyle = '#b5c6a744'; c.beginPath(); c.moveTo(a.x - this.tile * .15, a.y); c.lineTo(a.x + this.tile * .1, a.y); c.stroke(); }
+    } else if (this.terrainTexture) {
+      const anchor = this.project({ x: -.5, y: -.5 }), chunkSize = world.chunkSize;
+      c.save(); c.transform(this.tile / 2, this.tile / 4, -this.tile / 2, this.tile / 4, anchor.x, anchor.y);
+      const resolution = this.terrainTexture.width / world.width;
+      for (let y = Math.floor(minY / chunkSize) * chunkSize; y <= maxY; y += chunkSize) for (let x = Math.floor(minX / chunkSize) * chunkSize; x <= maxX; x += chunkSize) {
+        const width = Math.min(chunkSize, world.width - x), height = Math.min(chunkSize, world.height - y);
+        c.drawImage(this.terrainTexture, x * resolution, y * resolution, width * resolution, height * resolution, x, y, width, height);
+      }
+      c.restore();
     }
     if (this.overview || this.tile < 12) for (const district of world.districts) {
-      this.polygon(this.quad(district.x - .5, district.y - .5, district.width, district.height), '#d5d2aa06', '#c6d49377');
       const p = this.project({ x: district.x + district.width / 2, y: district.y + district.height / 2 });
       this.label(district.name.toUpperCase(), p.x, p.y - 20, '#e5e8c2', this.width < 480 ? 10 : 13);
     }
@@ -349,8 +417,8 @@ export class LiveScene {
   private minimap(snapshot: LiveSnapshot): void {
     const c = this.context, { x, y, scale, width, height } = this.minimapBounds(snapshot);
     c.fillStyle = '#14241fe6'; c.fillRect(x - 8, y - 8, width + 16, height + 29); c.strokeStyle = '#7c8c6166'; c.strokeRect(x - 8, y - 8, width + 16, height + 29);
-    for (const district of snapshot.world.districts) { c.fillStyle = district.theme === 'forest' ? '#385135' : district.theme === 'industrial' ? '#4b4c37' : '#4c5549'; c.fillRect(x + district.x * scale, y + district.y * scale, district.width * scale, district.height * scale); }
-    for (const obstacle of snapshot.world.obstacles) { c.fillStyle = '#63715b'; c.fillRect(x + obstacle.x * scale, y + obstacle.y * scale, obstacle.width * scale, obstacle.height * scale); }
+    if (this.terrainTexture) c.drawImage(this.terrainTexture, x, y, width, height);
+    for (const obstacle of snapshot.world.obstacles) { if (obstacle.kind === 'water' || obstacle.kind === 'tree') continue; c.fillStyle = obstacle.kind === 'building' ? '#bab7a088' : '#9b9e7c88'; c.fillRect(x + obstacle.x * scale, y + obstacle.y * scale, obstacle.width * scale, obstacle.height * scale); }
     for (const extract of snapshot.world.extracts) { c.fillStyle = '#a9d380'; c.fillRect(x + extract.x * scale - 2, y + extract.y * scale - 2, 4, 4); }
     for (const poi of snapshot.world.pois) { c.fillStyle = poi.danger === 3 ? '#b78665' : '#a6af84'; c.fillRect(x + (poi.x + poi.width / 2) * scale - 1, y + (poi.y + poi.height / 2) * scale - 1, 2, 2); }
     for (const entity of snapshot.entities) { c.fillStyle = entity.id === snapshot.selfId ? '#ffe0a4' : entity.kind === 'player' ? '#81d0e3' : entity.faction === 'raiders' ? '#e48971' : '#ce9778'; c.beginPath(); c.arc(x + entity.x * scale, y + entity.y * scale, entity.id === snapshot.selfId ? 2.8 : 1.6, 0, Math.PI * 2); c.fill(); }

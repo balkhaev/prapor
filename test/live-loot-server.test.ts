@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { createLiveService, getLiveLootPool, type LiveService } from "../server/live";
 import { LiveEconomyError, type EconomyLoot, type LiveDelivery, type LiveEconomy, type LiveSupplyReceipt, type LiveSupplyRequest } from "../server/live-economy";
 import { LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT, type LiveCommand, type LiveSnapshot } from "../src/game/live";
-import { getLiveMap, LIVE_MAPS } from "../src/game/live-maps";
+import { getLiveMap, isLiveWalkable, LIVE_MAPS } from "../src/game/live-maps";
 import { LOOT_MODELS } from "../src/game/loot";
 import { createHealth, createMedicalInventory, type MedicalInventory } from "../src/game/health";
 
@@ -163,6 +163,104 @@ describe("multiplayer loot and durable headquarters economy", () => {
     // Losing the old live token still resolves the linked headquarters body.
     const withoutLiveCookie = { ...owner, cookie: `hq=${owner.owner}`, id: undefined };
     expect((await enter(withoutLiveCookie)).state.self.id).toBe(legacy.selfId);
+  });
+
+  test("a V1 geometry revision moves exact and fallback container slots without rerolling contents, cargo or medical supplies", async () => {
+    const first = await enter(), second = await enter(), map = getLiveMap("perimeter");
+    const [exact, fallback] = map.containers, inBag = trophy("coffee"), inExact = trophy("gold-ring"), inFallback = trophy("old-watch"), retiredItem = trophy("bandage-roll"), bodyItem = trophy("coffee"), pendingItem = trophy("local-map");
+    const fallbackId = fallback!.id.replace(/-[a-z]+-(\d+)$/, "-retired-$1");
+    const body = createHealth(73); body.parts.leftLeg.fracture = true; body.parts.rightArm.maxHp = 48; body.parts.rightArm.hp = 35;
+    const medicine = createMedicalInventory({ medkit: 27, bandage: 1, tourniquet: 0, splint: 1, painkiller: 0, surgery: 0 });
+    const parcel: LiveDelivery = { id: randomUUID(), owner: first.session.owner, gameId: first.session.gameId, createdAt: time - 5000, items: [pendingItem], money: 11 };
+    blocked = true;
+    restart(db => {
+      const saved = JSON.parse(db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!.state);
+      saved.geometryVersion = "perimeter-g1-legacy-fixture";
+      saved.drops = saved.drops.filter((drop: { containerId?: string }) => ![exact!.id, fallback!.id].includes(drop.containerId ?? ""));
+      saved.drops.push(
+        { id: "old-searched-container", mapId: "perimeter", x: 0, y: 0, source: "supply", amount: 13, items: [inExact], containerId: exact!.id, containerKind: exact!.kind, expiresAt: time + 123_456 },
+        { id: "old-unsearched-container", mapId: "perimeter", x: 1, y: 0, source: "supply", amount: 0, items: [inFallback], containerId: fallbackId, containerKind: "crate", expiresAt: Number.MAX_SAFE_INTEGER },
+        { id: "retired-supply", mapId: "perimeter", x: 0, y: 0, source: "supply", amount: 17, items: [retiredItem], containerId: "retired-poi-crate-0", containerKind: "crate", expiresAt: time + 98_765 },
+        { id: "old-body", mapId: "perimeter", x: map.obstacles[0]!.x, y: map.obstacles[0]!.y, source: "body", amount: 23, items: [bodyItem], expiresAt: time + 120_000 },
+      );
+      db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify(saved));
+      for (const row of db.query<{ identity: string; state: string }, []>("SELECT identity,state FROM live_players").all()) {
+        const player = JSON.parse(row.state);
+        Object.assign(player, { x: exact!.x, y: exact!.y, safeUntil: time + 120_000, healthAt: time, searchedDropIds: player.id === first.session.id ? ["old-searched-container"] : [] });
+        if (player.id === first.session.id) Object.assign(player, { ammo: 17, cargo: 25, stash: 7, kills: 4, lootItems: [inBag], body, medicine, treatment: { type: "splint", part: "leftLeg", startedAt: time - 1000, endsAt: time + 3000 } });
+        db.query("UPDATE live_players SET state=? WHERE identity=?").run(JSON.stringify(player), row.identity);
+      }
+      db.query("INSERT INTO live_economy_outbox(id,identity,kind,payload,message) VALUES(?,?,'delivery',?,'Ожидает места')").run(parcel.id, first.session.owner, JSON.stringify(parcel));
+    });
+    const readDrops = () => {
+      const db = new Database(dbPath, { readonly: true });
+      const saved = JSON.parse(db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!.state) as { geometryVersion: string; drops: Array<{ id: string; x: number; y: number; amount: number; items?: EconomyLoot[]; source: string; expiresAt: number; containerId?: string; containerKind?: string }> }; db.close(); return saved;
+    };
+    const initial = readDrops();
+    expect(initial.geometryVersion).toBe(map.version);
+    const itemIds = initial.drops.flatMap(drop => drop.items?.map(item => item.id) ?? []);
+    expect(new Set(itemIds).size).toBe(itemIds.length);
+    expect(initial.drops.find(drop => drop.id === "old-searched-container")).toMatchObject({ x: exact!.x, y: exact!.y, items: [inExact], amount: 13, containerId: exact!.id, containerKind: exact!.kind, expiresAt: time + 123_456 });
+    expect(initial.drops.find(drop => drop.id === "old-unsearched-container")).toMatchObject({ x: fallback!.x, y: fallback!.y, items: [inFallback], amount: 0, containerId: fallback!.id, containerKind: fallback!.kind, expiresAt: Number.MAX_SAFE_INTEGER });
+    expect(initial.drops.filter(drop => drop.containerId === exact!.id)).toHaveLength(1);
+    expect(initial.drops.filter(drop => drop.containerId === fallback!.id)).toHaveLength(1);
+    const retired = initial.drops.find(drop => drop.id === "retired-supply")!;
+    expect(retired).toMatchObject({ source: "body", items: [retiredItem], amount: 17, expiresAt: time + 98_765 }); expect(retired.containerId).toBeUndefined(); expect(isLiveWalkable(map, retired)).toBe(true);
+    const bodyDrop = initial.drops.find(drop => drop.id === "old-body")!;
+    expect(bodyDrop).toMatchObject({ items: [bodyItem], amount: 23, expiresAt: time + 120_000 }); expect(isLiveWalkable(map, bodyDrop)).toBe(true);
+    expect(pending()).toBe(1); expect(delivered).toEqual([]);
+    const restored = (await enter(first.session)).state; await enter(second.session);
+    expect(restored.self).toMatchObject({ ammo: 17, cargo: 25, stash: 7, kills: 4, lootItems: [inBag], body, medicine, treatment: null });
+    expect(restored.self.pendingDelivery).toEqual([{ items: [pendingItem], money: 11, message: "Освободите место на складе убежища." }]);
+    expect(restored.drops.find(drop => drop.id === "old-searched-container")).toMatchObject({ searched: true, items: [inExact], amount: 13 });
+    const hidden = (await state(second.session)).drops.find(drop => drop.id === "old-searched-container")!;
+    expect(hidden).toMatchObject({ searched: false, amount: 0 }); expect(hidden.items).toBeUndefined();
+    const beforeRestart = readDrops().drops.filter(drop => ["old-searched-container", "old-unsearched-container", "retired-supply", "old-body"].includes(drop.id));
+    restart(); expect(readDrops().drops.filter(drop => beforeRestart.some(old => old.id === drop.id))).toEqual(beforeRestart);
+    const again = (await enter(first.session)).state;
+    expect(again.self.body).toEqual(body); expect(again.self.medicine).toEqual(medicine); expect(again.self.lootItems).toEqual([inBag]);
+    expect(again.drops.find(drop => drop.id === "old-searched-container")?.items).toEqual([inExact]);
+    const picked = await act(first.session, { type: "loot", id: "old-searched-container" }); expect(picked.self.lootItems).toEqual([inBag, inExact]); expect(picked.self.cargo).toBe(38);
+    expect((await call("action", { type: "loot", id: "old-searched-container" }, first.session)).status).toBe(409);
+    editPlayers([{ session: first.session }]); await enter(first.session);
+    blocked = false; time += 1000; service.tick();
+    await act(first.session, { type: "extract" });
+    expect(delivered.map(item => item.id).sort()).toEqual([pendingItem.id, inBag.id, inExact.id].sort()); expect(credited).toBe(56); expect(deliveries.size).toBe(2); expect(pending()).toBe(0);
+    restart(); await enter(first.session); await act(first.session, { type: "extract" });
+    expect(delivered).toHaveLength(3); expect(credited).toBe(56); expect(deliveries.size).toBe(2);
+  });
+
+  test("V1 depleted container cooldowns merge by logical slot and survive two restarts before one private refill", async () => {
+    const first = await enter(), map = getLiveMap("perimeter"), anchor = map.containers[2]!, deadline = time + 30_000;
+    const legacyId = anchor.id.replace(/-[a-z]+-(\d+)$/, "-retired-$1");
+    restart(db => {
+      const row = db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!, saved = JSON.parse(row.state);
+      saved.geometryVersion = "perimeter-g1-legacy-fixture";
+      saved.drops = saved.drops.filter((drop: { containerId?: string }) => drop.containerId !== anchor.id);
+      saved.lootCooldowns = [[`container:${anchor.id}`, time + 1000], [`container:${legacyId}`, deadline], ["perimeter:0:0", deadline]];
+      db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify(saved));
+      for (const row of db.query<{ identity: string; state: string }, []>("SELECT identity,state FROM live_players").all()) {
+        const player = JSON.parse(row.state); Object.assign(player, { x: anchor.x, y: anchor.y, safeUntil: time + 120_000 });
+        db.query("UPDATE live_players SET state=? WHERE identity=?").run(JSON.stringify(player), row.identity);
+      }
+    });
+    const readWorld = () => {
+      const db = new Database(dbPath, { readonly: true });
+      const saved = JSON.parse(db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!.state) as { drops: Array<{ id: string; containerId?: string; items?: EconomyLoot[] }>; lootCooldowns: Array<[string, number]> }; db.close(); return saved;
+    };
+    for (let retry = 0; retry < 2; retry++) {
+      expect(readWorld().drops.some(drop => drop.containerId === anchor.id)).toBe(false);
+      expect(readWorld().lootCooldowns).toContainEqual([`container:${anchor.id}`, deadline]);
+      expect(readWorld().lootCooldowns).toContainEqual(["perimeter:0:0", deadline]); restart();
+    }
+    time = deadline - 1; await enter(first.session); service.tick(); expect(readWorld().drops.some(drop => drop.containerId === anchor.id)).toBe(false);
+    time = deadline + 249; await enter(first.session); service.tick();
+    const refill = readWorld().drops.filter(drop => drop.containerId === anchor.id); expect(refill).toHaveLength(1); expect(refill[0]!.items?.length).toBeGreaterThan(0);
+    const hidden = (await state(first.session)).drops.find(drop => drop.id === refill[0]!.id)!;
+    expect(hidden).toMatchObject({ searched: false, amount: 0 }); expect(hidden.items).toBeUndefined();
+    expect((await call("action", { type: "loot", id: hidden.id }, first.session)).status).toBe(409);
+    restart(); await enter(first.session);
+    expect(readWorld().drops.filter(drop => drop.containerId === anchor.id)).toEqual(refill);
   });
 
   test("one shared named drop has one winner, weight and item count are hard limits, and trophy price is not a cash capacity", async () => {

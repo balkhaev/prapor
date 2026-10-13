@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { getLiveMap, hasLiveLineOfSight, isLiveMapId, isLiveWalkable, LIVE_MAPS } from '../src/game/live-maps';
 import type { LiveWorld } from '../src/game/live';
+import { createLiveNavigation } from '../server/live-navigation';
 
 describe('shared generated perimeter', () => {
   test('one persistent world contains four connected districts and sixteen streaming chunks', () => {
@@ -29,5 +30,18 @@ describe('shared generated perimeter', () => {
     }
     expect(hasLiveLineOfSight(world, { x: -1, y: 0 }, { x: 1, y: 0 })).toBe(false);
     expect(hasLiveLineOfSight(world, { x: .5, y: 0 }, { x: 1, y: 0 })).toBe(false);
+  });
+  test('water blocks movement while remaining transparent to sight and shots', () => {
+    const world: LiveWorld = { ...getLiveMap('perimeter'), width: 10, height: 10, obstacles: [{ x: 4, y: 0, width: 2, height: 10, kind: 'water' }] };
+    const navigation = createLiveNavigation(world), near = { x: 3, y: 4 }, far = { x: 6, y: 4 };
+    expect(isLiveWalkable(world, { x: 4, y: 4 })).toBe(false);
+    expect(navigation.walkable({ x: 4, y: 4 })).toBe(false);
+    expect(navigation.findPath(near, far)).toBeNull();
+    expect(hasLiveLineOfSight(world, near, far)).toBe(true);
+    expect(navigation.hasLineOfSight(near, far)).toBe(true);
+    expect(navigation.hasLineOfSight(far, near)).toBe(true);
+    world.obstacles.push({ x: 7, y: 4, width: 1, height: 1, kind: 'wall' });
+    expect(hasLiveLineOfSight(world, near, { x: 8, y: 4 })).toBe(false);
+    expect(createLiveNavigation(world).hasLineOfSight(near, { x: 8, y: 4 })).toBe(false);
   });
 });
