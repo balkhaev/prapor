@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type Phaser from "phaser";
 import { ROOM_DEFINITIONS, getRoomBounds, getRoomEntrance, getRoomLocalPoint, type RoomFacing, type RoomInstance } from "../src/game/shelter";
-import { paintIsometricProduction, paintIsometricRoom } from "../src/shelter-isometric-art";
+import { getShelterChimney, paintIsometricProduction, paintIsometricRoom } from "../src/shelter-isometric-art";
 import { projectShelterPoint, shelterRectPolygon } from "../src/shelter-isometric";
 import type { ProductionPresentation } from "../src/shelter-production";
 
@@ -30,6 +30,15 @@ const mean = (points: Point[]) => ({ x: points.reduce((sum, point) => sum + poin
 const near = (a: Point, b: Point) => Math.abs(a.x - b.x) < 1e-6 && Math.abs(a.y - b.y) < 1e-6;
 
 describe("oriented cutaway building artwork", () => {
+	test("smoke anchors stay centred on the drawn open chimney after every turn", () => {
+		for (const facing of [0, 1, 2, 3] as const) {
+			const building = room("workshop", facing), drawing = graphics(), chimney = getShelterChimney(building)!;
+			paintIsometricRoom(drawing.g, building.column, building.row, building);
+			const at = projectShelterPoint(chimney.point);
+			expect(drawing.faces.some(face => face.color === 0x26302b && near(mean(face.points), { x: at.x, y: at.y - chimney.height }))).toBe(true);
+		}
+		expect(getShelterChimney(room("hangar", 1))).toBeNull();
+	});
 	test("the visible porch agrees with the walking entrance in every direction at fractional positions", () => {
 		for (const facing of [0, 1, 2, 3] as const) {
 			const building = room("workshop", facing), drawing = graphics();
