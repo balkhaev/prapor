@@ -12,5 +12,26 @@
 .bench-slot-label{overflow-wrap:anywhere}
 .recipe-card .module-traits{margin-bottom:12px}
 .module-fit .mount-missing{color:#dbbe94}
+.bench-mat{border-color:#666b5f;border-radius:8px;background-color:#282e28;background-image:radial-gradient(ellipse at 50% 38%,#424a3c 0,#2b322a 66%,#242b25 100%);background-size:auto;box-shadow:inset 0 0 28px #11170f35,0 8px 24px #0002}
+.bench-mat:before{border-color:#9aa28b22;border-radius:4px}
+.bench-mat-head,.bench-mat-foot{color:#bfc4b3}
+.bench-mat-head>.mono{color:#c5c8b8;letter-spacing:.7px}
+.bench-mat-foot{border-color:#747b6240}
+.workbench-stage{min-height:240px;padding:16px 8px}
+.workbench-stage .weapon-build-art{filter:none}
+.bench-slot{background:#293027;border-color:#59624f;border-radius:5px}
+.bench-slot.active{border-color:#a39979;background:#383d31;box-shadow:inset 0 0 0 1px #a3997940}
+.bench-slot:hover{border-color:#8f9b7b}
+.bench-slot-art{background:#323a2d;border-radius:3px}
+.bench-slot-panel{border-color:#68725b;background:linear-gradient(150deg,#30382b,#242d24);border-radius:8px}
+.bench-current,.bench-candidate-preview{background:#283125;border-color:#657254;border-radius:5px}
+.bench-current .module-art,.bench-candidate-preview .module-art{max-height:135px;max-width:280px;padding:10px 0}
+.bench-candidate-preview{background:#363c2e;border-color:#978e6d;box-shadow:none}
+.bench-candidate{background:#2b3426;border-color:#57684a;border-radius:5px}
+.bench-candidate.selected{background:#3b4130;border-color:#9d9273;box-shadow:none}
+.module-inventory-grid .module-card{background:#293225;border-radius:6px}
+.module-card-art{background:radial-gradient(ellipse at center,#424b37,#2a3429);border-color:#71825a55;border-radius:4px;aspect-ratio:2.2/1}
+.module-card-art .module-art{max-width:260px;max-height:125px}
+.bench-build-mounts>span{background:#2a3425;border-color:#626d51;color:#ccd1bb}
 @media(max-width:1000px){.module-filters{grid-template-columns:repeat(3,minmax(0,1fr))}.module-search{grid-column:1/-1}}
-@media(max-width:640px){.module-filters{grid-template-columns:repeat(2,minmax(0,1fr))}.module-catalog-tools{align-items:flex-start}.module-catalog-tools>span{font-size:11px}.module-catalog-tools .text-button{font-size:11px}.module-catalog-pagination{gap:9px}.module-catalog-pagination .button{min-width:100px}.bench-build-mounts{font-size:11px}.bench-slots{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:640px){.module-filters{grid-template-columns:repeat(2,minmax(0,1fr))}.module-catalog-tools{align-items:flex-start}.module-catalog-tools>span{font-size:11px}.module-catalog-tools .text-button{font-size:11px}.module-catalog-pagination{gap:9px}.module-catalog-pagination .button{min-width:100px}.bench-build-mounts{font-size:11px}.bench-slots{grid-template-columns:repeat(2,minmax(0,1fr))}.workbench-stage{min-height:165px;padding:14px 3px}.bench-current .module-art,.bench-candidate-preview .module-art{max-height:140px}.module-card-art{aspect-ratio:2.6/1}}

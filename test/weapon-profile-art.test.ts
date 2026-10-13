@@ -6,7 +6,18 @@ import { FACTORY_KITS, getResolvedModuleMounts, MODULE_BY_ID, MODULE_MODELS, MOD
 
 const factory = (weaponId: string): WeaponInstance => ({ id: "profile-audit", weaponId, durability: 100, foundAt: 0, attachments: { optic: 0, magazine: 0, stock: 0 }, modules: Object.fromEntries(Object.entries(FACTORY_KITS[weaponId]!).map(([slot, modelId]) => [slot, { id: slot, modelId, durability: 100, foundAt: 0 }])) });
 const install = (gun: WeaponInstance, id: string) => { const model = MODULE_BY_ID[id]!; gun.modules[model.slot] = { id: model.slot, modelId: id, durability: 100, foundAt: 0 }; };
-const part = (svg: string, slot: ModuleSlot) => svg.match(new RegExp(`<g data-module-slot="${slot}"[^>]*>[\\s\\S]*?</g>`))?.[0];
+const part = (svg: string, slot: ModuleSlot) => {
+	const opening = svg.indexOf(`<g data-module-slot="${slot}"`);
+	if (opening < 0) return undefined;
+	const tags = /<g\b[^>]*>|<\/g>/g;
+	tags.lastIndex = opening;
+	let depth = 0;
+	for (let tag = tags.exec(svg); tag; tag = tags.exec(svg)) {
+		depth += tag[0].startsWith("</") ? -1 : 1;
+		if (depth === 0) return svg.slice(opening, tags.lastIndex);
+	}
+	throw new Error(`Unclosed part group: ${slot}`);
+};
 const viewport = (svg: string) => svg.match(/viewBox="([^"]+)"/)![1]!.split(" ").map(Number);
 const offset = (group: string) => group.match(/transform="translate\((-?[\d.]+) (-?[\d.]+)\)"/)?.slice(1).map(Number) ?? [0, 0];
 const outline = (svg: string) => svg.match(/<path d="([^"]+)"/)![1]!;
@@ -44,6 +55,14 @@ function pointsForPath(path: string): [number, number][] {
 			const control: [number, number] = cmd === "Q" ? pair() : [previous === "Q" || previous === "T" ? 2 * ox - cx : ox, previous === "Q" || previous === "T" ? 2 * oy - cy : oy];
 			const [nx, ny] = pair(); [cx, cy] = control;
 			for (let sample = 1; sample <= 20; sample++) { const t = sample / 20, u = 1 - t; points.push([u * u * ox + 2 * u * t * cx + t * t * nx, u * u * oy + 2 * u * t * cy + t * t * ny]); }
+			x = nx; y = ny;
+		} else if (cmd === "C" || cmd === "S") {
+			const control1: [number, number] = cmd === "C" ? pair() : [previous === "C" || previous === "S" ? 2 * ox - cx : ox, previous === "C" || previous === "S" ? 2 * oy - cy : oy];
+			const control2 = pair(), [nx, ny] = pair(); [cx, cy] = control2;
+			for (let sample = 1; sample <= 30; sample++) {
+				const t = sample / 30, u = 1 - t;
+				points.push([u ** 3 * ox + 3 * u * u * t * control1[0] + 3 * u * t * t * cx + t ** 3 * nx, u ** 3 * oy + 3 * u * u * t * control1[1] + 3 * u * t * t * cy + t ** 3 * ny]);
+			}
 			x = nx; y = ny;
 		} else throw new Error(`Unexpected SVG path command ${command} in ${path}`);
 		previous = cmd;
@@ -109,7 +128,9 @@ describe("complete weapon side-profile audit", () => {
 			const group = part(moduleArt(model), "optic")!;
 			expect(group).not.toContain("<ellipse");
 			expect(group).not.toContain("-glass)"); // A front-facing sight window is invisible from the side.
-			for (const circle of group.matchAll(/<circle[^>]+>/g)) expect(circle[0]).toContain('fill="#989d8c"'); // Side adjustment screws remain visible, reticles do not.
+			// Side fasteners and adjustment caps remain small; a lens or reticle
+			// painted across the sight's side would exceed their physical radius.
+			for (const circle of group.matchAll(/<circle[^>]+r="([\d.]+)"[^>]*>/g)) expect(Number(circle[1])).toBeLessThanOrEqual(12);
 		}
 		for (const model of MODULE_MODELS.filter((item) => item.appearance === "drum")) {
 			const group = part(moduleArt(model), "magazine")!, [left = 0, , right = 0] = geometryBounds(group);

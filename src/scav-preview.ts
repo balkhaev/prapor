@@ -1,9 +1,9 @@
 import Phaser from "phaser";
 import { PERSONALITY_BY_ID, WEAPONS } from "./game/data";
-import type { WeaponInstance } from "./game/engine";
-import { FACTORY_KITS, MODULE_BY_ID, MODULE_MODELS, MODULE_SLOTS, MODULE_SLOT_LABELS, RECEIVER_INFO, getResolvedModuleMounts, type ModuleInstance, type ModuleModel, type ModuleSlot } from "./game/modules";
+import { getWeaponStats, type WeaponInstance } from "./game/engine";
+import { FACTORY_KITS, MODULE_BY_ID, MODULE_MODELS, MODULE_SLOTS, MODULE_SLOT_LABELS, RECEIVER_INFO, getResolvedModuleMounts, modulePlatformLabel, type ModuleInstance, type ModuleModel, type ModuleSlot } from "./game/modules";
 import { moduleArt, weaponBuildArt } from "./armory-art";
-import { MODULE_DISPLAY_SLOTS, moduleFitsWeaponFamily, moduleModelMatches, moduleMountLabel } from "./module-catalog";
+import { MODULE_DISPLAY_SLOTS, moduleFitsWeaponFamily, moduleModelMatches, moduleMountLabel, moduleSlotHint } from "./module-catalog";
 import { GEAR_MODELS } from "./game/systems";
 import { SCAV_EQUIPMENT_ATLASES } from "./scav-gear-art";
 import { SCAV_APPEARANCES } from "./game/scav-appearances";
@@ -26,12 +26,16 @@ const weaponSummary = document.querySelector<HTMLElement>("#weapon-summary")!;
 const fitStatus = document.querySelector<HTMLElement>("#fit-status")!;
 const closeup = document.querySelector<HTMLElement>("#weapon-closeup")!;
 const buildParts = document.querySelector<HTMLElement>("#build-parts")!;
+const inspectionName = document.querySelector<HTMLElement>("#inspection-name")!, inspectionMeta = document.querySelector<HTMLElement>("#inspection-meta")!;
+const inspectionStats = document.querySelector<HTMLElement>("#inspection-stats")!, inspectionPart = document.querySelector<HTMLElement>("#inspection-part")!;
+const inspectionZoomButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-inspection-zoom]"));
+const inspectionFit = document.querySelector<HTMLButtonElement>("#inspection-fit")!, inspectionHighlight = document.querySelector<HTMLButtonElement>("#inspection-highlight")!;
 const library = document.querySelector<HTMLDetailsElement>("#module-library")!;
 const librarySlot = select("library-slot"), librarySearch = document.querySelector<HTMLInputElement>("#library-search")!;
 const libraryCompatible = document.querySelector<HTMLInputElement>("#library-compatible")!;
 const libraryCount = document.querySelector<HTMLElement>("#library-count")!, moduleCards = document.querySelector<HTMLElement>("#module-cards")!;
 const libraryMore = document.querySelector<HTMLButtonElement>("#library-more")!;
-let libraryLimit = 24, inspectedSlot: ModuleSlot | undefined;
+let libraryLimit = 24, inspectedSlot: ModuleSlot | undefined, inspectionZoom = 1, highlightInspection = true;
 const escape = (value: string) => value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
 type Point = { x: number; y: number };
 type Model = { id: number; root: Phaser.GameObjects.Container; body: Phaser.GameObjects.Container; poses: Phaser.GameObjects.Image[]; equipment: ScavEquipment; name: Phaser.GameObjects.Text; personality: Phaser.GameObjects.Text; badge: Phaser.GameObjects.Text };
@@ -62,6 +66,62 @@ function fittingReason(model: ModuleModel, weapon: WeaponInstance | null): strin
 	return model.requiresMount && !mounts.includes(model.requiresMount) ? `Нужно крепление: ${moduleMountLabel(model.requiresMount).toLowerCase()}` : null;
 }
 
+function renderInspection(weapon: WeaponInstance | null): void {
+	const scroll = { left: closeup.scrollLeft, top: closeup.scrollTop };
+	const focusedSlot = buildParts.contains(document.activeElement) ? (document.activeElement as HTMLButtonElement)?.dataset.inspectSlot : undefined;
+	closeup.innerHTML = weapon ? `<div class="inspection-canvas">${weaponBuildArt(weapon, highlightInspection ? inspectedSlot : undefined)}</div>` : '<div class="inspection-canvas"><p class="library-help">Выбери основу оружия, чтобы рассмотреть сборку.</p></div>';
+	closeup.style.setProperty("--inspection-width", `${inspectionZoom * 100}%`);
+	closeup.scrollLeft = scroll.left; closeup.scrollTop = scroll.top;
+	for (const button of inspectionZoomButtons) { button.disabled = !weapon; button.setAttribute("aria-pressed", String(Number(button.dataset.inspectionZoom) === inspectionZoom)); }
+	inspectionFit.disabled = !weapon;
+	inspectionHighlight.disabled = !weapon || !inspectedSlot;
+	inspectionHighlight.setAttribute("aria-pressed", String(highlightInspection && Boolean(inspectedSlot)));
+	inspectionName.textContent = weapon ? WEAPONS.find((model) => model.id === weapon.weaponId)!.name : "Без оружия";
+	if (!weapon) {
+		inspectionMeta.textContent = "Выбери основу оружия в примерке";
+		buildParts.replaceChildren(); inspectionStats.replaceChildren(); inspectionPart.replaceChildren(); inspectionPart.hidden = true;
+		return;
+	}
+	const info = RECEIVER_INFO[weapon.weaponId]!, stats = getWeaponStats(weapon);
+	inspectionMeta.textContent = `${modulePlatformLabel(info.platform)} · ${info.caliber} · ${stats.ready ? "Сборка готова" : "Сборка не завершена"}`;
+	inspectionStats.innerHTML = [["Вес", `${stats.weight.toFixed(2)} кг`], ["Урон", String(Math.round(stats.damage))], ["Удобство", String(Math.round(stats.ergonomics))], ["Отдача ↓", String(Math.round(stats.recoil))], ["Надёжность", `${Math.round(stats.reliability)}%`], ["Расход патронов", `×${Number(stats.ammoMultiplier.toFixed(2))}`]].map(([label, value]) => `<span>${label}<strong>${value}</strong></span>`).join("");
+	buildParts.innerHTML = MODULE_DISPLAY_SLOTS.map((slot) => {
+		const modelId = weapon.modules[slot]?.modelId, model = modelId ? MODULE_BY_ID[modelId] : undefined;
+		return `<li><button type="button" data-inspect-slot="${slot}" class="${model ? "" : "empty-part"}" aria-pressed="${slot === inspectedSlot}"><small>${MODULE_SLOT_LABELS[slot]}</small><strong>${escape(model?.label ?? (info.requiredSlots.includes(slot) ? "Нужна для сборки" : "Не установлено"))}</strong></button></li>`;
+	}).join("");
+	if (focusedSlot) buildParts.querySelector<HTMLButtonElement>(`[data-inspect-slot="${focusedSlot}"]`)?.focus({ preventScroll: true });
+	inspectionPart.hidden = !inspectedSlot;
+	if (!inspectedSlot) { inspectionPart.replaceChildren(); return; }
+	const modelId = weapon.modules[inspectedSlot]?.modelId, model = modelId ? MODULE_BY_ID[modelId] : undefined;
+	inspectionPart.classList.toggle("empty-inspection", !model);
+	if (!model) {
+		inspectionPart.innerHTML = `<div><h3>${MODULE_SLOT_LABELS[inspectedSlot]} · не установлено</h3><p>${escape(info.requiredSlots.includes(inspectedSlot) ? "Обязательная деталь. Выбери совместимый модуль в примерке или каталоге, чтобы завершить сборку." : moduleSlotHint(inspectedSlot))}</p></div>`;
+		return;
+	}
+	const fit = [model.requiresMount ? `Установка: ${moduleMountLabel(model.requiresMount)}` : "Штатная посадка", ...model.providesMounts.map((mount) => `Открывает: ${moduleMountLabel(mount)}`)].join(" · ");
+	inspectionPart.innerHTML = `${moduleArt(model)}<div><h3>${escape(model.label)}</h3><p>${escape(model.description)}</p><p class="part-fit">${escape(fit)} · ${model.stats.weight.toFixed(2)} кг</p></div>`;
+}
+
+function setInspectionZoom(zoom: number): void {
+	const centerX = (closeup.scrollLeft + closeup.clientWidth / 2) / Math.max(1, closeup.scrollWidth), centerY = (closeup.scrollTop + closeup.clientHeight / 2) / Math.max(1, closeup.scrollHeight);
+	inspectionZoom = zoom;
+	closeup.style.setProperty("--inspection-width", `${zoom * 100}%`);
+	for (const button of inspectionZoomButtons) button.setAttribute("aria-pressed", String(Number(button.dataset.inspectionZoom) === zoom));
+	closeup.scrollLeft = centerX * closeup.scrollWidth - closeup.clientWidth / 2;
+	closeup.scrollTop = centerY * closeup.scrollHeight - closeup.clientHeight / 2;
+}
+
+for (const button of inspectionZoomButtons) button.addEventListener("click", () => setInspectionZoom(Number(button.dataset.inspectionZoom)));
+inspectionFit.addEventListener("click", () => { setInspectionZoom(1); closeup.scrollLeft = 0; closeup.scrollTop = 0; });
+inspectionHighlight.addEventListener("click", () => { highlightInspection = !highlightInspection; renderInspection(selectedWeapon()); });
+function inspectSlot(slot: string | undefined): void {
+	if (!slot || !MODULE_SLOTS.includes(slot as ModuleSlot)) return;
+	inspectedSlot = slot as ModuleSlot; highlightInspection = true;
+	renderInspection(selectedWeapon());
+}
+buildParts.addEventListener("click", (event) => inspectSlot((event.target as Element | null)?.closest<HTMLButtonElement>("[data-inspect-slot]")?.dataset.inspectSlot));
+closeup.addEventListener("click", (event) => inspectSlot((event.target as Element | null)?.closest<SVGElement>("[data-module-slot]")?.dataset.moduleSlot));
+
 function renderLibrary(weapon: WeaponInstance | null): void {
 	if (!library.open) return;
 	const models = MODULE_MODELS.filter((model) => moduleModelMatches(model, { slot: librarySlot.value as ModuleSlot | "all", rarity: "all", platform: "all", search: librarySearch.value })
@@ -85,7 +145,7 @@ moduleCards.addEventListener("click", (event) => {
 	const button = (event.target as Element | null)?.closest<HTMLButtonElement>("button[data-try-module]");
 	const model = button?.dataset.tryModule ? MODULE_BY_ID[button.dataset.tryModule] : undefined, weapon = selectedWeapon();
 	if (!model || !weapon || fittingReason(model, weapon)) return;
-	weapon.modules[model.slot] = part(model.id, model.slot); inspectedSlot = model.slot;
+	weapon.modules[model.slot] = part(model.id, model.slot); inspectedSlot = model.slot; highlightInspection = true;
 	updateSelections(true);
 });
 
@@ -148,11 +208,7 @@ function updateSelections(rebuildOptions = false): void {
 	weaponSummary.textContent = !weapon ? "Без оружия" : missing.length ? `Неполная сборка · установлено ${count} / ${MODULE_SLOTS.length} деталей` : `Текущая сборка · установлено ${count} / ${MODULE_SLOTS.length} деталей`;
 	const labels = [controls.direction, controls.pose, controls.armor, controls.helmet, controls.pack, controls.weapon].map((input) => input.selectedOptions[0]!.textContent);
 	gallery.setAttribute("aria-label", `32 диких. ${labels.join(". ")}. ${weaponSummary.textContent}.`);
-	closeup.innerHTML = weapon ? weaponBuildArt(weapon, inspectedSlot) : '<p class="library-help">Выбери основу оружия, чтобы рассмотреть сборку.</p>';
-	buildParts.innerHTML = weapon ? MODULE_DISPLAY_SLOTS.flatMap((slot) => {
-		const modelId = weapon.modules[slot]?.modelId, model = modelId ? MODULE_BY_ID[modelId] : undefined;
-		return model ? [`<li>${escape(model.label)}</li>`] : [];
-	}).join("") : "";
+	renderInspection(weapon);
 	renderLibrary(weapon);
 }
 updateSelections(true);
@@ -163,7 +219,7 @@ for (const slot of MODULE_SLOTS) moduleControls[slot].addEventListener("change",
 	const modelId = moduleControls[slot].value;
 	if (modelId && compatibleOptions(slot, weapon).some((model) => model.id === modelId)) weapon.modules[slot] = part(modelId, slot);
 	else delete weapon.modules[slot];
-	inspectedSlot = slot;
+	inspectedSlot = slot; highlightInspection = true;
 	updateSelections(true);
 });
 resetWeapon.addEventListener("click", () => {
