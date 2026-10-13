@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	advance, continueExpedition, createGame, creditMarketMoney, dispatchRaid, extractRaid, getCargoValue, getCargoWeight, getLootCapacity,
 	getLootTraderPrice, getSupplyCapacity, getTradeAssetRow, getTradeInventory, getTradeQuote, LOOT_MODELS, parseSave, parseTradeAsset, receiveTradeAsset,
-	recycleLootItem, saveGame, sellLootItem, takeTradeAsset, type GameState, type LootItem,
+	recycleLootItem, SAVE_VERSION, saveGame, sellLootItem, takeTradeAsset, type GameState, type LootItem,
 } from "../src/game/engine";
 import { MAPS } from "../src/game/data";
 import { getRaidLootPool, rollRaidLoot } from "../src/game/loot";
@@ -24,8 +24,8 @@ describe("named physical raid loot", () => {
 	test("v15 ammunition saves migrate without adding loot rules to their already paid sortie", () => {
 		const state = createGame(NOW); state.scavs[0]!.loadout.ammoType = "tracer";
 		expect(dispatchRaid(state, state.scavs[0]!.id, "courtyard", NOW).ok).toBe(true);
-		const old = structuredClone(state); old.schemaVersion = 15; delete old.raids[0]!.lootVersion;
-		const migrated = parseSave(saveGame(old))!; expect(migrated).not.toBeNull(); expect(migrated.schemaVersion).toBe(16);
+		const old = structuredClone(state); old.schemaVersion = 15; delete old.raids[0]!.lootVersion; delete old.raids[0]!.expedition!.lootCatalogVersion;
+		const migrated = parseSave(saveGame(old))!; expect(migrated).not.toBeNull(); expect(migrated.schemaVersion).toBe(SAVE_VERSION);
 		expect(migrated.raids[0]!.lootVersion).toBeUndefined(); expect(migrated.raids[0]!.expedition!.ammunition).toEqual(old.raids[0]!.expedition!.ammunition);
 		expect(migrated.scavs[0]!.loadout.ammoType).toBe("tracer"); migrated.raids[0]!.chance = 1;
 		advance(migrated, migrated.raids[0]!.endsAt); expect(migrated.raids[0]!.expedition!.cargo.lootItems).toBeUndefined(); valid(migrated);

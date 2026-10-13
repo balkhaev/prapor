@@ -1,5 +1,6 @@
 import Phaser from "phaser";
 import { weaponActorArt } from "./armory-art";
+import { modularWeaponArtRevision } from "./modular-weapon-art";
 import { WEAPON_BY_ID } from "./game/data";
 import type { WeaponInstance } from "./game/engine";
 import { scavAttachment, type ScavDirection } from "./scav-isometric";
@@ -15,7 +16,7 @@ const hash = (value: string) => { let n = 2166136261; for (const c of value) n =
 function ensureWeaponTexture(scene: Phaser.Scene, weapon: WeaponInstance): { key: string; art: WeaponArt } | null {
 	let cache = weaponTextures.get(scene.textures);
 	if (!cache) { cache = { pending: new Set(), retry: new Map(), art: new Map() }; weaponTextures.set(scene.textures, cache); }
-	const signature = weaponVisualSignature(weapon), key = `scav-weapon-${hash(signature)}`;
+	const signature = `${weaponVisualSignature(weapon)}:${modularWeaponArtRevision(weapon)}`, key = `scav-weapon-${hash(signature)}`;
 	let art = cache.art.get(key);
 	if (!art) { art = weaponActorArt(weapon); cache.art.set(key, art); }
 	if (scene.textures.exists(key)) return { key, art };

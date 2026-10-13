@@ -4,6 +4,7 @@ import { MAPS, PERSONALITY_BY_ID, WEAPONS } from "./game/data";
 import { getWeaponStats, type WeaponInstance } from "./game/engine";
 import { FACTORY_KITS, MODULE_BY_ID, MODULE_MODELS, MODULE_SLOTS, MODULE_SLOT_LABELS, RECEIVER_INFO, getResolvedModuleMounts, modulePlatformLabel, type ModuleInstance, type ModuleModel, type ModuleSlot } from "./game/modules";
 import { moduleArt, weaponBuildArt } from "./armory-art";
+import { preloadModularWeaponArt } from "./modular-weapon-art";
 import { MODULE_DISPLAY_SLOTS, moduleFitsWeaponFamily, moduleModelMatches, moduleMountLabel, moduleSlotHint } from "./module-catalog";
 import { GEAR_MODELS } from "./game/systems";
 import { SCAV_EQUIPMENT_ATLASES } from "./scav-gear-art";
@@ -247,7 +248,13 @@ function updateSelections(rebuildOptions = false): void {
 	renderLibrary(weapon);
 }
 updateSelections(true);
-for (const [name, input] of Object.entries(controls)) input.addEventListener("change", () => updateSelections(name === "weapon"));
+for (const [name, input] of Object.entries(controls)) input.addEventListener("change", () => {
+	updateSelections(name === "weapon");
+	if (name === "weapon") {
+		const chosen = controls.weapon.value;
+		void preloadModularWeaponArt([chosen]).then(() => { if (controls.weapon.value === chosen) updateSelections(false); });
+	}
+});
 for (const slot of MODULE_SLOTS) moduleControls[slot].addEventListener("change", () => {
 	const weapon = selectedWeapon();
 	if (!weapon) return;
@@ -329,5 +336,5 @@ class ScavPreview extends Phaser.Scene {
 	}
 }
 
-await document.fonts.ready;
+await Promise.all([document.fonts.ready, preloadModularWeaponArt([controls.weapon.value])]);
 new Phaser.Game({ type: Phaser.AUTO, parent: gallery, width: gallery.clientWidth, height: 750, backgroundColor: "#17221b", transparent: true, antialias: true, pixelArt: false, scene: ScavPreview, banner: false, audio: { noAudio: true }, scale: { mode: Phaser.Scale.NONE } });

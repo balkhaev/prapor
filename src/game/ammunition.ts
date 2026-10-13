@@ -47,6 +47,13 @@ const CALIBER_BALLISTICS: Record<string, { damage: number; penetration: number; 
 	"9x19": { damage: 30, penetration: 13, piercingGain: 28, label: "9×19 мм" },
 	"7.62x54": { damage: 62, penetration: 45, piercingGain: 22, label: "7,62×54 мм" },
 	"9x39": { damage: 50, penetration: 40, piercingGain: 22, label: "9×39 мм" },
+	"5.56x45": { damage: 42, penetration: 34, piercingGain: 22, label: "5,56×45 мм" },
+	"5.7x28": { damage: 26, penetration: 26, piercingGain: 26, label: "5,7×28 мм" },
+	"4.6x30": { damage: 24, penetration: 28, piercingGain: 24, label: "4,6×30 мм" },
+	".45acp": { damage: 39, penetration: 10, piercingGain: 28, label: ".45 ACP" },
+	".300blk": { damage: 51, penetration: 29, piercingGain: 24, label: ".300 BLK" },
+	"7.62x51": { damage: 64, penetration: 43, piercingGain: 22, label: "7,62×51 мм" },
+	".338lapua": { damage: 88, penetration: 48, piercingGain: 22, label: ".338 Lapua" },
 };
 const AMMO_SPECS: Record<AmmoType, { damage: number; armorDamage: number; ammoMultiplier: number; wearMultiplier: number; description: string }> = {
 	standard: { damage: 1, armorDamage: .3, ammoMultiplier: 1, wearMultiplier: 1,
@@ -91,7 +98,7 @@ export const AMMO_MODELS: AmmoModel[] = Object.entries(CALIBER_BALLISTICS).flatM
 			: spec.description;
 	return {
 		id: `ammo-${caliber}-${type}`, caliber, type, label: `${name} · ${base.label}`, description,
-		packCode: PACK_CODES[type], packRounds: shotgun ? 10 : ["9x18", "9x19", "7.62x25"].includes(caliber) ? 50 : 20,
+		packCode: PACK_CODES[type], packRounds: shotgun || caliber === ".338lapua" ? 10 : ["9x18", "9x19", "7.62x25", "5.7x28", "4.6x30", ".45acp"].includes(caliber) ? 50 : 20,
 		damage: Math.round(base.damage * spec.damage * 10) / 10,
 		penetration: penetrationFor(type, base),
 		armorDamage: spec.armorDamage, ammoMultiplier: spec.ammoMultiplier, wearMultiplier: spec.wearMultiplier,

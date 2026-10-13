@@ -14,6 +14,7 @@ import { RECEIVER_INFO } from "../src/game/modules";
 import { TACTICS } from "../src/game/operations";
 import { EXPEDITION_BRANCHES } from "../src/game/systems";
 import { useWeaponPlatformFixture } from "./weapon-fixtures";
+import { withoutArsenalLoot } from "./legacy-strategy-fixture";
 import { withoutLoot } from "./legacy-loot-fixture";
 
 const NOW = 1_792_010_000_000;
@@ -43,7 +44,7 @@ function suppressor(state: GameState, weapon: WeaponInstance) {
 	return part;
 }
 /** A genuine paid and settled checkpoint; no fabricated chances or combat rolls. */
-function checkpoint(type: AmmoType, count = 1, completedRecon = false): { state: GameState; raid: Raid } {
+function checkpoint(type: AmmoType, count = 1, completedRecon = false, legacyCatalog = false): { state: GameState; raid: Raid } {
 	for (let offset = 0; offset < 512; offset++) {
 		const state = funded(NOW + offset), ids = state.scavs.slice(0, count).map((scav) => scav.id);
 		state.sectorIntel = { courtyard: { knowledge: 3, pressure: 2 } };
@@ -53,6 +54,7 @@ function checkpoint(type: AmmoType, count = 1, completedRecon = false): { state:
 		}
 		expect((count === 1 ? dispatchRaid(state, ids[0]!, "courtyard", state.lastUpdated)
 			: dispatchSquadRaid(state, ids, "courtyard", state.lastUpdated)).ok).toBe(true);
+		if (legacyCatalog) withoutLoot(withoutArsenalLoot(state));
 		advance(state, Math.max(...state.raids.map((raid) => raid.endsAt)));
 		if (state.raids.length !== count || state.raids.some((raid) => raid.expedition?.status !== "choice")) continue;
 		const raid = state.raids[0]!;
@@ -88,6 +90,7 @@ function logisticsCheckpoint(type: AmmoType, kit: FieldKit): { state: GameState;
 		expect(setLoadoutOption(state, scav.id, "ammoType", type).ok).toBe(true);
 		expect(setRaidPlan(state, scav.id, "intel", "scouted").ok).toBe(true);
 		expect(dispatchRaid(state, scav.id, "courtyard", state.lastUpdated).ok).toBe(true);
+		withoutLoot(withoutArsenalLoot(state));
 		const raid = state.raids[0]!;
 		expect(raid.fieldKit).toBe(kit);
 		expect(getFieldKitStock(state)[kit]).toBe(1);
@@ -98,7 +101,7 @@ function logisticsCheckpoint(type: AmmoType, kit: FieldKit): { state: GameState;
 }
 
 describe("expanded cartridges stay real through dispatch, settlement and saved expeditions", () => {
-	test("all sixteen guns dispatch every new calibre load for exactly the previewed resources and snapshot", () => {
+	test("all platforms dispatch every new cartridge type for exactly the previewed resources and snapshot", () => {
 		expect(AMMO_TYPES).toEqual([...RELEASED_TYPES, ...EXPANDED_TYPES]);
 		let dispatches = 0;
 		for (const definition of WEAPONS) for (const type of EXPANDED_TYPES) {
@@ -124,7 +127,7 @@ describe("expanded cartridges stay real through dispatch, settlement and saved e
 			expect(restore(state)).toEqual(state);
 			dispatches++;
 		}
-		expect(dispatches).toBe(64);
+		expect(dispatches).toBe(WEAPONS.length * EXPANDED_TYPES.length);
 	});
 
 	test("each new cartridge commits the actual next-stage quote without changing its paid snapshot", () => {
@@ -212,7 +215,7 @@ describe("expanded cartridges stay real through dispatch, settlement and saved e
 
 	test("released v13 active loads retain their exact paid snapshots, cargo, recon, strategy and offline settlement", () => {
 		for (const type of RELEASED_TYPES) {
-			const { state, raid } = checkpoint(type, 1, true);
+			const { state, raid } = checkpoint(type, 1, true, true);
 			withoutLoot(state);
 			const paid = structuredClone(raid), raw = JSON.parse(saveGame(state));
 			raw.schemaVersion = 13;
@@ -270,7 +273,7 @@ describe("expanded cartridges stay real through dispatch, settlement and saved e
 	});
 
 	test("v13 and v14 cannot inject v15 choices into a free loadout, active paid load or historical squad member", () => {
-		const ready = JSON.parse(saveGame(funded())), { state, raid } = checkpoint("standard", 3);
+		const ready = JSON.parse(saveGame(funded())), { state, raid } = checkpoint("standard", 3, false, true);
 		const active = withoutLoot(JSON.parse(saveGame(state)));
 		expect(extractRaid(state, raid.id, state.lastUpdated).ok).toBe(true);
 		const history = withoutLoot(JSON.parse(saveGame(state)));

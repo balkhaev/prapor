@@ -1,4 +1,4 @@
-import { withoutRaidStrategy } from "./legacy-strategy-fixture";
+import { withoutArsenalLoot, withoutRaidStrategy } from "./legacy-strategy-fixture";
 import { describe, expect, test } from "bun:test";
 import {
 	SAVE_VERSION, advance, continueExpedition, craftModule, createGame, dispatchRaid, dispatchSquadRaid,
@@ -48,7 +48,7 @@ function freeze<T>(value: T): T {
 	return value;
 }
 /** Uses genuine seeded departures and arrivals; it never changes a combat roll. */
-function checkpoint(count = 1) {
+function checkpoint(count = 1, legacyCatalog = false) {
 	for (let offset = 0; offset < 512; offset++) {
 		const state = funded(NOW + offset);
 		detailedBuild(state);
@@ -57,6 +57,7 @@ function checkpoint(count = 1) {
 		const result = count === 1 ? dispatchRaid(state, ids[0]!, "courtyard", state.lastUpdated)
 			: dispatchSquadRaid(state, ids, "courtyard", state.lastUpdated);
 		expect(result.ok).toBe(true);
+		if (legacyCatalog) withoutArsenalLoot(state);
 		const departure = copy(state);
 		advance(state, Math.max(...state.raids.map((raid) => raid.endsAt)));
 		if (state.raids.length === count && state.raids.every((raid) => raid.expedition?.status === "choice"))
@@ -129,7 +130,7 @@ describe("weapon mechanics remain real through raid clocks and saves", () => {
 	});
 
 	test("a pre-mechanics v10 active decision retains its old branch rules and settles identically after migration", () => {
-		const { state } = checkpoint(), raw = JSON.parse(saveGame(state));
+		const { state } = checkpoint(1, true), raw = JSON.parse(saveGame(state));
 		withoutRaidStrategy(raw); raw.schemaVersion = 10;
 		for (const raid of raw.raids) { delete raid.expedition.weaponMechanics; delete raid.expedition.ammunition; }
 		const legacy = parseSave(JSON.stringify(raw))!;

@@ -12,6 +12,9 @@ const amount = (value: number) => value.toLocaleString("ru-RU", { maximumFractio
 const branches: ExpeditionBranch[] = ["scavenge", "combat", "recon"];
 
 export function ammunitionCaliberLabel(caliber: string): string {
+	if (caliber === ".45acp") return ".45 ACP";
+	if (caliber === ".300blk") return ".300 BLK";
+	if (caliber === ".338lapua") return ".338 Lapua";
 	return caliber.endsWith("g") ? `${caliber.slice(0, -1)} калибр` : `${caliber.replaceAll(".", ",").replace("x", "×")} мм`;
 }
 

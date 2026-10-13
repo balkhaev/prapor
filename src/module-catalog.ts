@@ -11,6 +11,7 @@ export interface ModuleCatalogFilters {
 const mountLabels: Record<string, string> = {
 	"rail-top": "Верхняя планка", "rail-bottom": "Нижняя планка цевья", "rail-side": "Боковая планка",
 	"barrel-clamp": "Хомут ствола", "barrel-clamp-wide": "Место для широкого хомута ствола", dovetail: "Боковой кронштейн",
+	"pistol-rail": "Аксессуарный паз рамки пистолета",
 };
 
 export function moduleMountLabel(mount: string) {
