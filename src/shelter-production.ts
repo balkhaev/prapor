@@ -45,6 +45,7 @@ const PROCESS_LABELS = {
 	radio: ["Поиск сигнала", "Расшифровка", "Сверка данных"],
 	storage: ["Подготовка", "Размещение", "Проверка"],
 	dormitory: ["Подготовка", "Размещение", "Проверка"],
+	hangar: ["Подготовка", "Размещение", "Проверка"],
 } as const;
 
 export function getShelterProductionStages(roomType: ShelterRoomType) {
@@ -64,6 +65,9 @@ export function getShelterProductionPresentation(room: RoomInstance, production:
 		return { ...empty, productName: ROOM_DEFINITIONS[room.type].label, progress, stage: "construction",
 			stageLabel: room.status === "building" ? "Строительство" : "Улучшение", stageProgress: progress };
 	}
+	if (!ROOM_DEFINITIONS[room.type].production) return {
+		...empty, productName: ROOM_DEFINITIONS[room.type].label, stageLabel: "Работает без персонала", reason: null,
+	};
 	const job = room.queue[0];
 	if (!job) return { ...empty, stageLabel: production?.reason ? "Ожидание" : production?.status ?? "Нет заказа" };
 	const modelId = job.kind === "module" ? job.modelId ?? job.output.moduleModelId : null;

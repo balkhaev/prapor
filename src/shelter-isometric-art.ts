@@ -1,7 +1,7 @@
 import type Phaser from "phaser";
 import type { ModuleSlot } from "./game/modules";
-import { ROOM_DEFINITIONS, type RoomInstance } from "./game/shelter";
-import { projectShelterPoint, shelterRoomPosition } from "./shelter-isometric";
+import { ROOM_DEFINITIONS, getRoomFootprint, type RoomInstance } from "./game/shelter";
+import { projectShelterPoint, shelterRoomPosition, shelterRoomRect } from "./shelter-isometric";
 import type { ProductionPresentation } from "./shelter-production";
 
 type Point = { x: number; y: number };
@@ -21,8 +21,12 @@ const BLACK: Material = [0x344d3a, 0x233c2c, 0x193224];
 /** Equipment remains upright: the affine projection applies only to the floor. */
 class RoomPainter {
 	private readonly origin: Point;
-	constructor(readonly g: Phaser.GameObjects.Graphics, column: number, row: number) {
+	readonly width: number;
+	readonly height: number;
+	constructor(readonly g: Phaser.GameObjects.Graphics, column: number, row: number, width = 1, height = 1) {
 		this.origin = shelterRoomPosition(column, row);
+		const rect = shelterRoomRect(column, row, width, height);
+		this.width = rect.width; this.height = rect.height;
 	}
 	p(x: number, y: number, z = 0): Point {
 		const point = projectShelterPoint({ x: this.origin.x + x, y: this.origin.y + y });
@@ -76,14 +80,14 @@ class RoomPainter {
 }
 
 function foundation(a: RoomPainter, occupied: boolean): void {
-	a.box(0, 0, 172, 100, 5, [C.floor, 0x293d2d, 0x203528], -5);
-	for (let x = 4; x < 168; x += 24) for (let y = 4; y < 97; y += 23) {
-		const w = Math.min(23.4, 168 - x), d = Math.min(22.4, 97 - y);
+	a.box(0, 0, a.width, a.height, 5, [C.floor, 0x293d2d, 0x203528], -5);
+	for (let x = 4; x < a.width - 4; x += 24) for (let y = 4; y < a.height - 3; y += 23) {
+		const w = Math.min(23.4, a.width - 4 - x), d = Math.min(22.4, a.height - 3 - y);
 		a.plane(x, y, w, d, .15, (Math.floor(x / 24) + Math.floor(y / 23)) % 2 ? 0x40583e : 0x465d43, occupied ? 1 : .58);
 	}
-	a.line([0, 100, .3], [172, 100, .3], 0x8d9b71, 1.2, .6);
-	a.line([172, 0, .3], [172, 100, .3], 0x71825e, 1.2, .6);
-	for (const [x, y] of [[7, 92], [164, 92], [164, 7]]) {
+	a.line([0, a.height, .3], [a.width, a.height, .3], 0x8d9b71, 1.2, .6);
+	a.line([a.width, 0, .3], [a.width, a.height, .3], 0x71825e, 1.2, .6);
+	for (const [x, y] of [[7, a.height - 8], [a.width - 8, a.height - 8], [a.width - 8, 7]]) {
 		a.dot(x!, y!, .5, 1.5, C.ink);
 		a.line([x! - 1, y!, .5], [x! + 1, y!, .5], C.steel, .6, .7);
 	}
@@ -91,22 +95,61 @@ function foundation(a: RoomPainter, occupied: boolean): void {
 
 function walls(a: RoomPainter, accent: number): void {
 	// Rear walls are deliberately cut low so every neighbouring room stays readable.
-	a.box(0, 0, 172, 4, 22, [0x839272, 0x52684c, 0x3c533b]);
-	a.box(0, 4, 4, 96, 22, [0x839272, 0x4c6044, 0x42583e]);
+	a.box(0, 0, a.width, 5, 27, [0x8d9a7d, 0x617557, 0x3c533b]);
+	a.box(0, 5, 5, a.height - 5, 27, [0x8d9a7d, 0x576c4f, 0x42583e]);
 	for (const height of [6, 14]) {
-		a.line([4, 4.2, height], [171, 4.2, height], 0x344c36, .65, .65);
-		a.line([4.2, 4, height], [4.2, 99, height], 0x344c36, .65, .65);
+		a.line([5, 5.2, height], [a.width - 1, 5.2, height], 0x344c36, .65, .65);
+		a.line([5.2, 5, height], [5.2, a.height - 1, height], 0x344c36, .65, .65);
 	}
-	for (let x = 23; x < 171; x += 29) a.line([x, 4.2, 6], [x, 4.2, 14], 0x344c36, .6, .45);
-	for (let y = 20; y < 98; y += 27) a.line([4.2, y, 6], [4.2, y, 14], 0x344c36, .6, .45);
-	a.line([9, 5, 18], [164, 5, 18], accent, 1.4, .5);
-	a.line([5, 9, 18], [5, 91, 18], accent, 1.3, .35);
+	for (let x = 23; x < a.width; x += 29) a.line([x, 5.2, 6], [x, 5.2, 14], 0x344c36, .6, .45);
+	for (let y = 20; y < a.height; y += 27) a.line([5.2, y, 6], [5.2, y, 14], 0x344c36, .6, .45);
+	a.line([9, 6, 23], [a.width - 8, 6, 23], accent, 1.4, .5);
+	a.line([6, 9, 23], [6, a.height - 9, 23], accent, 1.3, .35);
+	// Exterior corner posts and a low front sill distinguish separate buildings.
+	for (const x of [0, a.width - 6]) a.box(x, a.height - 6, 6, 6, 14, OLIVE);
+	a.box(6, a.height - 3, Math.max(1, a.width / 2 - 24), 3, 3, OLIVE);
+	a.box(a.width / 2 + 18, a.height - 3, Math.max(1, a.width / 2 - 24), 3, 3, OLIVE);
 	for (const x of [29, 119]) {
 		a.line([x, 5, 20], [x + 20, 5, 20], C.ink, 3);
 		a.line([x + 2, 5, 20], [x + 18, 5, 20], C.pale, 1.7, .95);
 	}
 	a.box(8, 8, 8, 8, 12, BLACK);
 	a.line([10, 16, 8], [14, 16, 8], accent, 1.2, .75);
+}
+
+function hangar(a: RoomPainter): void {
+	const cx = a.width / 2, cy = a.height * .52;
+	for (let x = 28; x < a.width - 40; x += 48) {
+		a.box(x, 18, 38, 20, 12, STEEL);
+		a.crate(x + 4, 22, 25, 15, 12, 12);
+	}
+	// A wheeled transport under a gantry: large equipment has a real large footprint.
+	a.shadow(cx - 56, cy - 24, 112, 52);
+	for (const x of [cx - 48, cx + 30]) for (const y of [cy - 27, cy + 20]) a.box(x, y, 20, 9, 11, BLACK);
+	a.box(cx - 58, cy - 22, 111, 43, 14, OLIVE, 6);
+	a.box(cx - 49, cy - 18, 31, 35, 14, STEEL, 20);
+	a.plane(cx - 45, cy - 14, 23, 25, 34.2, 0x91b0a6);
+	a.box(cx - 10, cy - 17, 55, 32, 4, WOOD, 20);
+	for (const x of [cx - 75, cx + 69]) { a.box(x, cy - 37, 7, 76, 35, STEEL); a.box(x - 8, cy + 32, 22, 10, 5, BLACK); }
+	a.box(cx - 75, cy - 37, 151, 7, 6, STEEL, 35);
+	a.line([cx, cy - 34, 39], [cx, cy - 34, 18], C.amber, 1.4);
+	for (let x = 16; x < a.width - 12; x += 18) a.line([x, a.height - 23, .8], [x + 9, a.height - 23, .8], C.amber, 2, .6);
+	a.table(a.width - 64, a.height - 70, 43, 24, 14, WOOD);
+}
+
+/** Free land stays soil and grass; its boundary becomes clear on hover or selection. */
+export function paintIsometricLand(g: Phaser.GameObjects.Graphics, column: number, row: number, owned: boolean): void {
+	const a = new RoomPainter(g, column, row);
+	a.plane(0, 0, 172, 100, 0, owned ? 0x4b6245 : 0x334835, owned ? .88 : .72);
+	const seed = Math.abs(column * 73 + row * 151);
+	for (let i = 0; i < 22; i++) {
+		const x = 8 + (seed + i * 37) % 158, y = 5 + (seed * 3 + i * 29) % 90;
+		a.line([x, y, .1], [x + 4, y - 2, .1], i % 3 ? 0x78905d : 0x2e4833, .7, .5);
+	}
+	if (!owned) for (const [x, y] of [[0, 0], [172, 100]]) {
+		a.line([x!, y!, 0], [x!, y!, 8], C.wood, 1.3, .7);
+		a.line([x! - 2, y!, 7], [x! + 3, y!, 7], C.amber, 1.4, .8);
+	}
 }
 
 function workshop(a: RoomPainter): void {
@@ -259,12 +302,9 @@ function construction(a: RoomPainter): void {
 
 /** Draw one cutaway bunker cell; all output is in the shared projected world space. */
 export function paintIsometricRoom(g: Phaser.GameObjects.Graphics, column: number, row: number, room: RoomInstance | null): void {
-	const a = new RoomPainter(g, column, row);
+	if (!room) { paintIsometricLand(g, column, row, true); return; }
+	const footprint = getRoomFootprint(room), a = new RoomPainter(g, column, row, footprint.width, footprint.height);
 	foundation(a, Boolean(room));
-	if (!room) {
-		for (const x of [23, 147]) for (const y of [22, 77]) a.line([x, y, .8], [x + 7, y, .8], C.steel, .8, .35);
-		return;
-	}
 	walls(a, Number.parseInt(ROOM_DEFINITIONS[room.type].color.slice(1), 16));
 	if (room.status === "building") { construction(a); return; }
 	switch (room.type) {
@@ -275,6 +315,7 @@ export function paintIsometricRoom(g: Phaser.GameObjects.Graphics, column: numbe
 		case "radio": radio(a); break;
 		case "storage": storage(a); break;
 		case "dormitory": dormitory(a); break;
+		case "hangar": hangar(a); break;
 	}
 	if (room.status === "upgrading") construction(a);
 }
