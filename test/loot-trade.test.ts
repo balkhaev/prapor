@@ -56,7 +56,8 @@ describe("named physical raid loot", () => {
 		expect(weight("depot", "recon", "patrol-log")).toBeGreaterThan(weight("depot", "scavenge", "patrol-log"));
 		expect(getRaidLootPool("__proto__", "scavenge", 1)).toEqual([]);
 		const found = new Set<string>();
-		for (const map of MAPS) for (let seed = 1; seed <= 500; seed++) for (const model of rollRaidLoot(map.id, "scavenge", 3, random(seed * 7919))) found.add(model.id);
+		// Deeper junk now occupies only 6% of the pool across twelve models.
+		for (const map of MAPS) for (let seed = 1; seed <= 1000; seed++) for (const model of rollRaidLoot(map.id, "scavenge", 3, random(seed * 7919))) found.add(model.id);
 		expect(found.size).toBe(50);
 	});
 	test("new loot changes no combat, cash, parts or perk rolls and only begins on newly dispatched sorties", () => {

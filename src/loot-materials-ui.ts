@@ -2,6 +2,7 @@ import { LOOT_MODEL_BY_ID } from './game/loot';
 import { getLootUses } from './game/loot-uses';
 import type { ProductionJob } from './game/shelter';
 import { RARITY_LABELS } from './game/data';
+import { FIELD_KITS } from './game/shelter-logistics';
 
 const escape = (value: unknown) => String(value).replace(/[&<>"']/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[char]!));
 export interface LootRequirementProgress { modelId: string; required: number; owned: number }
@@ -32,4 +33,9 @@ export function productionLootReceipt(job: Pick<ProductionJob,'paidLoot'>): stri
 }
 export function productionRefundLabel(job: Pick<ProductionJob,'paidLoot'|'workDone'>): string {
   return job.workDone>0?'Работа начата · отмена без возврата':job.paidLoot?.length?'Не начат · вернутся только рубли и припасы':'Не начат · полный возврат при отмене';
+}
+export function productionOutputSnapshot(job: Pick<ProductionJob,'output'|'workRequired'>): string {
+  const labels={ammo:'Патроны',medicine:'Медикаменты',scrap:'Детали',intel:'Разведданные'};
+  const outputs=[job.output.fieldKit?`${FIELD_KITS[job.output.fieldKit].label} +1`:'',...Object.entries(job.output.supplies).filter(([,amount])=>amount>0).map(([key,amount])=>`${labels[key as keyof typeof labels]} +${amount}`)].filter(Boolean);
+  return `<div class="recipe-output">${outputs.map(output=>`<span>${escape(output)}</span>`).join('')}</div><small class="production-paid-duration">Оплаченная базовая работа: ${Math.round(job.workRequired/1_000_000)} с.</small>`;
 }

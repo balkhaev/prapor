@@ -164,7 +164,8 @@ import { createLiveMode } from "./live-ui";
 import { fleaPage, fleaPricePreview, readFleaOrder, readFleaInteger, raidLootReceipt, raidLootOverflow, raidGearReceipt, barterConfirmation, type FleaView, type FleaTab, type TradeKindFilter, type LootCatalogGroup } from './flea-ui';
 import { getBarterQuote } from './game/barter';
 import { getLootUses } from './game/loot-uses';
-import { productionLootReceipt, productionRefundLabel } from './loot-materials-ui';
+import { readLootHunt, lootHuntHint, type LootHuntSelection } from './loot-decision-ui';
+import { productionLootReceipt, productionRefundLabel, productionOutputSnapshot } from './loot-materials-ui';
 import { getTradeInventory, getTradeQuote, LOOT_MODEL_BY_ID } from './game/engine';
 import { MARKET_MAX_ACTIVE } from './game/flea';
 
@@ -297,6 +298,7 @@ const selectedPerks = new Map<string, RunPerk>();
 let contractFilter: "open" | "done" | "all" = "open";
 let achievementFilter: AchievementFilter = "all";
 const fleaView: FleaView = {tab:'inventory',search:'',kind:'all',draft:null,market:null,loading:false,error:'',busy:false};
+let lootHunt: LootHuntSelection | null = null;
 let barterDraft: {offerId:string;itemIds:string[]} | null = null;
 let fleaReadGeneration=0;
 let achievementNoticeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -339,10 +341,10 @@ function applySession(session: GameSession) {
 	moduleRarityFilter = session.filters.moduleRarity as typeof moduleRarityFilter; roomModuleSearch = session.filters.roomModuleSearch; roomModuleSlot = session.filters.roomModuleSlot;
 	moduleCraftForWeapon = session.filters.craftForWeapon; contractFilter = session.filters.contracts;
 	achievementFilter = readAchievementFilter(session.filters.achievements);
-	fleaView.tab=session.flea.tab; fleaView.search=session.flea.search; fleaView.kind=session.flea.kind; fleaView.barterModelId=session.flea.barterModelId??null; fleaView.catalogGroup=session.flea.catalogGroup??'all';
+	fleaView.tab=session.flea.tab; fleaView.search=session.flea.search; fleaView.kind=session.flea.kind; fleaView.barterModelId=session.flea.barterModelId??null; fleaView.catalogGroup=session.flea.catalogGroup??'all'; lootHunt=readLootHunt(session.flea.hunt);
 }
 function captureSession(): GameSession {
-	return readGameSession({version:1,page,view:worldView,mapId:selectedMap,weaponId:selectedWeapon,scavId:selectedScav,roomId:selectedRoomId,raidId:selectedRaidId,squadDraft,context:contextMode,site:selectedShelterSite,roomTab:roomContextTab,armoryTab:arsenalTab,moduleSlot:selectedModuleSlot,benchModuleId:selectedBenchModule,workshopId:productionWorkshopId,perks:[...selectedPerks].flatMap(([raidId,perk])=>{const raid=state.raids.find(item=>item.id===raidId);return raid?.expedition?[{raidId,perk,stage:raid.expedition.stage,seed:raid.seed}]:[]}),flea:{tab:fleaView.tab,search:fleaView.search,kind:fleaView.kind,barterModelId:fleaView.barterModelId,catalogGroup:fleaView.catalogGroup},journal:[...document.querySelectorAll<HTMLDetailsElement>('details[data-report][open]')].map(item=>item.dataset.report),filters:{weaponSearch,category,collection,moduleSearch,benchSearch:benchPartSearch,moduleSlot:moduleSlotFilter,moduleRarity:moduleRarityFilter,roomModuleSearch,roomModuleSlot,craftForWeapon:moduleCraftForWeapon,contracts:contractFilter,achievements:achievementFilter},presentation:world?.getPresentationState() ?? presentationFallback},state);
+	return readGameSession({version:1,page,view:worldView,mapId:selectedMap,weaponId:selectedWeapon,scavId:selectedScav,roomId:selectedRoomId,raidId:selectedRaidId,squadDraft,context:contextMode,site:selectedShelterSite,roomTab:roomContextTab,armoryTab:arsenalTab,moduleSlot:selectedModuleSlot,benchModuleId:selectedBenchModule,workshopId:productionWorkshopId,perks:[...selectedPerks].flatMap(([raidId,perk])=>{const raid=state.raids.find(item=>item.id===raidId);return raid?.expedition?[{raidId,perk,stage:raid.expedition.stage,seed:raid.seed}]:[]}),flea:{tab:fleaView.tab,search:fleaView.search,kind:fleaView.kind,barterModelId:fleaView.barterModelId,catalogGroup:fleaView.catalogGroup,...(lootHunt?{hunt:lootHunt}:{})},journal:[...document.querySelectorAll<HTMLDetailsElement>('details[data-report][open]')].map(item=>item.dataset.report),filters:{weaponSearch,category,collection,moduleSearch,benchSearch:benchPartSearch,moduleSlot:moduleSlotFilter,moduleRarity:moduleRarityFilter,roomModuleSearch,roomModuleSlot,craftForWeapon:moduleCraftForWeapon,contracts:contractFilter,achievements:achievementFilter},presentation:world?.getPresentationState() ?? presentationFallback},state);
 }
 function scheduleSessionSave() {
 	if (!serverReady || saveConflict || protectedSave) return;
@@ -595,7 +597,7 @@ async function loadServerProgress() {
         return;
     productionReserveDraft = null;
     roomStockTargetDrafts.clear();
-    fleaReadGeneration++; fleaView.market=null; fleaView.draft=null; fleaView.barterModelId=null; fleaView.catalogGroup='all'; fleaView.receivedGearId=null; barterDraft=null; fleaView.loading=false; fleaView.error='';
+    fleaReadGeneration++; fleaView.market=null; fleaView.draft=null; fleaView.barterModelId=null; fleaView.catalogGroup='all'; fleaView.receivedGearId=null; lootHunt=null; barterDraft=null; fleaView.loading=false; fleaView.error='';
     const presentation = storedSession();
     serverReady = false;
     serverSnapshot = null;
@@ -1711,9 +1713,6 @@ function roomName(id: string | null) {
 	const room = state.shelter.rooms.find((item) => item.id === id);
 	return room ? ROOM_DEFINITIONS[room.type].label : "Комната";
 }
-function productionOutput(output: GameState["supplies"]) {
-	return `<div class="recipe-output">${Object.entries(output).filter(([, amount]) => amount > 0).map(([key, amount]) => `<span>${icon(key, 13)} ${supplyName(key)} +${amount}</span>`).join("")}</div>`;
-}
 function shelterHomeNote() {
 	const busy = state.shelter.rooms.filter((room) => room.queue.length || room.recipeId);
 	const working = state.scavs.filter((scav) => scav.assignment).length;
@@ -1872,7 +1871,7 @@ function roomQueuePanel(room: RoomInstance) {
 		const label = model?.label ?? recipe?.label ?? "Производственная партия";
 		const fraction = job.workRequired ? Math.min(1, job.workDone / job.workRequired) : 0;
 		const current = index === 0;
-		return `<article class="room-job ${current ? "running" : ""}"><div class="room-job-head"><strong>${e(label)}</strong><span ${current ? `data-job-time="${job.id}"` : ""}>${current ? production.remainingSeconds == null ? "ПАУЗА" : seconds(production.remainingSeconds) : `ЗАКАЗ 0${index + 1}`}</span></div>${model ? `<div class="room-job-art">${moduleArt(model)}</div>` : job.output.fieldKit ? `<div class="recipe-output"><span>${e(FIELD_KITS[job.output.fieldKit].label)} +1</span></div>` : productionOutput(job.output.supplies)}<div class="progress"><i data-job-progress="${job.id}" style="width:${Math.round(fraction * 100)}%"></i></div><p ${current ? `data-job-status="${job.id}"` : ""}>${current ? e(production.reason ?? production.status) : "Ожидает завершения предыдущей партии"}</p>${productionLootReceipt(job)}<div class="room-job-foot"><span data-job-refund="${job.id}">${e(productionRefundLabel(job))}</span><button class="button ghost small" data-action="cancel-production" data-id="${room.id}" data-job-id="${job.id}" data-focus-key="cancel-${job.id}">Отменить</button></div></article>`;
+		return `<article class="room-job ${current ? "running" : ""}"><div class="room-job-head"><strong>${e(label)}</strong><span ${current ? `data-job-time="${job.id}"` : ""}>${current ? production.remainingSeconds == null ? "ПАУЗА" : seconds(production.remainingSeconds) : `ЗАКАЗ 0${index + 1}`}</span></div>${model ? `<div class="room-job-art">${moduleArt(model)}</div>` : productionOutputSnapshot(job)}<div class="progress"><i data-job-progress="${job.id}" style="width:${Math.round(fraction * 100)}%"></i></div><p ${current ? `data-job-status="${job.id}"` : ""}>${current ? e(production.reason ?? production.status) : "Ожидает завершения предыдущей партии"}</p>${productionLootReceipt(job)}<div class="room-job-foot"><span data-job-refund="${job.id}">${e(productionRefundLabel(job))}</span><button class="button ghost small" data-action="cancel-production" data-id="${room.id}" data-job-id="${job.id}" data-focus-key="cancel-${job.id}">Отменить</button></div></article>`;
 	}).join("");
 }
 function roomResourcesPanel(room: RoomInstance) {
@@ -1945,6 +1944,7 @@ function render() {
 	const tabsScroll = panel.querySelector<HTMLElement>(".armory-tabs")?.scrollLeft ?? 0;
 	const panelFocus = document.activeElement instanceof HTMLElement && panel.contains(document.activeElement) ? document.activeElement.dataset.focusKey : undefined;
 	const inputSelection=document.activeElement instanceof HTMLInputElement&&panel.contains(document.activeElement)?[document.activeElement.selectionStart,document.activeElement.selectionEnd] as const:null;
+	const expandedLootDecisions = [...panel.querySelectorAll<HTMLDetailsElement>('details[data-loot-decision][open]')].map(node=>node.dataset.lootDecision);
 	const expandedReports = [...resumedJournal, ...Array.from(panel.querySelectorAll<HTMLDetailsElement>("details[data-report][open]")).map((node) => node.dataset.report)];
 	const expandedSocial = Array.from(panel.querySelectorAll<HTMLDetailsElement>('details[data-social-detail-key][open]')).map(node => node.dataset.socialDetailKey);
 	const expandedAchievements = Array.from(panel.querySelectorAll<HTMLDetailsElement>('details[data-achievement-detail][open]')).map(node => node.dataset.achievementDetail);
@@ -2015,10 +2015,10 @@ function render() {
 		}</div>`;
 	if (page === "raids") {
 		const map = MAP_BY_ID[selectedMap]!;
-		panel.innerHTML = `${squadRaidComposer(state, squadDraft, selectedMap)}${raidRepresentatives(state.raids).filter(raid=>raid.squad&&raid.expedition?.status!=="choice").map(raid=>squadRaidOngoing(state,raid)).join("")}${operationsBar()}<div class="section-head"><h2>Выбери сектор</h2><button class="text-button" data-action="toggle-map" aria-expanded="${showTacticalMap}">${icon("raids", 16)} ${showTacticalMap ? "Скрыть карту" : "Тактическая карта"}</button></div><div class="maps">${MAPS.map((m, i) => `<button class="map-card ${m.id === selectedMap ? "selected" : ""} ${state.level < m.level ? "locked" : ""}" data-map="${m.id}" aria-pressed="${m.id === selectedMap}" ${state.level < m.level ? "disabled" : ""}><span class="map-graphic" style="--map-color:${m.accent}">${icon("raids", 70)}</span><span class="map-index">СЕКТОР 0${i + 1}${state.level < m.level ? ` · ${icon("lock", 10)} УР. ${m.level}` : ""}</span><h3>${e(m.name)}</h3><p>${e(m.subtitle)}</p><div class="map-meta"><span>${seconds(m.duration)} · ${m.ammoCost} патр.${m.intelCost ? ` · ${m.intelCost} разв.` : ""}</span><span>${m.reward[0]}–${m.reward[1]} ₽</span></div></button>`).join("")}</div><div class="selected-sector"><div><span class="eyebrow">Выбранный сектор</span><h3>${e(map.name)}</h3><p>${e(map.description)}</p></div><span class="sector-reward"><strong>${map.reward[0]}–${map.reward[1]} ₽</strong><small>Добыча первого этапа</small></span></div>${sectorIntelPanel(state, selectedMap)}<div class="section-head"><h2>Снаряжение отряда</h2><button class="button secondary small" data-action="recruit">${icon("people", 15)} Выбрать кандидата →</button></div><div class="card-grid scav-grid">${state.scavs.map(scavCard).join("") || '<div class="empty">Отряд потерян. Найми нового дикого бесплатно и начни снова.</div>'}</div><p class="muted roster-capacity">Отряд: ${state.scavs.length} / ${getScavCapacity(state)} · Улучшай радиорубку, чтобы нанимать больше диких. Медблок восстанавливает здоровье со временем.</p>`;
+		panel.innerHTML = `${lootHuntHint(state,lootHunt)}${squadRaidComposer(state, squadDraft, selectedMap)}${raidRepresentatives(state.raids).filter(raid=>raid.squad&&raid.expedition?.status!=="choice").map(raid=>squadRaidOngoing(state,raid)).join("")}${operationsBar()}<div class="section-head"><h2>Выбери сектор</h2><button class="text-button" data-action="toggle-map" aria-expanded="${showTacticalMap}">${icon("raids", 16)} ${showTacticalMap ? "Скрыть карту" : "Тактическая карта"}</button></div><div class="maps">${MAPS.map((m, i) => `<button class="map-card ${m.id === selectedMap ? "selected" : ""} ${state.level < m.level ? "locked" : ""}" data-map="${m.id}" aria-pressed="${m.id === selectedMap}" ${state.level < m.level ? "disabled" : ""}><span class="map-graphic" style="--map-color:${m.accent}">${icon("raids", 70)}</span><span class="map-index">СЕКТОР 0${i + 1}${state.level < m.level ? ` · ${icon("lock", 10)} УР. ${m.level}` : ""}</span><h3>${e(m.name)}</h3><p>${e(m.subtitle)}</p><div class="map-meta"><span>${seconds(m.duration)} · ${m.ammoCost} патр.${m.intelCost ? ` · ${m.intelCost} разв.` : ""}</span><span>${m.reward[0]}–${m.reward[1]} ₽</span></div></button>`).join("")}</div><div class="selected-sector"><div><span class="eyebrow">Выбранный сектор</span><h3>${e(map.name)}</h3><p>${e(map.description)}</p></div><span class="sector-reward"><strong>${map.reward[0]}–${map.reward[1]} ₽</strong><small>Добыча первого этапа</small></span></div>${sectorIntelPanel(state, selectedMap)}<div class="section-head"><h2>Снаряжение отряда</h2><button class="button secondary small" data-action="recruit">${icon("people", 15)} Выбрать кандидата →</button></div><div class="card-grid scav-grid">${state.scavs.map(scavCard).join("") || '<div class="empty">Отряд потерян. Найми нового дикого бесплатно и начни снова.</div>'}</div><p class="muted roster-capacity">Отряд: ${state.scavs.length} / ${getScavCapacity(state)} · Улучшай радиорубку, чтобы нанимать больше диких. Медблок восстанавливает здоровье со временем.</p>`;
 	}
 	if (page === "arsenal") renderArsenal();
-	if (page === "flea") {fleaView.busy=gameCommandPending;panel.innerHTML=fleaPage(state,fleaView);}
+	if (page === "flea") {fleaView.busy=gameCommandPending;panel.innerHTML=fleaPage(state,fleaView);for(const details of panel.querySelectorAll<HTMLDetailsElement>('details[data-loot-decision]'))if(expandedLootDecisions.includes(details.dataset.lootDecision))details.open=true;}
 	if (page === "recruits") panel.innerHTML = recruitmentPanel(state);
 	if (page === "squad") panel.innerHTML = squadRelationsPanel(state);
 	if (page === "achievements") panel.innerHTML = achievementsPanel(state, achievementFilter, new Set([...freshAchievements, ...getUnseenAchievementIds(state)]));
@@ -2408,6 +2408,12 @@ document.addEventListener("click", async (event) => {
 	}
 	const id = target.dataset.id ?? "";
 	switch (target.dataset.action) {
+		case 'flea-clear-hunt':lootHunt=null;render();break;
+		case 'flea-hunt':{
+			const hunt=readLootHunt({modelId:target.dataset.model,mapId:target.dataset.huntMap,branch:target.dataset.branch,depth:Number(target.dataset.depth)});
+			if(!hunt||state.level<(MAP_BY_ID[hunt.mapId]?.level??Infinity))break;
+			lootHunt=hunt;selectedMap=hunt.mapId;page="raids";render();break;
+		}
 		case 'flea-use-construction':{
 			const type=target.dataset.roomType;
 			if(!type||!Object.hasOwn(ROOM_DEFINITIONS,type))break;
