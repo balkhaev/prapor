@@ -126,7 +126,8 @@ describe("expansion save integrity", () => {
 		const value = JSON.parse(saveGame(original));
 		value.schemaVersion = 5;
 		delete value.recruitment;
-		for (const scav of value.scavs) delete scav.profile;
+		delete value.memorials;
+		for (const scav of value.scavs) { delete scav.profile; delete scav.story; }
 		delete value.shelter.sites; delete value.shelter.expansions;
 		expect(parseSave(JSON.stringify(value))).toEqual(original);
 		const migrated = restored(original);
