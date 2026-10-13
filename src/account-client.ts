@@ -1,6 +1,16 @@
 export interface AccountUser {
 	id: string;
 	username: string;
+	email: string | null;
+	emailVerified: boolean;
+	pendingEmail: string | null;
+}
+
+export type AccountEmailDelivery = "sent" | "failed" | "disabled" | "none" | null;
+
+export interface AccountEmailResult {
+	user: AccountUser;
+	emailDelivery: AccountEmailDelivery;
 }
 
 export type AccountSavedAt = number | string | null;
@@ -25,9 +35,14 @@ export class AccountApiError extends Error {
 }
 
 function messageForError(status: number, code: string, retryAfter: number | null): string {
-	if (code === "timeout") return "Сервер не ответил вовремя. Проверь подключение. Операция могла завершиться — попробуй войти перед повторной регистрацией.";
+	if (code === "timeout") return "Сервер не ответил вовремя. Операция могла завершиться. Проверь подключение и состояние аккаунта; после регистрации или смены пароля попробуй войти.";
 	if (code === "network") return "Нет связи с сервером. Игра на этом устройстве доступна; попробуй ещё раз, когда появится интернет.";
 	if (code === "invalid_response") return "Сервер прислал неполный ответ. Попробуй ещё раз позже.";
+	if (code === "email_disabled") return "Отправка писем сейчас недоступна. Вход и восстановление по коду работают.";
+	if (["invalid_email", "email_invalid"].includes(code)) return "Введи полный адрес почты, например name@example.com.";
+	if (["email_taken", "email_exists"].includes(code)) return "Этот адрес уже привязан к другому аккаунту. Используй другую почту.";
+	if (code === "email_already_verified") return "Почта уже подтверждена. Обнови страницу, чтобы увидеть её статус.";
+	if (["invalid_token", "expired_token", "token_expired", "invalid_email_token", "invalid_reset_token"].includes(code)) return "Ссылка недействительна или срок её действия истёк. Запроси новое письмо.";
 	if (status === 429) return retryAfter && retryAfter > 0 ? `Слишком много попыток. Подожди ${Math.ceil(retryAfter)} сек. и повтори.` : "Слишком много попыток. Подожди немного и повтори.";
 	if (status === 409 && ["username_taken", "username_exists", "account_exists"].includes(code)) return "Этот позывной уже занят. Выбери другой или войди в свой аккаунт.";
 	if (status === 409) return "В аккаунте появилось более новое сохранение. Выбери убежище для продолжения, прежде чем сохранять снова.";
@@ -53,7 +68,18 @@ function record(value: unknown): value is Record<string, unknown> {
 
 function readUser(value: unknown): AccountUser {
 	if (!record(value) || typeof value.id !== "string" || typeof value.username !== "string" || !value.id || !/^[A-Za-z0-9_-]{3,24}$/.test(value.username)) throw new AccountApiError(0, "invalid_response");
-	return { id: value.id, username: value.username };
+	if (!(value.email === undefined || value.email === null || typeof value.email === "string") || !(value.emailVerified === undefined || typeof value.emailVerified === "boolean") || !(value.pendingEmail === undefined || value.pendingEmail === null || typeof value.pendingEmail === "string")) throw new AccountApiError(0, "invalid_response");
+	return { id: value.id, username: value.username, email: typeof value.email === "string" ? value.email : null, emailVerified: value.emailVerified === true, pendingEmail: typeof value.pendingEmail === "string" ? value.pendingEmail : null };
+}
+
+function readDelivery(value: unknown): AccountEmailDelivery {
+	if (value === undefined || value === null) return null;
+	if (value === "sent" || value === "failed" || value === "disabled" || value === "none") return value;
+	throw new AccountApiError(0, "invalid_response");
+}
+
+function readEmailResult(value: Record<string, unknown>): AccountEmailResult {
+	return { user: readUser(value.user), emailDelivery: readDelivery(value.emailDelivery) };
 }
 
 function readReceipt(value: unknown): Pick<AccountSave, "revision" | "savedAt"> {
@@ -93,14 +119,14 @@ async function request(path: string, method = "GET", body?: Record<string, unkno
 }
 
 export const accountApi = {
-	async session(): Promise<{ user: AccountUser | null }> {
+	async session(): Promise<{ user: AccountUser | null; emailEnabled: boolean }> {
 		const result = await request("/api/auth/session");
-		return { user: result.user === null ? null : readUser(result.user) };
+		return { user: result.user === null ? null : readUser(result.user), emailEnabled: result.emailEnabled === true };
 	},
-	async register(username: string, password: string): Promise<{ user: AccountUser; recoveryCode: string }> {
-		const result = await request("/api/auth/register", "POST", { username, password });
+	async register(username: string, password: string, email?: string): Promise<{ user: AccountUser; recoveryCode: string; emailDelivery: AccountEmailDelivery }> {
+		const result = await request("/api/auth/register", "POST", { username, password, ...(email ? { email } : {}) });
 		if (typeof result.recoveryCode !== "string" || !result.recoveryCode) throw new AccountApiError(0, "invalid_response");
-		return { user: readUser(result.user), recoveryCode: result.recoveryCode };
+		return { user: readUser(result.user), recoveryCode: result.recoveryCode, emailDelivery: readDelivery(result.emailDelivery) };
 	},
 	async login(username: string, password: string): Promise<{ user: AccountUser }> {
 		const result = await request("/api/auth/login", "POST", { username, password });
@@ -108,6 +134,24 @@ export const accountApi = {
 	},
 	async recover(username: string, recoveryCode: string, password: string): Promise<{ recoveryCode: string }> {
 		const result = await request("/api/auth/recover", "POST", { username, recoveryCode, password });
+		if (typeof result.recoveryCode !== "string" || !result.recoveryCode) throw new AccountApiError(0, "invalid_response");
+		return { recoveryCode: result.recoveryCode };
+	},
+	async setEmail(userId: string, email: string, password: string): Promise<AccountEmailResult> {
+		return readEmailResult(await request("/api/auth/email", "POST", { email, password }, { "X-Prapor-Account": userId }));
+	},
+	async resendEmail(userId: string): Promise<AccountEmailResult> {
+		return readEmailResult(await request("/api/auth/email/resend", "POST", {}, { "X-Prapor-Account": userId }));
+	},
+	async forgotPassword(email: string): Promise<void> {
+		await request("/api/auth/password/forgot", "POST", { email });
+	},
+	async verifyEmail(token: string): Promise<{ user: AccountUser | null }> {
+		const result = await request("/api/auth/email/verify", "POST", { token });
+		return { user: result.user === undefined || result.user === null ? null : readUser(result.user) };
+	},
+	async resetPassword(token: string, password: string): Promise<{ recoveryCode: string }> {
+		const result = await request("/api/auth/password/reset", "POST", { token, password });
 		if (typeof result.recoveryCode !== "string" || !result.recoveryCode) throw new AccountApiError(0, "invalid_response");
 		return { recoveryCode: result.recoveryCode };
 	},

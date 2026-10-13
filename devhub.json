@@ -33,7 +33,10 @@
         "HOST": "127.0.0.1",
         "PORT": "3021",
         "APP_ORIGINS": "http://127.0.0.1:3020,http://localhost:3020,http://127.0.0.1:3021",
-        "ACCOUNT_DB_PATH": "F:/AI/prapor/accounts.sqlite"
+        "ACCOUNT_DB_PATH": "F:/AI/prapor/accounts.sqlite",
+        "RESEND_API_KEY_FILE": "F:/AI/prapor/resend_api_key",
+        "RESEND_FROM": "ggpick <noreply@ggpick.club>",
+        "PUBLIC_BASE_URL": "http://127.0.0.1:3020"
       }
     }
   ]
