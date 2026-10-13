@@ -1,7 +1,7 @@
 import { MAP_BY_ID, type Supplies } from "./data";
 import type { GameState, Scav } from "./engine";
 
-export type RaidObjective = "general" | "ammo" | "medicine" | "scrap" | "intel";
+export type RaidObjective = "general" | "ammo" | "medicine" | "scrap" | "intel" | "boss";
 export type RaidPreparation = "none" | "scouted";
 export interface RaidPlan { objective: RaidObjective; preparation: RaidPreparation }
 export interface SectorIntel { knowledge: number; pressure: number }
@@ -17,6 +17,7 @@ export const RAID_OBJECTIVES: Record<RaidObjective, {
 	medicine: { label: "Медицинские запасы", description: "+2 медикамента за пройденный этап; путь на 10% дольше. Денег на 25% меньше, шанс каждого оружейного модуля вдвое ниже.", supply: "medicine", resourceBonus: 2, moneyMultiplier: .75, moduleMultiplier: .5, chanceBonus: 0, durationMultiplier: 1.1 },
 	scrap: { label: "Детали для убежища", description: "+3 детали за пройденный этап. Денег на 25% меньше, шанс каждого оружейного модуля вдвое ниже.", supply: "scrap", resourceBonus: 3, moneyMultiplier: .75, moduleMultiplier: .5, chanceBonus: 0, durationMultiplier: 1 },
 	intel: { label: "Разведданные", description: "+2 разведданных за пройденный этап; шанс +2 п.п. Успешная эвакуация изучает сектор. Денег на 25% меньше, шанс каждого оружейного модуля вдвое ниже.", supply: "intel", resourceBonus: 2, moneyMultiplier: .75, moduleMultiplier: .5, chanceBonus: .02, durationMultiplier: 1 },
+	boss: { label: "Охота на босса", description: "Найди главаря на боевом маршруте его этапа. Бой требует больше припасов; награда остаётся в грузе до эвакуации.", supply: null, resourceBonus: 0, moneyMultiplier: 1, moduleMultiplier: 1, chanceBonus: 0, durationMultiplier: 1 },
 };
 export const RAID_PREPARATIONS: Record<RaidPreparation, {
 	label: string; description: string; money: number; intel: number; chanceBonus: number; durationMultiplier: number;
@@ -52,9 +53,10 @@ function object(value: unknown, allowed: readonly string[]): Record<string, unkn
 	if (Object.keys(source).length !== allowed.length || allowed.some(key => !Object.hasOwn(source, key))) throw new Error("strategy-fields");
 	return source;
 }
-export function parseRaidPlan(value: unknown): RaidPlan {
+export function parseRaidPlan(value: unknown, version = 26): RaidPlan {
 	const source = object(value, ["objective", "preparation"]);
 	if (typeof source.objective !== "string" || !Object.hasOwn(RAID_OBJECTIVES, source.objective)
+		|| source.objective === "boss" && version < 26
 		|| typeof source.preparation !== "string" || !Object.hasOwn(RAID_PREPARATIONS, source.preparation)) throw new Error("strategy-plan");
 	return { objective: source.objective as RaidObjective, preparation: source.preparation as RaidPreparation };
 }
@@ -64,9 +66,9 @@ export function parseSectorIntel(value: unknown): SectorIntel {
 		|| !Number.isInteger(source.pressure) || (source.pressure as number) < 0 || (source.pressure as number) > 6) throw new Error("strategy-sector");
 	return { knowledge: source.knowledge as number, pressure: source.pressure as number };
 }
-export function parseRaidStrategy(value: unknown): RaidStrategy {
+export function parseRaidStrategy(value: unknown, version = 26): RaidStrategy {
 	const source = object(value, ["objective", "preparation", "knowledge", "pressure"]);
-	return { ...parseRaidPlan({ objective: source.objective, preparation: source.preparation }), ...parseSectorIntel({ knowledge: source.knowledge, pressure: source.pressure }) };
+	return { ...parseRaidPlan({ objective: source.objective, preparation: source.preparation }, version), ...parseSectorIntel({ knowledge: source.knowledge, pressure: source.pressure }) };
 }
 export function parseSectorIntelRecord(value: unknown): Record<string, SectorIntel> {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("strategy-sectors");

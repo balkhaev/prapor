@@ -1,12 +1,14 @@
 import { LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT, LIVE_TERRAIN_CODES, type EconomyLoot, type LiveCommand, type LiveDrop, type LiveEntity, type LiveEvent, type LiveContainerKind, type LiveDistrict, type LiveDistrictId, type LiveMapSummary, type LivePlayer, type LivePurpose, type LiveSnapshot, type LiveStatus, type LiveWorld } from './game/live';
 import { readEconomyLootItems } from './game/live-loot';
 import { BODY_PARTS, parseHealth, parseMedicalInventory, type BodyPart, type TreatmentType } from './game/health';
+import { getBoss, type BossId } from './game/bosses';
 
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const number = (value: unknown, min = 0, max = Number.MAX_SAFE_INTEGER): value is number => typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max;
 const integer = (value: unknown, min = 0, max = Number.MAX_SAFE_INTEGER): value is number => number(value, min, max) && Number.isInteger(value);
 const districtId = (value: unknown): value is LiveDistrictId => ['customs', 'sawmill', 'depot', 'village'].includes(value as string);
-const purpose = (value: unknown): value is LivePurpose => ['pvp', 'pve', 'loot', 'quests'].includes(value as string);
+const purpose = (value: unknown): value is LivePurpose => ['pvp', 'pve', 'loot', 'quests', 'boss'].includes(value as string);
+const bossId = (value: unknown): value is BossId => typeof value === 'string' && getBoss(value) !== null;
 const containerKind = (value: unknown): value is LiveContainerKind => ['duffel', 'jacket', 'toolbox', 'medbag', 'cabinet', 'crate'].includes(value as string);
 const text = (value: unknown, max = 100): value is string => typeof value === 'string' && value.length > 0 && value.length <= max;
 const point = (value: unknown, world: Pick<LiveWorld, 'width' | 'height'>): value is Record<string, unknown> & { x: number; y: number } => record(value) && number(value.x, 0, world.width - 1) && number(value.y, 0, world.height - 1);
@@ -115,7 +117,20 @@ export function readLiveStatus(value: unknown): LiveStatus {
     });
     uniqueRoutes(parsed); return parsed;
   })();
-  return { id: value.id, name: value.name, online: value.online, capacity: value.capacity, startedAt: value.startedAt, maps, districts, ...(routes ? { routes } : {}) };
+  const bosses: LiveStatus['bosses'] = value.bosses === undefined ? undefined : (() => {
+    if (!Array.isArray(value.bosses) || value.bosses.length !== 4) return invalid();
+    const parsed = value.bosses.map(boss => {
+      if (!record(boss) || !keys(boss, ['bossId', 'name', 'districtId', 'poiId', 'area', 'state', 'respawnAt']) || !bossId(boss.bossId)
+        || boss.name !== getBoss(boss.bossId)!.name || boss.districtId !== getBoss(boss.bossId)!.districtId || !text(boss.poiId) || !rectangle(boss.area, maps[0]!)
+        || !['alive', 'defeated'].includes(boss.state as string) || !integer(boss.respawnAt) || boss.state === 'alive' && boss.respawnAt !== 0) return invalid();
+      const area = boss.area as Record<string, number>;
+      return { bossId: boss.bossId, name: boss.name as string, districtId: boss.districtId as LiveDistrictId, poiId: boss.poiId,
+        area: { x: area.x!, y: area.y!, width: area.width!, height: area.height! }, state: boss.state as 'alive' | 'defeated', respawnAt: boss.respawnAt };
+    });
+    if (new Set(parsed.map(boss => boss.bossId)).size !== 4) return invalid();
+    return parsed;
+  })();
+  return { id: value.id, name: value.name, online: value.online, capacity: value.capacity, startedAt: value.startedAt, maps, districts, ...(routes ? { routes } : {}), ...(bosses ? { bosses } : {}) };
 }
 
 /** Only immutable, versioned geometry may be reused between server responses. */
@@ -172,7 +187,7 @@ export function readLiveSnapshot(value: unknown, cachedWorld?: LiveWorld): LiveS
   if (!world || world.version !== value.worldVersion) return invalid();
   const bounds = { width: world.width, height: world.height };
   const self = value.self;
-  if (!keys(self, ['id', 'ammo', 'medkits', 'cargo', 'stash', 'kills', 'respawnAt', 'travelReadyAt', 'patrol', 'targetId', 'districtId', 'purpose', 'searching', 'body', 'medicine', 'treatment', 'leaveAt', 'gameId', 'lootItems', 'pendingDelivery', 'economyMessage']) || self.id !== value.selfId || !['ammo', 'medkits', 'cargo', 'stash', 'kills', 'respawnAt', 'travelReadyAt', 'leaveAt'].every(key => integer(self[key])) || typeof self.patrol !== 'boolean' || !(self.targetId === null || text(self.targetId)) || !districtId(self.districtId) || !purpose(self.purpose) || !(self.searching === null || record(self.searching) && keys(self.searching, ['id', 'readyAt']) && text(self.searching.id) && integer(self.searching.readyAt)) || !(self.gameId === undefined || uuid(self.gameId)) || !(self.economyMessage === undefined || typeof self.economyMessage === 'string' && self.economyMessage.length <= 2000)) return invalid();
+  if (!keys(self, ['id', 'ammo', 'medkits', 'cargo', 'stash', 'kills', 'bossKills', 'respawnAt', 'travelReadyAt', 'patrol', 'targetId', 'districtId', 'purpose', 'searching', 'body', 'medicine', 'treatment', 'leaveAt', 'gameId', 'lootItems', 'pendingDelivery', 'economyMessage']) || self.id !== value.selfId || !['ammo', 'medkits', 'cargo', 'stash', 'kills', 'respawnAt', 'travelReadyAt', 'leaveAt'].every(key => integer(self[key])) || typeof self.patrol !== 'boolean' || !(self.targetId === null || text(self.targetId)) || !districtId(self.districtId) || !purpose(self.purpose) || !(self.searching === null || record(self.searching) && keys(self.searching, ['id', 'readyAt']) && text(self.searching.id) && integer(self.searching.readyAt)) || !(self.gameId === undefined || uuid(self.gameId)) || !(self.economyMessage === undefined || typeof self.economyMessage === 'string' && self.economyMessage.length <= 2000) || !(self.bossKills === undefined || integer(self.bossKills, 0, self.kills as number))) return invalid();
   let body: LivePlayer['body'], medicine: LivePlayer['medicine'];
   try { body = parseHealth(self.body); medicine = parseMedicalInventory(self.medicine); } catch { return invalid(); }
   const treatment = self.treatment;
@@ -189,15 +204,17 @@ export function readLiveSnapshot(value: unknown, cachedWorld?: LiveWorld): LiveS
   if (self.lootItems !== undefined) player.lootItems = readLoot(self.lootItems);
   if (pendingDelivery !== undefined) player.pendingDelivery = pendingDelivery;
   if (self.economyMessage !== undefined) player.economyMessage = self.economyMessage as string;
+  if (self.bossKills !== undefined) player.bossKills = self.bossKills as number;
   if (!Array.isArray(value.entities) || value.entities.length > 256 || !Array.isArray(value.drops) || value.drops.length > 512 || !Array.isArray(value.events) || value.events.length > 256 || !Array.isArray(value.visibleChunks) || value.visibleChunks.length > 256) return invalid();
   const entities: LiveEntity[] = value.entities.map(entity => {
     if (!point(entity, bounds) || !record(entity) || !integer(entity.x) || !integer(entity.y) || !text(entity.id) || !text(entity.name, 80) || !['player', 'scav'].includes(entity.kind as string) || !integer(entity.appearance, 0, 31) || !number(entity.health, 0, 100) || !['idle', 'moving', 'combat', 'downed'].includes(entity.action as string) || !number(entity.safeUntil) || !(entity.faction === undefined || ['scavs', 'raiders'].includes(entity.faction as string)) || !(entity.role === undefined || ['patrol', 'guard', 'marksman'].includes(entity.role as string))) return invalid();
-    if (!(entity.bleeding === undefined || typeof entity.bleeding === 'boolean') || !(entity.limping === undefined || typeof entity.limping === 'boolean') || !(entity.aimUntil === undefined || number(entity.aimUntil)) || !(entity.aimTargetId === undefined || text(entity.aimTargetId))) return invalid();
-    return { x: entity.x, y: entity.y, id: entity.id, name: entity.name, kind: entity.kind as LiveEntity['kind'], appearance: entity.appearance, health: entity.health, action: entity.action as LiveEntity['action'], safeUntil: entity.safeUntil, ...(entity.faction ? { faction: entity.faction as LiveEntity['faction'] } : {}), ...(entity.role ? { role: entity.role as LiveEntity['role'] } : {}), ...(entity.bleeding === undefined ? {} : { bleeding: entity.bleeding as boolean }), ...(entity.limping === undefined ? {} : { limping: entity.limping as boolean }), ...(entity.aimUntil === undefined ? {} : { aimUntil: entity.aimUntil as number }), ...(entity.aimTargetId === undefined ? {} : { aimTargetId: entity.aimTargetId as string }) };
+    if (!(entity.bleeding === undefined || typeof entity.bleeding === 'boolean') || !(entity.limping === undefined || typeof entity.limping === 'boolean') || !(entity.aimUntil === undefined || number(entity.aimUntil)) || !(entity.aimTargetId === undefined || text(entity.aimTargetId))
+      || !(entity.bossId === undefined || bossId(entity.bossId) && entity.kind === 'scav' && entity.id === `boss-${entity.bossId}` && entity.name === getBoss(entity.bossId)!.name)) return invalid();
+    return { x: entity.x, y: entity.y, id: entity.id, name: entity.name, kind: entity.kind as LiveEntity['kind'], appearance: entity.appearance, health: entity.health, action: entity.action as LiveEntity['action'], safeUntil: entity.safeUntil, ...(entity.faction ? { faction: entity.faction as LiveEntity['faction'] } : {}), ...(entity.role ? { role: entity.role as LiveEntity['role'] } : {}), ...(entity.bossId ? { bossId: entity.bossId as BossId } : {}), ...(entity.bleeding === undefined ? {} : { bleeding: entity.bleeding as boolean }), ...(entity.limping === undefined ? {} : { limping: entity.limping as boolean }), ...(entity.aimUntil === undefined ? {} : { aimUntil: entity.aimUntil as number }), ...(entity.aimTargetId === undefined ? {} : { aimTargetId: entity.aimTargetId as string }) };
   });
   if (new Set(entities.map(entity => entity.id)).size !== entities.length || !entities.some(entity => entity.id === value.selfId && entity.kind === 'player')) return invalid();
   const drops: LiveDrop[] = value.drops.map(drop => {
-    if (!point(drop, bounds) || !keys(drop, ['id', 'x', 'y', 'amount', 'items', 'containerId', 'containerKind', 'searched']) || !integer(drop.x) || !integer(drop.y) || !text(drop.id) || !integer(drop.amount)) return invalid();
+    if (!point(drop, bounds) || !keys(drop, ['id', 'x', 'y', 'amount', 'items', 'containerId', 'containerKind', 'searched', 'bossId']) || !integer(drop.x) || !integer(drop.y) || !text(drop.id) || !integer(drop.amount) || !(drop.bossId === undefined || bossId(drop.bossId) && drop.containerId === undefined)) return invalid();
     const items = drop.items === undefined ? undefined : readLoot(drop.items);
     if (drop.containerId !== undefined) {
       const anchor = world.containers.find(anchor => anchor.id === drop.containerId);
@@ -205,7 +222,7 @@ export function readLiveSnapshot(value: unknown, cachedWorld?: LiveWorld): LiveS
       return { x: drop.x, y: drop.y, id: drop.id, amount: drop.amount, containerId: anchor.id, containerKind: drop.containerKind, searched: drop.searched, ...(items ? { items } : {}) };
     }
     if ((!drop.amount && !items?.length) || drop.containerKind !== undefined || drop.searched !== undefined) return invalid();
-    return { x: drop.x, y: drop.y, id: drop.id, amount: drop.amount, ...(items ? { items } : {}) };
+    return { x: drop.x, y: drop.y, id: drop.id, amount: drop.amount, ...(items ? { items } : {}), ...(drop.bossId ? { bossId: drop.bossId as BossId } : {}) };
   });
   const physicalIds = [...(player.lootItems ?? []), ...(player.pendingDelivery ?? []).flatMap(parcel => parcel.items), ...drops.flatMap(drop => drop.items ?? [])].map(item => item.id);
   if (new Set(drops.map(drop => drop.id)).size !== drops.length || new Set(physicalIds).size !== physicalIds.length) return invalid();
@@ -219,6 +236,10 @@ export function readLiveSnapshot(value: unknown, cachedWorld?: LiveWorld): LiveS
   });
   if (new Set(visibleChunks.map(chunk => `${chunk.x},${chunk.y}`)).size !== visibleChunks.length) return invalid();
   const server = readLiveStatus(value.server), map = server.maps[0]!;
+  for (const boss of server.bosses ?? []) {
+    const poi = world.pois.find(poi => poi.id === boss.poiId);
+    if (!poi || poi.districtId !== boss.districtId || poi.x !== boss.area.x || poi.y !== boss.area.y || poi.width !== boss.area.width || poi.height !== boss.area.height) return invalid();
+  }
   if (map.width !== world.width || map.height !== world.height || map.theme !== world.theme || map.name !== world.name) return invalid();
   return { server, now: value.now, selfId: value.selfId, self: player, world, entities, drops, events, worldVersion: value.worldVersion, visibleChunks };
 }

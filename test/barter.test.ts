@@ -15,7 +15,7 @@ function valid(state: GameState) { expect(parseSave(saveGame(state))).toEqual(st
 
 describe("physical trophy barters", () => {
 	test("all named loot feeds balanced exchanges for every wearable gear model", () => {
-		expect(BARTER_OFFERS).toHaveLength(26); expect(new Set(BARTER_OFFERS.map(offer => offer.id)).size).toBe(26);
+		expect(BARTER_OFFERS).toHaveLength(30); expect(new Set(BARTER_OFFERS.map(offer => offer.id)).size).toBe(30);
 		expect(new Set(BARTER_OFFERS.map(offer => offer.gearModelId))).toEqual(new Set(GEAR_MODELS.map(model => model.id)));
 		expect(new Set(BARTER_OFFERS.flatMap(offer => offer.requirements.map(value => value.modelId)))).toEqual(new Set(USEFUL_LOOT_MODELS.map(model => model.id)));
 		for (const offer of BARTER_OFFERS) {

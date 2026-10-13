@@ -8,7 +8,7 @@ function random(seed: number) { let value = seed; return () => { value ^= value 
 
 describe('named junk and useful rarity catalog', () => {
   test('only twelve distinct low-value junk models opt into automatic sale; useful common items remain owned choices', () => {
-    expect(LOOT_MODELS).toHaveLength(50); expect(JUNK_MODELS).toHaveLength(12); expect(USEFUL_LOOT_MODELS).toHaveLength(38);
+    expect(LOOT_MODELS).toHaveLength(54); expect(JUNK_MODELS).toHaveLength(12); expect(USEFUL_LOOT_MODELS).toHaveLength(42);
     expect(JUNK_MODELS.map(model => model.id)).toEqual(['empty-can', 'torn-cloth', 'broken-phone', 'bottle-cap', 'spent-casing', 'cracked-lens',
       'faded-receipt', 'crushed-bottle', 'rusty-nail', 'plastic-shard', 'dead-battery', 'broken-circuit']);
     for (const model of JUNK_MODELS) {
@@ -27,7 +27,7 @@ describe('named junk and useful rarity catalog', () => {
 
   test('legendary useful finds require deep late-sector sorties; paid v24 pools retain common dominance', () => {
     const legendary = USEFUL_LOOT_MODELS.filter(model => model.rarity === 'legendary');
-    expect(legendary.map(model => model.id)).toEqual(['military-cpu', 'prototype-optics']);
+    expect(legendary.map(model => model.id)).toEqual(['military-cpu', 'prototype-optics', 'boss-komendant-seal']);
     expect(legendary.every(model => model.minDepth === 3 && model.minSectorLevel >= 7)).toBe(true);
     expect(getRaidLootPool('reserve', 'recon', 3).some(entry => entry.model.id === 'military-cpu')).toBe(true);
     expect(getRaidLootPool('reserve', 'recon', 3).some(entry => entry.model.id === 'prototype-optics')).toBe(false);
@@ -76,9 +76,9 @@ describe('named junk and useful rarity catalog', () => {
     expect(parseLootItemForVersion(old, 16)).toEqual(old);
     for (const [index, model] of LOOT_MODELS.slice(24).entries()) {
       const value = { id: 'loot-2', modelId: model.id, foundAt: 0 };
-      const releasedIn = index < 8 ? 21 : 24;
+      const releasedIn = index < 8 ? 21 : index < 26 ? 24 : 26;
       expect(model.releasedIn).toBe(releasedIn);
-      for (const version of [16, 20, 21, 22, 23, 24]) {
+      for (const version of [16, 20, 21, 22, 23, 24, 25, 26]) {
         expect(lootAvailableInCatalog(model.id, version)).toBe(version >= releasedIn);
         if (version < releasedIn) expect(() => parseLootItemForVersion(value, version)).toThrow();
         else expect(parseLootItemForVersion(value, version)).toEqual(value);

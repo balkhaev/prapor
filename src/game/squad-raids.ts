@@ -10,6 +10,7 @@ import { getRaidFieldPlan } from "../raid-field";
 import { isAmmoType } from "./ammunition";
 import { BODY_PARTS, healthPercent, parseHealth, parseMedicalInventory } from "./health";
 import { resolveMedicalEncounter, type RaidMedicalStart } from "./raid-health";
+import { getRaidPlan } from "./raid-strategy";
 
 export type SquadRaidRole = "point" | "cover" | "medic";
 export const SQUAD_ROLE_LABELS: Record<SquadRaidRole, string> = { point: "Проводник", cover: "Прикрытие", medic: "Замыкающий" };
@@ -63,6 +64,8 @@ export function getSquadRaidQuote(state: GameState, scavIds: readonly string[], 
 	if (!map) { result.reason = "Сектор не найден."; return result; }
 	const people = scavIds.map((id) => state.scavs.find((scav) => scav.id === id));
 	if (people.some((person) => !person)) { result.reason = "Один из бойцов больше не доступен."; return result; }
+	const hunts = people.filter(person => getRaidPlan(person!).objective === 'boss');
+	if (hunts.length && hunts.length !== people.length) { result.reason = "Для общей охоты выбери цель «Охота на босса» каждому бойцу отряда."; return result; }
 	const weapons = people.map((person) => person!.weaponInstanceId).filter((id) => id !== null);
 	if (new Set(weapons).size !== weapons.length || weapons.some((id) => state.raids.some((raid) => raid.weaponInstanceId === id))) { result.reason = "Каждому бойцу нужно своё свободное оружие."; return result; }
 	for (let i = 0; i < scavIds.length; i++) for (let j = i + 1; j < scavIds.length; j++) {
