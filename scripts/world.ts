@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { generateLiveWorld, validateGeneratedWorld, worldChunks, WORLD_TEMPLATES } from '../src/game/world-generation';
+import { analyseWorldPlan } from '../src/game/world-analysis';
 
 const args = process.argv.slice(2);
 const allowed = new Set(['--seed', '--out']);
@@ -12,15 +13,17 @@ for (let index = 0; index < args.length; index += 2) {
 }
 const world = generateLiveWorld(options.get('--seed'));
 const report = validateGeneratedWorld(world);
+const plan = analyseWorldPlan(world);
 console.log(JSON.stringify({ version: world.version, seed: world.seed, dimensions: [world.width, world.height], ...report,
   npcPosts: world.npcSpawns.length, templateLibrary: WORLD_TEMPLATES.length,
   districts: world.districts.map(district => ({ id: district.id, name: district.name, spawn: district.spawns[0] })),
   containerKinds: [...new Set(world.containers.map(container => container.kind))],
+  planning: plan,
 }, null, 2));
 if (options.has('--out')) {
   const path = resolve(options.get('--out')!);
   await mkdir(dirname(path), { recursive: true });
   // Offline content artifact. No game database, live seed or private loot state is changed.
-  await writeFile(path, JSON.stringify({ world, chunks: worldChunks(world) }, null, 2), { flag: 'wx' });
+  await writeFile(path, JSON.stringify({ world, chunks: worldChunks(world), planning: plan }, null, 2), { flag: 'wx' });
   console.log(`Generated layout saved: ${path}`);
 }
