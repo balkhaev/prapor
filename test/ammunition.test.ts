@@ -10,11 +10,11 @@ const tactics = Object.keys(TACTICS) as RaidTactic[];
 const weapon = (weaponId: string) => ({ weaponId });
 
 describe("calibre-specific ammunition and armour interaction", () => {
-	test("each of the sixteen receiver calibres has eight real, distinct ammunition models", () => {
+	test("each of the twenty-two receiver calibres has eight real, distinct ammunition models", () => {
 		const calibers = [...new Set(Object.values(RECEIVER_INFO).map((info) => info.caliber))];
-		expect(calibers).toHaveLength(16);
-		expect(AMMO_MODELS).toHaveLength(128);
-		expect(new Set(AMMO_MODELS.map((model) => model.id)).size).toBe(128);
+		expect(calibers).toHaveLength(22);
+		expect(AMMO_MODELS).toHaveLength(176);
+		expect(new Set(AMMO_MODELS.map((model) => model.id)).size).toBe(176);
 		for (const caliber of calibers) {
 			const models = AMMO_MODELS.filter((model) => model.caliber === caliber);
 			expect(models.map((model) => model.type)).toEqual([...AMMO_TYPES]);

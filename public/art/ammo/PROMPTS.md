@@ -1,6 +1,6 @@
 # Ammunition pack art
 
-Current catalog: 16 atlases and 128 packs. The original nine are followed by seven new caliber atlases documented below.
+Current catalog: 22 atlases and 176 packs. The original nine are followed by seven and then six additional caliber atlases documented below.
 
 ## Seven new calibers
 
@@ -248,3 +248,97 @@ Scene/backdrop: actual transparent alpha. No floor or background, no painted che
 Constraints: exactly eight packages in regular4x2grid, allobjects fitcentral75percentofeachcell, allcartridgesare SHOTGUN SHELLS, shortbrassbaseandplasticcylinder. No guns,people,logos,watermark,gloworheavyshadow.
 ```
 
+
+## Six additional calibers
+
+Generated with the built-in imagegen tool on 2026-10-13. These six new 4×2 RGBA atlases add 48 package illustrations. Final images were copied unchanged into the repository; their generated pixels and transparency are preserved. Painted text is decorative; caliber, count and mechanics come from the game catalog.
+
+### 9x21
+
+Final asset: [ammo-9x21.png](ammo-9x21.png).
+
+```text
+Use case: stylized-concept
+Asset type: transparent game inventory sprite atlas, decorative ammunition packages for caliber 9x21.
+Primary request: Create ONE production-ready PNG sprite atlas of EIGHT distinct ammunition packages for a mature gritty isometric extraction videogame. Landscape 2:1 canvas, 4 equal columns and 2 equal rows. Each tile contains one package with 3 loose decorative rounds beside it. Objects centered at the exact centers of the eight equal square tiles, generous clear gutters, no objects crossing a tile boundary. All eight same scale, same orthographic isometric three-quarter angle, consistent upper-left light.
+Subject: compact straight-wall pistol cartridges, modestly elongated narrow brass cases, short rounded jacketed projectiles, small rectangular cardboard packs. Only exterior cosmetic artwork, no internals, technical cutaways or instructional information. Top row left-to-right: FMJ plain olive kraft box; AP charcoal box with red band and black decorative projectile tips; HP burgundy band box; MATCH slate-blue tidy precision box. Bottom row left-to-right: SUB dark muted violet pack; TR amber band pack with red decorative tips; +P rusty red reinforced carton; STOCK worn kraft paper packet tied with twine and dull gray cases.
+Style/medium: detailed realistic hand-painted 3D inventory concept art, restrained adult palette, crisp tactile brass, matte steel, paper creases, scuffed ink, slightly varied packages but coherent family. Silhouettes readable at 120 pixels.
+Text (verbatim): only large simple pack type codes "FMJ", "AP", "HP", "MATCH", "SUB", "TR", "+P", "STOCK" respectively, and small "9x21". No other text.
+Scene/backdrop: genuinely transparent alpha, no floor, no background, no checkerboard painted in image, no grid lines, no tile frames, no UI.
+Constraints: exactly eight packages, exact regular 4x2 atlas, no guns, no people, no logos, no watermark, no large shadows outside tile, no glow. All package art inside central 75 percent of each tile, transparent margins on every side. No dimensions, formulations, engineering details, or weapon assembly guidance.
+```
+
+### 10mm
+
+Final asset: [ammo-10mm.png](ammo-10mm.png).
+
+```text
+Use case: stylized-concept
+Asset type: transparent game inventory sprite atlas, decorative ammunition packages for caliber 10mm AUTO.
+Primary request: Create ONE production-ready PNG sprite atlas of EIGHT distinct ammunition packages for a mature gritty isometric extraction videogame. Landscape 2:1 canvas, 4 equal columns and 2 equal rows. Each tile contains one package with 3 loose decorative rounds beside it. Objects centered at the exact centers of the eight equal square tiles, generous clear gutters, no objects crossing a tile boundary. All eight same scale, same orthographic isometric three-quarter angle, consistent upper-left light.
+Subject: broad straight-wall pistol cartridges with thick brass cases and compact blunt rounded projectiles, visibly wider than ordinary narrow handgun rounds, small rectangular cardboard packs. Only exterior cosmetic artwork, no internals, technical cutaways or instructional information. Top row left-to-right: FMJ plain olive kraft box; AP charcoal box with red band and black decorative projectile tips; HP burgundy band box; MATCH slate-blue tidy precision box. Bottom row left-to-right: SUB dark muted violet pack; TR amber band pack with red decorative tips; +P rusty red reinforced carton; STOCK worn kraft paper packet tied with twine and dull gray cases.
+Style/medium: detailed realistic hand-painted 3D inventory concept art, restrained adult palette, crisp tactile brass, matte steel, paper creases, scuffed ink, slightly varied packages but coherent family. Silhouettes readable at 120 pixels.
+Text (verbatim): only large simple pack type codes "FMJ", "AP", "HP", "MATCH", "SUB", "TR", "+P", "STOCK" respectively, and small "10mm AUTO". No other text.
+Scene/backdrop: genuinely transparent alpha, no floor, no background, no checkerboard painted in image, no grid lines, no tile frames, no UI.
+Constraints: exactly eight packages, exact regular 4x2 atlas, no guns, no people, no logos, no watermark, no large shadows outside tile, no glow. All package art inside central 75 percent of each tile, transparent margins on every side. No dimensions, formulations, engineering details, or weapon assembly guidance.
+```
+
+### .366tkm
+
+Final asset: [ammo-.366tkm.png](ammo-.366tkm.png).
+
+```text
+Use case: stylized-concept
+Asset type: transparent game inventory sprite atlas, decorative ammunition packages for caliber 366 TKM.
+Primary request: Create ONE production-ready PNG sprite atlas of EIGHT distinct ammunition packages for a mature gritty isometric extraction videogame. Landscape 2:1 canvas, 4 equal columns and 2 equal rows. Each tile contains one package with 3 loose decorative rounds beside it. Objects centered at the exact centers of the eight equal square tiles, generous clear gutters, no objects crossing a tile boundary. All eight same scale, same orthographic isometric three-quarter angle, consistent upper-left light.
+Subject: medium-width rifle cartridges with near-straight slightly tapered brass cases and broad blunt projectiles, distinct rounded short heavy projectiles, small rectangular cardboard packs. Only exterior cosmetic artwork, no internals, technical cutaways or instructional information. Top row left-to-right: FMJ plain olive kraft box; AP charcoal box with red band and black decorative projectile tips; HP burgundy band box; MATCH slate-blue tidy precision box. Bottom row left-to-right: SUB dark muted violet pack; TR amber band pack with red decorative tips; +P rusty red reinforced carton; STOCK worn kraft paper packet tied with twine and dull gray cases.
+Style/medium: detailed realistic hand-painted 3D inventory concept art, restrained adult palette, crisp tactile brass, matte steel, paper creases, scuffed ink, slightly varied packages but coherent family. Silhouettes readable at 120 pixels.
+Text (verbatim): only large simple pack type codes "FMJ", "AP", "HP", "MATCH", "SUB", "TR", "+P", "STOCK" respectively, and small "366 TKM". No other text.
+Scene/backdrop: genuinely transparent alpha, no floor, no background, no checkerboard painted in image, no grid lines, no tile frames, no UI.
+Constraints: exactly eight packages, exact regular 4x2 atlas, no guns, no people, no logos, no watermark, no large shadows outside tile, no glow. All package art inside central 75 percent of each tile, transparent margins on every side. No dimensions, formulations, engineering details, or weapon assembly guidance.
+```
+
+### 12.7x55
+
+Final asset: [ammo-12.7x55.png](ammo-12.7x55.png).
+
+```text
+Use case: stylized-concept
+Asset type: transparent game inventory sprite atlas, decorative ammunition packages for caliber 12.7x55.
+Primary request: Create ONE production-ready PNG sprite atlas of EIGHT distinct ammunition packages for a mature gritty isometric extraction videogame. Landscape 2:1 canvas, 4 equal columns and 2 equal rows. Each tile contains one package with 3 loose decorative rounds beside it. Objects centered at the exact centers of the eight equal square tiles, generous clear gutters, no objects crossing a tile boundary. All eight same scale, same orthographic isometric three-quarter angle, consistent upper-left light.
+Subject: very broad squat heavy rifle cartridges with thick straight slightly tapered brass cases and oversized blunt or rounded projectiles, compact thick heavy ammunition silhouette, small rectangular cardboard packs. Only exterior cosmetic artwork, no internals, technical cutaways or instructional information. Top row left-to-right: FMJ plain olive kraft box; AP charcoal box with red band and black decorative projectile tips; HP burgundy band box; MATCH slate-blue tidy precision box. Bottom row left-to-right: SUB dark muted violet pack; TR amber band pack with red decorative tips; +P rusty red reinforced carton; STOCK worn kraft paper packet tied with twine and dull gray cases.
+Style/medium: detailed realistic hand-painted 3D inventory concept art, restrained adult palette, crisp tactile brass, matte steel, paper creases, scuffed ink, slightly varied packages but coherent family. Silhouettes readable at 120 pixels.
+Text (verbatim): only large simple pack type codes "FMJ", "AP", "HP", "MATCH", "SUB", "TR", "+P", "STOCK" respectively, and small "12.7x55". No other text.
+Scene/backdrop: genuinely transparent alpha, no floor, no background, no checkerboard painted in image, no grid lines, no tile frames, no UI.
+Constraints: exactly eight packages, exact regular 4x2 atlas, no guns, no people, no logos, no watermark, no large shadows outside tile, no glow. All package art inside central 75 percent of each tile, transparent margins on every side. No dimensions, formulations, engineering details, or weapon assembly guidance.
+```
+
+### 9.3x64
+
+Final asset: [ammo-9.3x64.png](ammo-9.3x64.png).
+
+```text
+Use case: stylized-concept
+Asset type: transparent game inventory sprite atlas, decorative ammunition packages for caliber 9.3x64.
+Primary request: Create ONE production-ready PNG sprite atlas of EIGHT distinct ammunition packages for a mature gritty isometric extraction videogame. Landscape 2:1 canvas, 4 equal columns and 2 equal rows. Each tile contains one package with 3 loose decorative rounds beside it. Objects centered at the exact centers of the eight equal square tiles, generous clear gutters, no objects crossing a tile boundary. All eight same scale, same orthographic isometric three-quarter angle, consistent upper-left light.
+Subject: large long full-size rifle cartridges, long tapered brass cases with a visible neck and broad long pointed projectiles, small rectangular cardboard packs. Only exterior cosmetic artwork, no internals, technical cutaways or instructional information. Top row left-to-right: FMJ plain olive kraft box; AP charcoal box with red band and black decorative projectile tips; HP burgundy band box; MATCH slate-blue tidy precision box. Bottom row left-to-right: SUB dark muted violet pack; TR amber band pack with red decorative tips; +P rusty red reinforced carton; STOCK worn kraft paper packet tied with twine and dull gray cases.
+Style/medium: detailed realistic hand-painted 3D inventory concept art, restrained adult palette, crisp tactile brass, matte steel, paper creases, scuffed ink, slightly varied packages but coherent family. Silhouettes readable at 120 pixels.
+Text (verbatim): only large simple pack type codes "FMJ", "AP", "HP", "MATCH", "SUB", "TR", "+P", "STOCK" respectively, and small "9.3x64". No other text.
+Scene/backdrop: genuinely transparent alpha, no floor, no background, no checkerboard painted in image, no grid lines, no tile frames, no UI.
+Constraints: exactly eight packages, exact regular 4x2 atlas, no guns, no people, no logos, no watermark, no large shadows outside tile, no glow. All package art inside central 75 percent of each tile, transparent margins on every side. No dimensions, formulations, engineering details, or weapon assembly guidance.
+```
+
+### .300winmag
+
+Final asset: [ammo-.300winmag.png](ammo-.300winmag.png).
+
+```text
+Use case: stylized-concept
+Asset type: transparent game inventory sprite atlas, decorative ammunition packages for caliber 300 WIN MAG.
+Primary request: Create ONE production-ready PNG sprite atlas of EIGHT distinct ammunition packages for a mature gritty isometric extraction videogame. Landscape 2:1 canvas, 4 equal columns and 2 equal rows. Each tile contains one package with 3 loose decorative rounds beside it. Objects centered at the exact centers of the eight equal square tiles, generous clear gutters, no objects crossing a tile boundary. All eight same scale, same orthographic isometric three-quarter angle, consistent upper-left light.
+Subject: long belted magnum rifle cartridges, slender long necked brass cases with a subtle thick base belt and elongated pointed projectiles, small rectangular cardboard packs. Only exterior cosmetic artwork, no internals, technical cutaways or instructional information. Top row left-to-right: FMJ plain olive kraft box; AP charcoal box with red band and black decorative projectile tips; HP burgundy band box; MATCH slate-blue tidy precision box. Bottom row left-to-right: SUB dark muted violet pack; TR amber band pack with red decorative tips; +P rusty red reinforced carton; STOCK worn kraft paper packet tied with twine and dull gray cases.
+Style/medium: detailed realistic hand-painted 3D inventory concept art, restrained adult palette, crisp tactile brass, matte steel, paper creases, scuffed ink, slightly varied packages but coherent family. Silhouettes readable at 120 pixels.
+Text (verbatim): only large simple pack type codes "FMJ", "AP", "HP", "MATCH", "SUB", "TR", "+P", "STOCK" respectively, and small "300 WIN MAG". No other text.
+Scene/backdrop: genuinely transparent alpha, no floor, no background, no checkerboard painted in image, no grid lines, no tile frames, no UI.
+Constraints: exactly eight packages, exact regular 4x2 atlas, no guns, no people, no logos, no watermark, no large shadows outside tile, no glow. All package art inside central 75 percent of each tile, transparent margins on every side. No dimensions, formulations, engineering details, or weapon assembly guidance.
+```

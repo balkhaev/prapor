@@ -4,7 +4,7 @@ import { MAPS, PERSONALITY_BY_ID, WEAPONS } from "./game/data";
 import { getWeaponStats, type WeaponInstance } from "./game/engine";
 import { FACTORY_KITS, MODULE_BY_ID, MODULE_MODELS, MODULE_SLOTS, MODULE_SLOT_LABELS, RECEIVER_INFO, getResolvedModuleMounts, modulePlatformLabel, type ModuleInstance, type ModuleModel, type ModuleSlot } from "./game/modules";
 import { moduleArt, weaponBuildArt } from "./armory-art";
-import { preloadModularWeaponArt } from "./modular-weapon-art";
+import { modularWeaponArtFamily, modularWeaponArtRevision, preloadModularWeaponArt } from "./modular-weapon-art";
 import { MODULE_DISPLAY_SLOTS, moduleFitsWeaponFamily, moduleModelMatches, moduleMountLabel, moduleSlotHint } from "./module-catalog";
 import { GEAR_MODELS } from "./game/systems";
 import { SCAV_EQUIPMENT_ATLASES } from "./scav-gear-art";
@@ -248,12 +248,20 @@ function updateSelections(rebuildOptions = false): void {
 	renderLibrary(weapon);
 }
 updateSelections(true);
+function preloadSelectedBuildArt(): void {
+	const weapon = selectedWeapon(); if (!weapon) return;
+	const revision = modularWeaponArtRevision(weapon);
+	const families = Object.values(weapon.modules).flatMap((instance) => {
+		const model = MODULE_BY_ID[instance.modelId], family = model ? modularWeaponArtFamily(model) : undefined;
+		return family ? [family] : [];
+	});
+	void preloadModularWeaponArt([weapon.weaponId, ...families]).then(() => {
+		if (selectedWeapon() === weapon && modularWeaponArtRevision(weapon) !== revision) updateSelections(false);
+	});
+}
 for (const [name, input] of Object.entries(controls)) input.addEventListener("change", () => {
 	updateSelections(name === "weapon");
-	if (name === "weapon") {
-		const chosen = controls.weapon.value;
-		void preloadModularWeaponArt([chosen]).then(() => { if (controls.weapon.value === chosen) updateSelections(false); });
-	}
+	if (name === "weapon") preloadSelectedBuildArt();
 });
 for (const slot of MODULE_SLOTS) moduleControls[slot].addEventListener("change", () => {
 	const weapon = selectedWeapon();
@@ -263,10 +271,12 @@ for (const slot of MODULE_SLOTS) moduleControls[slot].addEventListener("change",
 	else delete weapon.modules[slot];
 	inspectedSlot = slot; highlightInspection = true;
 	updateSelections(true);
+	preloadSelectedBuildArt();
 });
 resetWeapon.addEventListener("click", () => {
 	if (controls.weapon.value) weaponBuilds.set(controls.weapon.value, factoryWeapon(controls.weapon.value));
 	updateSelections(true);
+	preloadSelectedBuildArt();
 });
 
 class ScavPreview extends Phaser.Scene {

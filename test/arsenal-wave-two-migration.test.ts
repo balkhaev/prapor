@@ -3,7 +3,9 @@ import { SAVE_VERSION, advance, continueExpedition, craftModule, createGame, dis
 import { ARSENAL_SAVE_VERSION, ARSENAL_WAVE_TWO_SAVE_VERSION, moduleAvailableInSave, weaponAvailableInSave } from "../src/game/catalog-releases";
 import { MODULE_MODELS } from "../src/game/modules";
 import { RELEASED_V17_FIXTURES } from "./released-v17-arsenal-fixtures";
+import { RELEASED_V18_FIXTURES } from "./released-v18-arsenal-fixtures";
 import { useWeaponPlatformFixture } from "./weapon-fixtures";
+import { withoutMedical } from "./legacy-health-fixture";
 
 function canonical(value: unknown): string {
 	if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
@@ -11,19 +13,19 @@ function canonical(value: unknown): string {
 	return JSON.stringify(value);
 }
 const fingerprint = (value: unknown) => new Bun.CryptoHasher("sha256").update(canonical(value)).digest("hex");
-function releasedFormat(state: GameState) {
-	const raw = JSON.parse(saveGame(state)); raw.schemaVersion = 17;
+function releasedFormat(state: GameState, version = ARSENAL_SAVE_VERSION) {
+	const raw = JSON.parse(saveGame(state)); if (version < 18) withoutMedical(raw); raw.schemaVersion = version;
 	return raw;
 }
-const stateFingerprint = (state: GameState) => fingerprint(releasedFormat(state));
-function depart(fixture: typeof RELEASED_V17_FIXTURES[number]) {
+const stateFingerprint = (state: GameState, version = ARSENAL_SAVE_VERSION) => fingerprint(releasedFormat(state, version));
+function depart(fixture: typeof RELEASED_V17_FIXTURES[number] | typeof RELEASED_V18_FIXTURES[number], version = ARSENAL_SAVE_VERSION) {
 	const state = createGame(fixture.now), scav = state.scavs[0]!;
 	state.money = 100_000; state.supplies = { ammo: 10_000, medicine: 100, scrap: 1_000, intel: 100 }; state.level = 9; state.xp = 5_760;
 	useWeaponPlatformFixture(state, state.weapons[0]!, fixture.weaponId); scav.combat = 90; scav.scouting = 90; state.sectorIntel = { [fixture.mapId]: { knowledge: 3, pressure: 2 } };
 	for (const action of [setRaidTactic(state, scav.id, "cautious"), setLoadoutOption(state, scav.id, "ammoType", fixture.type), setRaidPlan(state, scav.id, "intel", "scouted"), dispatchRaid(state, scav.id, fixture.mapId, state.lastUpdated)]) expect(action.ok).toBe(true);
-	state.raids[0]!.expedition!.lootCatalogVersion = ARSENAL_SAVE_VERSION;
-	expect(stateFingerprint(state)).toBe(fixture.paid);
-	const loaded = parseSave(JSON.stringify(releasedFormat(state))); expect(loaded).not.toBeNull();
+	state.raids[0]!.expedition!.lootCatalogVersion = version;
+	expect(stateFingerprint(state,version)).toBe(fixture.paid);
+	const loaded = parseSave(JSON.stringify(releasedFormat(state,version))); expect(loaded).not.toBeNull();
 	return loaded!;
 }
 function irregularly(state: GameState, until: number) {
@@ -32,22 +34,22 @@ function irregularly(state: GameState, until: number) {
 }
 
 describe("second arsenal release preserves genuine paid v17 sorties", () => {
-	test("all nine original platforms retain their quotes, physical loot, payout and offline settlement", () => {
-		for (const fixture of RELEASED_V17_FIXTURES) {
-			const state = depart(fixture), raid = state.raids[0]!, active = saveGame(state), offline = parseSave(active)!;
+	for (const release of [{ version:17, fixtures: RELEASED_V17_FIXTURES }, { version:18, fixtures: RELEASED_V18_FIXTURES }]) test(`released v${release.version} retains quotes, physical loot, health, payout and offline settlement`, () => {
+		for (const fixture of release.fixtures) {
+			const state = depart(fixture,release.version), raid = state.raids[0]!, active = saveGame(state), offline = parseSave(active)!;
 			advance(state, raid.endsAt); irregularly(offline, raid.endsAt);
-			expect(stateFingerprint(state)).toBe(fixture.first); expect(offline).toEqual(state); expect(loadGameWithSummary(active, raid.endsAt)!.state).toEqual(state);
+			expect(stateFingerprint(state,release.version)).toBe(fixture.first); expect(offline).toEqual(state); expect(loadGameWithSummary(active, raid.endsAt)!.state).toEqual(state);
 			const perk = raid.expedition!.offers[0]!;
 			expect(fingerprint(getExpeditionChoices(state, raid, perk))).toBe(fixture.choices);
 			expect(continueExpedition(state, raid.id, fixture.branch, perk, state.lastUpdated).ok).toBe(true);
-			expect(stateFingerprint(state)).toBe(fixture.nextPaid);
+			expect(stateFingerprint(state,release.version)).toBe(fixture.nextPaid);
 			const second = parseSave(saveGame(state))!; advance(state, raid.endsAt); irregularly(second, raid.endsAt);
-			expect(stateFingerprint(state)).toBe(fixture.second); expect(second).toEqual(state);
+			expect(stateFingerprint(state,release.version)).toBe(fixture.second); expect(second).toEqual(state);
 			expect(raid.expedition!.cargo.modules.map(part => part.modelId)).toEqual([...fixture.cargoModels]);
 			expect(raid.expedition!.cargo.weaponIds).toEqual([...fixture.cargoWeapons]);
-			expect(raid.expedition!.lootCatalogVersion).toBe(17);
+			expect(raid.expedition!.lootCatalogVersion).toBe(release.version);
 			expect(extractRaid(state, raid.id, state.lastUpdated).ok).toBe(true);
-			expect(stateFingerprint(state)).toBe(fixture.extracted); expect(parseSave(saveGame(state))).toEqual(state);
+			expect(stateFingerprint(state,release.version)).toBe(fixture.extracted); expect(parseSave(saveGame(state))).toEqual(state);
 		}
 	});
 	test("v17 accepts every released module while v16 and v17 cannot inject later catalogues", () => {

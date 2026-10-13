@@ -10,14 +10,14 @@ function factory(weaponId: string): WeaponInstance {
 
 describe("expanded arsenal remains physical in trade", () => {
 	test("all nine new assembled platforms retain their actual parts, condition and statistics", () => {
-		for (const definition of WEAPONS.slice(16)) {
+		for (const definition of WEAPONS.slice(16, 25)) {
 			const gun = factory(definition.id), restored = parseTradeWeapon(gun);
 			expect(restored, definition.id).toEqual(gun);
 			expect(getWeaponStats(restored!), definition.id).toEqual(getWeaponStats(gun));
 		}
 	});
 	test("every new module is accepted individually with the same model and physical identity", () => {
-		for (const model of MODULE_MODELS.slice(411)) {
+		for (const model of MODULE_MODELS.slice(411, 621)) {
 			const item = { id: "module-9010", modelId: model.id, durability: 46, foundAt: 1000 };
 			expect(parseTradeModule(item), model.id).toEqual(item);
 		}

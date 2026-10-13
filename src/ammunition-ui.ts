@@ -15,12 +15,15 @@ export function ammunitionCaliberLabel(caliber: string): string {
 	if (caliber === ".45acp") return ".45 ACP";
 	if (caliber === ".300blk") return ".300 BLK";
 	if (caliber === ".338lapua") return ".338 Lapua";
-	return caliber.endsWith("g") ? `${caliber.slice(0, -1)} калибр` : `${caliber.replaceAll(".", ",").replace("x", "×")} мм`;
+	if (caliber === "10mm") return "10mm Auto";
+	if (caliber === ".366tkm") return ".366 ТКМ";
+	if (caliber === ".300winmag") return ".300 Win Mag";
+	return ["12g", "20g"].includes(caliber) ? `${caliber.slice(0, -1)} калибр` : `${caliber.replaceAll(".", ",").replace("x", "×")} мм`;
 }
 
 function ammunitionTypeLabel(model: AmmoModel): string {
-	if (model.caliber.endsWith("g") && model.type === "expanding") return "Дробовые";
-	if (model.caliber.endsWith("g") && model.type === "precision") return "Пулевые";
+	if (["12g", "20g"].includes(model.caliber) && model.type === "expanding") return "Дробовые";
+	if (["12g", "20g"].includes(model.caliber) && model.type === "precision") return "Пулевые";
 	return AMMO_TYPE_LABELS[model.type];
 }
 

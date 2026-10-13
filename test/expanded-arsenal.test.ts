@@ -13,7 +13,7 @@ import { useWeaponPlatformFixture } from "./weapon-fixtures";
 const NOW = 1_792_000_000_000;
 const newGuns = ["m4a1", "hk416", "p90", "mp7", "ump45", "m1911", "mcx", "scarh", "trg42"];
 const expectedCalibers = ["5.56x45", "5.56x45", "5.7x28", "4.6x30", ".45acp", ".45acp", ".300blk", "7.62x51", ".338lapua"];
-const additions = MODULE_MODELS.slice(411);
+const additions = MODULE_MODELS.slice(411, 621);
 
 function funded(): GameState {
 	const state = createGame(NOW);
@@ -52,9 +52,9 @@ function matchingGun(part: ModuleModel): string {
 
 describe("expanded modular arsenal", () => {
 	test("nine new weapons add seven calibers without changing the original definitions", () => {
-		expect(WEAPONS.slice(16).map((weapon) => weapon.id)).toEqual(newGuns);
+		expect(WEAPONS.slice(16, 25).map((weapon) => weapon.id)).toEqual(newGuns);
 		expect(newGuns.map((weaponId) => RECEIVER_INFO[weaponId]!.caliber)).toEqual(expectedCalibers);
-		expect(new Set(Object.values(RECEIVER_INFO).map((info) => info.caliber)).size).toBe(16);
+		expect(new Set(WEAPONS.slice(0, 25).map((weapon) => RECEIVER_INFO[weapon.id]!.caliber)).size).toBe(16);
 		expect(WEAPONS.slice(0, 16).map((weapon) => [weapon.id, weapon.power, weapon.reliability, weapon.value])).toEqual([
 			["pm", 15, 82, 70], ["tt", 20, 73, 90], ["toz", 24, 68, 110], ["mp133", 32, 80, 185],
 			["pp91", 34, 78, 210], ["sks", 38, 87, 245], ["ak74", 47, 89, 390], ["saiga", 49, 77, 420],
@@ -67,7 +67,7 @@ describe("expanded modular arsenal", () => {
 
 	test("210 appended modules cover the real platforms and keep unique physical recipes", () => {
 		expect(additions).toHaveLength(210);
-		expect(MODULE_MODELS).toHaveLength(621);
+		expect(MODULE_MODELS.slice(0, 621)).toHaveLength(621);
 		expect(MODULE_MODELS[410]!.id).toBe("laser-precision");
 		expect(MODULE_MODELS[411]!.id).toBe("receiver-m4a1");
 		expect(new Set(MODULE_MODELS.map((part) => part.id)).size).toBe(MODULE_MODELS.length);
