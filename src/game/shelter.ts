@@ -1,5 +1,7 @@
 import type { Supplies } from "./data";
 import type { FieldKit, ShelterLogistics } from "./shelter-logistics";
+import type { LootItem } from "./loot";
+import type { LootRequirement } from "./loot-uses";
 
 export type ShelterRoomType = "workshop" | "ammo" | "recycler" | "medbay" | "radio" | "storage" | "dormitory" | "hangar";
 export interface ShelterCost { money: number; supplies: Supplies }
@@ -7,13 +9,15 @@ export interface ProductionJob {
 	id: string; kind: "module" | "resource"; recipeId: string; modelId: string | null;
 	workDone: number; workRequired: number; paid: ShelterCost;
 	output: { supplies: Supplies; moduleModelId: string | null; fieldKit?: FieldKit }; createdAt: number;
+	/** Consumed once at payment; these are receipts, not usable inventory. */
+	paidLoot?: LootItem[];
 }
 export interface RoomInstance {
 	id: string; type: ShelterRoomType; column: number; row: number; level: number;
 	/** Quarter turn; old saves and compact structures default to the original orientation. */
 	rotation?: 0 | 1;
 	status: "building" | "ready" | "upgrading";
-	construction: { workDone: number; workRequired: number; targetLevel: number; cost: { money: number; scrap: number } } | null;
+	construction: { workDone: number; workRequired: number; targetLevel: number; cost: { money: number; scrap: number }; paidLoot?: LootItem[] } | null;
 	workerIds: string[]; queue: ProductionJob[]; recipeId: string | null; repeat: boolean; pending: boolean; cycles: number;
 	stockTarget?: number;
 }
@@ -51,6 +55,7 @@ export const ROOM_DEFINITIONS: Record<ShelterRoomType, {
 	label: string; description: string; color: string; cost: { money: number; scrap: number };
 	buildSeconds: number; workerSkill: "combat" | "scouting" | "balanced"; production: boolean;
 	footprint?: { width: number; height: number }; unlockLevel?: number;
+	lootRequirements?: LootRequirement[];
 }> = {
 	workshop: { label: "Мастерская", description: "Оружейные детали производятся по заказу. Опытные мастера и дополнительные рабочие ускоряют очередь.", color: "#d0a76f", cost: { money: 260, scrap: 10 }, buildSeconds: 90, workerSkill: "balanced", production: true },
 	ammo: { label: "Патронный цех", description: "Снаряжает партии патронов из деталей и рублей. Нужны рабочие с боевым опытом.", color: "#b5bd80", cost: { money: 160, scrap: 5 }, buildSeconds: 60, workerSkill: "combat", production: true },
@@ -61,6 +66,13 @@ export const ROOM_DEFINITIONS: Record<ShelterRoomType, {
 	dormitory: { label: "Жилой блок", description: "Два новых места для отряда на первом уровне, затем ещё по одному. Рабочие не требуются.", color: "#c1ae94", cost: { money: 240, scrap: 8 }, buildSeconds: 90, workerSkill: "balanced", production: false },
 	hangar: { label: "Ангар", description: "Большая постройка 3×2, доступная с 4-го уровня. На каждом уровне: +18 мест для оружия, +48 для деталей и дополнительный запас припасов. Рабочие не требуются.", color: "#87a0ad", cost: { money: 900, scrap: 30 }, buildSeconds: 180, workerSkill: "balanced", production: false, footprint: { width: 3, height: 2 }, unlockLevel: 4 },
 };
+const constructionLoot: Record<ShelterRoomType, [string, number][]> = {
+	workshop: [["tool-case", 1], ["pliers", 1]], medbay: [["bandage-roll", 2], ["antiseptic", 1]],
+	radio: [["copper-wire", 2], ["battery", 1]], storage: [["duct-tape", 2], ["pliers", 1]],
+	dormitory: [["ration", 2], ["coffee", 1]], ammo: [["duct-tape", 1], ["pliers", 1]],
+	recycler: [["pliers", 2], ["duct-tape", 1]], hangar: [["precision-tools", 1], ["circuit-board", 1], ["battery", 2]],
+};
+for (const type of Object.keys(constructionLoot) as ShelterRoomType[]) ROOM_DEFINITIONS[type].lootRequirements = constructionLoot[type].map(([modelId, quantity]) => ({ modelId, quantity }));
 export function getRoomFootprint(room: Pick<RoomInstance, "type" | "rotation">): { width: number; height: number } {
 	const footprint = ROOM_DEFINITIONS[room.type].footprint ?? { width: 1, height: 1 };
 	return room.rotation === 1 ? { width: footprint.height, height: footprint.width } : { ...footprint };
@@ -75,7 +87,7 @@ export function getShelterRoomAt(shelter: ShelterLayout, column: number, row: nu
 	return shelter.rooms?.find(room => getRoomSites(room).some(site => site.column === column && site.row === row));
 }
 const supplies = (changes: Partial<Supplies> = {}): Supplies => ({ ammo: 0, medicine: 0, scrap: 0, intel: 0, ...changes });
-export const RESOURCE_RECIPES: { id: string; roomType: ShelterRoomType; label: string; description: string; durationSeconds: number; cost: ShelterCost; output: Supplies; minLevel?: number; outputKit?: FieldKit }[] = [
+export const RESOURCE_RECIPES: { id: string; roomType: ShelterRoomType; label: string; description: string; durationSeconds: number; cost: ShelterCost; output: Supplies; minLevel?: number; outputKit?: FieldKit; lootRequirements?: LootRequirement[] }[] = [
 	{ id: "ammo-batch", roomType: "ammo", label: "Партия патронов", description: "12 патронов из одной детали и 10 ₽.", durationSeconds: 40, cost: { money: 10, supplies: supplies({ scrap: 1 }) }, output: supplies({ ammo: 12 }) },
 	{ id: "scrap-batch", roomType: "recycler", label: "Сортировка утиля", description: "6 деталей за 15 ₽ и 2 патрона.", durationSeconds: 55, cost: { money: 15, supplies: supplies({ ammo: 2 }) }, output: supplies({ scrap: 6 }) },
 	{ id: "medicine-batch", roomType: "medbay", label: "Медицинские наборы", description: "3 медикамента из 2 деталей и 20 ₽.", durationSeconds: 75, cost: { money: 20, supplies: supplies({ scrap: 2 }) }, output: supplies({ medicine: 3 }) },
@@ -86,6 +98,10 @@ export const RESOURCE_RECIPES: { id: string; roomType: ShelterRoomType; label: s
 	{ id: "intel-analysis", roomType: "radio", minLevel: 2, label: "Анализ находок", description: "4 разведданных за 15 ₽ и 2 детали. Экономит рубли ценой деталей и времени.", durationSeconds: 90, cost: { money: 15, supplies: supplies({ scrap: 2 }) }, output: supplies({ intel: 4 }) },
 	{ id: "maintenance-kit", roomType: "workshop", label: "Ремкомплект для рейда", description: "1 ремкомплект за 25 ₽ и 3 детали. Снижает износ оружия на всём выходе.", durationSeconds: 65, cost: { money: 25, supplies: supplies({ scrap: 3 }) }, output: supplies(), outputKit: "maintenance" },
 	{ id: "trauma-kit", roomType: "medbay", label: "Травмокомплект для рейда", description: "1 травмокомплект за 20 ₽, 1 медикамент и 2 детали. Смягчает ранения на всём выходе.", durationSeconds: 70, cost: { money: 20, supplies: supplies({ medicine: 1, scrap: 2 }) }, output: supplies(), outputKit: "trauma" },
+	{ id: "maintenance-from-loot", roomType: "workshop", label: "Ремкомплект из трофеев", description: "Пассатижи и скотч превращаются в 1 ремкомплект за 8 ₽. Целые трофеи расходуются при запуске и при отмене не возвращаются.", durationSeconds: 55, cost: { money: 8, supplies: supplies() }, output: supplies(), outputKit: "maintenance", lootRequirements: [{ modelId: "pliers", quantity: 1 }, { modelId: "duct-tape", quantity: 1 }] },
+	{ id: "trauma-from-loot", roomType: "medbay", label: "Травмокомплект из находок", description: "Бинт и антисептик превращаются в 1 травмокомплект за 5 ₽. Целые трофеи расходуются при запуске и при отмене не возвращаются.", durationSeconds: 60, cost: { money: 5, supplies: supplies() }, output: supplies(), outputKit: "trauma", lootRequirements: [{ modelId: "bandage-roll", quantity: 1 }, { modelId: "antiseptic", quantity: 1 }] },
+	{ id: "ammo-from-loot", roomType: "ammo", label: "Патроны из медного кабеля", description: "1 целый кабель и 8 ₽ дают 24 патрона. Трофей расходуется при запуске и при отмене не возвращается.", durationSeconds: 55, cost: { money: 8, supplies: supplies() }, output: supplies({ ammo: 24 }), lootRequirements: [{ modelId: "copper-wire", quantity: 1 }] },
+	{ id: "intel-from-loot", roomType: "radio", label: "Расшифровка журнала патрулей", description: "1 целый журнал и 10 ₽ дают 6 разведданных. Трофей расходуется при запуске и при отмене не возвращается.", durationSeconds: 70, cost: { money: 10, supplies: supplies() }, output: supplies({ intel: 6 }), lootRequirements: [{ modelId: "patrol-log", quantity: 1 }] },
 ];
 export const RESOURCE_RECIPE_BY_ID = Object.fromEntries(RESOURCE_RECIPES.map((recipe) => [recipe.id, recipe])) as Record<string, typeof RESOURCE_RECIPES[number]>;
 export function initialShelter(base: Record<string, number>): ShelterState {

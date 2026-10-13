@@ -1,14 +1,17 @@
 import { MAP_BY_ID, type Rarity, type Supplies } from "./data";
 import type { ExpeditionBranch } from "./systems";
 
-export type LootCategory = "tools" | "electronics" | "medicine" | "provisions" | "valuables" | "intel";
+export type LootCategory = "tools" | "electronics" | "medicine" | "provisions" | "valuables" | "intel" | "junk";
 export interface LootItem { id: string; modelId: string; foundAt: number }
 export interface LootModel {
 	id: string; label: string; description: string; category: LootCategory; rarity: Rarity;
 	weight: number; guidePrice: number; salvage: Supplies; minDepth: number; minSectorLevel: number;
+	/** Only these low-value objects are sold automatically on confirmed delivery. */
+	autoSell?: true;
+	releasedIn?: number;
 }
 export const LOOT_CATEGORY_LABELS: Record<LootCategory, string> = {
-	tools: "Инструменты", electronics: "Электроника", medicine: "Медицина", provisions: "Провизия", valuables: "Ценности", intel: "Документы",
+	tools: "Инструменты", electronics: "Электроника", medicine: "Медицина", provisions: "Провизия", valuables: "Ценности", intel: "Документы", junk: "Мусор",
 };
 const supplies = (value: Partial<Supplies>): Supplies => ({ ammo: 0, medicine: 0, scrap: 0, intel: 0, ...value });
 const item = (id: string, label: string, description: string, category: LootCategory, rarity: Rarity, weight: number, guidePrice: number, salvage: Partial<Supplies>, minDepth = 1, minSectorLevel = 1): LootModel =>
@@ -39,24 +42,39 @@ export const LOOT_MODELS: LootModel[] = [
 	item("patrol-log", "Журнал патрулей", "Записи обходов и постов. Полезен для разведподготовки следующего выхода.", "intel", "uncommon", .3, 115, { intel: 3 }, 1, 2),
 	item("depot-manifest", "Складские накладные", "Маршруты снабжения и номера ящиков. Несколько разведданных вместо ожидания покупателя.", "intel", "rare", .5, 250, { intel: 5 }, 2, 2),
 	item("cipher-book", "Книга шифров", "Архив военной связи. Лёгкий дорогой трофей или большой запас разведданных.", "intel", "epic", .4, 650, { intel: 10 }, 3, 7),
+	{ ...item("empty-can", "Пустая консервная банка", "Мусор · автопродажа при доставке. Погнутая пустая тара без полезных вложений.", "junk", "common", .15, 3, {}), autoSell: true, releasedIn: 21 },
+	{ ...item("torn-cloth", "Рваная ткань", "Мусор · автопродажа при доставке. Грязный обрывок, непригодный для медицинских и защитных комплектов.", "junk", "common", .1, 4, {}), autoSell: true, releasedIn: 21 },
+	{ ...item("broken-phone", "Разбитый телефон", "Мусор · автопродажа при доставке. Электроника выгорела, корпус и экран расколоты.", "junk", "common", .25, 18, {}), autoSell: true, releasedIn: 21 },
+	{ ...item("bottle-cap", "Крышка от бутылки", "Мусор · автопродажа при доставке. Дешёвая металлическая крышка.", "junk", "common", .05, 2, {}), autoSell: true, releasedIn: 21 },
+	{ ...item("spent-casing", "Стреляная гильза", "Мусор · автопродажа при доставке. Пустая повреждённая гильза, непригодная для снаряжения патронов.", "junk", "common", .05, 2, {}), autoSell: true, releasedIn: 21 },
+	{ ...item("cracked-lens", "Треснувшая линза", "Мусор · автопродажа при доставке. Оптика разбита и не подходит для приборов или бартера.", "junk", "common", .12, 10, {}), autoSell: true, releasedIn: 21 },
+	{ ...item("military-cpu", "Военный вычислительный модуль", "Легендарный процессор из защищённого комплекса. Целый трофей для бартера на снаряжение; разбор даёт детали и разведданные.", "electronics", "legendary", .2, 1050, { scrap: 18, intel: 8 }, 3, 7), releasedIn: 21 },
+	{ ...item("prototype-optics", "Прототип военной оптики", "Легендарный опытный прибор из закрытого бункера. Целый трофей для бартера на снаряжение; разбор даёт детали и разведданные.", "electronics", "legendary", .25, 800, { scrap: 16, intel: 5 }, 3, 9), releasedIn: 21 },
 ];
 export const LOOT_MODEL_BY_ID: Record<string, LootModel> = Object.fromEntries(LOOT_MODELS.map(model => [model.id, model]));
+export const JUNK_MODELS: readonly LootModel[] = LOOT_MODELS.filter(model => model.autoSell === true);
+export const USEFUL_LOOT_MODELS: readonly LootModel[] = LOOT_MODELS.filter(model => !model.autoSell);
+export function lootAvailableInCatalog(modelId: string, catalogVersion: number): boolean {
+	return Object.hasOwn(LOOT_MODEL_BY_ID, modelId) && Number.isInteger(catalogVersion)
+		&& (LOOT_MODEL_BY_ID[modelId]!.releasedIn ?? 16) <= catalogVersion;
+}
+export function isAutoSellLoot(item: Pick<LootItem, "modelId">): boolean { return Object.hasOwn(LOOT_MODEL_BY_ID, item.modelId) && LOOT_MODEL_BY_ID[item.modelId]!.autoSell === true; }
 const sectorCategories: Record<string, LootCategory[]> = {
 	courtyard: ["tools", "provisions", "valuables"], depot: ["tools", "provisions", "intel"], forest: ["provisions", "medicine", "intel"],
 	factory: ["tools", "electronics"], reserve: ["medicine", "intel", "electronics"], bunker: ["electronics", "intel", "valuables"],
 };
 const branchCategories: Record<ExpeditionBranch, LootCategory[]> = { scavenge: ["tools", "provisions", "valuables"], combat: ["electronics", "medicine"], recon: ["intel", "electronics"] };
-export function getRaidLootPool(mapId: string, branch: ExpeditionBranch, depth: number): { model: LootModel; weight: number }[] {
+export function getRaidLootPool(mapId: string, branch: ExpeditionBranch, depth: number, catalogVersion = 21): { model: LootModel; weight: number }[] {
 	if (!Object.hasOwn(MAP_BY_ID, mapId) || !Object.hasOwn(branchCategories, branch) || !Number.isInteger(depth) || depth < 1 || depth > 3) return [];
 	const level = MAP_BY_ID[mapId]!.level;
-	return LOOT_MODELS.filter(model => model.minDepth <= depth && model.minSectorLevel <= level).map(model => ({ model,
+	return LOOT_MODELS.filter(model => lootAvailableInCatalog(model.id, catalogVersion) && model.minDepth <= depth && model.minSectorLevel <= level).map(model => ({ model,
 		weight: ({ common: 7, uncommon: 4, rare: 1.5, epic: .45, legendary: .15 }[model.rarity])
 			* (sectorCategories[mapId]!.includes(model.category) ? 3 : .6) * (branchCategories[branch].includes(model.category) ? 1.8 : 1)
 			* (model.rarity === "rare" || model.rarity === "epic" ? 1 + (depth - 1) * .25 + (level - 1) * .08 : 1),
 	}));
 }
-export function rollRaidLoot(mapId: string, branch: ExpeditionBranch, depth: number, random: () => number): LootModel[] {
-	const pool = getRaidLootPool(mapId, branch, depth); if (!pool.length) return [];
+export function rollRaidLoot(mapId: string, branch: ExpeditionBranch, depth: number, random: () => number, catalogVersion = 21): LootModel[] {
+	const pool = getRaidLootPool(mapId, branch, depth, catalogVersion); if (!pool.length) return [];
 	const count = 1 + (random() < (branch === "scavenge" ? .3 : .15) + (depth - 1) * .12 ? 1 : 0);
 	const result: LootModel[] = [], total = pool.reduce((sum, entry) => sum + entry.weight, 0);
 	for (let index = 0; index < count; index++) {
@@ -76,4 +94,9 @@ export function parseLootItem(value: unknown): LootItem {
 	if (Object.keys(source).some(key => !["id", "modelId", "foundAt"].includes(key)) || typeof source.id !== "string" || !/^loot-[1-9]\d*$/.test(source.id)
 		|| typeof source.modelId !== "string" || !Object.hasOwn(LOOT_MODEL_BY_ID, source.modelId) || typeof source.foundAt !== "number" || !Number.isFinite(source.foundAt) || source.foundAt < 0 || source.foundAt > 1e15) throw new Error("loot-item");
 	return { id: source.id, modelId: source.modelId, foundAt: source.foundAt };
+}
+export function parseLootItemForVersion(value: unknown, catalogVersion: number): LootItem {
+	const parsed = parseLootItem(value);
+	if (!lootAvailableInCatalog(parsed.modelId, catalogVersion)) throw new Error("loot-catalog-version");
+	return parsed;
 }

@@ -9,7 +9,7 @@ import { getMarketCommission, getMarketListingFee, MARKET_MAX_ACTIVE, MARKET_MAX
 import type { MarketListing, MarketSnapshot } from '../src/game/flea';
 import type { AccountService } from './accounts';
 import type { GameActionSnapshot, GameCommand, GameCommandType, GameIdentity, GameSnapshot } from '../src/game/commands';
-import { LOOT_MODEL_BY_ID } from '../src/game/loot';
+import { getLootTraderPrice, isAutoSellLoot, LOOT_MODEL_BY_ID } from '../src/game/loot';
 import { LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT } from '../src/game/live';
 import { LiveEconomyError, type LiveDelivery, type LiveEconomy, type LiveSupplyRequest, type LiveSupplyReceipt } from './live-economy';
 
@@ -286,16 +286,27 @@ export function createGameService(options: GameOptions): GameService {
           return JSON.parse(previous.receipt) as { ok: boolean; message: string };
         }
         const { snapshot, before } = advanceRow(row, identity), state = structuredClone(snapshot.state);
+        let junkMoney = 0;
+        const junk: { label: string; money: number }[] = [];
         for (const item of parcel.items) {
           if (db.query('SELECT id FROM authoritative_live_items WHERE id=?').get(item.id)) throw new LiveEconomyError(409, 'live_item_already_delivered');
+          if (isAutoSellLoot(item)) {
+            const money = getLootTraderPrice({ ...item, id: 'loot-1' });
+            junkMoney += money; junk.push({ label: LOOT_MODEL_BY_ID[item.modelId]!.label, money });
+            continue;
+          }
           const received = receiveTradeAsset(state, { kind: 'loot', item: { id: 'loot-1', modelId: item.modelId, foundAt: item.foundAt } }, snapshot.serverNow, true);
           if (!received.ok) return { ok: false, message: 'На складе нет места для всей посылки. Освободите место и заберите доставку.' };
           state.lootItems!.at(-1)!.foundAt = item.foundAt;
         }
-        const credited = creditMarketMoney(state, parcel.money);
+        const credited = creditMarketMoney(state, parcel.money + junkMoney);
         if (!credited.ok) return { ok: false, message: 'Доставка ждёт свободного места в кошельке.' };
         validateTransfer(state);
-        const receipt = { ok: true, message: `На склад доставлено ${parcel.items.length} трофеев${parcel.money ? ` и ${parcel.money} ₽` : ''}.` };
+        const usefulCount = parcel.items.length - junk.length;
+        const receipt = { ok: true, message: [
+          `На склад доставлено ${usefulCount} полезных трофеев${parcel.money ? ` и ${parcel.money} ₽` : ''}.`,
+          junk.length ? `Мусор продан при доставке за ${junkMoney} ₽: ${junk.map(item => `${item.label} — ${item.money} ₽`).join(' · ')}.` : '',
+        ].filter(Boolean).join(' ') };
         db.query('INSERT INTO authoritative_live_deliveries(id,owner,payload,receipt) VALUES(?,?,?,?)').run(parcel.id, parcel.owner, payload, JSON.stringify(receipt));
         for (const item of parcel.items) db.query('INSERT INTO authoritative_live_items(id,delivery_id) VALUES(?,?)').run(item.id, parcel.id);
         snapshot.state = state;

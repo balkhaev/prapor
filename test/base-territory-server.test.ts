@@ -7,6 +7,7 @@ import { createGameService, readGameCommand, type GameService } from "../server/
 import { readAuthoritativeAction, readAuthoritativeSnapshot } from "../src/authoritative-client";
 import { getRoomSites, getShelterRoomAt, parseSave, saveGame } from "../src/game/engine";
 import type { GameCommand, GameSnapshot } from "../src/game/commands";
+import { fundConstructionLoot } from "./loot-material-fixture";
 
 const NOW = 1_792_000_000_000, ORIGIN = "http://territory.test";
 const services: GameService[] = [], folders: string[] = [];
@@ -88,7 +89,12 @@ describe("authoritative base placement commands", () => {
 	});
 
 	test("rechecks owned cells and collisions; a locked large building cannot spend resources", async () => {
-		const { service } = setup(), client = await connect(service), original = structuredClone(client.snapshot.state);
+		const folder = await mkdtemp(join(tmpdir(), "prapor-territory-inputs-")); folders.push(folder);
+		const path = join(folder, "game.sqlite"), { service } = setup(path), client = await connect(service);
+		const db = new Database(path);
+		try { const stored = parseSave(db.query<{ state: string }, []>("SELECT state FROM authoritative_games LIMIT 1").get()!.state)!; fundConstructionLoot(stored); db.query("UPDATE authoritative_games SET state=?,revision=revision+1").run(saveGame(stored)); }
+		finally { db.close(); }
+		await poll(service, client); const original = structuredClone(client.snapshot.state);
 		for (const command of [
 			{ type: "moveRoom", args: ["room-workshop", 1, 0] },
 			{ type: "moveRoom", args: ["room-workshop", 4, 1] },
@@ -110,6 +116,7 @@ describe("authoritative base placement commands", () => {
 		try {
 			const stored = parseSave(db.query<{ state: string }, []>("SELECT state FROM authoritative_games LIMIT 1").get()!.state)!;
 			stored.level = 4; stored.xp = 810; stored.money = 20_000; stored.supplies.scrap = 200;
+			fundConstructionLoot(stored);
 			db.query("UPDATE authoritative_games SET state=?,revision=revision+1").run(saveGame(stored));
 		} finally { db.close(); }
 		await poll(first.service, client);
