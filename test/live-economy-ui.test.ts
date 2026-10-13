@@ -5,12 +5,14 @@ import { LOOT_MODELS } from '../src/game/loot';
 import type { EconomyLoot, LiveSnapshot } from '../src/game/live';
 import { getLiveMap, isLiveWalkable } from '../src/game/live-maps';
 import { createHealth, createMedicalInventory } from '../src/game/health';
+import { BOSSES } from '../src/game/bosses';
+import { getLiveBossArena } from '../src/game/live-boss-arenas';
 
 const GAME='cba21a6d-2936-4590-9433-dfa2b58c8dc8', NEXT='4ad58c2f-7616-4600-8134-83b7a210814d';
 const loot=(modelId='gold-ring',suffix=1):EconomyLoot=>({id:`532cfa7a-5ca1-4742-a07c-ffefdc785d${String(suffix).padStart(2,'0')}`,modelId,foundAt:1000});
 function fixture(game=GAME):LiveSnapshot {
   const {npcSpawns:_npcs,lootSpawns:_loot,...world}=structuredClone(getLiveMap('perimeter'));
-  const maps=[{id:world.id,name:world.name,description:world.description,theme:world.theme,width:world.width,height:world.height,online:1,npcs:0}];
+  const maps=[{id:world.id,name:world.name,description:world.description,theme:world.theme,width:world.width,height:world.height,online:1,npcs:0,...(world.city?{city:structuredClone(world.city)}:{})}];
   const exit=world.extracts[0]!;
   return {
     server:{id:'perimeter-1',name:'Периметр 01',online:1,capacity:32,startedAt:1000,maps,districts:world.districts.map((district,index)=>({...district,online:index===0?1:0,npcs:0}))},now:2000,selfId:'player-1',world,worldVersion:world.version,visibleChunks:[{x:0,y:0}],
@@ -26,7 +28,8 @@ class Element {
   hidden=false; innerHTML=''; disabled=false; dataset:Record<string,string>={};
   classList={add:()=>{},remove:()=>{}};
   listeners=new Map<string,EventListenerOrEventListenerObject>();
-  append(..._elements:unknown[]){} remove(){} setAttribute(_name:string,_value:string){} removeAttribute(_name:string){}
+  children:Element[]=[];
+  append(...elements:unknown[]){this.children.push(...elements.filter((element):element is Element=>element instanceof Element));} remove(){} setAttribute(_name:string,_value:string){} removeAttribute(_name:string){}
   querySelector(){return null;} querySelectorAll(){return [];} closest(){return this;}
   contains(value:unknown){return value instanceof Element;}
   addEventListener(name:string,listener:EventListenerOrEventListenerObject){this.listeners.set(name,listener);}
@@ -50,10 +53,71 @@ function harness(run:(url:string,init:RequestInit)=>Promise<Response>,getGameId:
   });
   cleanup=()=>{mode.destroy();if(originalDocument)Object.defineProperty(globalThis,'document',originalDocument);else Reflect.deleteProperty(globalThis,'document');if(originalWindow)Object.defineProperty(globalThis,'window',originalWindow);else Reflect.deleteProperty(globalThis,'window');};
   const pump=async()=>{await tick();await tick();};
-  return {mode,dock,calls,updates,routeUpdates,pump,get economicChanges(){return economicChanges;},get marketOpens(){return marketOpens;},firePoll(){const next=timers.entries().next().value;if(next){timers.delete(next[0]);next[1]();}}};
+  return {mode,world,dock,calls,updates,routeUpdates,pump,get economicChanges(){return economicChanges;},get marketOpens(){return marketOpens;},firePoll(){const next=timers.entries().next().value;if(next){timers.delete(next[0]);next[1]();}}};
 }
 
 describe('live loot and headquarters presentation',()=>{
+  test('walking across city districts keeps the initial hunt arena until an explicit boss choice without revealing or moving unseen NPCs',async()=>{
+    const state=fixture();state.self.purpose='boss';
+    state.server.bosses=BOSSES.map(boss=>{const arena=getLiveBossArena(state.world,boss.id);return {bossId:boss.id,name:boss.name,districtId:boss.districtId,poiId:arena.poiId,area:arena.area,state:'alive',respawnAt:0};});
+    const h=harness(async url=>{
+      if(url.endsWith('/status'))return response(state.server);
+      if(url.endsWith('/leave'))return response({ok:true});
+      return response(url.endsWith('/join')?state:{...state,world:undefined,server:{...state.server,maps:state.server.maps.map(({city:_city,...map})=>map)}});
+    });
+    h.mode.show();await h.pump();h.dock.click('join');await h.pump();
+    const first=state.server.bosses.find(boss=>boss.districtId==='customs')!;
+    expect(h.routeUpdates.at(-1)).toEqual([first.poiId]);
+    const city=state.world.city!, district=state.world.districts.find(district=>district.id==='sawmill')!;
+    let crossing:{x:number;y:number}|undefined;
+    for(let y=Math.max(city.y,district.y);!crossing&&y<Math.min(city.y+city.height,district.y+district.height);y++)for(let x=Math.max(city.x,district.x);x<Math.min(city.x+city.width,district.x+district.width);x++)if(isLiveWalkable(state.world,{x,y})){crossing={x,y};break;}
+    expect(crossing).toBeDefined();Object.assign(state.entities[0]!,crossing);state.self.districtId='sawmill';
+    h.firePoll();await h.pump();
+    expect(h.routeUpdates.at(-1)).toEqual([first.poiId]);
+    expect(h.dock.innerHTML).toContain(`data-live-button="poi:${first.poiId}"`);
+    expect(h.dock.innerHTML).not.toContain('class="live-boss-weapon"');
+    expect(h.updates.at(-1)?.entities.some(entity=>entity.bossId)).toBe(false);
+    expect(h.calls.some(call=>call.url.endsWith('/action'))).toBe(false);
+    const next=state.server.bosses.find(boss=>boss.districtId==='sawmill')!;
+    h.dock.click(`boss-area:${next.bossId}`);
+    expect(h.routeUpdates.at(-1)).toEqual([next.poiId]);
+    expect(state.entities[0]).toMatchObject(crossing!);
+    expect(h.calls.some(call=>call.url.endsWith('/action'))).toBe(false);
+    expect(h.updates.at(-1)?.world.city).toEqual(state.world.city);
+  });
+  test('a city crossing preserves the starting route and cached landmarks while a confirmed respawn selects a new starting route',async()=>{
+    const state=fixture(), side=Math.floor(state.world.width/4);
+    state.world.city={name:'Ольховск',x:side,y:side,width:side*2,height:side*2,quarters:[
+      {id:'old-center',name:'Старый центр',x:side,y:side,width:side,height:side},
+      {id:'industrial',name:'Промышленный квартал',x:side*2,y:side,width:side,height:side},
+      {id:'station',name:'Привокзальный квартал',x:side,y:side*2,width:side,height:side},
+      {id:'residential',name:'Жилой квартал',x:side*2,y:side*2,width:side,height:side},
+    ]};
+    state.server.maps[0]!.city=structuredClone(state.world.city);
+    const h=harness(async(url,init)=>{
+      if(url.endsWith('/status'))return response(state.server);
+      if(url.endsWith('/leave'))return response({ok:true});
+      if(url.endsWith('/action')){expect(JSON.parse(init.body as string).type).toBe('respawn');state.entities[0]!.health=100;state.entities[0]!.action='idle';state.self.respawnAt=0;}
+      return response(url.endsWith('/join')?state:{...state,world:undefined,server:{...state.server,maps:state.server.maps.map(({city:_city,...map})=>map)}});
+    });
+    h.mode.show();await h.pump();
+    expect(h.world.children[0]!.innerHTML).toContain('Город в сердце Периметра');
+    expect(h.world.children[0]!.innerHTML).toContain('Ольховск');
+    h.dock.click('join');await h.pump();
+    const original=state.world.routes!.find(route=>route.purpose==='loot'&&route.districtId==='customs')!;
+    expect(h.routeUpdates.at(-1)).toEqual(original.poiIds);
+    state.self.districtId='sawmill';state.entities[0]!.x=side*2+2;state.entities[0]!.y=side+2;
+    h.firePoll();await h.pump();
+    expect(h.routeUpdates.at(-1)).toEqual(original.poiIds);
+    expect(h.world.children[0]!.innerHTML).toContain('<strong>Ольховск');
+    expect(h.world.children[0]!.innerHTML).toContain('Промышленный квартал');
+    expect(h.updates.at(-1)?.world.city).toEqual(state.world.city);
+    expect(h.calls.some(call=>call.url.endsWith('/action'))).toBe(false);
+    state.entities[0]!.health=0;state.entities[0]!.action='downed';h.firePoll();await h.pump();
+    h.dock.click('district:sawmill');h.dock.click('respawn');await h.pump();
+    expect(h.routeUpdates.at(-1)).toEqual(state.world.routes!.find(route=>route.purpose==='loot'&&route.districtId==='sawmill')!.poiIds);
+    expect(h.calls.filter(call=>call.url.endsWith('/action'))).toHaveLength(1);
+  });
   test('guidance clears on a confirmed injury and identity change, resumes after return and resets on a new world revision',async()=>{
     const state=fixture();let game=GAME;
     const h=harness(async url=>url.endsWith('/status')?response(state.server):url.endsWith('/leave')?response({ok:true}):response(state),()=>game);

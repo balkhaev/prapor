@@ -10,6 +10,9 @@ import { LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT, type LiveCommand, type LiveSnapsh
 import { getLiveMap, isLiveWalkable, LIVE_MAPS } from "../src/game/live-maps";
 import { LOOT_MODELS } from "../src/game/loot";
 import { createHealth, createMedicalInventory, type MedicalInventory } from "../src/game/health";
+import { readLiveSnapshot } from "../src/live-client";
+import { getBoss } from "../src/game/bosses";
+import { getLiveBossArena } from "../src/game/live-boss-arenas";
 
 const ORIGIN = "https://game.delopusk.ru";
 interface Session { cookie: string; gameId: string; owner: string; id?: string }
@@ -167,7 +170,7 @@ describe("multiplayer loot and durable headquarters economy", () => {
     expect((await enter(withoutLiveCookie)).state.self.id).toBe(legacy.selfId);
   });
 
-  test.each(["perimeter-g1-legacy-fixture", "perimeter-g2-a827381f"])("geometry %s expands exact and fallback container slots without rerolling contents, cargo or medical supplies", async geometryVersion => {
+  test.each(["perimeter-g1-legacy-fixture", "perimeter-g2-a827381f", "perimeter-g3-b38b4b0d"])("geometry %s expands exact and fallback container slots without rerolling contents, cargo or medical supplies", async geometryVersion => {
     const first = await enter(), second = await enter(), map = getLiveMap("perimeter");
     const [exact, fallback] = map.containers, inBag = trophy("coffee"), inExact = trophy("gold-ring"), inFallback = trophy("old-watch"), retiredItem = trophy("bandage-roll"), bodyItem = trophy("coffee"), pendingItem = trophy("local-map");
     const fallbackId = fallback!.id.replace(/-[a-z]+-(\d+)$/, "-retired-$1");
@@ -180,7 +183,10 @@ describe("multiplayer loot and durable headquarters economy", () => {
       const saved = JSON.parse(db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!.state);
       saved.geometryVersion = geometryVersion;
       if (geometryVersion.startsWith("perimeter-g2-")) saved.drops = saved.drops.filter((drop: { containerId?: string }) => /^poi-[0-3]-[0-3]-/.test(drop.containerId ?? ""));
+      if (geometryVersion.startsWith("perimeter-g3-")) saved.drops = saved.drops.filter((drop: { containerId?: string }) => /^poi-[0-7]-[0-3]-/.test(drop.containerId ?? ""));
       saved.drops = saved.drops.filter((drop: { containerId?: string }) => ![exact!.id, fallback!.id].includes(drop.containerId ?? ""));
+      // Old global supply positions must follow their logical anchors into the outer ring.
+      for (const drop of saved.drops) if (drop.containerId) { drop.x = 117; drop.y = 115; }
       existingCycles = saved.drops.filter((drop: { containerId?: string }) => drop.containerId).map(({ id, containerId, amount, items, expiresAt }: typeof existingCycles[number]) => structuredClone({ id, containerId, amount, items, expiresAt }));
       saved.drops.push(
         { id: "old-searched-container", mapId: "perimeter", x: 0, y: 0, source: "supply", amount: 13, items: [inExact], containerId: exact!.id, containerKind: exact!.kind, expiresAt: time + 123_456 },
@@ -203,10 +209,15 @@ describe("multiplayer loot and durable headquarters economy", () => {
     };
     const initial = readDrops();
     expect(initial.geometryVersion).toBe(map.version);
+    if (geometryVersion.startsWith("perimeter-g3-")) {
+      expect(existingCycles).toHaveLength(126);
+      expect(initial.drops.filter(drop => /^poi-(?:8|9|10|11)-[0-3]-/.test(drop.containerId ?? ""))).toHaveLength(64);
+    }
     const itemIds = initial.drops.flatMap(drop => drop.items?.map(item => item.id) ?? []);
     expect(new Set(itemIds).size).toBe(itemIds.length);
     for (const cycle of existingCycles) {
-      expect(initial.drops.find(drop => drop.id === cycle.id)).toMatchObject(cycle);
+      const anchor = map.containers.find(anchor => anchor.id === cycle.containerId)!;
+      expect(initial.drops.find(drop => drop.id === cycle.id)).toMatchObject({ ...cycle, x: anchor.x, y: anchor.y });
       expect(initial.drops.filter(drop => drop.containerId === cycle.containerId)).toHaveLength(1);
     }
     expect(initial.drops.find(drop => drop.id === "old-searched-container")).toMatchObject({ x: exact!.x, y: exact!.y, items: [inExact], amount: 13, containerId: exact!.id, containerKind: exact!.kind, expiresAt: time + 123_456 });
@@ -224,8 +235,8 @@ describe("multiplayer loot and durable headquarters economy", () => {
     expect(restored.drops.find(drop => drop.id === "old-searched-container")).toMatchObject({ searched: true, items: [inExact], amount: 13 });
     const hidden = (await state(second.session)).drops.find(drop => drop.id === "old-searched-container")!;
     expect(hidden).toMatchObject({ searched: false, amount: 0 }); expect(hidden.items).toBeUndefined();
-    const beforeRestart = readDrops().drops.filter(drop => ["old-searched-container", "old-unsearched-container", "retired-supply", "old-body"].includes(drop.id));
-    restart(); expect(readDrops().drops.filter(drop => beforeRestart.some(old => old.id === drop.id))).toEqual(beforeRestart);
+    const beforeRestart = readDrops().drops;
+    restart(); expect(readDrops().drops).toEqual(beforeRestart);
     const again = (await enter(first.session)).state;
     expect(again.self.body).toEqual(body); expect(again.self.medicine).toEqual(medicine); expect(again.self.lootItems).toEqual([inBag]);
     expect(again.drops.find(drop => drop.id === "old-searched-container")?.items).toEqual([inExact]);
@@ -239,13 +250,14 @@ describe("multiplayer loot and durable headquarters economy", () => {
     expect(delivered).toHaveLength(3); expect(credited).toBe(56); expect(deliveries.size).toBe(2);
   });
 
-  test.each(["perimeter-g1-legacy-fixture", "perimeter-g2-a827381f"])("geometry %s depleted container cooldowns merge by logical slot and survive two restarts before one private refill", async geometryVersion => {
+  test.each(["perimeter-g1-legacy-fixture", "perimeter-g2-a827381f", "perimeter-g3-b38b4b0d"])("geometry %s depleted container cooldowns merge by logical slot and survive two restarts before one private refill", async geometryVersion => {
     const first = await enter(), map = getLiveMap("perimeter"), anchor = map.containers[2]!, deadline = time + 30_000;
     const legacyId = anchor.id.replace(/-[a-z]+-(\d+)$/, "-retired-$1");
     restart(db => {
       const row = db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!, saved = JSON.parse(row.state);
       saved.geometryVersion = geometryVersion;
       if (geometryVersion.startsWith("perimeter-g2-")) saved.drops = saved.drops.filter((drop: { containerId?: string }) => /^poi-[0-3]-[0-3]-/.test(drop.containerId ?? ""));
+      if (geometryVersion.startsWith("perimeter-g3-")) saved.drops = saved.drops.filter((drop: { containerId?: string }) => /^poi-[0-7]-[0-3]-/.test(drop.containerId ?? ""));
       saved.drops = saved.drops.filter((drop: { containerId?: string }) => drop.containerId !== anchor.id);
       saved.lootCooldowns = [[`container:${anchor.id}`, time + 1000], [`container:${legacyId}`, deadline], ["perimeter:0:0", deadline]];
       db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify(saved));
@@ -271,6 +283,100 @@ describe("multiplayer loot and durable headquarters economy", () => {
     expect((await call("action", { type: "loot", id: hidden.id }, first.session)).status).toBe(409);
     restart(); await enter(first.session);
     expect(readWorld().drops.filter(drop => drop.containerId === anchor.id)).toEqual(refill);
+  });
+
+  test("a crowded city projects a bounded loot window without leaking unsearched contents or discarding overflow cargo", async () => {
+    const first = await enter(), map = getLiveMap("perimeter"), anchor = map.containers.find(anchor => /^poi-(?:8|9|10|11)-/.test(anchor.id))!;
+    expect(anchor).toBeDefined();
+    const secret = trophy("secure-drive"), corpses = Array.from({ length: 520 }, (_, index) => ({ id: `city-body-${index.toString().padStart(4, "0")}`, mapId: "perimeter", x: anchor.x, y: anchor.y, source: "body", amount: 0, items: [trophy(index % 2 ? "coffee" : "gold-ring")], expiresAt: time + 120_000 }));
+    editPlayers([{ session: first.session, x: anchor.x, y: anchor.y }]);
+    restart(db => {
+      const saved = JSON.parse(db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!.state);
+      const supply = saved.drops.find((drop: { containerId?: string }) => drop.containerId === anchor.id);
+      supply.items = [secret]; supply.amount = 77;
+      saved.drops.push(...corpses);
+      db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify(saved));
+    });
+    const stored = (): Array<{ id: string; containerId?: string; items?: EconomyLoot[] }> => {
+      const db = new Database(dbPath, { readonly: true });
+      const rows = JSON.parse(db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!.state).drops; db.close(); return rows;
+    };
+    const crowded = (await enter(first.session)).state;
+    expect(crowded.drops.length).toBeLessThanOrEqual(512); expect(crowded.drops.length).toBeGreaterThan(0);
+    expect(readLiveSnapshot(crowded)).toEqual(crowded);
+    expect(JSON.stringify(crowded).includes(secret.id)).toBe(false);
+    const visibleSupply = crowded.drops.find(drop => drop.containerId === anchor.id);
+    if (visibleSupply) { expect(visibleSupply).toMatchObject({ searched: false, amount: 0 }); expect(visibleSupply.items).toBeUndefined(); }
+    expect(stored().filter(drop => drop.id.startsWith("city-body-"))).toHaveLength(520);
+    const allIds = stored().flatMap(drop => drop.items?.map(item => item.id) ?? []); expect(new Set(allIds).size).toBe(allIds.length);
+    const picked = crowded.drops.find(drop => drop.id.startsWith("city-body-"))!;
+    expect(picked).toBeDefined();
+    const response = await act(first.session, { type: "loot", id: picked.id });
+    expect(response.self.lootItems).toEqual(picked.items); expect(response.drops.some(drop => drop.id === picked.id)).toBe(false);
+    expect(response.drops.some(drop => drop.id.startsWith("city-body-") && !crowded.drops.some(old => old.id === drop.id))).toBe(true);
+    expect((await call("action", { type: "loot", id: picked.id }, first.session)).status).toBe(409);
+    const remaining = stored().filter(drop => drop.id.startsWith("city-body-")); expect(remaining).toHaveLength(519);
+    for (let retry = 0; retry < 2; retry++) {
+      restart(); const restored = (await enter(first.session)).state;
+      expect(readLiveSnapshot(restored)).toEqual(restored); expect(restored.self.lootItems).toEqual(picked.items);
+      expect(stored().filter(drop => drop.id.startsWith("city-body-"))).toEqual(remaining);
+      expect(JSON.stringify(restored).includes(secret.id)).toBe(false);
+    }
+  });
+
+  test("G3 boss bodies relocate without healing, restarting a defeated cycle or duplicating its trophy and headquarters receipt", async () => {
+    const first = await enter(), map = getLiveMap("perimeter"), woundedBody = createHealth(64), deadBody = createHealth();
+    woundedBody.parts.leftLeg.fracture = true; woundedBody.parts.rightArm.maxHp = 48; woundedBody.parts.rightArm.hp = 31; deadBody.parts.head.hp = 0;
+    const trophyItem = trophy(getBoss("komendant")!.trophyModelId), waitingItem = trophy(getBoss("lesnik")!.trophyModelId), deadline = time + 90_000, corpseExpiry = time + 120_000;
+    const parcel: LiveDelivery = { id: randomUUID(), owner: first.session.owner, gameId: first.session.gameId, createdAt: time - 5000, items: [waitingItem], money: 5 };
+    const medicine = createMedicalInventory({ medkit: 27, bandage: 0, tourniquet: 0, splint: 1, painkiller: 0, surgery: 0 });
+    blocked = true;
+    restart(db => {
+      const saved = JSON.parse(db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!.state);
+      saved.geometryVersion = "perimeter-g3-b38b4b0d";
+      saved.drops = saved.drops.filter((drop: { containerId?: string }) => /^poi-[0-7]-[0-3]-/.test(drop.containerId ?? ""));
+      saved.drops.push({ id: "g3-boss-corpse", bossId: "komendant", source: "body", mapId: "perimeter", x: 0, y: 0, amount: 350, items: [trophyItem], expiresAt: corpseExpiry });
+      db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify(saved));
+      for (const row of db.query<{ boss_id: string; state: string }, []>("SELECT boss_id,state FROM live_bosses").all()) {
+        const boss = JSON.parse(row.state); Object.assign(boss, { x: 0, y: 0, home: { x: 0, y: 0 }, route: [{ x: 0, y: 0 }], nextMove: time + 1_000_000, nextAttack: time + 1_000_000, healthAt: time });
+        if (row.boss_id === "lesnik") Object.assign(boss, { body: woundedBody, health: 64, bossCycle: 7, bossDeathSettled: false, respawnAt: 0 });
+        if (row.boss_id === "komendant") Object.assign(boss, { body: deadBody, health: 0, bossCycle: 9, bossDeathSettled: true, respawnAt: deadline });
+        db.query("UPDATE live_bosses SET state=? WHERE boss_id=?").run(JSON.stringify(boss), row.boss_id);
+      }
+      const row = db.query<{ identity: string; state: string }, []>("SELECT identity,state FROM live_players").get()!, player = JSON.parse(row.state);
+      Object.assign(player, { x: 0, y: 0, ammo: 17, medicine, cargo: 0, stash: 0, kills: 4, bossKills: 1, lastCombatAt: 0, safeUntil: time + 120_000 });
+      db.query("UPDATE live_players SET state=? WHERE identity=?").run(JSON.stringify(player), row.identity);
+      db.query("INSERT INTO live_boss_kill_credits(boss_id,cycle,identity,player_id,created_at) VALUES(?,?,?,?,?)").run("komendant", 9, first.session.owner, first.session.id!, time - 5000);
+      db.query("INSERT INTO live_economy_outbox(id,identity,kind,payload,message) VALUES(?,?,'delivery',?,'Ожидает места')").run(parcel.id, first.session.owner, JSON.stringify(parcel));
+    });
+    const durable = () => {
+      const db = new Database(dbPath, { readonly: true });
+      const bosses = db.query<{ boss_id: string; state: string }, []>("SELECT boss_id,state FROM live_bosses").all().map(row => ({ id: row.boss_id, state: JSON.parse(row.state) }));
+      const world = JSON.parse(db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!.state), credits = db.query<{ count: number }, []>("SELECT count(*) AS count FROM live_boss_kill_credits WHERE boss_id='komendant' AND cycle=9").get()!.count;
+      db.close(); return { bosses, world, credits };
+    };
+    for (let retry = 0; retry < 3; retry++) {
+      if (retry) restart(); const restored = (await enter(first.session)).state, saved = durable();
+      const wounded = saved.bosses.find(boss => boss.id === "lesnik")!.state, defeated = saved.bosses.find(boss => boss.id === "komendant")!.state;
+      const arena = getLiveBossArena(map, "lesnik");
+      expect(wounded).toMatchObject({ body: woundedBody, bossCycle: 7, bossDeathSettled: false, respawnAt: 0 });
+      expect(wounded.x >= arena.area.x && wounded.y >= arena.area.y && wounded.x < arena.area.x + arena.area.width && wounded.y < arena.area.y + arena.area.height).toBe(true);
+      expect(isLiveWalkable(map, wounded)).toBe(true); expect(wounded.health).toBeGreaterThan(0); expect(wounded.health).toBeLessThan(100);
+      expect(defeated).toMatchObject({ body: deadBody, health: 0, bossCycle: 9, bossDeathSettled: true, respawnAt: deadline });
+      expect(saved.world.drops.filter((drop: { bossId?: string }) => drop.bossId === "komendant")).toEqual([{ id: "g3-boss-corpse", bossId: "komendant", source: "body", mapId: "perimeter", x: 0, y: 0, amount: 350, items: [trophyItem], expiresAt: corpseExpiry }]);
+      expect(saved.credits).toBe(1); expect(restored.self).toMatchObject({ ammo: 17, medicine, kills: 4, bossKills: 1 });
+      expect(pending()).toBe(1); expect(delivered).toEqual([]);
+    }
+    time = deadline - 1; await enter(first.session); service.tick(); expect(durable().bosses.find(boss => boss.id === "komendant")!.state).toMatchObject({ health: 0, bossCycle: 9, respawnAt: deadline });
+    time = deadline + 249; await enter(first.session); service.tick(); expect(durable().bosses.find(boss => boss.id === "komendant")!.state).toMatchObject({ health: 100, bossCycle: 10, bossDeathSettled: false });
+    expect(durable().credits).toBe(1); expect(durable().world.drops.filter((drop: { bossId?: string }) => drop.bossId === "komendant")).toHaveLength(1);
+    const picked = await act(first.session, { type: "loot", id: "g3-boss-corpse" }); expect(picked.self.lootItems).toEqual([trophyItem]); expect(picked.self.cargo).toBe(350);
+    expect((await call("action", { type: "loot", id: "g3-boss-corpse" }, first.session)).status).toBe(409);
+    editPlayers([{ session: first.session }]); await enter(first.session); blocked = false; time += 1000; service.tick(); await act(first.session, { type: "extract" });
+    expect(delivered.map(item => item.id).sort()).toEqual([waitingItem.id, trophyItem.id].sort()); expect(credited).toBe(355); expect(deliveries.size).toBe(2); expect(pending()).toBe(0);
+    restart(); const again = (await enter(first.session)).state; await act(first.session, { type: "extract" });
+    expect(again.self.bossKills).toBe(1); expect(durable().credits).toBe(1); expect(deliveries.size).toBe(2); expect(delivered).toHaveLength(2); expect(credited).toBe(355);
+    expect(durable().world.drops.some((drop: { id: string }) => drop.id === "g3-boss-corpse")).toBe(false);
   });
 
   test("one shared named drop has one winner, weight and item count are hard limits, and trophy price is not a cash capacity", async () => {

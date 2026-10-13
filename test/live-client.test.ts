@@ -111,7 +111,7 @@ describe('live wire parser', () => {
       value => { value.world.paths![0]!.points[0]!.x = value.world.width; },
       value => { value.world.paths![0]!.points[0]!.y = -1; },
       value => { value.world.paths![0]!.points = Array.from({ length: 257 }, () => ({ x: 1, y: 1 })); },
-      value => { value.world.paths = Array.from({ length: 257 }, (_, index) => ({ ...value.world.paths![0]!, id: `path-${index}` })); },
+      value => { value.world.paths = Array.from({ length: 385 }, (_, index) => ({ ...value.world.paths![0]!, id: `path-${index}` })); },
       value => { Object.assign(value.world.obstacles[0]!, { kind: 'lava' }); },
       value => { Object.assign(value.world.zones[0]!, { terrain: 'private-loot' }); },
     ];
@@ -129,11 +129,46 @@ describe('live wire parser', () => {
     expect(() => readLiveSnapshot({ ...full, visibleChunks: [{ x: Math.ceil(full.world.width / full.world.chunkSize), y: 0 }] })).toThrow(LiveApiError);
     const duplicate = fixture(); duplicate.server.districts[1]!.id = 'customs'; expect(() => readLiveStatus(duplicate.server)).toThrow(LiveApiError);
   });
-  test('expanded worlds accept the new outer bounds, six streaming columns and more than 128 bounded landscape paths', () => {
+  test('expanded worlds accept their outer bounds, all streaming columns and 384 bounded landscape paths', () => {
     const value = fixture(); value.entities[0]!.x = value.world.width - 1; value.entities[0]!.y = value.world.height - 1;
-    value.visibleChunks = [{ x: 5, y: 5 }];
-    value.world.paths = Array.from({ length: 139 }, (_, index) => ({ id: `road-${index}`, name: 'Дорога', kind: 'road', width: 3, points: [{ x: 0, y: 0 }, { x: 191, y: 191 }] }));
+    value.visibleChunks = [{ x: Math.ceil(value.world.width/value.world.chunkSize)-1, y: Math.ceil(value.world.height/value.world.chunkSize)-1 }];
+    value.world.paths = Array.from({ length: 384 }, (_, index) => ({ id: `road-${index}`, name: 'Дорога', kind: 'road', width: 3, points: [{ x: 0, y: 0 }, { x: value.world.width-1, y: value.world.height-1 }] }));
     expect(readLiveSnapshot(value)).toEqual(value);
+  });
+  test('city quarters and outer labels survive full and cached geometry while rejecting malformed public regions', () => {
+    const full=fixture(), side=Math.floor(full.world.width/4), x=side,y=side;
+    full.world.city={name:'Ольховск',x,y,width:side*2,height:side*2,quarters:[
+      {id:'old-center',name:'Старый центр',x,y,width:side,height:side},
+      {id:'industrial',name:'Промышленный квартал',x:x+side,y,width:side,height:side},
+      {id:'station',name:'Привокзальный квартал',x,y:y+side,width:side,height:side},
+      {id:'residential',name:'Жилой квартал',x:x+side,y:y+side,width:side,height:side},
+    ]};
+    full.world.districts[0]!.labelPoint={x:12,y:12};
+    full.server.maps[0]!.city=structuredClone(full.world.city);
+    full.server.districts[0]!.labelPoint={x:12,y:12};
+    const parsed=readLiveSnapshot(full);expect(parsed).toEqual(full);
+    const {world:_world,...withoutWorld}=full,delta={...withoutWorld,server:structuredClone(full.server)};delete delta.server.maps[0]!.city;
+    expect(readLiveSnapshot(delta,parsed.world).world.city).toEqual(full.world.city);
+    expect(readLiveSnapshot(delta,parsed.world).world.districts[0]!.labelPoint).toEqual({x:12,y:12});
+    const legacy=fixture();delete legacy.world.city;delete legacy.server.maps[0]!.city;
+    for(const district of [...legacy.world.districts,...legacy.server.districts])delete district.labelPoint;
+    expect(readLiveSnapshot(legacy)).toEqual(legacy);
+    const edits:Array<(value:LiveSnapshot)=>void>=[
+      value=>{value.world.city!.x=-1;},
+      value=>{value.world.city!.width=value.world.width;},
+      value=>{value.world.city!.name='x'.repeat(81);},
+      value=>{value.world.city!.quarters.pop();},
+      value=>{value.world.city!.quarters[1]!.id=value.world.city!.quarters[0]!.id;},
+      value=>{value.world.city!.quarters[0]!.x=value.world.city!.x-1;},
+      value=>{Object.assign(value.world.city!,{immunity:true});},
+      value=>{Object.assign(value.world.city!.quarters[0]!,{reward:999});},
+      value=>{value.world.districts[0]!.labelPoint={x:value.world.width,y:12};},
+      value=>{value.world.districts[0]!.labelPoint={x:Number.NaN,y:12};},
+      value=>{value.server.districts[0]!.labelPoint={x:12,y:-1};},
+    ];
+    for(const edit of edits){const value=structuredClone(full);edit(value);expect(()=>readLiveSnapshot(value)).toThrow(LiveApiError);}
+    const mismatch=structuredClone(full);mismatch.server.maps[0]!.city!.name='Другой город';
+    expect(()=>readLiveSnapshot(mismatch)).toThrow(LiveApiError);
   });
   test('purpose routes preserve ordered known places without granting immunity or accepting foreign references', () => {
     const full = fixture();
@@ -142,6 +177,9 @@ describe('live wire parser', () => {
       poiIds: full.world.pois.filter(poi => poi.districtId === district.id).slice(0, 2).map(poi => poi.id),
     })));
     expect(readLiveSnapshot(full)).toEqual(full);
+    const crossDistrict = structuredClone(full);
+    crossDistrict.world.routes![0]!.poiIds[0] = crossDistrict.world.pois.find(poi => poi.districtId !== crossDistrict.world.routes![0]!.districtId)!.id;
+    expect(readLiveSnapshot(crossDistrict)).toEqual(crossDistrict);
     const { world: _world, ...update } = full; expect(readLiveSnapshot(update, full.world)).toEqual(full);
     const legacy = fixture(); delete legacy.world.routes; expect(readLiveSnapshot(legacy)).toEqual(legacy);
     const edits: Array<(value: LiveSnapshot) => void> = [
@@ -149,7 +187,6 @@ describe('live wire parser', () => {
       value => { Object.assign(value.world.routes![0]!, { purpose: 'immune' }); },
       value => { Object.assign(value.world.routes![0]!, { districtId: 'other-server' }); },
       value => { value.world.routes![0]!.poiIds[0] = 'client-secret-room'; },
-      value => { value.world.routes![0]!.poiIds[0] = value.world.pois.find(poi => poi.districtId !== value.world.routes![0]!.districtId)!.id; },
       value => { value.world.routes![0]!.poiIds.push(value.world.routes![0]!.poiIds[0]!); },
       value => { value.world.routes![0]!.poiIds = []; },
       value => { Object.assign(value.world.routes![0]!, { poiIds: 'poi-0-0' }); },

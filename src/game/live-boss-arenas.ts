@@ -11,7 +11,8 @@ export function getLiveBossArena(world: LiveWorld, bossId: BossId): LiveBossAren
   const dangerAt = (point: LivePoint) => world.zones.filter(zone => point.x >= zone.x && point.y >= zone.y && point.x < zone.x + zone.width && point.y < zone.y + zone.height).reduce((danger, zone) => Math.max(danger, zone.danger), 1);
   const candidates = world.pois.filter(poi => poi.districtId === boss.districtId && poi.danger >= boss.depth && poi.tags.includes('contested')
     && poi.entrances.some(point => isLiveWalkable(world, point) && dangerAt(point) >= boss.depth))
-    .sort((a, b) => Number(b.templateId === boss.poiTemplateId) - Number(a.templateId === boss.poiTemplateId) || b.danger - a.danger || a.id.localeCompare(b.id));
+    .sort((a, b) => Number(b.tags.includes(`boss-arena:${bossId}`)) - Number(a.tags.includes(`boss-arena:${bossId}`))
+      || Number(b.templateId === boss.poiTemplateId) - Number(a.templateId === boss.poiTemplateId) || b.danger - a.danger || a.id.localeCompare(b.id));
   const poi = candidates[0];
   if (!poi) throw new Error(`Missing authored boss arena: ${bossId}`);
   const home = poi.entrances.find(point => isLiveWalkable(world, point) && dangerAt(point) >= boss.depth)!;

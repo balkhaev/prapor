@@ -35,3 +35,17 @@ test('planning accepts legacy worlds without recommendations and multiple entry 
   const plan = analyseWorldPlan(world);
   expect(plan.routes).toEqual([]); expect(plan.districts[0]!.nearestLootSteps).toBe(1); expect(plan.districts[0]!.nearestContestedSteps).toBe(1);
 });
+
+test('city planning reports real building coverage without counting overlapping footprint tiles twice', () => {
+  const world = planningFixture();
+  world.city = { name: 'Город', x: 1, y: 0, width: 6, height: 4, quarters: [
+    { id: 'nw', name: 'Северо-запад', x: 1, y: 0, width: 3, height: 2 }, { id: 'ne', name: 'Северо-восток', x: 4, y: 0, width: 3, height: 2 },
+    { id: 'sw', name: 'Юго-запад', x: 1, y: 2, width: 3, height: 2 }, { id: 'se', name: 'Юго-восток', x: 4, y: 2, width: 3, height: 2 },
+  ] };
+  world.obstacles.push({ x: 5, y: 1, width: 1, height: 3, kind: 'building' }, { x: 5, y: 2, width: 1, height: 1, kind: 'building' });
+  const city = analyseWorldPlan(world).city!;
+  expect(city).toMatchObject({ name: 'Город', places: 2, containers: 1, buildings: 2, buildingTiles: 3, areaTiles: 24,
+    approaches: [{ districtId: 'customs', firstCityStopSteps: 12 }] });
+  expect(city.quarters.map(quarter => quarter.buildingTiles)).toEqual([0, 1, 0, 2]);
+  expect(city.quarters.reduce((sum, quarter) => sum + quarter.buildingTiles, 0)).toBe(city.buildingTiles);
+});

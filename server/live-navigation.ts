@@ -12,17 +12,26 @@ export function createLiveNavigation(world: LiveWorld) {
   const key = (point: LivePoint): number => point.y * world.width + point.x;
   const walkable = (point: LivePoint): boolean => Number.isInteger(point.x) && Number.isInteger(point.y) && point.x >= 0 && point.y >= 0 && point.x < world.width && point.y < world.height && walls[key(point)] === 0;
   const rayClear = (point: LivePoint): boolean => Number.isInteger(point.x) && Number.isInteger(point.y) && point.x >= 0 && point.y >= 0 && point.x < world.width && point.y < world.height && sightWalls[key(point)] === 0;
+  // Searches are synchronous. Epochs reuse storage without clearing the entire world
+  // for every NPC or player order; only entries stamped by this search are readable.
+  const costs = new Int32Array(cells), parents = new Int32Array(cells), touched = new Uint32Array(cells), visited = new Uint32Array(cells);
+  let epoch = 0;
   const findPath = (start: LivePoint, target: LivePoint, occupied: ReadonlySet<number> = new Set()): LivePoint[] | null => {
     if (!walkable(start) || !walkable(target) || occupied.has(key(target))) return null;
     const initial = key(start), end = key(target);
     if (initial === end) return [];
-    const costs = new Int32Array(cells).fill(0x7fffffff), parents = new Int32Array(cells).fill(-1), visited = new Uint8Array(cells);
+    epoch = (epoch + 1) >>> 0;
+    if (!epoch) { touched.fill(0); visited.fill(0); epoch = 1; }
+    const currentEpoch = epoch;
     const heap: Node[] = [];
+    // With equal f scores, finish a deeper candidate before exploring an entire
+    // Manhattan plateau. The admissible heuristic and shortest-path costs stay intact.
+    const precedes = (a: Node, b: Node): boolean => a.score < b.score || a.score === b.score && a.cost > b.cost;
     const push = (node: Node): void => {
       let index = heap.length; heap.push(node);
       while (index > 0) {
         const parent = (index - 1) >>> 1;
-        if (heap[parent]!.score <= node.score) break;
+        if (!precedes(node, heap[parent]!)) break;
         heap[index] = heap[parent]!; index = parent;
       }
       heap[index] = node;
@@ -33,33 +42,38 @@ export function createLiveNavigation(world: LiveWorld) {
       let index = 0;
       while (index * 2 + 1 < heap.length) {
         const left = index * 2 + 1, right = left + 1;
-        const child = right < heap.length && heap[right]!.score < heap[left]!.score ? right : left;
-        if (last.score <= heap[child]!.score) break;
+        const child = right < heap.length && precedes(heap[right]!, heap[left]!) ? right : left;
+        if (!precedes(heap[child]!, last)) break;
         heap[index] = heap[child]!; index = child;
       }
       heap[index] = last;
       return first;
     };
     const estimate = (cell: number): number => Math.abs(cell % world.width - target.x) + Math.abs(Math.floor(cell / world.width) - target.y);
-    costs[initial] = 0; push({ cell: initial, cost: 0, score: estimate(initial) });
+    const offer = (cell: number, from: number, fromCost: number): void => {
+      if (walls[cell] || visited[cell] === currentEpoch || occupied.has(cell)) return;
+      const cost = fromCost + 1;
+      if (touched[cell] === currentEpoch && cost >= costs[cell]!) return;
+      touched[cell] = currentEpoch; costs[cell] = cost; parents[cell] = from;
+      push({ cell, cost, score: cost + estimate(cell) });
+    };
+    touched[initial] = currentEpoch; costs[initial] = 0; parents[initial] = -1;
+    push({ cell: initial, cost: 0, score: estimate(initial) });
     let expanded = 0;
     while (heap.length && expanded < cells) {
       const node = pop()!;
-      if (visited[node.cell] || node.cost !== costs[node.cell]) continue;
-      visited[node.cell] = 1; expanded++;
+      if (visited[node.cell] === currentEpoch || node.cost !== costs[node.cell]) continue;
+      visited[node.cell] = currentEpoch; expanded++;
       if (node.cell === end) {
         const route: LivePoint[] = [];
         for (let cell = end; cell !== initial; cell = parents[cell]!) route.push({ x: cell % world.width, y: Math.floor(cell / world.width) });
         return route.reverse();
       }
       const x = node.cell % world.width, y = Math.floor(node.cell / world.width);
-      for (const cell of [x > 0 ? node.cell - 1 : -1, x + 1 < world.width ? node.cell + 1 : -1, y > 0 ? node.cell - world.width : -1, y + 1 < world.height ? node.cell + world.width : -1]) {
-        if (cell < 0 || walls[cell] || visited[cell] || occupied.has(cell)) continue;
-        const cost = node.cost + 1;
-        if (cost >= costs[cell]!) continue;
-        costs[cell] = cost; parents[cell] = node.cell;
-        push({ cell, cost, score: cost + estimate(cell) });
-      }
+      if (x > 0) offer(node.cell - 1, node.cell, node.cost);
+      if (x + 1 < world.width) offer(node.cell + 1, node.cell, node.cost);
+      if (y > 0) offer(node.cell - world.width, node.cell, node.cost);
+      if (y + 1 < world.height) offer(node.cell + world.width, node.cell, node.cost);
     }
     return null;
   };

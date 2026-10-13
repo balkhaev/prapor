@@ -27,6 +27,10 @@ export interface LiveLandscapePath {
   id: string; name: string; kind: "road" | "trail" | "rail" | "river";
   width: number; points: LivePoint[];
 }
+export interface LiveCityRegion extends LivePoint {
+  name: string; width: number; height: number;
+  quarters: Array<LivePoint & { id: string; name: string; width: number; height: number }>;
+}
 /** Suggested exploration stops; these are guidance, not rewarded quest assignments. */
 export interface LiveWorldRoute {
   id: string; name: string; description: string;
@@ -48,6 +52,7 @@ export interface LiveMapSummary {
   id: LiveMapId; name: string; description: string;
   theme: "industrial" | "forest" | "urban" | "mixed";
   width: number; height: number; online: number; npcs: number;
+  city?: LiveCityRegion;
 }
 export interface LiveWorld {
   id: LiveMapId;
@@ -70,11 +75,13 @@ export interface LiveWorld {
   terrainRows?: string[];
   paths?: LiveLandscapePath[];
   routes?: LiveWorldRoute[];
+  city?: LiveCityRegion;
 }
 export interface LiveDistrict extends LivePoint {
   id: LiveDistrictId; name: string; description: string;
   width: number; height: number; theme: "industrial" | "forest" | "urban";
   spawns: LivePoint[];
+  labelPoint?: LivePoint;
 }
 export interface LivePoi extends LivePoint {
   id: string; templateId: string; name: string; districtId: LiveDistrictId;

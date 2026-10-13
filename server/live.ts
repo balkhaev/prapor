@@ -75,7 +75,7 @@ function storedBody(value: unknown, legacyHealth: number): HealthState {
   if (legacyHealth <= 0) body.parts.head.hp = 0;
   return body;
 }
-const DEFAULT_MAP: LiveMapId = "perimeter", WORLD_VERSION = 3, COMBAT_TRAVEL_MS = 8000, VISION_RADIUS = 24;
+const DEFAULT_MAP: LiveMapId = "perimeter", WORLD_VERSION = 3, COMBAT_TRAVEL_MS = 8000, VISION_RADIUS = 24, VISIBLE_DROP_CAPACITY = 512;
 const maps = new Map(LIVE_MAPS.map(map => [map.id, map]));
 const mapFrom = (id: unknown): LiveMapId | null => typeof id === "string" && maps.has(id as LiveMapId) ? id as LiveMapId : null;
 const worldFor = (id: LiveMapId): LiveWorld => {
@@ -260,7 +260,11 @@ export function createLiveService(options: LiveOptions): LiveService {
     }
   };
   const exposed = (player: Participant): boolean => player.online || player.graceUntil > now();
-  const occupied = (mapId: LiveMapId, point: LivePoint, exceptId?: string): boolean => [...players.values(), ...scavs.values()].some(entity => entity.mapId === mapId && entity.id !== exceptId && entity.health > 0 && (!isParticipant(entity) || exposed(entity)) && entity.x === point.x && entity.y === point.y);
+  const occupied = (mapId: LiveMapId, point: LivePoint, exceptId?: string): boolean => {
+    for (const player of players.values()) if (player.mapId === mapId && player.id !== exceptId && player.health > 0 && exposed(player) && player.x === point.x && player.y === point.y) return true;
+    for (const scav of scavs.values()) if (scav.mapId === mapId && scav.id !== exceptId && scav.health > 0 && scav.x === point.x && scav.y === point.y) return true;
+    return false;
+  };
   const clear = (mapId: LiveMapId, point: LivePoint, exceptId?: string): boolean => walkable(mapId, point) && !occupied(mapId, point, exceptId);
   const pickPoint = (mapId: LiveMapId, spawn = false, districtId: LiveDistrictId = "customs"): LivePoint => {
     const world = maps.get(mapId)!;
@@ -521,6 +525,7 @@ export function createLiveService(options: LiveOptions): LiveService {
       return { bossId: definition.id, name: definition.name, districtId: definition.districtId, poiId: arena.poiId, area: { ...arena.area }, state: boss.health > 0 ? 'alive' : 'defeated', respawnAt: boss.health > 0 ? 0 : boss.respawnAt };
     }),
     maps: LIVE_MAPS.map(map => ({ id: map.id, name: map.name, description: map.description, theme: map.theme, width: map.width, height: map.height,
+      ...(includeRoutes && map.city ? { city: map.city } : {}),
       online: [...players.values()].filter(player => player.online && player.mapId === map.id).length, npcs: [...scavs.values()].filter(scav => scav.mapId === map.id && scav.health > 0).length })),
     districts: maps.get(DEFAULT_MAP)!.districts.map(district => ({ ...district,
       online: [...players.values()].filter(player => player.online && districtAt(player) === district.id).length,
@@ -542,7 +547,12 @@ export function createLiveService(options: LiveOptions): LiveService {
           }), economyMessage: player.economyMessage ?? "Находки с выхода поступают в убежище; пополнение расходует его запасы." } : {}) },
       entities: [...players.values()].filter(other => exposed(other) && other.mapId === player.mapId && (other.id === player.id || visible(other))).map(publicEntity)
         .concat([...scavs.values()].filter(scav => scav.mapId === player.mapId && visible(scav)).map(publicEntity)),
-      drops: [...drops.values()].filter(drop => drop.mapId === player.mapId && visible(drop)).map(drop => {
+      // Dense fights can leave more cargo than one bounded packet can contain.
+      // Project a stable page; keep every physical UUID in the durable world.
+      drops: [...drops.values()].filter(drop => drop.mapId === player.mapId && visible(drop)).sort((a, b) =>
+        Number(b.id === player.searching?.id) - Number(a.id === player.searching?.id)
+        || Number(Boolean(b.containerId)) - Number(Boolean(a.containerId))
+        || distance(player, a) - distance(player, b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).slice(0, VISIBLE_DROP_CAPACITY).map(drop => {
         const searched = player.searchedDropIds.includes(drop.id);
         return { id: drop.id, x: drop.x, y: drop.y, amount: !drop.containerId || searched ? drop.amount : 0,
           ...(drop.bossId ? { bossId: drop.bossId } : {}),
@@ -560,7 +570,9 @@ export function createLiveService(options: LiveOptions): LiveService {
     if (changed || !next || !clear(entity.mapId, next, entity.id)) {
       if (!changed && entity.replanAt > now()) return null;
       const nav = navigation.get(entity.mapId)!;
-      const occupiedCells = new Set([...players.values(), ...scavs.values()].filter(other => other.id !== entity.id && other.mapId === entity.mapId && other.health > 0 && (!isParticipant(other) || exposed(other))).map(nav.key));
+      const occupiedCells = new Set<number>();
+      for (const other of players.values()) if (other.id !== entity.id && other.mapId === entity.mapId && other.health > 0 && exposed(other)) occupiedCells.add(nav.key(other));
+      for (const other of scavs.values()) if (other.id !== entity.id && other.mapId === entity.mapId && other.health > 0) occupiedCells.add(nav.key(other));
       entity.path = nav.findPath(entity, destination, occupiedCells) ?? [];
       entity.pathGoal = { ...destination }; entity.replanAt = now() + 1000;
     }

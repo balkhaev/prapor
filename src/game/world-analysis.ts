@@ -3,6 +3,9 @@ import type { LiveDistrictId, LivePoint, LivePurpose, LiveWorld } from './live';
 export interface WorldPlanReport {
   districts: Array<{ id: LiveDistrictId; places: number; containers: number; nearestLootSteps: number | null; nearestContestedSteps: number | null }>;
   routes: Array<{ id: string; name: string; districtId: LiveDistrictId; purpose: LivePurpose; stops: string[]; firstStopSteps: number; walkSteps: number; returnSteps: number }>;
+  city?: { name: string; places: number; containers: number; buildings: number; buildingTiles: number; areaTiles: number;
+    quarters: Array<{ id: string; name: string; buildings: number; buildingTiles: number; areaTiles: number }>;
+    approaches: Array<{ districtId: LiveDistrictId; firstCityStopSteps: number | null }> };
 }
 
 /** Authoring measurements use the same four-direction movement as the server, without actors. */
@@ -63,5 +66,18 @@ export function analyseWorldPlan(world: LiveWorld): WorldPlanReport {
     if (!exit) throw new Error(`Unreachable route extraction ${route.id}`);
     return { id: route.id, name: route.name, districtId: route.districtId, purpose: route.purpose, stops, firstStopSteps, walkSteps, returnSteps: exit.steps };
   });
-  return { districts, routes };
+  if (!world.city) return { districts, routes };
+  const city = world.city;
+  const inArea = (point: LivePoint, area: { x: number; y: number; width: number; height: number }): boolean => point.x >= area.x && point.y >= area.y && point.x < area.x + area.width && point.y < area.y + area.height;
+  const buildings = world.obstacles.filter(obstacle => obstacle.kind === 'building'), buildingMask = new Uint8Array(cells);
+  for (const building of buildings) for (let y = building.y; y < building.y + building.height; y++) for (let x = building.x; x < building.x + building.width; x++) if (inside({ x, y })) buildingMask[y * world.width + x] = 1;
+  const measure = (area: { x: number; y: number; width: number; height: number }) => {
+    let buildingTiles = 0;
+    for (let y = area.y; y < area.y + area.height; y++) for (let x = area.x; x < area.x + area.width; x++) if (inside({ x, y }) && buildingMask[y * world.width + x]) buildingTiles++;
+    return { buildings: buildings.filter(building => building.x < area.x + area.width && building.y < area.y + area.height && building.x + building.width > area.x && building.y + building.height > area.y).length, buildingTiles, areaTiles: area.width * area.height };
+  };
+  const places = world.pois.filter(poi => inArea(poi, city) && inArea({ x: poi.x + poi.width - 1, y: poi.y + poi.height - 1 }, city)), ids = new Set(places.map(poi => poi.id));
+  return { districts, routes, city: { name: city.name, places: places.length, containers: world.containers.filter(anchor => ids.has(anchor.poiId)).length, ...measure(city),
+    quarters: city.quarters.map(quarter => ({ id: quarter.id, name: quarter.name, ...measure(quarter) })),
+    approaches: world.districts.map(district => ({ districtId: district.id, firstCityStopSteps: closest(districtFields.get(district.id)!, places.flatMap(poi => poi.entrances))?.steps ?? null })) } };
 }

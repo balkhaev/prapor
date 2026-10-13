@@ -1,6 +1,6 @@
-import type { LiveLandscapePath, LiveObstacle, LivePoint, LiveWorld } from './live';
+import type { LiveCityRegion, LiveLandscapePath, LiveObstacle, LivePoint, LiveWorld } from './live';
 
-type LandscapeWorld = Pick<LiveWorld, 'width' | 'height' | 'obstacles' | 'pois' | 'extracts'>;
+type LandscapeWorld = Pick<LiveWorld, 'width' | 'height' | 'obstacles' | 'pois' | 'extracts' | 'city'>;
 const distance = (a: LivePoint, b: LivePoint): number => Math.hypot(a.x - b.x, a.y - b.y);
 const segmentDistance = (point: LivePoint, a: LivePoint, b: LivePoint): number => {
   const dx = b.x - a.x, dy = b.y - a.y, denominator = dx * dx + dy * dy;
@@ -24,6 +24,16 @@ function riverCurve(controls: LivePoint[], width: number, height: number): LiveP
   points.push({ ...controls[controls.length - 1]! });
   return points;
 }
+/** These streets are reserved before buildings are placed, then rasterized unchanged. */
+export function cityStreetPlan(city: LiveCityRegion): LiveLandscapePath[] {
+  const left = city.x, top = city.y, right = left + city.width - 1, bottom = top + city.height - 1;
+  const roads: LiveLandscapePath[] = [{ id: 'city-ring', name: 'Городское кольцо', kind: 'road', width: 5, points: [{ x: left, y: top }, { x: right, y: top }, { x: right, y: bottom }, { x: left, y: bottom }, { x: left, y: top }] }];
+  for (const axis of [90, 126, 162]) {
+    roads.push({ id: `city-street-x-${axis}`, name: axis === 126 ? 'Проспект Победы' : axis === 90 ? 'Вокзальная улица' : 'Заводская улица', kind: 'road', width: axis === 126 ? 6 : 4, points: [{ x: axis, y: top }, { x: axis, y: bottom }] });
+    roads.push({ id: `city-street-y-${axis}`, name: axis === 126 ? 'Центральный проспект' : axis === 90 ? 'Северная улица' : 'Садовая улица', kind: 'road', width: axis === 126 ? 6 : 4, points: [{ x: left, y: axis }, { x: right, y: axis }] });
+  }
+  return roads;
+}
 
 /** Ground and transport are independent of streaming sectors and contain no reward rolls. */
 export function generateLandscape(world: LandscapeWorld, seed: string): { terrainRows: string[]; paths: LiveLandscapePath[]; water: LiveObstacle[] } {
@@ -34,7 +44,7 @@ export function generateLandscape(world: LandscapeWorld, seed: string): { terrai
   for (const obstacle of world.obstacles) for (let y = obstacle.y; y < obstacle.y + obstacle.height; y++) for (let x = obstacle.x; x < obstacle.x + obstacle.width; x++) blocked[y * width + x] = 1;
   for (const poi of world.pois) for (let y = poi.y; y < poi.y + poi.height; y++) for (let x = poi.x; x < poi.x + poi.width; x++) footprints[y * width + x] = 1;
   const paths: LiveLandscapePath[] = [{ id: 'river-east', name: 'Речка Ольховая', kind: 'river', width: 5,
-    points: riverCurve([{ x: 191, y: 54 }, { x: 174, y: 69 }, { x: 153, y: 87 }, { x: 137, y: 111 }, { x: 132, y: 130 }, { x: 141, y: 149 }, { x: 129, y: 171 }, { x: 135, y: 191 }], width, height) }];
+    points: riverCurve([{ x: 255, y: 44 }, { x: 239, y: 54 }, { x: 220, y: 72 }, { x: 212, y: 92 }, { x: 210, y: 118 }, { x: 215, y: 148 }, { x: 207, y: 182 }, { x: 213, y: 212 }, { x: 207, y: 255 }], width, height) }];
   const river = paths[0]!;
   // The same bounded curve drives the visible path, bank raster and collision water.
   // Index expanded segment bounds by row before evaluating distances near the bank.
@@ -46,15 +56,16 @@ export function generateLandscape(world: LandscapeWorld, seed: string): { terrai
   const riverRows = Array.from({ length: height }, (_, y) => segments.filter(segment => y >= segment.minY && y <= segment.maxY));
   for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
     const wave = Math.sin(x / 11 + phase) * .11 + Math.cos(y / 13 - phase) * .13 + Math.sin((x + y) / 17 + phase) * .08;
-    const forest = ((x - 149) / 57) ** 2 + ((y - 36) / 57) ** 2 < 1 + wave
-      || ((x - 106) / 23) ** 2 + ((y - 106) / 74) ** 2 < .75 + wave
-      || x < 12 + Math.sin(y / 17 + phase) * 7 && y > 30;
+    const forest = ((x - 181) / 67) ** 2 + ((y - 20) / 35) ** 2 < 1 + wave
+      || ((x - 32) / 25) ** 2 + ((y - 144) / 82) ** 2 < .75 + wave
+      || y > 218 + Math.sin(x / 21 + phase) * 10 && x > 67 && x < 220;
     ground[y * width + x] = forest ? 'f' : 'g';
     let riverDistance = Infinity;
     for (const segment of riverRows[y]!) if (x >= segment.minX && x <= segment.maxX) riverDistance = Math.min(riverDistance, segmentDistance({ x, y }, segment.a, segment.b));
-    const lake = ((x - 172) / 13) ** 2 + ((y - 91) / 10) ** 2;
+    const lake = ((x - 210) / 4) ** 2 + ((y - 157) / 10) ** 2;
     if (riverDistance < river.width / 2 + wave * .6 || lake < .9 + wave * .3) ground[y * width + x] = 'w';
     else if (riverDistance < river.width / 2 + 1.8 || lake < 1.5 + wave * .4) ground[y * width + x] = 's';
+    if (world.city && x >= world.city.x && y >= world.city.y && x < world.city.x + world.city.width && y < world.city.y + world.city.height) ground[y * width + x] = 'c';
   }
   // Each place has an irregular apron rather than a district-wide rectangular background.
   for (const poi of world.pois) {
@@ -124,9 +135,9 @@ export function generateLandscape(world: LandscapeWorld, seed: string): { terrai
   const nearestClear = (point: LivePoint): LivePoint => { for (let radius = 0; radius < 24; radius++) for (let y = point.y - radius; y <= point.y + radius; y++) for (let x = point.x - radius; x <= point.x + radius; x++) if (clear({ x, y }) && !footprints[y * width + x]) return { x, y }; throw new Error('Transport corridor has no clear port'); };
   const approaches: Array<{ deck: LivePoint[]; id: string; name: string }> = [];
   const crossings = [
-    { id: 'bridge-mill', name: 'Лесопильная переправа', x: 150, y: 98, kind: 'road' as const },
-    { id: 'bridge-stone', name: 'Каменный мост', x: 134, y: 134, kind: 'road' as const },
-    { id: 'bridge-meadow', name: 'Луговой настил', x: 132, y: 173, kind: 'trail' as const },
+    { id: 'bridge-mill', name: 'Лесопильная переправа', y: 92, kind: 'road' as const },
+    { id: 'bridge-stone', name: 'Каменный мост', y: 148, kind: 'road' as const },
+    { id: 'bridge-meadow', name: 'Луговой настил', y: 212, kind: 'trail' as const },
   ];
   const proposals = crossings.map(crossing => {
     const options: LivePoint[][] = [];
@@ -175,6 +186,10 @@ export function generateLandscape(world: LandscapeWorld, seed: string): { terrai
     paths.push({ id: crossing.id, name: crossing.name, kind: crossing.kind, width: pathWidth, points: [deck[0]!, deck.at(-1)!] });
     approaches.push({ deck, id: crossing.id, name: crossing.name });
   }
+  if (world.city) {
+    for (const street of cityStreetPlan(world.city)) { paint(street.points, street.width, 'r'); paths.push(street); }
+    for (let y = 118; y <= 136; y++) for (let x = 118; x <= 136; x++) if (!blocked[y * width + x]) ground[y * width + x] = 'r';
+  }
   for (const crossing of approaches) {
     for (const [index, end] of [crossing.deck[0]!, crossing.deck.at(-1)!].entries()) {
       const bankNodes = nodes.filter(point => index === 0 ? point.x <= end.x : point.x >= end.x);
@@ -192,9 +207,11 @@ export function generateLandscape(world: LandscapeWorld, seed: string): { terrai
   for (const [a, b] of [[0, 5], [1, 9], [4, 12], [6, 10], [9, 14], [10, 15], [16, 21], [18, 22], [20, 25], [23, 27], [24, 29], [26, 30]] as const) connect(nodes[a]!, nodes[b]!, `road-${connection++}`);
   for (const poi of world.pois) for (let index = 1; index < poi.entrances.length; index++) connect(poi.entrances[0]!, poi.entrances[index]!, `access-${poi.id}-${index}`, 'trail');
   const highways = [
-    { id: 'highway-north', name: 'Северный грузовой тракт', points: [{ x: 8, y: 25 }, { x: 55, y: 33 }, { x: 95, y: 48 }, { x: 125, y: 64 }, { x: 166, y: 48 }, { x: 184, y: 10 }] },
-    { id: 'highway-cargo', name: 'Грузовой проспект', points: [{ x: 10, y: 174 }, { x: 49, y: 145 }, { x: 70, y: 110 }, { x: 103, y: 87 }, { x: 137, y: 71 }] },
-    { id: 'trail-meadows', name: 'Обход через луга', points: [{ x: 47, y: 185 }, { x: 96, y: 166 }, { x: 116, y: 173 }, { x: 148, y: 175 }, { x: 180, y: 182 }] },
+    { id: 'highway-north', name: 'Северный въезд', points: [{ x: 6, y: 6 }, { x: 24, y: 40 }, { x: 48, y: 52 }, { x: 56, y: 90 }, { x: 90, y: 126 }, { x: 126, y: 126 }] },
+    { id: 'highway-forest', name: 'Лесной въезд', points: [{ x: 249, y: 6 }, { x: 228, y: 30 }, { x: 228, y: 92 }, { x: 199, y: 90 }, { x: 162, y: 126 }, { x: 126, y: 126 }] },
+    { id: 'highway-cargo', name: 'Грузовой въезд', points: [{ x: 6, y: 249 }, { x: 28, y: 225 }, { x: 48, y: 205 }, { x: 56, y: 162 }, { x: 90, y: 126 }, { x: 126, y: 126 }] },
+    { id: 'highway-south', name: 'Южный въезд', points: [{ x: 249, y: 249 }, { x: 231, y: 228 }, { x: 227, y: 212 }, { x: 199, y: 162 }, { x: 162, y: 162 }, { x: 126, y: 126 }] },
+    { id: 'trail-meadows', name: 'Обход окраин', points: [{ x: 5, y: 70 }, { x: 6, y: 166 }, { x: 52, y: 207 }, { x: 176, y: 247 }, { x: 228, y: 207 }] },
   ];
   for (const highway of highways) {
     const cells: LivePoint[] = [];
@@ -202,7 +219,7 @@ export function generateLandscape(world: LandscapeWorld, seed: string): { terrai
     const trail = highway.id.startsWith('trail'), pathWidth = trail ? 2 : 4;
     paint(cells, pathWidth, trail ? 'p' : 'r'); paths.push({ id: highway.id, name: highway.name, kind: trail ? 'trail' : 'road', width: pathWidth, points: simplify(cells) });
   }
-  const railPoints = [{ x: 1, y: 176 }, { x: 29, y: 159 }, { x: 59, y: 136 }, { x: 79, y: 108 }, { x: 98, y: 84 }, { x: 125, y: 67 }, { x: 155, y: 55 }, { x: 190, y: 32 }];
+  const railPoints = [{ x: 1, y: 225 }, { x: 43, y: 218 }, { x: 56, y: 181 }, { x: 73, y: 162 }, { x: 90, y: 145 }, { x: 90, y: 126 }, { x: 56, y: 90 }, { x: 32, y: 63 }];
   const rail: LivePoint[] = [];
   for (let index = 1; index < railPoints.length; index++) rail.push(...route(nearestClear(railPoints[index - 1]!), nearestClear(railPoints[index]!)).slice(index === 1 ? 0 : 1));
   paint(rail, 2, 't'); paths.push({ id: 'rail-freight', name: 'Грузовая ветка', kind: 'rail', width: 2, points: simplify(rail) });
