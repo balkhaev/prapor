@@ -26,7 +26,7 @@ describe("continuous territory map geometry", () => {
 		const layout = getTerritoryPlanLayout(state), frontier = new Set(getShelterFrontier(state.shelter).map(key));
 		expect(layout.expansions.some(item => item.site.column === 1 && item.site.row === 1)).toBe(true);
 		for (const entrance of layout.expansions) expect(frontier.has(key(entrance.site))).toBe(true);
-		expect(layout.landscape.lots).toHaveLength(11);
+		expect(layout.landscape.lots).toHaveLength(23);
 	});
 
 	test("a reserved expansion keeps its own progress and isn't offered as new land", () => {
@@ -59,7 +59,7 @@ describe("continuous territory map geometry", () => {
 
 	test("projected map bounds include the continuous ground and raised building hulls", () => {
 		const state = createGame(NOW);
-		state.shelter.sites.push({ column: -1, row: 2 }, { column: 3, row: 3 });
+		state.shelter.sites.push({ column: -1, row: 2 }, { column: 3, row: 4 });
 		for (const facing of [0, 1, 2, 3] as const) {
 			state.shelter.rooms[0]!.facing = facing;
 			const { landscape, projectedBounds: frame } = getTerritoryPlanLayout(state);

@@ -3,7 +3,7 @@ import { addLootInputs, fundConstructionLoot, withoutLootMaterials } from "./loo
 import {
 	advance, assignWorker, buildRoom, constructRoom, createGame, getFreeBuildRoomQuote,
 	getRoomBounds, getRoomFreePlacementReason, getRoomPosition, getRoomSites,
-	getShelterRoomAtPoint, moveRoom, parseSave, placeRoom, queueModuleProduction,
+	getShelterRoomAtPoint, getStartingShelterSites, moveRoom, parseSave, placeRoom, queueModuleProduction,
 	rotateRoom, saveGame, setRoomRecipe, setRoomStockTarget, upgradeRoom, ROOM_DEFINITIONS, receiveTradeAsset,
 	type GameState, type ShelterRoomType,
 } from "../src/game/engine";
@@ -11,6 +11,8 @@ import {
 const NOW = 1_792_000_000_000;
 function funded(level = 1): GameState {
 	const state = createGame(NOW);
+	// Keep the legacy perimeter fixture for hole and boundary checks.
+	state.shelter.sites = Array.from({ length: 12 }, (_, index) => ({ column: index % 4, row: Math.floor(index / 4) }));
 	state.level = level; state.xp = (level - 1) ** 2 * 90;
 	state.money = 20_000; state.supplies = { ammo: 100, medicine: 0, scrap: 200, intel: 20 };
 	return fundConstructionLoot(state);
@@ -122,6 +124,7 @@ describe("continuous ground placement", () => {
 describe("continuous save integrity and migration", () => {
 	test("released v21 construction receipts and physical inventories migrate without repositioning or repaying", () => {
 		const state = funded();
+		state.shelter.sites = getStartingShelterSites();
 		expect(buildRoom(state, "ammo", 2, 2, NOW).ok).toBe(true); advance(state, NOW + 1000);
 		const original = structuredClone(state.shelter.rooms.at(-1)!);
 		const raw = JSON.parse(saveGame(state)); raw.schemaVersion = 21;
@@ -135,6 +138,7 @@ describe("continuous save integrity and migration", () => {
 
 	test("v20 saves preserve old grid placement and every paid job and construction field", () => {
 		const state = funded();
+		state.shelter.sites = getStartingShelterSites();
 		expect(assignWorker(state, state.scavs[0]!.id, "room-workshop", NOW).ok).toBe(true);
 		expect(queueModuleProduction(state, "room-workshop", "factory-sks-stock", NOW).ok).toBe(true);
 		expect(buildRoom(state, "ammo", 2, 2, NOW).ok).toBe(true); advance(state, NOW + 1000);

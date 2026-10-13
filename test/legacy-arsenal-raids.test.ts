@@ -9,6 +9,7 @@ import { withoutBarters, withoutLoot } from "./legacy-loot-fixture";
 import { withoutArsenalLoot } from "./legacy-strategy-fixture";
 import { withoutMedical } from "./legacy-health-fixture";
 import type { AmmoType } from "../src/game/ammunition";
+import { getShelterSites, getStartingShelterSites } from "../src/game/shelter";
 
 // Generated with the released v15 engine at 7df999da336ea1c70797ed519ec8f35e1823e63e.
 // Public actions reproduce the actual paid saves; their fingerprints prove the
@@ -168,8 +169,16 @@ function canonical(value: unknown): string {
 	return JSON.stringify(value);
 }
 const fingerprint = (value: unknown) => new Bun.CryptoHasher("sha256").update(canonical(value)).digest("hex");
+function releasedStartingLand(raw: { shelter: { sites: unknown[] } }) {
+	// Normalize only the new starting-land grant for historical raid fingerprints;
+	// paid resources, identities, loot and all expedition outcomes remain unchanged.
+	const foundation = getShelterSites({}).map(site => ({ ...site }));
+	expect(raw.shelter.sites).toEqual(raw.shelter.sites.length === foundation.length ? foundation : getStartingShelterSites());
+	raw.shelter.sites = foundation;
+}
 function oldFormat(state: GameState) {
 	const raw = withoutMedical(JSON.parse(saveGame(state))); raw.schemaVersion = 15;
+	releasedStartingLand(raw);
 	const lootArrays = [raw.lootItems, ...raw.raids.map((raid: { expedition?: { cargo?: { lootItems?: unknown[] } } }) => raid.expedition?.cargo?.lootItems), ...raw.history.flatMap((report: { lootItems?: unknown[]; lootAutoSold?: unknown[]; lostCargo?: { lootItems?: unknown[] } }) => [report.lootItems, report.lootAutoSold, report.lostCargo?.lootItems])];
 	for (const items of lootArrays) expect(items?.length ?? 0).toBe(0);
 	withoutLoot(raw);
@@ -179,6 +188,7 @@ function oldFormat(state: GameState) {
 const stateFingerprint = (state: GameState) => fingerprint(oldFormat(state));
 function departRecipe(fixture: { now: number; weaponId: string; mapId: string; type: AmmoType }): GameState {
 	const state = createGame(fixture.now), scav = state.scavs[0]!;
+	state.shelter.sites = getShelterSites({}).map(site => ({ ...site }));
 	state.money = 100_000; state.supplies = { ammo: 10_000, medicine: 100, scrap: 1_000, intel: 100 };
 	state.level = 9; state.xp = 5_760;
 	useWeaponPlatformFixture(state, state.weapons[0]!, fixture.weaponId);
@@ -308,6 +318,7 @@ const V16_FIXTURES = [
 ] as const;
 function v16Fingerprint(state: GameState): string {
 	const raw = withoutMedical(JSON.parse(saveGame(state))); raw.schemaVersion = 16;
+	releasedStartingLand(raw);
 	// These retained fixtures have an empty shelf. Only the empty receipt field
 	// changed when overflow became a parcel; all paid outcomes must remain exact.
 	for (const report of raw.history) if (Object.hasOwn(report, "lootPending")) {
@@ -324,7 +335,7 @@ test("released v16 paid trophies, receipt provenance and seed outcomes migrate w
 		expect(fingerprint(raw)).toBe(fixture.paid);
 		const state = parseSave(JSON.stringify(raw));
 		expect(state).not.toBeNull();
-		expect(state).toEqual(departed);
+		expect(state).toEqual({ ...departed, shelter: { ...departed.shelter, sites: getStartingShelterSites() } });
 		const raid = state!.raids[0]!;
 		expect(raid.lootVersion).toBe(1);
 		expect(raid.expedition!.lootCatalogVersion).toBeUndefined();

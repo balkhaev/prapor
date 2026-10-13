@@ -35,6 +35,8 @@ export interface ShelterExpansion extends ShelterSite {
 export interface ShelterState { rooms: RoomInstance[]; sites: ShelterSite[]; expansions: ShelterExpansion[]; logistics?: ShelterLogistics }
 export const SHELTER_COLUMNS = 4;
 export const SHELTER_ROWS = 3;
+export const STARTING_SHELTER_COLUMNS = 6;
+export const STARTING_SHELTER_ROWS = 4;
 export const SHELTER_COORDINATE_LIMIT = 128;
 export const SHELTER_POSITION_LIMIT = 30_000;
 export const SHELTER_ROOM_CLEARANCE = 8;
@@ -47,6 +49,9 @@ export const SHELTER_EXCAVATION = { money: 60, scrap: 2, duration: 20 } as const
 type ShelterLayout = { rooms?: readonly RoomInstance[]; sites?: readonly ShelterSite[]; expansions?: readonly ShelterExpansion[] };
 const initialSites = (): ShelterSite[] => Array.from({ length: SHELTER_ROWS }, (_, row) =>
 	Array.from({ length: SHELTER_COLUMNS }, (_, column) => ({ column, row }))).flat();
+/** A spacious starting yard; the original foundation remains the save integrity baseline. */
+export const getStartingShelterSites = (): ShelterSite[] => Array.from({ length: STARTING_SHELTER_ROWS }, (_, row) =>
+	Array.from({ length: STARTING_SHELTER_COLUMNS }, (_, column) => ({ column, row }))).flat();
 export function isShelterSiteCoordinate(column: number, row: number): boolean {
 	return Number.isInteger(column) && Number.isInteger(row) && Math.abs(column) <= SHELTER_COORDINATE_LIMIT && row >= 0 && row <= SHELTER_COORDINATE_LIMIT;
 }
@@ -181,6 +186,6 @@ export function getProductionRecipe(recipeId: string, recipeVersion?: 24): typeo
 	return Object.hasOwn(catalogue, recipeId) ? catalogue[recipeId] : undefined;
 }
 export function initialShelter(base: Record<string, number>): ShelterState {
-	return { sites: initialSites(), expansions: [], rooms: ["workshop", "medbay", "radio", "storage"].map((type, column) => ({ id: `room-${type}`, type: type as ShelterRoomType, column, row: 0,
+	return { sites: getStartingShelterSites(), expansions: [], rooms: ["workshop", "medbay", "radio", "storage"].map((type, column) => ({ id: `room-${type}`, type: type as ShelterRoomType, column, row: 0,
 		level: base[type] ?? 1, status: "ready", construction: null, workerIds: [], queue: [], recipeId: null, repeat: false, pending: false, cycles: 0 })) };
 }

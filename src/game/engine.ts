@@ -16,7 +16,7 @@ import { BLUEPRINTS, EXPEDITION_BRANCHES, GEAR_MODEL_BY_ID, MARKET_OFFERS, RUN_P
 export * from "./systems";
 import { FACTORY_KITS, getResolvedModuleMounts, MODULE_BY_ID, MODULE_MODELS, MODULE_SLOTS, MODULE_SLOT_LABELS, modulePlatformLabel, RECEIVER_INFO, type ModuleInstance, type ModuleSlot } from "./modules";
 export * from "./modules";
-import { initialShelter, ROOM_DEFINITIONS, RESOURCE_RECIPE_BY_ID, getProductionRecipe, LEGACY_RESOURCE_RECIPES_V24, getShelterSites, getShelterFrontier, getRoomFootprint, getRoomFacing, getRoomSites, getRoomPosition, getRoomPositionSite, getRoomBounds, shelterBoundsOverlap, isShelterRoomPosition, isShelterSiteCoordinate, MAX_SHELTER_SITES, SHELTER_COORDINATE_LIMIT, SHELTER_POSITION_LIMIT, SHELTER_ROOM_CLEARANCE, SHELTER_GATE_APPROACH, SHELTER_EXCAVATION, type ProductionJob, type RoomInstance, type RoomFacing, type ShelterCost, type ShelterRoomType, type ShelterSite, type ShelterExpansion, type ShelterState } from "./shelter";
+import { initialShelter, ROOM_DEFINITIONS, RESOURCE_RECIPE_BY_ID, getProductionRecipe, LEGACY_RESOURCE_RECIPES_V24, getShelterSites, getStartingShelterSites, getShelterFrontier, getRoomFootprint, getRoomFacing, getRoomSites, getRoomPosition, getRoomPositionSite, getRoomBounds, shelterBoundsOverlap, isShelterRoomPosition, isShelterSiteCoordinate, MAX_SHELTER_SITES, SHELTER_COORDINATE_LIMIT, SHELTER_POSITION_LIMIT, SHELTER_ROOM_CLEARANCE, SHELTER_GATE_APPROACH, SHELTER_EXCAVATION, type ProductionJob, type RoomInstance, type RoomFacing, type ShelterCost, type ShelterRoomType, type ShelterSite, type ShelterExpansion, type ShelterState } from "./shelter";
 export * from "./shelter";
 import { getRaidFieldFrame, getRaidFieldOutcome, getRaidFieldPlan, type RaidFieldPlan } from "../raid-field";
 import { buildRecruitmentBoard, chooseRecruitCandidateAppearance, createRecruitmentState, getEarnedRecruitmentTier, getRecruitmentBoard, getScavProfileEffects, getScavTalentOffers, isRecruitDrawbackForRole, isRecruitTraitForRole, neutralScavProfile, RECOVERY_RECRUIT_ID, RECRUIT_BACKGROUNDS, RECRUIT_DRAWBACKS, RECRUIT_ROLES, RECRUIT_TRAITS, SCAV_TALENTS, stepRecruitmentSeed, type RecruitCandidate, type RecruitmentState, type RecruitRole, type RecruitTier, type ScavProfile } from "./recruitment";
@@ -56,7 +56,7 @@ export * from "./bosses";
 export * from "./raid-gear-loot";
 
 export const SAVE_KEY = "prapor.save.v1";
-export const SAVE_VERSION = 26;
+export const SAVE_VERSION = 27;
 export const MAX_PENDING_LOOT_DELIVERIES = 128;
 export const PENDING_LOOT_RAID_LIMIT = 96;
 export const MAX_OFFLINE_MS = 8 * 60 * 60 * 1000;
@@ -3201,7 +3201,11 @@ function parseShelter(value: unknown, version: number): GameState["shelter"] {
 		const policy = record(source.logistics), kits = record(policy.kits); fields(policy, ["reserve", "kits"]); fields(kits, ["maintenance", "trauma"]);
 		logistics = { reserve: parseProductionReserve(policy.reserve), kits: { maintenance: number(kits.maintenance, FIELD_KIT_CAPACITY, 0, true), trauma: number(kits.trauma, FIELD_KIT_CAPACITY, 0, true) } };
 	}
-	return { rooms, sites, expansions, ...(logistics ? { logistics } : {}) };
+	// Grant the larger yard only after validating the original land and buildings.
+	// Purchased territory and paid excavation jobs retain their exact layout and progress.
+	const startingSites = version < 27 && sites.length === foundation.length && expansions.length === 0
+		? getStartingShelterSites() : sites;
+	return { rooms, sites: startingSites, expansions, ...(logistics ? { logistics } : {}) };
 }
 function parseScavProfile(value: unknown): ScavProfile {
 	const source = record(value); fields(source, ["backgroundId", "traitId", "drawbackId", "talents", "candidateId"]);

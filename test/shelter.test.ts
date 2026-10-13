@@ -432,8 +432,8 @@ describe("shelter save integrity and migration", () => {
 		const state = createGame(NOW);
 		const mutations: ((value: any) => void)[] = [
 			value => { value.shelter.rooms[0].type = "constructor"; },
-			value => { value.shelter.rooms[0].column = 4; },
-			value => { value.shelter.rooms[0].row = 3; },
+			value => { value.shelter.rooms[0].column = 6; },
+			value => { value.shelter.rooms[0].row = 4; },
 			value => { value.shelter.rooms[1].column = value.shelter.rooms[0].column; value.shelter.rooms[1].row = value.shelter.rooms[0].row; },
 			value => { value.shelter.rooms.push(value.shelter.rooms[0]); },
 			value => { value.shelter.rooms[0].workerIds = ["scav-999"]; },

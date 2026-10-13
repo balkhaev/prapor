@@ -7,6 +7,7 @@ import { RELEASED_V18_FIXTURES } from "./released-v18-arsenal-fixtures";
 import { useWeaponPlatformFixture } from "./weapon-fixtures";
 import { withoutMedical } from "./legacy-health-fixture";
 import { withoutBarters } from "./legacy-loot-fixture";
+import { getShelterSites, getStartingShelterSites } from "../src/game/shelter";
 
 function canonical(value: unknown): string {
 	if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
@@ -16,6 +17,11 @@ function canonical(value: unknown): string {
 const fingerprint = (value: unknown) => new Bun.CryptoHasher("sha256").update(canonical(value)).digest("hex");
 function releasedFormat(state: GameState, version = ARSENAL_SAVE_VERSION) {
 	const raw = JSON.parse(saveGame(state)); if (version < 18) withoutMedical(raw); raw.schemaVersion = version;
+	// The new starting-land grant is independent of paid raid outcomes. Compare
+	// only that land in its released shape; every resource, ID and result stays exact.
+	const foundation = getShelterSites({}).map(site => ({ ...site }));
+	expect(raw.shelter.sites).toEqual(raw.shelter.sites.length === foundation.length ? foundation : getStartingShelterSites());
+	raw.shelter.sites = foundation;
 	// This fixture has space for all trophies. Convert only the empty receipt
 	// property to its released spelling; retain every actual outcome and ID.
 	for (const report of raw.history) if (Object.hasOwn(report, "lootPending")) {
@@ -28,6 +34,7 @@ function releasedFormat(state: GameState, version = ARSENAL_SAVE_VERSION) {
 const stateFingerprint = (state: GameState, version = ARSENAL_SAVE_VERSION) => fingerprint(releasedFormat(state, version));
 function depart(fixture: typeof RELEASED_V17_FIXTURES[number] | typeof RELEASED_V18_FIXTURES[number], version = ARSENAL_SAVE_VERSION) {
 	const state = createGame(fixture.now), scav = state.scavs[0]!;
+	state.shelter.sites = getShelterSites({}).map(site => ({ ...site }));
 	state.money = 100_000; state.supplies = { ammo: 10_000, medicine: 100, scrap: 1_000, intel: 100 }; state.level = 9; state.xp = 5_760;
 	useWeaponPlatformFixture(state, state.weapons[0]!, fixture.weaponId); scav.combat = 90; scav.scouting = 90; state.sectorIntel = { [fixture.mapId]: { knowledge: 3, pressure: 2 } };
 	for (const action of [setRaidTactic(state, scav.id, "cautious"), setLoadoutOption(state, scav.id, "ammoType", fixture.type), setRaidPlan(state, scav.id, "intel", "scouted"), dispatchRaid(state, scav.id, fixture.mapId, state.lastUpdated)]) expect(action.ok).toBe(true);

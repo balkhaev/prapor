@@ -9,6 +9,8 @@ import {
 const NOW = 1_792_000_000_000;
 function funded(): GameState {
 	const state = createGame(NOW);
+	// Existing purchased yards retain the original foundation and expansion semantics.
+	state.shelter.sites = getShelterSites({}).map(site => ({ ...site }));
 	state.money = 10_000;
 	state.supplies = { ammo: 60, medicine: 0, scrap: 50, intel: 10 };
 	return fundConstructionLoot(state);
@@ -122,7 +124,7 @@ describe("paid excavation of the shelter perimeter", () => {
 });
 
 describe("expansion save integrity", () => {
-	test("old v5 shelter fields default to the original foundation without changing gameplay progress", () => {
+	test("old v5 shelter fields receive the larger starting yard without changing gameplay progress", () => {
 		const original = funded();
 		const value = JSON.parse(saveGame(original));
 		value.schemaVersion = 5;
@@ -133,6 +135,7 @@ describe("expansion save integrity", () => {
 		delete value.shelter.sites; delete value.shelter.expansions;
 		const transferred = parseSave(JSON.stringify(value))!;
 		expect(transferred).not.toBeNull();
+		original.shelter.sites = transferred.shelter.sites.map(site => ({ ...site }));
 		const withoutPersonalHistory = (game: GameState) => {
 			const copy = JSON.parse(saveGame(game));
 			delete copy.memorials; delete copy.social; delete copy.achievements;
@@ -148,7 +151,7 @@ describe("expansion save integrity", () => {
 		}
 		const migrated = restored(original);
 		expect(migrated.schemaVersion).toBe(original.schemaVersion);
-		expect(migrated.shelter.sites).toHaveLength(12);
+		expect(migrated.shelter.sites).toHaveLength(24);
 	});
 
 	test("forged disconnected floors, duplicate reservations, street sites and unpaid jobs cannot be imported", () => {
