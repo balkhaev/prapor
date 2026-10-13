@@ -8,6 +8,22 @@ const segmentDistance = (point: LivePoint, a: LivePoint, b: LivePoint): number =
   return Math.hypot(point.x - a.x - t * dx, point.y - a.y - t * dy);
 };
 const hash = (value: string): number => { let result = 2166136261; for (const char of value) result = Math.imul(result ^ char.charCodeAt(0), 16777619); return result >>> 0; };
+function riverCurve(controls: LivePoint[], width: number, height: number): LivePoint[] {
+  const points: LivePoint[] = [];
+  for (let index = 0; index < controls.length - 1; index++) {
+    const a = controls[Math.max(0, index - 1)]!, b = controls[index]!, c = controls[index + 1]!, d = controls[Math.min(controls.length - 1, index + 2)]!;
+    for (let sample = 0; sample < 6; sample++) {
+      const t = sample / 6, t2 = t * t, t3 = t2 * t;
+      const component = (p0: number, p1: number, p2: number, p3: number, limit: number): number => {
+        const value = .5 * (2 * p1 + (p2 - p0) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (3 * p1 - p0 - 3 * p2 + p3) * t3);
+        return Math.round(Math.max(0, Math.min(limit - 1, value)) * 1000) / 1000;
+      };
+      points.push({ x: component(a.x, b.x, c.x, d.x, width), y: component(a.y, b.y, c.y, d.y, height) });
+    }
+  }
+  points.push({ ...controls[controls.length - 1]! });
+  return points;
+}
 
 /** Ground and transport are independent of streaming sectors and contain no reward rolls. */
 export function generateLandscape(world: LandscapeWorld, seed: string): { terrainRows: string[]; paths: LiveLandscapePath[]; water: LiveObstacle[] } {
@@ -18,13 +34,22 @@ export function generateLandscape(world: LandscapeWorld, seed: string): { terrai
   for (const obstacle of world.obstacles) for (let y = obstacle.y; y < obstacle.y + obstacle.height; y++) for (let x = obstacle.x; x < obstacle.x + obstacle.width; x++) blocked[y * width + x] = 1;
   for (const poi of world.pois) for (let y = poi.y; y < poi.y + poi.height; y++) for (let x = poi.x; x < poi.x + poi.width; x++) footprints[y * width + x] = 1;
   const paths: LiveLandscapePath[] = [{ id: 'river-east', name: 'Речка Ольховая', kind: 'river', width: 4.5,
-    points: [{ x: 127, y: 42 }, { x: 117, y: 52 }, { x: 105, y: 60 }, { x: 96, y: 73 }, { x: 91, y: 89 }, { x: 96, y: 104 }, { x: 89, y: 127 }] }];
+    points: riverCurve([{ x: 127, y: 42 }, { x: 117, y: 52 }, { x: 105, y: 60 }, { x: 96, y: 73 }, { x: 91, y: 89 }, { x: 96, y: 104 }, { x: 89, y: 127 }], width, height) }];
   const river = paths[0]!;
+  // The same bounded curve drives the visible path, bank raster and collision water.
+  // Index expanded segment bounds by row before evaluating distances near the bank.
+  const bank = river.width / 2 + 1.8;
+  const segments = river.points.slice(1).map((b, index) => {
+    const a = river.points[index]!;
+    return { a, b, minX: Math.min(a.x, b.x) - bank, maxX: Math.max(a.x, b.x) + bank, minY: Math.min(a.y, b.y) - bank, maxY: Math.max(a.y, b.y) + bank };
+  });
+  const riverRows = Array.from({ length: height }, (_, y) => segments.filter(segment => y >= segment.minY && y <= segment.maxY));
   for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
     const wave = Math.sin(x / 11 + phase) * .11 + Math.cos(y / 13 - phase) * .13 + Math.sin((x + y) / 17 + phase) * .08;
     const forest = ((x - 101) / 46) ** 2 + ((y - 31) / 50) ** 2 < 1 + wave || x < 10 + Math.sin(y / 12 + phase) * 6 && y > 19;
     ground[y * width + x] = forest ? 'f' : 'g';
-    const riverDistance = Math.min(...river.points.slice(1).map((b, index) => segmentDistance({ x, y }, river.points[index]!, b)));
+    let riverDistance = Infinity;
+    for (const segment of riverRows[y]!) if (x >= segment.minX && x <= segment.maxX) riverDistance = Math.min(riverDistance, segmentDistance({ x, y }, segment.a, segment.b));
     const lake = ((x - 114) / 10) ** 2 + ((y - 61) / 7) ** 2;
     if (riverDistance < river.width / 2 + wave * .6 || lake < .9 + wave * .3) ground[y * width + x] = 'w';
     else if (riverDistance < river.width / 2 + 1.8 || lake < 1.5 + wave * .4) ground[y * width + x] = 's';
