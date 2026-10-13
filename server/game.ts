@@ -58,8 +58,8 @@ const COMMAND_RULES: Record<GameCommandType, Rule[]> = {
   sellLootItem: [id], recycleLootItem: [id],
   barterGear: [id, ids(16, 1)], claimLootDelivery: [id],
   excavateShelter: [coord, rowCoord], buildRoom: [choose(...Object.keys(engine.ROOM_DEFINITIONS)), coord, rowCoord, integer(0, 1)], upgradeRoom: [id],
-  moveRoom: [id, coord, rowCoord, integer(0, 1)], rotateRoom: [id],
-  placeRoom: [id, groundX, groundY, integer(0, 1)], constructRoom: [choose(...Object.keys(engine.ROOM_DEFINITIONS)), groundX, groundY, integer(0, 1)],
+  moveRoom: [id, coord, rowCoord, integer(0, 1)], rotateRoom: [id], faceRoom: [id, integer(0, 3)],
+  placeRoom: [id, groundX, groundY, integer(0, 1), integer(0, 3)], constructRoom: [choose(...Object.keys(engine.ROOM_DEFINITIONS)), groundX, groundY, integer(0, 1), integer(0, 3)],
   assignWorker: [id, nullableId], queueModuleProduction: [id, id], setRoomRecipe: [id, nullableId, bool], cancelProduction: [id, id],
   setProductionReserve: [productionReserve], setRoomStockTarget: [id, value => value === null || integer(0, 1e6)(value)],
   setFieldKit: [id, choose('none', ...Object.keys(engine.FIELD_KITS))], queueFieldKitProduction: [id, fieldKit],
@@ -79,8 +79,9 @@ class GameError extends Error {
 export function readGameCommand(value: unknown): GameCommand {
   if (!object(value) || !exact(value, ['type', 'args']) || typeof value.type !== 'string' || !Object.hasOwn(COMMAND_RULES, value.type) || !Array.isArray(value.args)) throw new GameError(400, 'invalid_command');
   const rules = COMMAND_RULES[value.type as GameCommandType];
-  const optionalRotation = ['buildRoom', 'moveRoom', 'placeRoom', 'constructRoom'].includes(value.type) && value.args.length === 3;
-  if ((!optionalRotation && value.args.length !== rules.length) || !rules.slice(0, value.args.length).every((rule, index) => rule((value.args as unknown[])[index]))) throw new GameError(400, 'invalid_command');
+  const optionalOrientation = ['placeRoom', 'constructRoom'].includes(value.type) ? value.args.length >= 3 && value.args.length <= 5
+    : ['buildRoom', 'moveRoom'].includes(value.type) && value.args.length === 3;
+  if ((!optionalOrientation && value.args.length !== rules.length) || !rules.slice(0, value.args.length).every((rule, index) => rule((value.args as unknown[])[index]))) throw new GameError(400, 'invalid_command');
   if (value.type === 'setLoadoutOption' && (value.args[1] === 'medkit' ? typeof value.args[2] !== 'boolean' : typeof value.args[2] !== 'string')) throw new GameError(400, 'invalid_command');
   if (value.type === 'markAchievementsSeen' && !(value.args[0] as string[]).every(id => engine.ACHIEVEMENTS.some(achievement => achievement.id === id))) throw new GameError(400, 'invalid_command');
   return value as unknown as GameCommand;
@@ -93,8 +94,8 @@ function execute(state: engine.GameState, command: GameCommand, now: number): en
   }
   if (command.type === 'buildRoom') return engine.buildRoom(state, command.args[0] as engine.ShelterRoomType, command.args[1], command.args[2], now, command.args[3]);
   if (command.type === 'moveRoom') return engine.moveRoom(state, command.args[0], command.args[1], command.args[2], now, command.args[3]);
-  if (command.type === 'placeRoom') return engine.placeRoom(state, command.args[0], command.args[1], command.args[2], now, command.args[3]);
-  if (command.type === 'constructRoom') return engine.constructRoom(state, command.args[0] as engine.ShelterRoomType, command.args[1], command.args[2], now, command.args[3]);
+  if (command.type === 'placeRoom') return engine.placeRoom(state, command.args[0], command.args[1], command.args[2], now, command.args[3], command.args[4]);
+  if (command.type === 'constructRoom') return engine.constructRoom(state, command.args[0] as engine.ShelterRoomType, command.args[1], command.args[2], now, command.args[3], command.args[4]);
   // The own-key whitelist above is the only path to an engine action. Extra clocks are never accepted.
   const action = engine[command.type] as unknown as (state: engine.GameState, ...args: unknown[]) => engine.ActionResult;
   return action(state, ...command.args, now);

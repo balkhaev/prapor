@@ -8,8 +8,8 @@ export interface GameCommandArguments {
   sellLootItem: [string]; recycleLootItem: [string];
   barterGear: [string, string[]]; claimLootDelivery: [string];
   excavateShelter: [number, number]; buildRoom: [string, number, number, (0 | 1)?]; upgradeRoom: [string];
-  moveRoom: [string, number, number, (0 | 1)?]; rotateRoom: [string];
-  placeRoom: [string, number, number, (0 | 1)?]; constructRoom: [string, number, number, (0 | 1)?];
+  moveRoom: [string, number, number, (0 | 1)?]; rotateRoom: [string]; faceRoom: [string, 0 | 1 | 2 | 3];
+  placeRoom: [string, number, number, (0 | 1)?, (0 | 1 | 2 | 3)?]; constructRoom: [string, number, number, (0 | 1)?, (0 | 1 | 2 | 3)?];
   assignWorker: [string, string | null]; queueModuleProduction: [string, string];
   setRoomRecipe: [string, string | null, boolean]; cancelProduction: [string, string];
   setProductionReserve: [ShelterCost]; setRoomStockTarget: [string, number | null];

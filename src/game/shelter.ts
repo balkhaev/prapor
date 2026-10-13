@@ -4,6 +4,7 @@ import type { LootItem } from "./loot";
 import type { LootRequirement } from "./loot-uses";
 
 export type ShelterRoomType = "workshop" | "ammo" | "recycler" | "medbay" | "radio" | "storage" | "dormitory" | "hangar";
+export type RoomFacing = 0 | 1 | 2 | 3;
 export interface ShelterCost { money: number; supplies: Supplies }
 export interface ProductionJob {
 	id: string; kind: "module" | "resource"; recipeId: string; modelId: string | null;
@@ -16,8 +17,10 @@ export interface RoomInstance {
 	id: string; type: ShelterRoomType; column: number; row: number; level: number;
 	/** Absolute ground coordinates; column/row identify the land lot containing the origin. */
 	position?: { x: number; y: number };
-	/** Quarter turn; old saves and compact structures default to the original orientation. */
+	/** Legacy land footprint orientation; retained for earlier saves and commands. */
 	rotation?: 0 | 1;
+	/** Entrance direction: south, west, north, east. Missing values face south. */
+	facing?: RoomFacing;
 	status: "building" | "ready" | "upgrading";
 	construction: { workDone: number; workRequired: number; targetLevel: number; cost: { money: number; scrap: number }; paidLoot?: LootItem[] } | null;
 	workerIds: string[]; queue: ProductionJob[]; recipeId: string | null; repeat: boolean; pending: boolean; cycles: number;
@@ -86,7 +89,7 @@ export function getRoomFootprint(room: Pick<RoomInstance, "type" | "rotation">):
 	return room.rotation === 1 ? { width: footprint.height, height: footprint.width } : { ...footprint };
 }
 type PositionedRoom = Pick<RoomInstance, "column" | "row" | "position">;
-type RoomGeometry = PositionedRoom & Pick<RoomInstance, "type" | "rotation">;
+type RoomGeometry = PositionedRoom & Pick<RoomInstance, "type" | "rotation" | "facing">;
 export function isShelterRoomPosition(x: number, y: number): boolean {
 	return Number.isFinite(x) && Number.isFinite(y) && Math.abs(x) <= SHELTER_POSITION_LIMIT && y >= 0 && y <= SHELTER_POSITION_LIMIT;
 }
@@ -96,9 +99,30 @@ export function getRoomPosition(room: PositionedRoom): { x: number; y: number } 
 export function getRoomPositionSite(x: number, y: number): ShelterSite {
 	return { column: Math.floor((x - SHELTER_LAND_ORIGIN.x) / SHELTER_LAND_STRIDE.x), row: Math.floor((y - SHELTER_LAND_ORIGIN.y) / SHELTER_LAND_STRIDE.y) };
 }
-export function getRoomBounds(room: RoomGeometry): { x: number; y: number; width: number; height: number } {
+export function getRoomFacing(room: Pick<RoomInstance, "facing">): RoomFacing { return room.facing ?? 0; }
+/** Local dimensions retain the old footprint; facing rotates these physical dimensions. */
+export function getRoomLocalSize(room: Pick<RoomInstance, "type" | "rotation">): { width: number; height: number } {
 	const footprint = getRoomFootprint(room);
-	return { ...getRoomPosition(room), width: footprint.width * SHELTER_LAND_STRIDE.x - 20, height: footprint.height * SHELTER_LAND_STRIDE.y - 32 };
+	return { width: footprint.width * SHELTER_LAND_STRIDE.x - 20, height: footprint.height * SHELTER_LAND_STRIDE.y - 32 };
+}
+export function getRoomBounds(room: RoomGeometry): { x: number; y: number; width: number; height: number } {
+	const { width, height } = getRoomLocalSize(room);
+	return { ...getRoomPosition(room), ...(getRoomFacing(room) % 2 ? { width: height, height: width } : { width, height }) };
+}
+/** Rotate a point around the native footprint, preserving its absolute top-left origin. */
+export function getRoomLocalPoint(room: RoomGeometry, localX: number, localY: number): { x: number; y: number } {
+	const origin = getRoomPosition(room), { width, height } = getRoomLocalSize(room);
+	switch (getRoomFacing(room)) {
+		case 1: return { x: origin.x + height - localY, y: origin.y + localX };
+		case 2: return { x: origin.x + width - localX, y: origin.y + height - localY };
+		case 3: return { x: origin.x + localY, y: origin.y + width - localX };
+		default: return { x: origin.x + localX, y: origin.y + localY };
+	}
+}
+/** The visible doorway and its outside approach always share the building's facing. */
+export function getRoomEntrance(room: RoomGeometry, outside = 0): { x: number; y: number } {
+	const { width, height } = getRoomLocalSize(room);
+	return getRoomLocalPoint(room, width / 2, height + outside);
 }
 export function shelterBoundsOverlap(a: { x: number; y: number; width: number; height: number }, b: { x: number; y: number; width: number; height: number }, clearance = 0): boolean {
 	return a.x < b.x + b.width + clearance && a.x + a.width + clearance > b.x && a.y < b.y + b.height + clearance && a.y + a.height + clearance > b.y;
