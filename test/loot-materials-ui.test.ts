@@ -17,7 +17,7 @@ const button=(html:string,action:string)=>html.match(new RegExp(`<button[^>]*dat
 
 test('junk and useful items have distinct, truthful dispositions at every rarity',()=>{
   const state=createGame(NOW),before=saveGame(state),html=fleaPage(state,view);
-  expect(LOOT_MODELS).toHaveLength(32);expect(JUNK_MODELS).toHaveLength(6);expect(USEFUL_LOOT_MODELS).toHaveLength(26);expect(html).toContain('Находок: 32');expect(html).toContain('Легендарное');
+  expect(LOOT_MODELS).toHaveLength(50);expect(JUNK_MODELS).toHaveLength(12);expect(USEFUL_LOOT_MODELS).toHaveLength(38);expect(html).toContain('Находок: 50');expect(html).toContain('Легендарное');
   for(const model of JUNK_MODELS){const row=lootUsesPanel(model.id);expect(row).toContain('автопродажа при доставке');expect(row).toContain('Не используется в рецептах');expect(row).not.toContain('К бартеру');expect(getLootUses(model.id)).toEqual([]);}
   for(const model of USEFUL_LOOT_MODELS){expect(lootUsesPanel(model.id)).toContain('К бартеру');expect(lootUsesPanel(model.id)).not.toContain('автопродажа');}
   expect(html).toContain('Автопродажа');expect(html).toContain(LOOT_MODEL_BY_ID['military-cpu']!.label);expect(html).toContain(LOOT_MODEL_BY_ID['prototype-optics']!.label);expect(saveGame(state)).toBe(before);
@@ -46,8 +46,8 @@ test('building catalogue and placement display full requirements while relocatio
   const ready=getBuildRoomQuote(state,'workshop',0,1);expect(ready.reason).toBeNull();expect(buildingCatalogueReason(state,'workshop')).toBeNull();expect(button(buildingPlacementControls({type:'workshop',rotation:0,site:{column:0,row:1}},null,state),'placement-confirm')).not.toContain('disabled');
   const move=buildingPlacementControls({type:'workshop',roomId:'room-workshop',rotation:0,site:{column:0,row:1}},null,state);expect(move).not.toContain('loot-material-requirements');expect(move).toContain('Перенос');
 });
-test('all four loot recipes show named inputs and use their own recipe rather than the cash-only kit shortcut',()=>{
-  const recipes=RESOURCE_RECIPES.filter(recipe=>recipe.lootRequirements?.length);expect(recipes).toHaveLength(4);
+test('all loot recipes show named inputs and use their own recipe rather than the cash-only kit shortcut',()=>{
+  const recipes=RESOURCE_RECIPES.filter(recipe=>recipe.lootRequirements?.length);expect(recipes).toHaveLength(7);
   for(const recipe of recipes){const state=createGame(NOW),room=state.shelter.rooms.find(room=>room.type===recipe.roomType)??{...state.shelter.rooms[0]!,id:'room-ammo-test',type:'ammo' as ShelterRoomType};if(!state.shelter.rooms.some(item=>item.id===room.id))state.shelter.rooms.push(room);
     const missing=shelterRecipeCard(state,room,recipe);expect(missing).toContain('Целые предметы для партии');expect(missing).toContain('Заказать одну партию');expect(missing).toContain('повторение включается отдельно');expect(missing).toContain('data-loot-order="true"');expect(missing).not.toContain('data-action="queue-field-kit"');expect(button(missing,'set-room-recipe')).toContain('disabled');
     for(const input of recipe.lootRequirements!)add(state,input.modelId,input.quantity);expect(assignWorker(state,state.scavs[1]!.id,room.id,NOW).ok).toBe(true);

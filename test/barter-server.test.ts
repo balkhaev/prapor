@@ -101,9 +101,9 @@ describe('authoritative trophy barter and collection', () => {
       else expect(loadout.protection).toBeGreaterThanOrEqual(model.protection);
       expect(parseSave(saveGame(player.snapshot.state))).not.toBeNull();
     }
-    expect(received).toHaveLength(20); const beforeRestart = structuredClone(player.snapshot);
+    expect(received).toHaveLength(26); const beforeRestart = structuredClone(player.snapshot);
     service.close(); const restored = setup(path), same = await client(restored, player.cookie);
-    expect(snapshotValue(same.snapshot)).toEqual(snapshotValue(beforeRestart)); expect(same.snapshot.state.gearItems).toHaveLength(20);
+    expect(snapshotValue(same.snapshot)).toEqual(snapshotValue(beforeRestart)); expect(same.snapshot.state.gearItems).toHaveLength(26);
   });
 
   test('stale, extra, wrong and another owner selections fail without consuming trophies; a repeated request cannot mint twice', async () => {

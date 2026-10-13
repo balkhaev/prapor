@@ -50,9 +50,11 @@ import { getBarterQuote } from "./barter";
 export * from "./barter";
 import { getLootRequirementQuote, type LootRequirement } from "./loot-uses";
 export * from "./loot-uses";
+import { getRaidGearLootPool, getRaidGearValue, rollRaidGearLoot } from "./raid-gear-loot";
+export * from "./raid-gear-loot";
 
 export const SAVE_KEY = "prapor.save.v1";
-export const SAVE_VERSION = 22;
+export const SAVE_VERSION = 23;
 export const MAX_PENDING_LOOT_DELIVERIES = 128;
 export const PENDING_LOOT_RAID_LIMIT = 96;
 export const MAX_OFFLINE_MS = 8 * 60 * 60 * 1000;
@@ -203,8 +205,10 @@ export interface RaidReport {
 	lootAutoSold?: { item: LootItem; money: number }[];
 	/** Intact named trophies awaiting space; historical automatic sales remain historical. */
 	lootPending?: LootItem[];
+	gearItems?: GearItem[];
+	gearPending?: GearItem[];
 }
-export interface LootDelivery { id: string; raidId: string; at: number; items: LootItem[] }
+export interface LootDelivery { id: string; raidId: string; at: number; items: LootItem[]; gearItems?: GearItem[] }
 export interface GameState {
 	schemaVersion: number;
 	createdAt: number;
@@ -1153,9 +1157,11 @@ export function claimLootDelivery(state: GameState, deliveryId: string): ActionR
 	const delivery = state.pendingLoot?.find(value => value.id === deliveryId);
 	if (!delivery) return fail("Посылка с трофеями не найдена или уже получена.");
 	if ((state.lootItems?.length ?? 0) + delivery.items.length > getLootCapacity(state)) return fail(`Для всей посылки нужно ${delivery.items.length} свободных мест на складе трофеев.`);
+	if (state.gearItems.length + (delivery.gearItems?.length ?? 0) > 28) return fail(`Для всей посылки нужно ${delivery.gearItems?.length ?? 0} свободных мест на стойке снаряжения.`);
 	(state.lootItems ??= []).push(...delivery.items);
+	state.gearItems.push(...(delivery.gearItems ?? []));
 	state.pendingLoot = state.pendingLoot!.filter(value => value.id !== delivery.id);
-	return ok(`Посылка получена: ${delivery.items.length} целых трофеев. Их можно оставить, обменять или продать по своему выбору.`);
+	return ok(`Посылка получена: ${delivery.items.length} целых трофеев${delivery.gearItems?.length ? ` и ${delivery.gearItems.length} предметов снаряжения` : ""}. Их можно оставить, выдать бойцам или продать по своему выбору.`);
 }
 export function sellLootItem(state: GameState, itemId: string): ActionResult {
 	const item = state.lootItems?.find(item => item.id === itemId); if (!item) return fail("Трофей не найден.");
@@ -1210,12 +1216,13 @@ export function getLoadoutStats(state: GameState, scav: Scav) {
 		speedMultiplier: 1 + weight * 0.017, ammoMultiplier: (1 + Math.max(0, weight - 5) * 0.025) * profile.ammo };
 }
 export function getCargoWeight(cargo: Cargo): number {
-	return Math.round((cargo.weaponIds.length * 6 + cargo.modules.reduce((sum, part) => sum + getModuleDefinition(part).stats.weight, 0) + (cargo.lootItems ?? []).reduce((sum, item) => sum + getLootModel(item).weight, 0) + cargo.supplies.ammo * 0.1 + cargo.supplies.medicine + cargo.supplies.scrap * 0.5 + cargo.supplies.intel * 0.25) * 10) / 10;
+	return Math.round((cargo.weaponIds.length * 6 + cargo.modules.reduce((sum, part) => sum + getModuleDefinition(part).stats.weight, 0) + (cargo.lootItems ?? []).reduce((sum, item) => sum + getLootModel(item).weight, 0) + (cargo.gearItems ?? []).reduce((sum, item) => sum + getGearModel(item).weight, 0) + cargo.supplies.ammo * 0.1 + cargo.supplies.medicine + cargo.supplies.scrap * 0.5 + cargo.supplies.intel * 0.25) * 10) / 10;
 }
 export function getCargoValue(cargo: Cargo): number {
 	return Math.round(cargo.money + cargo.weaponIds.reduce((sum, weaponId) => sum + (ownValue(WEAPON_BY_ID, weaponId)?.value ?? 0) * 0.5, 0)
 		+ cargo.modules.reduce((sum, item) => sum + getModuleSaleValue(item), 0)
 		+ (cargo.lootItems ?? []).reduce((sum, item) => sum + getLootModel(item).guidePrice, 0)
+		+ (cargo.gearItems ?? []).reduce((sum, item) => sum + getRaidGearValue(item), 0)
 		+ cargo.supplies.ammo * 6.5 + cargo.supplies.medicine * (100 / 3) + cargo.supplies.scrap * 14.5 + cargo.supplies.intel * (140 / 3));
 }
 export function getMarketReason(state: GameState, offerId: string): string | null {
@@ -2087,6 +2094,7 @@ function fitCargo(cargo: Cargo, capacity: number, objective: RaidObjective = "ge
 			cargo.weaponIds.forEach((weaponId, index) => candidates.push({ density: ownValue(WEAPON_BY_ID, weaponId)!.value * .5 / 6, discard: () => { cargo.weaponIds.splice(index, 1); } }));
 			cargo.modules.forEach((part, index) => candidates.push({ density: getModuleDefinition(part).value * (.4 + part.durability * .006) / Math.max(.05, getModuleDefinition(part).stats.weight), discard: () => { cargo.modules.splice(index, 1); } }));
 			(cargo.lootItems ?? []).forEach((item, index) => candidates.push({ density: getLootModel(item).guidePrice / getLootModel(item).weight, discard: () => { cargo.lootItems!.splice(index, 1); } }));
+			(cargo.gearItems ?? []).forEach((item, index) => candidates.push({ density: getRaidGearValue(item) / getGearModel(item).weight, discard: () => { cargo.gearItems!.splice(index, 1); } }));
 			if (!candidates.length) { if (target && cargo.supplies[target] > 0) cargo.supplies[target]--; else break; }
 			else candidates.sort((a, b) => a.density - b.density)[0]!.discard();
 		}
@@ -2214,6 +2222,11 @@ function reachCheckpoint(state: GameState, raid: Raid, now: number, party?: { in
 		const finds = rollRaidLoot(map.id, expedition.branch, expedition.stage, lootRandom, expedition.lootCatalogVersion ?? 16);
 		expedition.cargo.lootItems ??= [];
 		for (const model of finds) expedition.cargo.lootItems.push({ id: id(state, "loot"), modelId: model.id, foundAt: now });
+		if ((expedition.lootCatalogVersion ?? 16) >= 23) {
+			const gearRandom = generator(((raid.outcomeSeed ?? raid.seed) ^ Math.imul(expedition.stage, 0x7391c8b7)) >>> 0);
+			expedition.cargo.gearItems ??= [];
+			for (const find of rollRaidGearLoot(map.id, expedition.branch, expedition.stage, gearRandom, expedition.lootCatalogVersion)) expedition.cargo.gearItems.push({ id: id(state, "gear"), modelId: find.model.id, durability: find.durability });
+		}
 	}
 	fitCargo(expedition.cargo, expedition.capacity, raid.strategy?.objective, raid.lootVersion === 1);
 	expedition.trail.push({ at: now, label: `Контрольная точка ${expedition.stage}`, text: (`Маршрут «${EXPEDITION_BRANCHES[expedition.branch].label}» пройден. В рюкзаке ${expedition.cargo.money} ₽, ${getCargoWeight(expedition.cargo)} ед. груза и ${expedition.cargo.weaponIds.length} ед. оружия.${discoveriesText ? ` Передано: ${discoveriesText}.` : ""}${streetText}`).slice(0, 400), kind: "loot" });
@@ -2304,7 +2317,7 @@ function finishExpedition(state: GameState, raid: Raid, success: boolean, now: n
 		weaponAutoSold: false, description: "", isAuto: raid.isAuto, tactic: raid.tactic, events: [], depth: expedition.stage,
 		discoveries: [...expedition.discoveries], lostCargo: success ? null : structuredClone(expedition.cargo), moduleIds: [],
 		...(raid.strategy ? { strategy: { ...raid.strategy } } : {}), ...(expedition.reconCompleted ? { reconCompleted: true } : {}), ...(raid.fieldKit ? { fieldKit: raid.fieldKit } : {}),
-		...(raid.lootVersion === 1 ? { lootItems: [], lootPending: [] } : {}) };
+		...(raid.lootVersion === 1 ? { lootItems: [], lootPending: [], ...((expedition.lootCatalogVersion ?? 16) >= 23 ? { gearItems: [], gearPending: [] } : {}) } : {}) };
 	if (expedition.medical) report.medical = { body: structuredClone(getScavBody(scav)), inventory: structuredClone(expedition.medical.inventory) };
 	state.stats.raidsCompleted++; scav.raids++;
 	if (raid.isAuto) { state.stats.autoRaidsCompleted++; scav.autoRaid.runs++; }
@@ -2348,13 +2361,18 @@ function finishExpedition(state: GameState, raid: Raid, success: boolean, now: n
 			if (state.lootItems.length < getLootCapacity(state)) { state.lootItems.push(item); report.lootItems!.push(structuredClone(item)); }
 			else report.lootPending!.push(structuredClone(item));
 		}
-		if (report.lootPending?.length) (state.pendingLoot ??= []).push({ id: id(state, "delivery"), raidId: raid.id, at: now, items: structuredClone(report.lootPending) });
+		for (const item of expedition.cargo.gearItems ?? []) {
+			if (state.gearItems.length < 28) { state.gearItems.push(item); report.gearItems!.push(structuredClone(item)); }
+			else report.gearPending!.push(structuredClone(item));
+		}
+		if (report.lootPending?.length || report.gearPending?.length) (state.pendingLoot ??= []).push({ id: id(state, "delivery"), raidId: raid.id, at: now, items: structuredClone(report.lootPending ?? []), ...(report.gearPending?.length ? { gearItems: structuredClone(report.gearPending) } : {}) });
 		const expectedMoney = report.money;
 		report.money = addMoney(state, report.money);
 		report.description = `Эвакуация после этапа ${expedition.stage}. Груз доставлен${report.weaponAutoSold ? "; лишний трофей продан" : ""}.`;
 		if (report.lootAutoSold?.length) report.description += ` Мусор продан автоматически: ${report.lootAutoSold.length} шт., +${report.lootAutoSold.reduce((sum, sale) => sum + sale.money, 0)} ₽.`;
 		if (report.money < expectedMoney || report.lootAutoSold?.some(sale => sale.money < getLootTraderPrice(sale.item))) report.description += " Выплата ограничена пределом кошелька или учёта заработка.";
-		if (report.lootPending?.length) report.description += ` Склад трофеев полон: ${report.lootPending.length} предметов ждут в посылке. Освободи место и забери их целыми.`;
+		if (report.gearPending?.length) report.description += ` Посылка ждёт места: ${report.lootPending?.length ?? 0} трофеев и ${report.gearPending.length} предметов снаряжения.`;
+		else if (report.lootPending?.length) report.description += ` Склад трофеев полон: ${report.lootPending.length} предметов ждут в посылке. Освободи место и забери их целыми.`;
 		const discarded = getCargoWeight({ money: 0, supplies: {
 			ammo: expedition.cargo.supplies.ammo - report.supplies.ammo, medicine: expedition.cargo.supplies.medicine - report.supplies.medicine,
 			scrap: expedition.cargo.supplies.scrap - report.supplies.scrap, intel: expedition.cargo.supplies.intel - report.supplies.intel }, weaponIds: [], modules: [] });
@@ -2844,8 +2862,11 @@ function parseLoadout(value: unknown, version: number): Loadout {
 }
 function parseCargo(value: unknown, version: number): Cargo {
 	const source = record(value);
-	fields(source, ["money", "supplies", "weaponIds", ...(version >= 4 ? ["modules"] : []), ...(version >= 16 ? ["lootItems"] : [])]);
-	return { money: number(source.money, 1e8), supplies: parseSupplies(source.supplies), weaponIds: array(source.weaponIds, 3, (value) => versionedWeaponId(value, version)), modules: version >= 4 ? array(source.modules, 12, (value) => parseModule(value, version)) : [], ...(version >= 16 && Object.hasOwn(source, "lootItems") ? { lootItems: array(source.lootItems, 6, value => parseLootItemForVersion(value, version)) } : {}) };
+	fields(source, ["money", "supplies", "weaponIds", ...(version >= 4 ? ["modules"] : []), ...(version >= 16 ? ["lootItems"] : []), ...(version >= 23 ? ["gearItems"] : [])]);
+	return { money: number(source.money, 1e8), supplies: parseSupplies(source.supplies), weaponIds: array(source.weaponIds, 3, (value) => versionedWeaponId(value, version)), modules: version >= 4 ? array(source.modules, 12, (value) => parseModule(value, version)) : [], ...(version >= 16 && Object.hasOwn(source, "lootItems") ? { lootItems: array(source.lootItems, 6, value => parseLootItemForVersion(value, version)) } : {}), ...(version >= 23 && Object.hasOwn(source, "gearItems") ? { gearItems: array(source.gearItems, 3, parseRaidGearItem) } : {}) };
+}
+function parseRaidGearItem(value: unknown): GearItem {
+	const item = parseGear(value); if (!/^gear-[1-9]\d*$/.test(item.id)) throw new Error("raid-gear-id"); return item;
 }
 function parseEvents(value: unknown, max: number): RaidReport["events"] {
 	return array(value, max, (value) => {
@@ -2949,7 +2970,7 @@ function parseProductionJob(value: unknown, roomType: ShelterRoomType, version: 
 		const recipe = ownValue(RESOURCE_RECIPE_BY_ID, job.recipeId);
 		if (!recipe || recipe.roomType !== roomType || job.modelId !== null || job.output.moduleModelId !== null || job.output.fieldKit !== recipe.outputKit
 			|| (version < 14 && (recipe.minLevel || recipe.outputKit))
-			|| (version < 21 && recipe.lootRequirements) || (recipe.lootRequirements ? !job.paidLoot || !matchesLootPayment(job.paidLoot, recipe.lootRequirements) : job.paidLoot !== undefined)
+			|| (version < 21 && recipe.lootRequirements) || version < (recipe.releasedIn ?? 1) || (recipe.lootRequirements ? !job.paidLoot || !matchesLootPayment(job.paidLoot, recipe.lootRequirements) : job.paidLoot !== undefined)
 			|| job.workRequired !== recipe.durationSeconds * 1_000_000 || job.paid.money !== recipe.cost.money
 			|| !sameSupplies(job.paid.supplies, recipe.cost.supplies) || !sameSupplies(job.output.supplies, recipe.output)) throw new Error("resource-order");
 	}
@@ -3020,7 +3041,7 @@ function parseShelter(value: unknown, version: number): GameState["shelter"] {
 			|| (room.recipeId === null && (room.repeat || room.pending))) throw new Error("room-production");
 		if (room.queue.some((job) => job.kind === "module" && ownValue(MODULE_BY_ID, job.modelId!)!.workshopLevel > room.level)) throw new Error("room-recipe-level");
 		const recipe = room.recipeId ? ownValue(RESOURCE_RECIPE_BY_ID, room.recipeId)! : null;
-		if ((recipe && (room.level < (recipe.minLevel ?? 1) || (version < 14 && (recipe.minLevel || recipe.outputKit)) || (version < 21 && recipe.lootRequirements)))
+		if ((recipe && (room.level < (recipe.minLevel ?? 1) || (version < 14 && (recipe.minLevel || recipe.outputKit)) || (version < 21 && recipe.lootRequirements) || version < (recipe.releasedIn ?? 1)))
 			|| room.queue.some(job => job.kind === "resource" && room.level < (ownValue(RESOURCE_RECIPE_BY_ID, job.recipeId)!.minLevel ?? 1))
 			|| (room.stockTarget !== undefined && (!recipe || (recipe.outputKit && room.stockTarget > FIELD_KIT_CAPACITY)))) throw new Error("room-recipe-level");
 		if (roomSource.construction !== null) {
@@ -3208,7 +3229,7 @@ function parseRaid(value: unknown, version: number): Raid {
 	const expedition = version >= 3 ? parseExpedition(source.expedition, version) : null;
 	if (version >= 14 && Object.hasOwn(source, "fieldKit") && (!expedition || expedition.legacyLoot || !Object.hasOwn(source, "strategy"))) throw new Error("field-kit-sortie");
 	if (version >= 16 && Object.hasOwn(source, "lootVersion") && (source.lootVersion !== 1 || !expedition || expedition.legacyLoot || !Object.hasOwn(source, "strategy"))) throw new Error("loot-version");
-	if (expedition?.cargo.lootItems && !Object.hasOwn(source, "lootVersion")) throw new Error("loot-sortie-source");
+	if ((expedition?.cargo.lootItems || expedition?.cargo.gearItems) && !Object.hasOwn(source, "lootVersion")) throw new Error("loot-sortie-source");
 	if ((expedition?.status === "choice" ? endsAt < startedAt : endsAt <= startedAt) || endsAt - startedAt > 600_000)
 		throw new Error("duration");
 	return {
@@ -3237,7 +3258,7 @@ function parseRaid(value: unknown, version: number): Raid {
 }
 function parseReport(value: unknown, version: number): RaidReport {
 	const source = record(value);
-	fields(source, ["id", "raidId", "scavName", "scavAppearance", "mapId", "at", "success", "lostScav", "lostWeapon", "money", "supplies", "weaponId", "weaponAutoSold", "description", ...(version >= 2 ? ["isAuto", "tactic", "events"] : []), ...(version >= 3 ? ["depth", "discoveries", "lostCargo"] : []), ...(version >= 4 ? ["moduleIds"] : []), ...(version >= 10 ? ["squad"] : []), ...(version >= 12 ? ["strategy", "sectorOutcome", "reconCompleted"] : []), ...(version >= 14 ? ["fieldKit"] : []), ...(version >= 16 ? ["lootItems", "lootAutoSold"] : []), ...(version >= 18 ? ['medical'] : []), ...(version >= 20 ? ["lootPending"] : [])]);
+	fields(source, ["id", "raidId", "scavName", "scavAppearance", "mapId", "at", "success", "lostScav", "lostWeapon", "money", "supplies", "weaponId", "weaponAutoSold", "description", ...(version >= 2 ? ["isAuto", "tactic", "events"] : []), ...(version >= 3 ? ["depth", "discoveries", "lostCargo"] : []), ...(version >= 4 ? ["moduleIds"] : []), ...(version >= 10 ? ["squad"] : []), ...(version >= 12 ? ["strategy", "sectorOutcome", "reconCompleted"] : []), ...(version >= 14 ? ["fieldKit"] : []), ...(version >= 16 ? ["lootItems", "lootAutoSold"] : []), ...(version >= 18 ? ['medical'] : []), ...(version >= 20 ? ["lootPending"] : []), ...(version >= 23 ? ["gearItems", "gearPending"] : [])]);
 	if (version >= 14 && Object.hasOwn(source, "fieldKit") && !Object.hasOwn(source, "strategy")) throw new Error("field-kit-report");
 	return {
 		id: string(source.id),
@@ -3270,6 +3291,8 @@ function parseReport(value: unknown, version: number): RaidReport {
 		...(version >= 18 && Object.hasOwn(source, 'medical') ? { medical: parseReportMedicine(source.medical) } : {}),
 		...(version >= 16 && Object.hasOwn(source, "lootItems") ? { lootItems: array(source.lootItems, 6, value => parseLootItemForVersion(value, version)) } : {}),
 		...(version >= 20 && Object.hasOwn(source, "lootPending") ? { lootPending: array(source.lootPending, 6, value => parseLootItemForVersion(value, version)) } : {}),
+		...(version >= 23 && Object.hasOwn(source, "gearItems") ? { gearItems: array(source.gearItems, 3, parseRaidGearItem) } : {}),
+		...(version >= 23 && Object.hasOwn(source, "gearPending") ? { gearPending: array(source.gearPending, 3, parseRaidGearItem) } : {}),
 		...(version >= 16 && Object.hasOwn(source, "lootAutoSold") ? { lootAutoSold: array(source.lootAutoSold, 6, value => {
 			const sale = record(value); fields(sale, ["item", "money"]); const item = parseLootItemForVersion(sale.item, version), boundedJunk = version >= 21 && getLootModel(item).autoSell;
 			const money = number(sale.money, 10000, boundedJunk ? 0 : 1, true), price = getLootTraderPrice(item);
@@ -3344,8 +3367,8 @@ export function parseSave(raw: string, options: { publicSnapshot?: boolean } = {
 			...(version >= 12 && Object.hasOwn(source, "sectorIntel") ? { sectorIntel: parseSectorIntelRecord(source.sectorIntel) } : {}),
 			...(version >= 16 && Object.hasOwn(source, "lootItems") ? { lootItems: array(source.lootItems, 512, value => parseLootItemForVersion(value, version)) } : {}),
 			...(version >= 20 && Object.hasOwn(source, "pendingLoot") ? { pendingLoot: array(source.pendingLoot, MAX_PENDING_LOOT_DELIVERIES, value => {
-				const delivery = record(value); fields(delivery, ["id", "raidId", "at", "items"]);
-				return { id: string(delivery.id), raidId: string(delivery.raidId), at: number(delivery.at), items: array(delivery.items, 6, value => parseLootItemForVersion(value, version)) };
+				const delivery = record(value); fields(delivery, ["id", "raidId", "at", "items", ...(version >= 23 ? ["gearItems"] : [])]);
+				return { id: string(delivery.id), raidId: string(delivery.raidId), at: number(delivery.at), items: array(delivery.items, 6, value => parseLootItemForVersion(value, version)), ...(version >= 23 && Object.hasOwn(delivery, "gearItems") ? { gearItems: array(delivery.gearItems, 3, parseRaidGearItem) } : {}) };
 			}) } : {}),
 			stats: {
 				raidsWon: number(stats.raidsWon, 1e9, 0, true),
@@ -3394,8 +3417,9 @@ export function parseSave(raw: string, options: { publicSnapshot?: boolean } = {
 			...state.weapons.flatMap((weapon) => Object.values(weapon.modules).map((item) => item.id)),
 			...state.raids.flatMap((raid) => raid.expedition?.cargo.modules.map((item) => item.id) ?? []),
 			...(state.lootItems ?? []).map(item => item.id),
-			...(state.pendingLoot ?? []).flatMap(delivery => [delivery.id, ...delivery.items.map(item => item.id)]),
+			...(state.pendingLoot ?? []).flatMap(delivery => [delivery.id, ...delivery.items.map(item => item.id), ...(delivery.gearItems ?? []).map(item => item.id)]),
 			...state.raids.flatMap(raid => raid.expedition?.cargo.lootItems?.map(item => item.id) ?? []),
+			...state.raids.flatMap(raid => raid.expedition?.cargo.gearItems?.map(item => item.id) ?? []),
 			...state.shelter.rooms.flatMap((room) => room.queue.map((job) => job.id)),
 			...state.shelter.rooms.flatMap(room => [...(room.construction?.paidLoot ?? []), ...room.queue.flatMap(job => job.paidLoot ?? [])].map(item => item.id)),
 			...state.shelter.rooms.filter(room => /^room-[1-9]\d*$/.test(room.id)).map(room => room.id),
@@ -3406,10 +3430,10 @@ export function parseSave(raw: string, options: { publicSnapshot?: boolean } = {
 		unique((state.pendingLoot ?? []).map(delivery => delivery.raidId));
 		for (const delivery of state.pendingLoot ?? []) {
 			if (!/^delivery-[1-9]\d*$/.test(delivery.id) || !/^raid-[1-9]\d*$/.test(delivery.raidId)
-				|| Number(delivery.raidId.slice(5)) >= state.nextId || delivery.at > state.lastUpdated || !delivery.items.length
+				|| Number(delivery.raidId.slice(5)) >= state.nextId || delivery.at > state.lastUpdated || !delivery.items.length && !(delivery.gearItems?.length)
 				|| state.raids.some(raid => raid.id === delivery.raidId)) throw new Error("loot-delivery");
 			const report = state.history.find(report => report.raidId === delivery.raidId);
-			if (report && (!report.success || report.at !== delivery.at || JSON.stringify(report.lootPending ?? []) !== JSON.stringify(delivery.items))) throw new Error("loot-delivery-receipt");
+			if (report && (!report.success || report.at !== delivery.at || JSON.stringify(report.lootPending ?? []) !== JSON.stringify(delivery.items) || JSON.stringify(report.gearPending ?? []) !== JSON.stringify(delivery.gearItems ?? []))) throw new Error("loot-delivery-receipt");
 		}
 		for (const part of [...state.modules, ...state.weapons.flatMap((weapon) => Object.values(weapon.modules)), ...state.raids.flatMap((raid) => raid.expedition?.cargo.modules ?? [])]) if (!part.id.startsWith("module-")) throw new Error("module-id");
 		unique(state.claimedContracts);
@@ -3520,6 +3544,8 @@ export function parseSave(raw: string, options: { publicSnapshot?: boolean } = {
 				const pack = state.gearItems.find((item) => item.id === scav.loadout.backpackItemId);
 				const loadout = raid.expedition.loadout;
 				if ((raid.expedition.cargo.lootItems ?? []).some(item => !lootAvailableInCatalog(item.modelId, raid.expedition!.lootCatalogVersion ?? 16) || getLootModel(item).minDepth > raid.expedition!.stage || getLootModel(item).minSectorLevel > MAP_BY_ID[raid.mapId]!.level)) throw new Error("loot-depth");
+				if (raid.expedition.cargo.gearItems && ((raid.expedition.lootCatalogVersion ?? 16) < 23 || raid.expedition.cargo.gearItems.length > raid.expedition.stage
+					|| raid.expedition.cargo.gearItems.some(item => item.durability < 50 || !getRaidGearLootPool(raid.mapId, raid.expedition!.branch, raid.expedition!.stage).some(entry => entry.model.id === item.modelId)))) throw new Error("raid-gear-source");
 				if (raid.expedition.ammunition) {
 					const model = ownValue(AMMO_BY_ID, raid.expedition.ammunition.modelId)!;
 					const weapon = state.weapons.find((item) => item.id === raid.weaponInstanceId)!;
@@ -3560,6 +3586,11 @@ export function parseSave(raw: string, options: { publicSnapshot?: boolean } = {
 			if ((report.lostScav && !report.lostWeapon) || (report.success && (report.lostScav || report.lostWeapon))) throw new Error("report-outcome");
 			if (report.medical && report.lostScav === isAlive(report.medical.body)) throw new Error('medical-report');
 			const receipt = [...(report.lootItems ?? []), ...(report.lootPending ?? []), ...(report.lootAutoSold ?? []).map(sale => sale.item), ...(report.lostCargo?.lootItems ?? [])];
+			const gearReceipt = [...(report.gearItems ?? []), ...(report.gearPending ?? []), ...(report.lostCargo?.gearItems ?? [])];
+			unique(gearReceipt.map(item => item.id));
+			if (gearReceipt.length > report.depth || (Object.hasOwn(report, "gearItems") || Object.hasOwn(report, "gearPending") || gearReceipt.length) && !report.strategy
+				|| !report.success && ((report.gearItems?.length ?? 0) > 0 || (report.gearPending?.length ?? 0) > 0)
+				|| gearReceipt.some(item => Number(item.id.split("-")[1]) >= state.nextId || item.durability < 50 || !getRaidGearLootPool(report.mapId, "scavenge", report.depth).some(entry => entry.model.id === item.modelId))) throw new Error("raid-gear-receipt");
 			unique(receipt.map(item => item.id));
 			if (receipt.length > 6 || (Object.hasOwn(report, "lootItems") || Object.hasOwn(report, "lootAutoSold") || Object.hasOwn(report, "lootPending") || receipt.length > 0) && !report.strategy
 				|| receipt.some(item => Number(item.id.split("-")[1]) >= state.nextId || getLootModel(item).minDepth > report.depth || getLootModel(item).minSectorLevel > MAP_BY_ID[report.mapId]!.level) || (!report.success && ((report.lootItems?.length ?? 0) > 0 || (report.lootPending?.length ?? 0) > 0 || (report.lootAutoSold?.length ?? 0) > 0))

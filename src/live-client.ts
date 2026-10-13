@@ -1,5 +1,5 @@
 import { LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT, type EconomyLoot, type LiveCommand, type LiveDrop, type LiveEntity, type LiveEvent, type LiveContainerKind, type LiveDistrict, type LiveDistrictId, type LiveMapSummary, type LivePlayer, type LivePurpose, type LiveSnapshot, type LiveStatus, type LiveWorld } from './game/live';
-import { LOOT_MODEL_BY_ID } from './game/loot';
+import { readEconomyLootItems } from './game/live-loot';
 import { BODY_PARTS, parseHealth, parseMedicalInventory, type BodyPart, type TreatmentType } from './game/health';
 
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -15,13 +15,7 @@ const keys = (value: Record<string, unknown>, allowed: readonly string[]) => Obj
 const uuid = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 
 function readLoot(value: unknown): EconomyLoot[] {
-  if (!Array.isArray(value) || value.length > LIVE_LOOT_CAPACITY) return invalid();
-  const items = value.map(item => {
-    if (!record(item) || !keys(item, ['id', 'modelId', 'foundAt']) || !uuid(item.id) || typeof item.modelId !== 'string' || !Object.hasOwn(LOOT_MODEL_BY_ID, item.modelId) || !integer(item.foundAt, 0, 1e15)) return invalid();
-    return { id: item.id, modelId: item.modelId, foundAt: item.foundAt };
-  });
-  if (new Set(items.map(item => item.id)).size !== items.length || items.reduce((weight, item) => weight + LOOT_MODEL_BY_ID[item.modelId]!.weight, 0) > LIVE_LOOT_WEIGHT + .000001) return invalid();
-  return items;
+  try { return readEconomyLootItems(value, LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT); } catch { return invalid(); }
 }
 
 /** Vetted messages keep private diagnostics and arbitrary response HTML out of the UI. */

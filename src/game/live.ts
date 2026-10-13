@@ -2,6 +2,7 @@
 import type { BodyPart, HealthState, MedicalInventory, TreatmentType } from './health';
 export type { EconomyLoot } from "../../server/live-economy";
 import type { EconomyLoot } from "../../server/live-economy";
+export { getLiveLootDefinition, getLiveLootWeight, readEconomyLoot, readEconomyLootItems, type LiveLootDefinition } from './live-loot';
 /** One headquarters medicine funds one bundle: 40 HP and one use of each field aid. */
 export const LIVE_MEDICAL_CAPACITY = { medkit: 80, bandage: 2, tourniquet: 1, splint: 1, painkiller: 1, surgery: 1 } as const;
 export function liveMedicalSupplyNeeded(medicine: MedicalInventory): number {

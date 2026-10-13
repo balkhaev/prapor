@@ -6,7 +6,9 @@ import { LIVE_CAPACITY, LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT, LIVE_MEDICAL_CAPAC
 import { LIVE_MAPS } from "../src/game/live-maps";
 import { createLiveNavigation } from "./live-navigation";
 import { BODY_PARTS, BODY_PART_LABELS, TREATMENT_DURATION_MS, TREATMENT_LABELS, advanceBleeding, applyHit, canTreat, completeTreatment, createHealth, createMedicalInventory, healthPercent, injuryEffects, isAlive, isStable, parseHealth, parseMedicalInventory, selectTreatment, type BodyPart, type HealthState, type TreatmentType } from "../src/game/health";
-import { getRaidLootPool, LOOT_MODEL_BY_ID, type LootModel } from "../src/game/loot";
+import { getRaidLootPool, type LootModel } from "../src/game/loot";
+import { getLiveLootDefinition, getLiveLootWeight, readEconomyLootItems } from '../src/game/live-loot';
+import { getLiveLootFamilyOdds, rollLiveLootModel } from '../src/game/live-physical-loot';
 import type { AccountService } from "./accounts";
 import { LiveEconomyError, type EconomyLoot, type LiveDelivery, type LiveEconomy, type LiveEconomyIdentity, type LiveSupplyRequest } from "./live-economy";
 
@@ -89,19 +91,23 @@ const walkable = (mapId: LiveMapId, { x, y }: LivePoint): boolean => {
   return navigation.get(mapId)!.walkable({ x, y });
 };
 /** Authored danger zones select the same trophy catalog used by headquarters. */
-export function getLiveLootPool(mapId: LiveMapId, point: LivePoint): { model: LootModel; weight: number }[] {
+function liveLootLocation(mapId: LiveMapId, point: LivePoint) {
   const world = maps.get(mapId)!;
   const depth = world.zones.filter(zone => point.x >= zone.x && point.x < zone.x + zone.width && point.y >= zone.y && point.y < zone.y + zone.height)
     .reduce((danger, zone) => Math.max(danger, zone.danger), 1);
   const district = districtAt(point);
   const sector = depth === 3 && district === "depot" ? "bunker" : ({ customs: "factory", sawmill: "forest", depot: "reserve", village: "forest" } as const)[district];
-  const pool = getRaidLootPool(sector,
-    ({ customs: "scavenge", sawmill: "recon", depot: "combat", village: "scavenge" } as const)[district], depth);
+  return { world, depth, sector, branch: ({ customs: "scavenge", sawmill: "recon", depot: "combat", village: "scavenge" } as const)[district] };
+}
+export function getLiveLootPool(mapId: LiveMapId, point: LivePoint): { model: LootModel; weight: number }[] {
+  const { world, depth, sector, branch } = liveLootLocation(mapId, point), pool = getRaidLootPool(sector, branch, depth);
   const table = world.containers.find(anchor => anchor.x === point.x && anchor.y === point.y)?.lootTable;
   const category = table === "medical" ? "medicine" : table;
   const matching = pool.filter(entry => entry.model.category === category);
   // Dedicated containers favour their contents, while broken remnants may still appear there.
-  return matching.length ? [...matching, ...pool.filter(entry => entry.model.autoSell).map(entry => ({ ...entry, weight: entry.weight * .5 }))] : pool;
+  if (!matching.length) return pool;
+  const junk = pool.filter(entry => entry.model.autoSell), matchingWeight = matching.reduce((sum, entry) => sum + entry.weight, 0), junkWeight = junk.reduce((sum, entry) => sum + entry.weight, 0);
+  return [...matching, ...junk.map(entry => ({ ...entry, weight: junkWeight ? entry.weight * matchingWeight / (9 * junkWeight) : 0 }))];
 }
 
 class LiveError extends Error {
@@ -237,6 +243,7 @@ export function createLiveService(options: LiveOptions): LiveService {
     const binding = byLive.get(identity);
     if (binding) { player.economyOwner = binding.owner_key; player.gameId = binding.game_id; }
     if (options.economy) player.lootItems ??= [];
+    if (player.lootItems) player.lootItems = readEconomyLootItems(player.lootItems, LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT);
     player.targetId = null; player.travelReadyAt ??= 0; player.lastCombatAt ??= 0; player.disconnectAt = 0;
     player.online = false; player.destination = null; player.patrol = false; player.action = player.health <= 0 ? "downed" : "idle";
     if (wasAlive && player.health <= 0) down(player);
@@ -321,6 +328,7 @@ export function createLiveService(options: LiveOptions): LiveService {
       // Rotate failures durably; a full warehouse cannot starve other players' parcels.
       db.query("UPDATE live_economy_outbox SET attempts=attempts+1 WHERE id=? AND acknowledged=0").run(row.id);
       const payload = JSON.parse(row.payload) as LiveDelivery | LiveSupplyRequest;
+      if (row.kind === 'delivery') (payload as LiveDelivery).items = readEconomyLootItems((payload as LiveDelivery).items, LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT);
       let receipt: { ammo: number; medkits: number; message: string } | undefined, message: string;
       try {
         if (row.kind === "delivery") {
@@ -384,12 +392,12 @@ export function createLiveService(options: LiveOptions): LiveService {
       health: point ? 100 : 0, body: storedBody(undefined, point ? 100 : 0), healthAt: now(), aim: null, action: point ? "idle" : "downed", safeUntil: 0, respawnAt: point ? 0 : now() + 1000, nextMove: now() + 750, nextAttack: now() + 1000 };
   };
   const rollItems = (mapId: LiveMapId, point: LivePoint): EconomyLoot[] => {
-    const pool = getLiveLootPool(mapId, point), total = pool.reduce((sum, entry) => sum + entry.weight, 0);
+    const pool = getLiveLootPool(mapId, point), location = liveLootLocation(mapId, point);
+    const odds = getLiveLootFamilyOdds(location.world.containers.find(anchor => anchor.x === point.x && anchor.y === point.y)?.lootTable);
     const count = random() < .35 ? 2 : 1, result: EconomyLoot[] = [];
     for (let index = 0; index < count; index++) {
-      let roll = random() * total;
-      const model = (pool.find(entry => (roll -= entry.weight) < 0) ?? pool.at(-1)!).model;
-      result.push({ id: randomUUID(), modelId: model.id, foundAt: now() });
+      const item = { id: randomUUID(), ...rollLiveLootModel(location.sector, location.branch, location.depth, pool, random, odds), foundAt: now() };
+      if (result.reduce((sum, value) => sum + getLiveLootWeight(value), 0) + getLiveLootWeight(item) <= LIVE_LOOT_WEIGHT) result.push(item);
     }
     return result;
   };
@@ -420,6 +428,7 @@ export function createLiveService(options: LiveOptions): LiveService {
     }
     for (const drop of world.drops) {
       if (drop.source === "supply" && (world.version !== WORLD_VERSION || world.geometryVersion !== maps.get(DEFAULT_MAP)!.version)) continue;
+      if (drop.items) drop.items = readEconomyLootItems(drop.items, LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT);
       if (drop.mapId !== DEFAULT_MAP) Object.assign(drop, translateLegacy(drop, drop.mapId));
       drop.mapId = mapFrom(drop.mapId) ?? DEFAULT_MAP;
       if (!walkable(drop.mapId, drop)) Object.assign(drop, nearestFree(drop, districtAt(drop)));
@@ -570,7 +579,7 @@ export function createLiveService(options: LiveOptions): LiveService {
   const canCarry = (player: Participant, drop: Drop): boolean => {
     const items = [...(player.lootItems ?? []), ...(drop.items ?? [])];
     return player.cargo + drop.amount <= 500 && items.length <= LIVE_LOOT_CAPACITY
-      && items.reduce((sum, item) => sum + LOOT_MODEL_BY_ID[item.modelId]!.weight, 0) <= LIVE_LOOT_WEIGHT + 1e-9;
+      && items.reduce((sum, item) => sum + getLiveLootWeight(item), 0) <= LIVE_LOOT_WEIGHT + 1e-9;
   };
   const loot = (player: Participant, id: string): void => {
     const drop = drops.get(id);
@@ -582,7 +591,7 @@ export function createLiveService(options: LiveOptions): LiveService {
     drops.delete(id); player.cargo += drop.amount;
     if (drop.items?.length) player.lootItems = [...(player.lootItems ?? []), ...structuredClone(drop.items)];
     if (drop.source === "supply") lootCooldowns.set(lootKey(player.mapId, drop, drop.containerId), now() + 30_000);
-    const names = drop.items?.slice(0, 4).map(item => LOOT_MODEL_BY_ID[item.modelId]!.label).join(", ");
+    const names = drop.items?.slice(0, 4).map(item => getLiveLootDefinition(item).label).join(", ");
     event(player.mapId, "loot", drop.items?.length ? `${player.name} забрал: ${names}${drop.items.length > 4 ? ` и ещё ${drop.items.length - 4}` : ""}${drop.amount ? ` и ${drop.amount} ₽` : ""}.` : `${player.name} забрал груз: ${drop.amount}.`, player.id);
   };
   const respawn = (player: Participant, districtId = player.districtId, purpose = player.purpose): void => {

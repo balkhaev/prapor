@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { createGameService, readGameCommand, readGameOptions, type GameService } from '../server/game';
 import { advance, createGame, getModuleSaleValue, getRaidQuote, parseSave, saveGame } from '../src/game/engine';
 import { MAP_BY_ID } from '../src/game/data';
+import { getLootModel, getLootTraderPrice } from '../src/game/loot';
 import { Database } from 'bun:sqlite';
 import { getRaidFieldPlan } from '../src/raid-field';
 import type { GameActionSnapshot, GameCommand, GameSnapshot } from '../src/game/commands';
@@ -127,7 +128,8 @@ describe('authoritative game state and commands', () => {
     for (const active of expected.raids) delete active.outcomeSeed;
     setTime(raid.endsAt); expect((await state(service, client)).state).toEqual(expected);
     expect(client.snapshot.state.raids[0]!.expedition!.status).toBe('choice');
-    const cargo = client.snapshot.state.raids[0]!.expedition!.cargo.money, money = client.snapshot.state.money;
+    const carried = client.snapshot.state.raids[0]!.expedition!.cargo;
+    const cargo = carried.money + (carried.lootItems ?? []).filter(item => getLootModel(item).autoSell).reduce((sum, item) => sum + getLootTraderPrice(item), 0), money = client.snapshot.state.money;
     const before = client.snapshot.revision;
     const extracted = await action(service, client, { type: 'extractRaid', args: [raid.id] }); expect(extracted.body.result.ok).toBe(true);
     expect(client.snapshot.state.money).toBe(money + cargo);

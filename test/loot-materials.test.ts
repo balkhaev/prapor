@@ -42,8 +42,8 @@ describe("intact raid loot as shelter materials", () => {
 		delete state.shelter.rooms.at(-1)!.construction!.paidLoot; state.schemaVersion = 20;
 		const migrated = parseSave(saveGame(state))!; expect(migrated).not.toBeNull(); advance(migrated, migrated.lastUpdated + 60_000); expect(migrated.shelter.rooms.at(-1)!.status).toBe("ready"); valid(migrated);
 	});
-	test("four alternate recipes pay their exact owned objects once and deliver their real outputs", () => {
-		expect(newRecipes).toHaveLength(4);
+	test("seven alternate recipes pay their exact owned objects once and deliver their real outputs", () => {
+		expect(newRecipes).toHaveLength(7);
 		for (const { id } of newRecipes) {
 			const { state, recipe, room } = prepareProduction(id), items = add(state, recipe.lootRequirements), money = state.money;
 			const quote = getResourceProductionQuote(state, room.id, id); expect(quote.reason).toBeNull();
@@ -54,6 +54,15 @@ describe("intact raid loot as shelter materials", () => {
 			if (recipe.outputKit) expect(getFieldKitStock(state)[recipe.outputKit]).toBe(1);
 			else for (const [key, output] of Object.entries(recipe.output)) if (output) expect(state.supplies[key as keyof GameState["supplies"]]).toBeGreaterThanOrEqual(output);
 			valid(state);
+		}
+	});
+	test("new material recipes cannot be configured in released v22 saves before any order has been paid", () => {
+		for (const { id } of newRecipes.filter(recipe => recipe.releasedIn === 23)) {
+			const { state, room } = prepareProduction(id); room.recipeId = id; room.pending = true;
+			valid(state); state.schemaVersion = 22; expect(parseSave(saveGame(state))).toBeNull();
+			state.schemaVersion = 23; const items = add(state, RESOURCE_RECIPES.find(recipe => recipe.id === id)!.lootRequirements);
+			expect(setRoomRecipe(state, room.id, id, false, state.lastUpdated).ok).toBe(true); expect(room.queue[0]!.paidLoot).toEqual(items); valid(state);
+			state.schemaVersion = 22; expect(parseSave(saveGame(state))).toBeNull();
 		}
 	});
 	test("worker, cash reserves, capacity and targets block before any trophy is consumed", () => {
