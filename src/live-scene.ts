@@ -1,4 +1,4 @@
-import type { LiveCommand, LiveEntity, LiveEvent, LiveObstacle, LivePoint, LiveSnapshot, LiveTerrain } from './game/live';
+import type { LiveCommand, LiveDrop, LiveEntity, LiveEvent, LiveObstacle, LivePoint, LiveSnapshot, LiveTerrain, LiveWorld } from './game/live';
 import { scavDirection, type ScavDirection } from './scav-isometric';
 
 type AtlasFrame = { frame: { x: number; y: number; w: number; h: number }; spriteSourceSize: { x: number; y: number; w: number; h: number }; sourceSize: { w: number; h: number } };
@@ -32,6 +32,8 @@ export class LiveScene {
   private ignoreClickUntil = 0;
   private effects: { event: LiveEvent; at: number }[] = [];
   private seenEvents = new Set<string>();
+  private terrain: LiveTerrain[] = [];
+  private overviewTerrain: HTMLCanvasElement | null = null;
 
   constructor(private host: HTMLElement, private command: (command: LiveCommand) => void, private select: (id: string) => void) {
     const context = this.canvas.getContext('2d');
@@ -60,10 +62,10 @@ export class LiveScene {
   setSelected(id: string | null): void { this.selected = id; }
   update(snapshot: LiveSnapshot): void {
     const at = performance.now();
-    if (this.snapshot?.world.id !== snapshot.world.id) { this.motions.clear(); this.effects = []; this.seenEvents.clear(); this.selected = null; this.following = true; this.overview = false; this.dragging = null; }
+    if (this.snapshot?.worldVersion !== snapshot.worldVersion) { this.motions.clear(); this.effects = []; this.seenEvents.clear(); this.selected = null; this.following = true; this.overview = false; this.dragging = null; this.cacheTerrain(snapshot.world); }
     for (const entity of snapshot.entities) {
       const existing = this.motions.get(entity.id);
-      const from = existing ? this.interpolated(existing, at) : { x: entity.x, y: entity.y };
+      const from = existing && Math.hypot(entity.x - existing.to.x, entity.y - existing.to.y) <= 4 ? this.interpolated(existing, at) : { x: entity.x, y: entity.y };
       const shot = entity.action === 'combat' ? [...snapshot.events].reverse().find(event => event.actorId === entity.id && event.from && event.to && snapshot.now - event.at < 1500) : null;
       const facing = shot?.from && shot.to ? { x: shot.to.x - shot.from.x, y: shot.to.y - shot.from.y } : { x: entity.x - from.x, y: entity.y - from.y };
       const dx = facing.x - facing.y, dy = facing.x + facing.y;
@@ -95,7 +97,7 @@ export class LiveScene {
     if (!action) return;
     if (action === 'follow') { this.following = true; this.overview = false; this.zoom = 1; }
     else if (action === 'overview') { this.following = false; this.overview = true; }
-    else { this.overview = false; this.zoom = clamp(this.zoom * (action === 'in' ? 1.25 : .8), .35, 1.8); }
+    else { this.overview = false; this.zoom = clamp(this.zoom * (action === 'in' ? 1.25 : .8), .06, 1.8); }
     this.controls.querySelectorAll<HTMLButtonElement>('button').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.liveZoom === (this.overview ? 'overview' : this.following ? 'follow' : ''))));
     this.canvas.focus({ preventScroll: true });
   };
@@ -112,7 +114,11 @@ export class LiveScene {
     if (target && target.entity.id !== this.snapshot.selfId) { this.selected = target.entity.id; this.select(target.entity.id); return; }
     const self = this.snapshot.entities.find(entity => entity.id === this.snapshot?.selfId);
     const drop = this.snapshot.drops.find(drop => { const p = this.project(drop); return Math.hypot(x - p.x, y - p.y) < 18; });
-    if (drop && self && Math.hypot(drop.x - self.x, drop.y - self.y) <= 1.5) { this.command({ type: 'loot', id: drop.id }); return; }
+    if (drop && self) {
+      if (Math.hypot(drop.x - self.x, drop.y - self.y) <= 1.5) this.command({ type: drop.containerId && !drop.searched ? 'search' : 'loot', id: drop.id });
+      else this.command({ type: 'move', x: drop.x, y: drop.y });
+      return;
+    }
     const dx = (x - this.origin.x) / (this.tile / 2), dy = (y - this.origin.y) / (this.tile / 4);
     const destination = { x: Math.round((dx + dy) / 2 + this.camera.x), y: Math.round((dy - dx) / 2 + this.camera.y) };
     if (destination.x >= 0 && destination.y >= 0 && destination.x < this.snapshot.world.width && destination.y < this.snapshot.world.height) this.command({ type: 'move', ...destination });
@@ -146,6 +152,49 @@ export class LiveScene {
   private polygon(points: LivePoint[], color: string, stroke?: string): void { const c = this.context; c.beginPath(); points.forEach((p, i) => i ? c.lineTo(p.x, p.y) : c.moveTo(p.x, p.y)); c.closePath(); c.fillStyle = color; c.fill(); if (stroke) { c.strokeStyle = stroke; c.lineWidth = .7; c.stroke(); } }
   private quad(x: number, y: number, width = 1, height = 1, elevation = 0): LivePoint[] { return [{ x, y }, { x: x + width, y }, { x: x + width, y: y + height }, { x, y: y + height }].map(p => this.project(p, elevation)); }
   private label(text: string, x: number, y: number, color: string, size = 10): void { const c = this.context; c.font = `600 ${size}px Manrope, sans-serif`; c.textAlign = 'center'; c.lineWidth = 4; c.strokeStyle = '#101c18'; c.strokeText(text, x, y); c.fillStyle = color; c.fillText(text, x, y); }
+  private unproject(x: number, y: number): LivePoint {
+    const dx = (x - this.origin.x) / (this.tile / 2), dy = (y - this.origin.y) / (this.tile / 4);
+    return { x: (dx + dy) / 2 + this.camera.x, y: (dy - dx) / 2 + this.camera.y };
+  }
+  private cacheTerrain(world: LiveWorld): void {
+    const zones = [...world.zones].reverse();
+    this.terrain = [];
+    for (let y = 0; y < world.height; y++) for (let x = 0; x < world.width; x++) {
+      const zone = zones.find(zone => x >= zone.x && x < zone.x + zone.width && y >= zone.y && y < zone.y + zone.height);
+      const district = world.districts.find(district => x >= district.x && x < district.x + district.width && y >= district.y && y < district.y + district.height);
+      this.terrain.push(zone?.terrain ?? (district?.theme === 'forest' ? 'forest' : district?.theme === 'industrial' ? 'yard' : 'concrete'));
+    }
+    const cache = document.createElement('canvas'); cache.width = (world.width + world.height) * 4; cache.height = (world.width + world.height) * 2;
+    const c = cache.getContext('2d');
+    if (c) for (let y = 0; y < world.height; y++) for (let x = 0; x < world.width; x++) {
+      const px = world.height * 4 + (x - y) * 4, py = (x + y) * 2;
+      c.fillStyle = this.ground(this.terrain[y * world.width + x]!, (x * 17 + y * 29) % 5);
+      c.beginPath(); c.moveTo(px, py); c.lineTo(px + 4, py + 2); c.lineTo(px, py + 4); c.lineTo(px - 4, py + 2); c.closePath(); c.fill();
+    }
+    this.overviewTerrain = cache;
+  }
+  private paintContainer(drop: LiveDrop): void {
+    const p = this.project(drop), c = this.context, scale = this.tile / 54;
+    if (p.x < -30 || p.x > this.width + 30 || p.y < -30 || p.y > this.height + 30) return;
+    if (this.tile < 12) { c.fillStyle = '#e0c17e'; c.fillRect(p.x - 1.5, p.y - 1.5, 3, 3); return; }
+    c.save(); c.translate(p.x, p.y); c.scale(scale, scale);
+    c.fillStyle = '#182d2166'; c.beginPath(); c.ellipse(0, 3, 12, 5, 0, 0, Math.PI * 2); c.fill();
+    const kind = drop.containerKind;
+    if (kind === 'jacket') {
+      this.context.fillStyle = '#b1a17a'; c.beginPath(); c.moveTo(-4, -18); c.lineTo(-13, -11); c.lineTo(-9, -6); c.lineTo(-5, -10); c.lineTo(-5, 0); c.lineTo(5, 0); c.lineTo(5, -10); c.lineTo(9, -6); c.lineTo(13, -11); c.lineTo(4, -18); c.closePath(); c.fill(); c.strokeStyle = '#796d52'; c.beginPath(); c.moveTo(0, -14); c.lineTo(0, 0); c.stroke();
+    } else if (kind === 'duffel' || kind === 'medbag') {
+      c.fillStyle = kind === 'medbag' ? '#d4c8ac' : '#89925e'; c.beginPath(); c.ellipse(0, -4, 11, 7, 0, 0, Math.PI * 2); c.fill(); c.strokeStyle = '#424d36'; c.lineWidth = 2; c.strokeRect(-4, -13, 8, 5);
+      if (kind === 'medbag') { c.fillStyle = '#a65f48'; c.fillRect(-2, -9, 4, 10); c.fillRect(-5, -6, 10, 4); }
+    } else if (kind === 'cabinet') {
+      c.fillStyle = '#778779'; c.fillRect(-7, -24, 14, 26); c.strokeStyle = '#afbaa4'; c.strokeRect(-7, -24, 14, 26); c.strokeStyle = '#3f5042'; for (const y of [-18, -11, -4]) { c.strokeRect(-5, y, 10, 5); c.fillStyle = '#c3bc92'; c.fillRect(-1, y + 2, 2, 1); }
+    } else {
+      c.fillStyle = kind === 'toolbox' ? '#977455' : '#a18d60'; c.fillRect(-10, -11, 20, 13); c.strokeStyle = '#d1bc86'; c.strokeRect(-10, -11, 20, 13);
+      if (kind === 'toolbox') { c.strokeStyle = '#d7c299'; c.lineWidth = 2; c.strokeRect(-4, -16, 8, 4); }
+      else { c.strokeStyle = '#665333'; c.beginPath(); c.moveTo(-10, -10); c.lineTo(10, 1); c.moveTo(10, -10); c.lineTo(-10, 1); c.stroke(); }
+    }
+    c.restore();
+    if (scale > .55) this.label(drop.containerId ? drop.searched ? drop.amount ? `${drop.amount} ₽` : 'ПУСТО' : 'ОБЫСКАТЬ' : `${drop.amount} ₽`, p.x, p.y + 19, '#e6d19a', 8);
+  }
   private ground(terrain: LiveTerrain, shade: number): string {
     const palettes: Record<LiveTerrain, string[]> = { road: ['#55584e', '#505447', '#55594e', '#4e554b', '#575b50'], concrete: ['#707365', '#6b7062', '#686e61', '#6e7365', '#707568'], forest: ['#334937', '#354d36', '#3b5037', '#3a4b32', '#405139'], water: ['#3b5b5d', '#355153', '#3c5757', '#3b5351', '#3e5a58'], yard: ['#5f6247', '#5a6145', '#5c6649', '#626a4b', '#64694c'] };
     return palettes[terrain][shade]!;
@@ -191,18 +240,26 @@ export class LiveScene {
     if (this.overview) this.camera = { x: snapshot.world.width / 2, y: snapshot.world.height / 2 };
     else if (self && this.following) this.camera = this.interpolated(this.motions.get(self.id)!, now);
     const world = snapshot.world;
-    const zones = [...world.zones].reverse();
-    for (let y = 0; y < world.height; y++) for (let x = 0; x < world.width; x++) {
+    const corners = [this.unproject(-this.tile, -this.tile), this.unproject(this.width + this.tile, -this.tile), this.unproject(-this.tile, this.height + this.tile), this.unproject(this.width + this.tile, this.height + this.tile)];
+    const minX = clamp(Math.floor(Math.min(...corners.map(point => point.x))), 0, world.width - 1), maxX = clamp(Math.ceil(Math.max(...corners.map(point => point.x))), 0, world.width - 1);
+    const minY = clamp(Math.floor(Math.min(...corners.map(point => point.y))), 0, world.height - 1), maxY = clamp(Math.ceil(Math.max(...corners.map(point => point.y))), 0, world.height - 1);
+    if (this.overviewTerrain && (this.overview || this.tile < 16)) {
+      const anchor = this.project({ x: -.5, y: -.5 });
+      c.drawImage(this.overviewTerrain, anchor.x - world.height * this.tile / 2, anchor.y, (world.width + world.height) * this.tile / 2, (world.width + world.height) * this.tile / 4);
+    } else for (let y = minY; y <= maxY; y++) for (let x = minX; x <= maxX; x++) {
       const p = this.project({ x, y }); if (p.x < -this.tile || p.x > this.width + this.tile || p.y < -this.tile || p.y > this.height + this.tile) continue;
-      const zone = zones.find(zone => x >= zone.x && x < zone.x + zone.width && y >= zone.y && y < zone.y + zone.height);
-      const terrain = zone?.terrain ?? (world.theme === 'forest' ? 'forest' : 'concrete');
+      const terrain = this.terrain[y * world.width + x]!;
       const shade = (x * 17 + y * 29) % 5;
       this.polygon(this.quad(x - .5, y - .5), this.ground(terrain, shade), '#90916c18');
       if (terrain === 'road' && (x + y) % 4 === 0) { c.strokeStyle = '#d9d19b55'; const a = this.project({ x: x - .25, y }), b = this.project({ x: x + .25, y }); c.beginPath(); c.moveTo(a.x, a.y); c.lineTo(b.x, b.y); c.stroke(); }
-      if (world.theme === 'urban' && terrain === 'yard') { c.strokeStyle = '#353f38aa'; c.lineWidth = Math.max(.5, this.tile / 40); for (const offset of [-.22, .22]) { const a = this.project({ x: x + offset, y: y - .5 }), b = this.project({ x: x + offset, y: y + .5 }); c.beginPath(); c.moveTo(a.x, a.y); c.lineTo(b.x, b.y); c.stroke(); } }
+      if (world.districts.find(district => x >= district.x && x < district.x + district.width && y >= district.y && y < district.y + district.height)?.id === 'depot' && terrain === 'yard') { c.strokeStyle = '#353f38aa'; c.lineWidth = Math.max(.5, this.tile / 40); for (const offset of [-.22, .22]) { const a = this.project({ x: x + offset, y: y - .5 }), b = this.project({ x: x + offset, y: y + .5 }); c.beginPath(); c.moveTo(a.x, a.y); c.lineTo(b.x, b.y); c.stroke(); } }
       if (terrain === 'water' && (x + y) % 3 === 0) { const a = this.project({ x, y }); c.strokeStyle = '#b5c6a744'; c.beginPath(); c.moveTo(a.x - this.tile * .15, a.y); c.lineTo(a.x + this.tile * .1, a.y); c.stroke(); }
     }
-    for (const zone of world.zones.slice(1)) { const p = this.project({ x: zone.x + zone.width / 2, y: zone.y + zone.height / 2 }); if (this.overview || this.tile < 28) this.label(zone.name.toUpperCase(), p.x, p.y, '#d5dab5', this.overview ? 8 : 10); }
+    if (this.overview || this.tile < 12) for (const district of world.districts) {
+      this.polygon(this.quad(district.x - .5, district.y - .5, district.width, district.height), '#d5d2aa06', '#c6d49377');
+      const p = this.project({ x: district.x + district.width / 2, y: district.y + district.height / 2 });
+      this.label(district.name.toUpperCase(), p.x, p.y - 20, '#e5e8c2', this.width < 480 ? 10 : 13);
+    }
     for (const [index, extract] of world.extracts.entries()) {
       const p = this.project(extract); this.polygon(this.quad(extract.x - .7, extract.y - .7, 1.4, 1.4), '#5b8d5655', '#a4cf76');
       const flagHeight = this.overview ? 12 : 40;
@@ -210,13 +267,22 @@ export class LiveScene {
       this.polygon([{ x: p.x, y: p.y - flagHeight }, { x: p.x + flagHeight * .6, y: p.y - flagHeight * .87 }, { x: p.x, y: p.y - flagHeight * .72 }], '#b2ce7e'); this.label(`ВЫХОД ${index + 1}`, p.x, p.y + (this.overview ? 12 : 21), '#cce5a2', this.overview ? 7 : 10);
     }
     const objects: { depth: number; paint: () => void }[] = [];
-    for (const [index, obstacle] of world.obstacles.entries()) objects.push({ depth: obstacle.x + obstacle.y + (obstacle.width + obstacle.height) / 2, paint: () => this.obstacle(obstacle, index) });
-    for (const drop of snapshot.drops) objects.push({ depth: drop.x + drop.y, paint: () => {
-      const p = this.project(drop), size = this.overview ? 3 : 8; this.polygon([{ x: p.x - size, y: p.y - size / 2 }, { x: p.x, y: p.y - size }, { x: p.x + size, y: p.y - size / 2 }, { x: p.x, y: p.y + 1 }], '#d2a662', '#efd49a'); if (!this.overview) { c.fillStyle = '#9b753e'; c.fillRect(p.x - 6, p.y - 3, 12, 8); this.label(`${Math.floor(drop.amount)} ₽`, p.x, p.y + 22, '#ebc98d', 9); }
-    } });
+    for (const [index, obstacle] of world.obstacles.entries()) {
+      if (obstacle.x + obstacle.width < minX || obstacle.x > maxX || obstacle.y + obstacle.height < minY || obstacle.y > maxY) continue;
+      objects.push({ depth: obstacle.x + obstacle.y + (obstacle.width + obstacle.height) / 2, paint: () => this.obstacle(obstacle, index) });
+    }
+    for (const drop of snapshot.drops) objects.push({ depth: drop.x + drop.y, paint: () => this.paintContainer(drop) });
     this.hitTargets = [];
     for (const entity of snapshot.entities) objects.push({ depth: entity.x + entity.y + .1, paint: () => this.paintEntity(entity, now) });
     objects.sort((a, b) => a.depth - b.depth).forEach(object => object.paint());
+    for (const poi of world.pois) {
+      const p = this.project({ x: poi.x + poi.width / 2, y: poi.y + poi.height / 2 });
+      if (p.x < -60 || p.x > this.width + 60 || p.y < -30 || p.y > this.height + 30) continue;
+      if (this.overview || this.tile < 12) {
+        c.fillStyle = poi.danger === 3 ? '#d6a17c' : '#c2ca95'; c.fillRect(p.x - 2, p.y - 2, 4, 4);
+        if (this.width >= 480) this.label(poi.name, p.x, p.y + 12, '#c5d3b0', 7);
+      } else if (this.tile > 30) this.label(poi.name, p.x, p.y, '#d6d3ac', 9);
+    }
     this.paintCombat(now);
     this.minimap(snapshot);
   }
@@ -271,8 +337,10 @@ export class LiveScene {
   private minimap(snapshot: LiveSnapshot): void {
     const c = this.context, { x, y, scale, width, height } = this.minimapBounds(snapshot);
     c.fillStyle = '#14241fe6'; c.fillRect(x - 8, y - 8, width + 16, height + 29); c.strokeStyle = '#7c8c6166'; c.strokeRect(x - 8, y - 8, width + 16, height + 29);
+    for (const district of snapshot.world.districts) { c.fillStyle = district.theme === 'forest' ? '#385135' : district.theme === 'industrial' ? '#4b4c37' : '#4c5549'; c.fillRect(x + district.x * scale, y + district.y * scale, district.width * scale, district.height * scale); }
     for (const obstacle of snapshot.world.obstacles) { c.fillStyle = '#63715b'; c.fillRect(x + obstacle.x * scale, y + obstacle.y * scale, obstacle.width * scale, obstacle.height * scale); }
     for (const extract of snapshot.world.extracts) { c.fillStyle = '#a9d380'; c.fillRect(x + extract.x * scale - 2, y + extract.y * scale - 2, 4, 4); }
+    for (const poi of snapshot.world.pois) { c.fillStyle = poi.danger === 3 ? '#b78665' : '#a6af84'; c.fillRect(x + (poi.x + poi.width / 2) * scale - 1, y + (poi.y + poi.height / 2) * scale - 1, 2, 2); }
     for (const entity of snapshot.entities) { c.fillStyle = entity.id === snapshot.selfId ? '#ffe0a4' : entity.kind === 'player' ? '#81d0e3' : entity.faction === 'raiders' ? '#e48971' : '#ce9778'; c.beginPath(); c.arc(x + entity.x * scale, y + entity.y * scale, entity.id === snapshot.selfId ? 2.8 : 1.6, 0, Math.PI * 2); c.fill(); }
     this.label(snapshot.world.name.toUpperCase(), x + width / 2, y + height + 14, '#a9b596', 8);
   }
