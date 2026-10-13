@@ -126,9 +126,23 @@ describe("expansion save integrity", () => {
 		const value = JSON.parse(saveGame(original));
 		value.schemaVersion = 5;
 		delete value.recruitment;
-		for (const scav of value.scavs) delete scav.profile;
+		delete value.memorials;
+		for (const scav of value.scavs) { delete scav.profile; delete scav.story; }
 		delete value.shelter.sites; delete value.shelter.expansions;
-		expect(parseSave(JSON.stringify(value))).toEqual(original);
+		const transferred = parseSave(JSON.stringify(value))!;
+		expect(transferred).not.toBeNull();
+		const withoutPersonalHistory = (game: GameState) => {
+			const copy = JSON.parse(saveGame(game));
+			delete copy.memorials;
+			for (const scav of copy.scavs) delete scav.story;
+			return copy;
+		};
+		expect(withoutPersonalHistory(transferred)).toEqual(withoutPersonalHistory(original));
+		for (const scav of transferred.scavs) {
+			expect(scav.story.pending).toBeNull();
+			expect(scav.story.bond).toBe(20);
+			expect(scav.story.stress).toBe(0);
+		}
 		const migrated = restored(original);
 		expect(migrated.schemaVersion).toBe(original.schemaVersion);
 		expect(migrated.shelter.sites).toHaveLength(12);

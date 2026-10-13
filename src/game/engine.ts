@@ -19,12 +19,14 @@ export * from "./modules";
 import { initialShelter, ROOM_DEFINITIONS, RESOURCE_RECIPE_BY_ID, getShelterSites, getShelterFrontier, isShelterSiteCoordinate, MAX_SHELTER_SITES, SHELTER_COORDINATE_LIMIT, SHELTER_EXCAVATION, type ProductionJob, type RoomInstance, type ShelterCost, type ShelterRoomType, type ShelterSite, type ShelterExpansion, type ShelterState } from "./shelter";
 export * from "./shelter";
 import { getRaidFieldFrame, getRaidFieldOutcome, getRaidFieldPlan, type RaidFieldPlan } from "../raid-field";
-import { buildRecruitmentBoard, createRecruitmentState, getEarnedRecruitmentTier, getRecruitmentBoard, getScavProfileEffects, getScavTalentOffers, isRecruitDrawbackForRole, isRecruitTraitForRole, neutralScavProfile, RECOVERY_RECRUIT_ID, RECRUIT_BACKGROUNDS, RECRUIT_DRAWBACKS, RECRUIT_ROLES, RECRUIT_TRAITS, SCAV_TALENTS, stepRecruitmentSeed, type RecruitCandidate, type RecruitmentState, type RecruitRole, type RecruitTier, type ScavProfile } from "./recruitment";
+import { buildRecruitmentBoard, chooseRecruitCandidateAppearance, createRecruitmentState, getEarnedRecruitmentTier, getRecruitmentBoard, getScavProfileEffects, getScavTalentOffers, isRecruitDrawbackForRole, isRecruitTraitForRole, neutralScavProfile, RECOVERY_RECRUIT_ID, RECRUIT_BACKGROUNDS, RECRUIT_DRAWBACKS, RECRUIT_ROLES, RECRUIT_TRAITS, SCAV_TALENTS, stepRecruitmentSeed, type RecruitCandidate, type RecruitmentState, type RecruitRole, type RecruitTier, type ScavProfile } from "./recruitment";
 export * from "./recruitment";
 import { chooseScavAppearance, defaultScavAppearance, isScavAppearance } from "./scav-appearances";
+import { createScavStory, getScavStoryEffects, noteScavProduction, noteScavRaid, rememberLostScav, validateScavStory, SCAV_STORY_EVENTS, MAX_SCAV_MEMORIES, MAX_SCAV_MEMORIALS, type ScavStory, type ScavMemory, type ScavMemorial, type ScavEventId } from "./scav-stories";
+export * from "./scav-stories";
 
 export const SAVE_KEY = "prapor.save.v1";
-export const SAVE_VERSION = 6;
+export const SAVE_VERSION = 7;
 export const MAX_OFFLINE_MS = 8 * 60 * 60 * 1000;
 export const MAX_ROOM_LEVEL = 5;
 
@@ -55,6 +57,7 @@ export interface Scav {
 	loadout: Loadout;
 	assignment: string | null;
 	profile: ScavProfile;
+	story: ScavStory;
 	autoRaid: { mapId: string; enabled: boolean; minHealth: number; runs: number; waitingReason: string | null; maxDepth: number };
 }
 export interface Expedition {
@@ -129,6 +132,7 @@ export interface GameState {
 	modules: ModuleInstance[];
 	shelter: ShelterState;
 	recruitment: RecruitmentState;
+	memorials: ScavMemorial[];
 	stats: {
 		raidsWon: number;
 		raidsCompleted: number;
@@ -188,6 +192,16 @@ function rebaseClock(state: GameState, now: number) {
 		raid.endsAt = raid.expedition?.status === "choice" ? Math.max(0, raid.endsAt - shift) : raid.endsAt - shift;
 		if (raid.expedition) for (const event of raid.expedition.trail) event.at = Math.max(0, event.at - shift);
 	});
+	for (const person of [...state.scavs, ...state.memorials]) {
+		person.story.joinedAt = Math.max(0, person.story.joinedAt - shift);
+		for (const memory of person.story.memories) memory.at = Math.max(0, memory.at - shift);
+		if (person.story.pending) person.story.pending.at = Math.max(0, person.story.pending.at - shift);
+	}
+	for (const memorial of state.memorials) memorial.at = Math.max(0, memorial.at - shift);
+	for (const report of state.history) {
+		report.at = Math.max(0, report.at - shift);
+		for (const event of report.events) event.at = Math.max(0, event.at - shift);
+	}
 	state.createdAt = Math.min(state.createdAt, now);
 	state.lastUpdated = now;
 }
@@ -281,6 +295,7 @@ function createScav(
 		loadout: { armorItemId: null, backpackItemId: null, ammoType: "standard", medkit: false },
 		assignment: null,
 		profile: neutralScavProfile(),
+		story: createScavStory(`scav-${state.nextId - 1}`, state.lastUpdated, true),
 		autoRaid: { mapId: "courtyard", enabled: false, minHealth: 70, runs: 0, waitingReason: null, maxDepth: 1 },
 	};
 	state.scavs.push(scav);
@@ -309,6 +324,7 @@ export function createGame(now = Date.now()): GameState {
 		modules: [],
 		shelter: initialShelter({ workshop: 1, medbay: 1, radio: 1, storage: 1 }),
 		recruitment: { rng: 1, generation: 1, tier: 0, boardTier: 0, boardSeed: 1, board: [], hiredCandidateIds: [] },
+		memorials: [],
 		stats: {
 			raidsWon: 0,
 			raidsCompleted: 0,
@@ -509,7 +525,7 @@ function roomWorkRate(state: GameState, room: RoomInstance): number {
 	if (room.status !== "ready") return 0;
 	const work = room.workerIds.reduce((sum, workerId) => {
 		const scav = state.scavs.find((item) => item.id === workerId);
-		return sum + (scav && scav.status !== "raiding" && scav.health >= 25 ? (700 + getWorkerAffinity(scav, room.type) * 10) * getScavProfileEffects(scav).work : 0);
+		return sum + (scav && scav.status !== "raiding" && scav.health >= 25 ? (700 + getWorkerAffinity(scav, room.type) * 10) * getScavProfileEffects(scav).work * getScavStoryEffects(scav).work : 0);
 	}, 0);
 	return Math.floor(work * (9 + room.level) / 10);
 }
@@ -723,6 +739,7 @@ function settleShelter(state: GameState, now: number, stoppedAtBoundary: Readonl
 			for (const workerId of room.workerIds) {
 				const scav = state.scavs.find((item) => item.id === workerId); if (!scav) continue;
 				const previous = scav.level; scav.xp += job.kind === "module" ? 3 : 1;
+				noteScavProduction(scav, job.kind === "module", job.id, now);
 				scav.level = Math.min(15, 1 + Math.floor(Math.sqrt(scav.xp / 60)));
 				scav.combat = Math.min(100, scav.combat + (scav.level - previous) * 4); scav.scouting = Math.min(100, scav.scouting + (scav.level - previous) * 3);
 			}
@@ -931,6 +948,7 @@ export function getRaidChance(
 			(scav.level - 1) * 0.008 +
 			personality.survivalBonus +
 			getScavProfileEffects(scav).chance +
+			getScavStoryEffects(scav).chance +
 			state.base.radio * 0.012 +
 			TACTICS[scav.tactic].chanceBonus + getLoadoutStats(state, scav).protection +
 			(scav.loadout.ammoType === "piercing" ? 0.055 : 0) + (state.blueprints.includes(`route:${map.id}`) ? 0.02 : 0) -
@@ -1235,7 +1253,7 @@ export function getRecruitmentRefreshQuote(state: GameState) {
 export function refreshRecruitment(state: GameState): ActionResult {
 	const quote = getRecruitmentRefreshQuote(state); if (quote.reason) return fail(quote.reason);
 	const generation = state.recruitment.generation + 1, boardSeed = state.recruitment.rng;
-	const board = buildRecruitmentBoard(boardSeed, generation, quote.tier);
+	const board = buildRecruitmentBoard(boardSeed, generation, quote.tier, state.scavs.map((scav) => scav.appearance ?? defaultScavAppearance(scav.personality)));
 	state.money -= quote.money; state.supplies.intel -= quote.intel;
 	state.recruitment = { generation, tier: quote.tier, boardTier: quote.tier, boardSeed, rng: stepRecruitmentSeed(boardSeed), board, hiredCandidateIds: [] };
 	return ok(`Связные нашли трёх кандидатов за ${quote.money} ₽ и ${quote.intel} разведданных. Предложения закреплены до следующего поиска.`);
@@ -1245,7 +1263,8 @@ export function hireRecruitCandidate(state: GameState, candidateId: string): Act
 	const candidate = getRecruitmentBoard(state).find((item) => item.id === candidateId)!;
 	const personality: Record<RecruitRole, string> = { assault: "veteran", scout: "runner", technician: "collector" };
 	state.money -= quote.money;
-	const scav = createScav(state, candidate.name, personality[candidate.role], candidate.combat, candidate.scouting);
+	const scav = createScav(state, candidate.name, personality[candidate.role], candidate.combat, candidate.scouting, candidate.appearance);
+	scav.story = createScavStory(candidate.id === RECOVERY_RECRUIT_ID ? `recovery:${scav.id}` : candidate.id, state.lastUpdated, true);
 	// Recovery grants the old neutral recruit; no elite traits can be farmed by a wipe.
 	scav.profile = quote.money === 0 ? neutralScavProfile() : { backgroundId: candidate.backgroundId, traitId: candidate.traitId, drawbackId: candidate.drawbackId, talents: [], candidateId: candidate.id };
 	if (candidate.id !== RECOVERY_RECRUIT_ID) {
@@ -1680,6 +1699,8 @@ function finishExpedition(state: GameState, raid: Raid, success: boolean, now: n
 		if (survivor) survivor.weaponInstanceId = createWeapon(state, "pm", now, 70).id;
 	}
 	report.events = [...expedition.trail, { at: now, label: success ? "Эвакуация" : report.lostScav ? "Связь потеряна" : "Отход", text: report.description + (success ? ` Доставлено ${report.money} ₽.` : ""), kind: success ? "success" : "danger" }];
+	noteScavRaid(scav, report);
+	if (report.lostScav) rememberLostScav(state, scav, report);
 	state.history.unshift(report); state.history.length = Math.min(state.history.length, 40);
 	state.recruitment.tier = Math.max(state.recruitment.tier, getEarnedRecruitmentTier(state)) as RecruitTier;
 	return report;
@@ -1825,6 +1846,8 @@ function finishRaid(state: GameState, raid: Raid): RaidReport {
 			survivor.weaponInstanceId = createWeapon(state, "pm", raid.endsAt, 70).id;
 	}
 	report.events = createRaidEvents(raid, report, map);
+	noteScavRaid(scav, report);
+	if (report.lostScav) rememberLostScav(state, scav, report);
 	state.history.unshift(report);
 	state.history.length = Math.min(state.history.length, 40);
 	state.recruitment.tier = Math.max(state.recruitment.tier, getEarnedRecruitmentTier(state)) as RecruitTier;
@@ -2199,17 +2222,43 @@ function parseScavProfile(value: unknown): ScavProfile {
 	}
 	return profile;
 }
-function parseRecruitCandidate(value: unknown): RecruitCandidate {
-	const source = record(value); fields(source, ["id", "name", "role", "backgroundId", "traitId", "drawbackId", "combat", "scouting", "cost"]);
+function parseStoryEvent(value: unknown): ScavEventId {
+	if (!SCAV_STORY_EVENTS.includes(value as ScavEventId)) throw new Error("story-event");
+	return value as ScavEventId;
+}
+function parseScavStory(value: unknown): ScavStory {
+	const source = record(value); fields(source, ["identityKey", "joinedAt", "bond", "stress", "counters", "memories", "pending", "completedEvents"]);
+	const counters = record(source.counters); fields(counters, ["wins", "injuries", "deepReturns", "modules", "batches"]);
+	const parseSource = (item: ObjectValue) => ({ sourceId: item.sourceId === null ? null : string(item.sourceId), mapId: item.mapId === null ? null : known(item.mapId, MAP_BY_ID) });
+	const story: ScavStory = { identityKey: string(source.identityKey), joinedAt: number(source.joinedAt), bond: number(source.bond, 100, 0, true), stress: number(source.stress, 100, 0, true),
+		counters: { wins: number(counters.wins, 1e9, 0, true), injuries: number(counters.injuries, 1e9, 0, true), deepReturns: number(counters.deepReturns, 1e9, 0, true), modules: number(counters.modules, 1e9, 0, true), batches: number(counters.batches, 1e9, 0, true) },
+		memories: array(source.memories, MAX_SCAV_MEMORIES, (item): ScavMemory => {
+			const memory = record(item); fields(memory, ["kind", "at", "sourceId", "mapId", "eventId", "choiceId"]);
+			if (!["joined", "return", "injury", "deep_return", "module", "event", "lost"].includes(memory.kind as string)) throw new Error("story-memory-kind");
+			return { kind: memory.kind as ScavMemory["kind"], at: number(memory.at), ...parseSource(memory), eventId: memory.eventId === null ? null : parseStoryEvent(memory.eventId), choiceId: memory.choiceId === null ? null : string(memory.choiceId) };
+		}), pending: source.pending === null ? null : (() => {
+			const pending = record(source.pending); fields(pending, ["eventId", "at", "sourceId", "mapId"]);
+			return { eventId: parseStoryEvent(pending.eventId), at: number(pending.at), ...parseSource(pending) };
+		})(), completedEvents: array(source.completedEvents, SCAV_STORY_EVENTS.length, parseStoryEvent) };
+	unique(story.completedEvents);
+	return story;
+}
+function parseScavMemorial(value: unknown): ScavMemorial {
+	const source = record(value); fields(source, ["id", "name", "personality", "appearance", "profile", "story", "at", "mapId", "raidId", "level", "xp", "raids"]);
+	return { id: string(source.id), name: string(source.name, 30), personality: known(source.personality, PERSONALITY_BY_ID), appearance: parseAppearance(source.appearance), profile: parseScavProfile(source.profile), story: parseScavStory(source.story),
+		at: number(source.at), mapId: known(source.mapId, MAP_BY_ID), raidId: string(source.raidId), level: number(source.level, 15, 1, true), xp: number(source.xp), raids: number(source.raids, 1e9, 1, true) };
+}
+function parseRecruitCandidate(value: unknown, version: number): RecruitCandidate {
+	const source = record(value); fields(source, ["id", "name", "role", "backgroundId", "traitId", "drawbackId", "combat", "scouting", "cost", "appearance"]);
 	return { id: string(source.id), name: string(source.name, 30), role: known(source.role, RECRUIT_ROLES) as RecruitRole,
 		backgroundId: known(source.backgroundId, RECRUIT_BACKGROUNDS), traitId: known(source.traitId, RECRUIT_TRAITS), drawbackId: known(source.drawbackId, RECRUIT_DRAWBACKS),
-		combat: number(source.combat, 100, 1, true), scouting: number(source.scouting, 100, 1, true), cost: number(source.cost, 10000, 1, true) };
+		combat: number(source.combat, 100, 1, true), scouting: number(source.scouting, 100, 1, true), cost: number(source.cost, 10000, 1, true), appearance: version >= 7 || Object.hasOwn(source, "appearance") ? parseAppearance(source.appearance) : -1 };
 }
-function parseRecruitment(value: unknown): RecruitmentState {
+function parseRecruitment(value: unknown, version: number): RecruitmentState {
 	const source = record(value); fields(source, ["rng", "generation", "tier", "boardSeed", "boardTier", "board", "hiredCandidateIds"]);
 	const recruitment: RecruitmentState = { rng: number(source.rng, 4294967295, 1, true), boardSeed: number(source.boardSeed, 4294967295, 1, true),
 		generation: number(source.generation, 1e9, 1, true), tier: number(source.tier, 2, 0, true) as RecruitTier, boardTier: number(source.boardTier, 2, 0, true) as RecruitTier,
-		board: array(source.board, 3, parseRecruitCandidate), hiredCandidateIds: array(source.hiredCandidateIds, 3, (candidateId) => string(candidateId)) };
+		board: array(source.board, 3, (candidate) => parseRecruitCandidate(candidate, version)), hiredCandidateIds: array(source.hiredCandidateIds, 3, (candidateId) => string(candidateId)) };
 	if (recruitment.boardTier > recruitment.tier || recruitment.rng !== stepRecruitmentSeed(recruitment.boardSeed)) throw new Error("recruit-generation");
 	const generated = buildRecruitmentBoard(recruitment.boardSeed, recruitment.generation, recruitment.boardTier);
 	const consumed = [...recruitment.board.map((candidate) => candidate.id), ...recruitment.hiredCandidateIds];
@@ -2217,11 +2266,12 @@ function parseRecruitment(value: unknown): RecruitmentState {
 	if (consumed.length !== generated.length || consumed.some((candidateId) => !generated.some((candidate) => candidate.id === candidateId))) throw new Error("recruit-ledger");
 	for (const candidate of recruitment.board) {
 		const expected = generated.find((offer) => offer.id === candidate.id)!;
-		if (Object.keys(expected).some((key) => candidate[key as keyof RecruitCandidate] !== expected[key as keyof RecruitCandidate])) throw new Error("recruit-offer");
+		if (Object.keys(expected).some((key) => key !== "appearance" && candidate[key as keyof RecruitCandidate] !== expected[key as keyof RecruitCandidate])) throw new Error("recruit-offer");
 	}
+	unique(recruitment.board.filter((candidate) => candidate.appearance >= 0).map((candidate) => String(candidate.appearance)));
 	return recruitment;
 }
-function validateScavRecruitment(state: GameState, scav: Scav) {
+function validateScavRecruitment(state: GameState, scav: Pick<Scav, "profile" | "level">) {
 	const profile = scav.profile;
 	for (let index = 0; index < profile.talents.length; index++) {
 		const previous = { ...scav, profile: { ...profile, talents: profile.talents.slice(0, index) } };
@@ -2238,9 +2288,29 @@ function validateScavRecruitment(state: GameState, scav: Scav) {
 			return offer.backgroundId === profile.backgroundId && offer.traitId === profile.traitId && offer.drawbackId === profile.drawbackId; });
 	if (!provenance) throw new Error("scav-recruit-provenance");
 }
+function validateStoryRecruitment(state: GameState, scav: Pick<Scav, "name" | "personality" | "story" | "profile">) {
+	const match = /^recruit-([1-9]\d*)-([012])-([1-9]\d*)$/.exec(scav.story.identityKey);
+	if (!match) return;
+	const generation = Number(match[1]), slot = Number(match[2]), seed = Number(match[3]);
+	if (generation > state.recruitment.generation || (generation === state.recruitment.generation && (seed !== state.recruitment.boardSeed || !state.recruitment.hiredCandidateIds.includes(scav.story.identityKey)))) throw new Error("story-recruit-owner");
+	const candidate = buildRecruitmentBoard(seed, generation, 0)[slot]!;
+	const personality = { assault: "veteran", scout: "runner", technician: "collector" }[candidate.role];
+	if (scav.profile.candidateId === null && scav.personality !== personality) throw new Error("story-free-recruit-role");
+}
+function validateStorySources(state: GameState, scav: Pick<Scav, "name" | "story">, lostRaidId: string | null) {
+	for (const memory of scav.story.memories) {
+		if (memory.kind === "lost" && memory.sourceId !== lostRaidId) throw new Error("story-alive-loss");
+		if (memory.kind === "event" || memory.kind === "joined") continue;
+		if (state.raids.some((raid) => raid.id === memory.sourceId) || state.shelter.rooms.some((room) => room.queue.some((job) => job.id === memory.sourceId))) throw new Error("story-unfinished-source");
+		const report = state.history.find((item) => item.raidId === memory.sourceId);
+		if (!report) continue;
+		if (report.scavName !== scav.name || report.mapId !== memory.mapId || report.at !== memory.at || (memory.kind === "lost" ? !report.lostScav : report.lostScav)
+			|| (memory.kind === "return" && !report.success) || (memory.kind === "deep_return" && (!report.success || report.depth < 2))) throw new Error("story-report-source");
+	}
+}
 function parseScav(value: unknown, version: number): Scav {
 	const source = record(value);
-	fields(source, ["id", "name", "personality", "appearance", "level", "xp", "health", "combat", "scouting", "weaponInstanceId", "status", "raids", ...(version >= 2 ? ["tactic", "gear", "autoRaid"] : []), ...(version >= 3 ? ["loadout"] : []), ...(version >= 5 ? ["assignment"] : []), ...(version >= 6 ? ["profile"] : [])]);
+	fields(source, ["id", "name", "personality", "appearance", "level", "xp", "health", "combat", "scouting", "weaponInstanceId", "status", "raids", ...(version >= 2 ? ["tactic", "gear", "autoRaid"] : []), ...(version >= 3 ? ["loadout"] : []), ...(version >= 5 ? ["assignment"] : []), ...(version >= 6 ? ["profile"] : []), ...(version >= 7 ? ["story"] : [])]);
 	if (!["ready", "raiding", "wounded"].includes(source.status as string))
 		throw new Error("status");
 	let gear: Scav["gear"] = { armor: 0, backpack: 0 };
@@ -2277,6 +2347,7 @@ function parseScav(value: unknown, version: number): Scav {
 		loadout: version >= 3 ? parseLoadout(source.loadout) : { armorItemId: null, backpackItemId: null, ammoType: "standard", medkit: false },
 		assignment: version >= 5 && source.assignment !== null ? string(source.assignment) : null,
 		profile: version >= 6 ? parseScavProfile(source.profile) : neutralScavProfile(),
+		story: version >= 7 ? parseScavStory(source.story) : createScavStory(string(source.id), 0, false),
 		autoRaid,
 	};
 }
@@ -2341,9 +2412,9 @@ export function parseSave(raw: string): GameState | null {
 	try {
 		if (typeof raw !== "string" || raw.length > 1_000_000) return null;
 		const source = record(JSON.parse(raw));
-		if (source.schemaVersion !== 1 && source.schemaVersion !== 2 && source.schemaVersion !== 3 && source.schemaVersion !== 4 && source.schemaVersion !== 5 && source.schemaVersion !== SAVE_VERSION) return null;
+		if (source.schemaVersion !== 1 && source.schemaVersion !== 2 && source.schemaVersion !== 3 && source.schemaVersion !== 4 && source.schemaVersion !== 5 && source.schemaVersion !== 6 && source.schemaVersion !== SAVE_VERSION) return null;
 		const version = source.schemaVersion;
-		fields(source, ["schemaVersion", "createdAt", "lastUpdated", "money", "supplies", "xp", "level", "base", "scavs", "weapons", "raids", "history", "claimedContracts", "discoveredWeapons", "stats", "clock", "rng", "nextId", ...(version >= 3 ? ["gearItems", "blueprints"] : []), ...(version >= 4 ? ["modules"] : []), ...(version >= 5 ? ["shelter"] : []), ...(version >= 6 ? ["recruitment"] : [])]);
+		fields(source, ["schemaVersion", "createdAt", "lastUpdated", "money", "supplies", "xp", "level", "base", "scavs", "weapons", "raids", "history", "claimedContracts", "discoveredWeapons", "stats", "clock", "rng", "nextId", ...(version >= 3 ? ["gearItems", "blueprints"] : []), ...(version >= 4 ? ["modules"] : []), ...(version >= 5 ? ["shelter"] : []), ...(version >= 6 ? ["recruitment"] : []), ...(version >= 7 ? ["memorials"] : [])]);
 		const base = record(source.base);
 		const stats = record(source.stats);
 		const clock = record(source.clock);
@@ -2395,7 +2466,8 @@ export function parseSave(raw: string): GameState | null {
 			blueprints: version >= 3 ? array(source.blueprints, Object.keys(BLUEPRINTS).length, (value) => known(value, BLUEPRINTS)) : ["light_vest", "scout_pack"],
 			modules: version >= 4 ? array(source.modules, 1000, parseModule) : [],
 			shelter: version >= 5 ? parseShelter(source.shelter) : initialShelter(base as Record<string, number>),
-			recruitment: version >= 6 ? parseRecruitment(source.recruitment) : { rng: 1, generation: 1, tier: 0, boardTier: 0, boardSeed: 1, board: [], hiredCandidateIds: [] },
+			recruitment: version >= 6 ? parseRecruitment(source.recruitment, version) : { rng: 1, generation: 1, tier: 0, boardTier: 0, boardSeed: 1, board: [], hiredCandidateIds: [] },
+			memorials: version >= 7 ? array(source.memorials, MAX_SCAV_MEMORIALS, parseScavMemorial) : [],
 			stats: {
 				raidsWon: number(stats.raidsWon, 1e9, 0, true),
 				raidsCompleted: number(stats.raidsCompleted, 1e9, 0, true),
@@ -2419,6 +2491,11 @@ export function parseSave(raw: string): GameState | null {
 			nextId: number(source.nextId, 1e12, 1, true),
 		};
 		if (version < 6) state.recruitment = createRecruitmentState(state);
+		if (version < 7) for (const scav of state.scavs) scav.story = createScavStory(scav.profile.candidateId ?? scav.id, state.createdAt, false);
+		if (version < 7) {
+			const used = [...state.scavs.map((scav) => scav.appearance ?? defaultScavAppearance(scav.personality)), ...state.recruitment.board.filter((candidate) => candidate.appearance >= 0).map((candidate) => candidate.appearance)];
+			for (const candidate of state.recruitment.board) if (candidate.appearance < 0) { candidate.appearance = chooseRecruitCandidateAppearance(candidate.role, candidate.id, used); used.push(candidate.appearance); }
+		}
 		if (state.recruitment.tier > getEarnedRecruitmentTier(state)) throw new Error("recruit-network-evidence");
 		// Only retained evidence can seed per-sector counters from an old save.
 		if (version < 4) for (const weapon of state.weapons) {
@@ -2475,6 +2552,9 @@ export function parseSave(raw: string): GameState | null {
 			throw new Error("stats");
 		for (const scav of state.scavs) {
 			validateScavRecruitment(state, scav);
+			validateScavStory(scav.story, scav, state.lastUpdated, state.nextId);
+			validateStoryRecruitment(state, scav);
+			validateStorySources(state, scav, null);
 			if (!scav.id.startsWith("scav-") || scav.autoRaid.runs > scav.raids) throw new Error("scav-id");
 			if (
 				scav.weaponInstanceId &&
@@ -2496,6 +2576,21 @@ export function parseSave(raw: string): GameState | null {
 				const gearId = scav.loadout[key];
 				if (gearId !== null && !state.gearItems.some((item) => item.id === gearId && getGearModel(item).slot === slot)) throw new Error("gear-owner");
 			}
+		}
+		unique([...state.scavs.map((scav) => scav.id), ...state.memorials.map((memorial) => memorial.id)]);
+		unique(state.memorials.map((memorial) => memorial.raidId));
+		if (state.memorials.length > state.stats.lostScavs) throw new Error("memorial-count");
+		for (const memorial of state.memorials) {
+			if (!/^scav-[1-9]\d*$/.test(memorial.id) || Number(memorial.id.slice(5)) >= state.nextId || !/^raid-[1-9]\d*$/.test(memorial.raidId) || Number(memorial.raidId.slice(5)) >= state.nextId
+				|| memorial.at > state.lastUpdated || memorial.story.joinedAt > memorial.at || memorial.raids > state.stats.raidsCompleted
+				|| memorial.level !== Math.min(15, 1 + Math.floor(Math.sqrt(memorial.xp / 60)))) throw new Error("memorial-career");
+			validateScavStory(memorial.story, memorial, state.lastUpdated, state.nextId);
+			validateScavRecruitment(state, memorial);
+			validateStoryRecruitment(state, memorial);
+			validateStorySources(state, memorial, memorial.raidId);
+			const loss = state.history.find((report) => report.raidId === memorial.raidId);
+			if (memorial.story.pending !== null || (loss && (!loss.lostScav || loss.scavName !== memorial.name || loss.mapId !== memorial.mapId || loss.at !== memorial.at || (loss.scavAppearance !== undefined && loss.scavAppearance !== memorial.appearance)))) throw new Error("memorial-report");
+			if (!memorial.story.memories.some((memory) => memory.kind === "lost" && memory.sourceId === memorial.raidId && memory.mapId === memorial.mapId && memory.at === memorial.at)) throw new Error("memorial-last-moment");
 		}
 		for (const raid of state.raids) {
 			if (!raid.id.startsWith("raid-")) throw new Error("raid-id");
