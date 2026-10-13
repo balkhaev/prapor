@@ -119,7 +119,7 @@ describe("authoritative base placement commands", () => {
 			{ type: "placeRoom", args: ["room-workshop", 500, 130] },
 			{ type: "placeRoom", args: ["room-workshop", 280, 350] },
 			{ type: "placeRoom", args: [ammo.id, 500, 350] },
-			{ type: "constructRoom", args: ["ammo", 700.25, 300] },
+			{ type: "constructRoom", args: ["ammo", 1084.25, 300] },
 		] satisfies GameCommand[]) expect((await action(first.service, client, command)).result.ok).toBe(false);
 		expect(client.snapshot.state).toEqual(before);
 		const preTurn = structuredClone(client.snapshot.state);
@@ -198,7 +198,7 @@ describe("authoritative base placement commands", () => {
 		await poll(service, client); const original = structuredClone(client.snapshot.state);
 		for (const command of [
 			{ type: "moveRoom", args: ["room-workshop", 1, 0] },
-			{ type: "moveRoom", args: ["room-workshop", 4, 1] },
+			{ type: "moveRoom", args: ["room-workshop", 6, 1] },
 			{ type: "buildRoom", args: ["hangar", 0, 1] },
 		] as GameCommand[]) expect((await action(service, client, command)).result.ok).toBe(false);
 		expect(client.snapshot.state).toEqual(original);
@@ -217,6 +217,8 @@ describe("authoritative base placement commands", () => {
 		try {
 			const stored = parseSave(db.query<{ state: string }, []>("SELECT state FROM authoritative_games LIMIT 1").get()!.state)!;
 			stored.level = 4; stored.xp = 810; stored.money = 20_000; stored.supplies.scrap = 200;
+			// Retain the older perimeter to verify a paid extension before rotation.
+			stored.shelter.sites = Array.from({ length: 12 }, (_, index) => ({ column: index % 4, row: Math.floor(index / 4) }));
 			fundConstructionLoot(stored);
 			db.query("UPDATE authoritative_games SET state=?,revision=revision+1").run(saveGame(stored));
 		} finally { db.close(); }

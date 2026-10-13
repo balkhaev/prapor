@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	advance, assignWorker, buildRoom, createGame, excavateShelter, getBuildRoomQuote,
 	getExcavationQuote, getModuleCapacity, getRoomFootprint, getRoomPlacementReason,
-	getRoomSites, getShelterRoomAt, getStorageCapacity, getSupplyCapacity, moveRoom,
+	getRoomSites, getShelterSites, getShelterRoomAt, getStorageCapacity, getSupplyCapacity, moveRoom,
 	parseSave, queueModuleProduction, rotateRoom, saveGame, setRoomRecipe, setRoomStockTarget,
 	upgradeRoom, type GameState,
 } from "../src/game/engine";
@@ -11,6 +11,8 @@ import {
 const NOW = 1_792_000_000_000;
 function funded(level = 1): GameState {
 	const state = createGame(NOW);
+	// Exercise the boundaries of a retained legacy yard.
+	state.shelter.sites = getShelterSites({}).map(site => ({ ...site }));
 	state.level = level; state.xp = (level - 1) ** 2 * 90;
 	state.money = 20_000;
 	state.supplies = { ammo: 100, medicine: 0, scrap: 200, intel: 20 };

@@ -1,7 +1,7 @@
 import { fundConstructionLoot } from './loot-material-fixture';
 import { describe, expect, test } from "bun:test";
 import {
-	advance, buildRoom, createGame, excavateShelter, getRoomSites, getRoomProductionState,
+	advance, buildRoom, createGame, getRoomSites, getRoomProductionState,
 	ROOM_DEFINITIONS, saveGame, placeRoom, getRoomBounds, type ShelterRoomType,
 } from "../src/game/engine";
 import { readGameSession } from "../src/game-session";
@@ -20,10 +20,6 @@ function withHangar(rotation: 0 | 1 = 0) {
 	state.level = 4; state.xp = 810; state.money = 5_000; state.supplies.scrap = 40;
 	for(const need of ROOM_DEFINITIONS.hangar.lootRequirements??[])for(let i=0;i<need.quantity;i++)(state.lootItems??=[]).push({id:`loot-${state.nextId++}`,modelId:need.modelId,foundAt:NOW});
 	fundConstructionLoot(state);
-	if (rotation) {
-		for (const column of [0, 1]) expect(excavateShelter(state, column, 3, state.lastUpdated).ok).toBe(true);
-		advance(state, NOW + 20_000);
-	}
 	expect(buildRoom(state, "hangar", 0, 1, state.lastUpdated, rotation).ok).toBe(true);
 	advance(state, state.lastUpdated + ROOM_DEFINITIONS.hangar.buildSeconds * 1_000);
 	return { state, hangar: state.shelter.rooms.find(room => room.type === "hangar")! };
@@ -47,7 +43,7 @@ describe("territory presentation and restored controls", () => {
 		expect(getRoomBounds(hangar).x).toBe(57.25);
 		expect(getRoomBounds(hangar).y).toBe(285.75);
 		for (const site of getRoomSites(hangar)) expect(plan).not.toContain(`data-shelter-column="${site.column}" data-shelter-row="${site.row}"`);
-		expect(summary).toContain("<strong>35%</strong>");
+		expect(summary).toContain("<strong>67%</strong>");
 		expect(summary).toContain("свободной земли");
 		expect(plan).toContain('aria-label="План территории базы"');
 		expect(saveGame(state)).toBe(before);

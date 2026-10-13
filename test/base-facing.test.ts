@@ -71,7 +71,7 @@ describe("four-direction building facing", () => {
 		expect(faceRoom(state, "missing", 0, NOW + 1000).ok).toBe(false);
 		expect(saveGame(state)).toBe(before);
 		const border = funded(), edge = border.shelter.rooms[0]!;
-		expect(placeRoom(border, edge.id, 80, 420, NOW, 0, 0).ok).toBe(true);
+		expect(placeRoom(border, edge.id, 80, 552, NOW, 0, 0).ok).toBe(true);
 		const edgeBefore = saveGame(border);
 		expect(faceRoom(border, edge.id, 1, NOW + 1000).ok).toBe(false); expect(saveGame(border)).toBe(edgeBefore);
 	});
@@ -92,7 +92,7 @@ describe("four-direction building facing", () => {
 
 	test("large structures use their native proportions in all four directions without altering legacy rotation", () => {
 		const state = funded();
-		for (const row of [3, 4, 5]) for (const column of [0, 1, 2, 3]) state.shelter.sites.push({ column, row });
+		for (const row of [4, 5]) for (const column of [0, 1, 2, 3]) state.shelter.sites.push({ column, row });
 		expect(constructRoom(state, "hangar", 40.25, 280.125, NOW, 0, 0).ok).toBe(true);
 		advance(state, NOW + 180_000);
 		const room = state.shelter.rooms.at(-1)!, baseline = structuredClone(room), money = state.money, supplies = { ...state.supplies };
@@ -160,7 +160,7 @@ describe("four-direction building facing", () => {
 		expect(faceRoom(state, "room-workshop", 3, NOW).ok).toBe(true); expect(restored(state)).toEqual(state);
 		const facingSave = JSON.parse(saveGame(state)); facingSave.schemaVersion = 23;
 		expect(parseSave(JSON.stringify(facingSave))).toEqual(state);
-		const forged = JSON.parse(saveGame(state)); forged.shelter.rooms[0].position = { x: 80, y: 420 }; forged.shelter.rooms[0].column = 0; forged.shelter.rooms[0].row = 2;
+		const forged = JSON.parse(saveGame(state)); forged.shelter.rooms[0].position = { x: 80, y: 552 }; forged.shelter.rooms[0].column = 0; forged.shelter.rooms[0].row = 3;
 		expect(parseSave(JSON.stringify(forged))).toBeNull();
 	});
 });
