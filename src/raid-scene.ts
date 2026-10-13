@@ -39,6 +39,10 @@ export class RaidStreetRenderer {
 	private alertPlate: Phaser.GameObjects.Graphics;
 	private alertText: Phaser.GameObjects.Text;
 	private feedback: RaidFeedbackState | null = null;
+	private compactHud = false;
+	private hudCssScale = 1;
+	private hudTop = 43;
+	private hudBottomInset = 30;
 	private mini: Phaser.GameObjects.Graphics;
 	private progress: Phaser.GameObjects.Graphics;
 	private viewport: ShelterViewport;
@@ -90,6 +94,7 @@ export class RaidStreetRenderer {
 		this.world.removeAll(true); this.plan = null; this.planInput = ""; this.builtRaidId = null; this.selectedId = null; this.cachedRaid = null; this.carriedWeapon = null; this.report = null; this.pawn = null; this.enemies = []; this.loot.clear(); this.occluders = []; this.pendingCamera = null;
 		this.groundMinimap.clear(); this.mini.clear(); this.progress.clear(); this.title.setText("УЛИЦЫ · НАБЛЮДЕНИЕ");
 		this.feedback = null; this.alertRoot.setVisible(false); this.actionBadge.setText(""); this.detail.setText("");
+		this.paintHudPlate();
 	}
 	getCameraState(): ShelterCamera & { following: boolean } { return this.pendingCamera ? { ...this.pendingCamera } : { ...this.camera, following: this.following }; }
 	/** The first real frame owns pawn placement; apply persisted camera only after that placement. */
@@ -111,12 +116,40 @@ export class RaidStreetRenderer {
 	resize(viewport: ShelterViewport): void {
 		const center = { x: this.camera.x + this.viewport.width / this.camera.zoom / 2, y: this.camera.y + this.viewport.height / this.camera.zoom / 2 };
 		this.viewport = { ...viewport }; this.camera.x = center.x - viewport.width / this.camera.zoom / 2; this.camera.y = center.y - viewport.height / this.camera.zoom / 2;
-		this.groundMinimap.setPosition(viewport.width - MINI.width - 17, viewport.height - MINI.height - 30); this.mini.setPosition(viewport.width - MINI.width - 17, viewport.height - MINI.height - 30);
-		const plateWidth = Math.min(366, viewport.width - 30);
-		this.hudPlate.clear().fillStyle(0x0d2018, .91).fillRoundedRect(15, 43, plateWidth, 117, 6).lineStyle(1, 0x819273, .36).strokeRoundedRect(15, 43, plateWidth, 117, 6);
-		this.title.setWordWrapWidth(plateWidth - 24, true); this.caption.setWordWrapWidth(plateWidth - 24, true);
+		const canvas = this.scene.game.canvas, rect = canvas.getBoundingClientRect();
+		const card = canvas.closest(".world-card"), head = card?.querySelector(".world-head")?.getBoundingClientRect(), bottom = card?.querySelector(".world-bottom")?.getBoundingClientRect();
+		this.hudCssScale = rect.width > 0 && viewport.width > 0 ? rect.width / viewport.width : 1;
+		this.compactHud = rect.width > 0 && rect.width <= 480;
+		const inverseScale = 1 / this.hudCssScale;
+		const headInset = head ? Math.max(0, head.bottom - rect.top) : 0;
+		this.hudTop = this.compactHud ? (headInset + 8) * inverseScale : Math.max(43, (headInset + 8) * inverseScale);
+		this.hudBottomInset = ((bottom ? Math.max(0, rect.bottom - bottom.top) : 0) + 8) * inverseScale;
+		const right = Math.max(17, 8 * inverseScale), miniY = viewport.height - MINI.height - this.hudBottomInset;
+		this.groundMinimap.setPosition(viewport.width - MINI.width - right, miniY); this.mini.setPosition(viewport.width - MINI.width - right, miniY);
+		this.title.setVisible(!this.compactHud).setPosition(27, this.hudTop + 11);
+		this.caption.setVisible(!this.compactHud).setPosition(27, this.hudTop + 58);
+		this.detail.setVisible(!this.compactHud).setPosition(27, this.hudTop + 95);
+		this.actionBadge.setFontSize(this.compactHud ? 12 * inverseScale : 10)
+			.setPosition(this.compactHud ? 16 * inverseScale : 27, this.compactHud ? this.hudTop + 6 * inverseScale : this.hudTop + 38)
+			.setWordWrapWidth(this.compactHud ? 124 * inverseScale : 342, true);
+		this.paintHudPlate();
 		this.alertRoot.setPosition(23, viewport.height - 137);
-		this.progress.setPosition(23, viewport.height - 53); if (this.following) this.follow(0, true); this.applyCamera();
+		if (this.compactHud) this.alertRoot.setVisible(false);
+		this.progress.setPosition(23, viewport.height - this.hudBottomInset - 10); if (this.following) this.follow(0, true); this.applyCamera();
+	}
+	private paintHudPlate(): void {
+		this.hudPlate.clear().setVisible(!this.compactHud || Boolean(this.actionBadge.text));
+		if (this.compactHud) {
+			const inverseScale = 1 / this.hudCssScale;
+			const width = Math.min(this.viewport.width - 16 * inverseScale, Math.max(90 * inverseScale, this.actionBadge.width + 16 * inverseScale));
+			const height = Math.max(26 * inverseScale, this.actionBadge.height + 12 * inverseScale);
+			this.hudPlate.fillStyle(0x0d2018, .94).fillRoundedRect(8 * inverseScale, this.hudTop, width, height, 5 * inverseScale)
+				.lineStyle(inverseScale, 0x819273, .65).strokeRoundedRect(8 * inverseScale, this.hudTop, width, height, 5 * inverseScale);
+		} else {
+			const width = Math.min(366, this.viewport.width - 30);
+			this.hudPlate.fillStyle(0x0d2018, .91).fillRoundedRect(15, this.hudTop, width, 117, 6).lineStyle(1, 0x819273, .36).strokeRoundedRect(15, this.hudTop, width, 117, 6);
+			this.title.setWordWrapWidth(width - 24, true); this.caption.setWordWrapWidth(width - 24, true);
+		}
 	}
 	zoomBy(factor: number, at?: Point): void {
 		if (!Number.isFinite(factor) || factor <= 0 || at && (!Number.isFinite(at.x) || !Number.isFinite(at.y))) return;
@@ -374,14 +407,15 @@ export class RaidStreetRenderer {
 
 	private updateAlert(): void {
 		const alert = this.feedback?.alert;
-		this.alertRoot.setVisible(Boolean(alert));
-		if (!alert) return;
+		this.alertRoot.setVisible(Boolean(alert) && !this.compactHud);
+		if (!alert || this.compactHud) return;
 		const danger = alert.action === "skirmish", tint = danger ? 0xdb9e77 : alert.action === "search" ? 0xd8be80 : 0xa6c6a1;
 		const width = Math.max(150, Math.min(348, this.viewport.width - MINI.width - 57));
 		this.alertText.setWordWrapWidth(width - 26, true);
 		this.alertText.setText(`${getRaidActionLabel(alert.action)}\n${alert.label}`).setColor(danger ? "#f0c5a2" : "#e3d6b2");
 		const height = this.alertText.height + 18;
 		this.alertPlate.clear().fillStyle(0x10221a, .95).fillRoundedRect(0, 0, width, height, 5).lineStyle(1, tint, .65).strokeRoundedRect(0, 0, width, height, 5).fillStyle(tint).fillRect(0, 7, 3, height - 14);
+		this.alertRoot.setY(Math.min(this.viewport.height - 137, this.viewport.height - this.hudBottomInset - 22 - height));
 		this.alertRoot.setAlpha(this.reducedMotion ? 1 : Math.min(1, alert.remainingMs / 450));
 	}
 
@@ -390,7 +424,7 @@ export class RaidStreetRenderer {
 		if (id !== this.selectedId) this.selectRaid(id);
 		const activeRaid = snapshot.raids.find((raid) => raid.id === id);
 		const raid = activeRaid ?? (this.cachedRaid?.id === id ? this.cachedRaid : null);
-		if (!raid) { this.world.setVisible(false); this.mini.clear(); this.groundMinimap.clear(); this.progress.clear(); this.title.setText("УЛИЦЫ · НАБЛЮДЕНИЕ"); this.caption.setText("Отправь бойца в рейд и выбери «Наблюдать»"); this.actionBadge.setText(""); this.detail.setText(""); this.feedback = null; this.alertRoot.setVisible(false); return; }
+		if (!raid) { this.world.setVisible(false); this.mini.clear(); this.groundMinimap.clear(); this.progress.clear(); this.title.setText("УЛИЦЫ · НАБЛЮДЕНИЕ"); this.caption.setText("Отправь бойца в рейд и выбери «Наблюдать»"); this.actionBadge.setText(""); this.detail.setText(""); this.feedback = null; this.alertRoot.setVisible(false); this.paintHudPlate(); return; }
 		this.world.setVisible(true);
 		this.cachedRaid = raid;
 		this.report = activeRaid ? null : snapshot.history?.find((report) => report.raidId === id) ?? (this.report?.raidId === id ? this.report : null);
@@ -462,6 +496,7 @@ export class RaidStreetRenderer {
 		this.title.setText(`${raid.scavName} · ${plan.theme.label}`); this.caption.setText(status);
 		this.actionBadge.setText(this.report ? "СВОДКА ПОЛУЧЕНА" : getRaidActionLabel(frame.action)).setColor(frame.action === "skirmish" ? "#e9b58e" : frame.action === "search" ? "#efd399" : "#bad0b2");
 		this.detail.setText(`Этап ${raid.expedition?.stage ?? 1} · Участок ${objective.segment}/${objective.segments}${!frame.paused && !this.report ? ` · ${objective.remainingSeconds} с` : ""}`);
+		this.paintHudPlate();
 		this.updateAlert();
 		this.progress.clear(); this.progress.fillStyle(0x0c1c16, .92).fillRoundedRect(0, 0, Math.min(350, this.viewport.width - 224), 10, 3).fillStyle(0xcbb580).fillRoundedRect(0, 0, Math.min(350, this.viewport.width - 224) * frame.progress, 10, 3);
 	}

@@ -369,6 +369,7 @@ export function createWorld(
 			this.syncSnapshot();
 			if (view === "raid") this.raidStreet.update(snapshot(), Date.now(), 0);
 			this.applyCamera();
+			if (view === "raid") this.raidStreet.resize(this.viewport);
 		}
 
 		getCameraState(): WorldCameraState { return { ...(requestedView === "raid" && this.raidStreet ? this.raidStreet.getCameraState() : this.viewCamera), panMode: this.panMode, view: requestedView, minZoom: requestedView === "raid" ? .7 : getMinShelterZoom(this.viewport, this.worldBounds), maxZoom: 4 }; }
@@ -483,12 +484,12 @@ export function createWorld(
 			this.viewCamera = resizeShelterCamera(this.viewCamera, this.viewport, next, this.worldBounds);
 			const changed = Math.abs(next.width - this.viewport.width) > .001 || Math.abs(next.height - this.viewport.height) > .001;
 			this.viewport = next;
-			this.raidStreet?.resize(next);
 			// FIT still scales uniformly, but its logical viewport now occupies the
 			// whole stage. Only the fully visible overview keeps centered margins.
 			this.scale.getParentBounds();
 			if (changed) this.scale.setGameSize(next.width, next.height);
 			else this.scale.refresh();
+			this.raidStreet?.resize(next);
 			this.applyCamera();
 		}
 

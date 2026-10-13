@@ -325,6 +325,13 @@ async function toggleGameSound() {
 	updateSoundControl();
 	if (gameSound.enabled) gameSound.play("confirm");
 }
+function resumeSoundOnGesture(event: Event) {
+	if (!event.isTrusted || !gameSound.enabled || event.target instanceof Element && event.target.closest('[data-action="toggle-sound"]')) return;
+	void gameSound.setEnabled(true).then(updateSoundControl);
+}
+document.addEventListener("pointerdown", resumeSoundOnGesture, true);
+document.addEventListener("pointerup", resumeSoundOnGesture, true);
+document.addEventListener("keydown", resumeSoundOnGesture, true);
 updateSoundControl();
 worldViewport.tabIndex = 0;
 worldViewport.setAttribute("role", "region");
@@ -2320,7 +2327,9 @@ function watchRaid(id: string) {
 	world?.selectRaid(id);
 	setView("raid");
 	world?.setRaidFollow(true);
-	render(); worldViewport.focus({preventScroll:true});
+	render();
+	document.querySelector<HTMLElement>(".command-main")?.scrollTo({ top: 0, behavior: "instant" });
+	worldViewport.focus({preventScroll:true});
 }
 function setView(view: "base" | "map" | "raid") {
 	updateSceneHover(null);
@@ -2477,6 +2486,9 @@ window.addEventListener("resize", responsiveContext);
 import.meta.hot?.dispose(() => {
 	cancelWorkerPlacement();
 	gameSound.destroy();
+	document.removeEventListener("pointerdown", resumeSoundOnGesture, true);
+	document.removeEventListener("pointerup", resumeSoundOnGesture, true);
+	document.removeEventListener("keydown", resumeSoundOnGesture, true);
 	for (const timer of resourcePulseTimers.values()) clearTimeout(timer); resourcePulseTimers.clear();
 	persist();
 	clearInterval(simulationTimer);
