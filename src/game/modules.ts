@@ -97,4 +97,118 @@ for (const caliber of [...new Set(Object.values(RECEIVER_INFO).map((info) => inf
 	model(`muzzle-${caliber}-brake`, `ДТК · ${caliber}`, "muzzle", "Отдача −12, надёжность +2. Вес 0,25 кг; удобство −4. Нужна резьба нужного калибра.", { value: 95, rarity: "uncommon", calibers: [caliber], appearance: "brake", requiresMount: `thread:${caliber}`, stats: stats({ recoil: -12, ergonomics: -4, reliability: 2, weight: 0.25 }) });
 	model(`muzzle-${caliber}-suppressor`, `Глушитель · ${caliber}`, "muzzle", "+4 урона, отдача −7. Вес 0,6 кг, удобство −10, надёжность −5; требует резьбы.", { value: 230, rarity: "rare", calibers: [caliber], appearance: "suppressor", workshopLevel: 3, lootTier: 3, requiresMount: `thread:${caliber}`, stats: stats({ damage: 4, recoil: -7, ergonomics: -10, reliability: -5, weight: 0.6 }) });
 }
+
+// Append new models so the IDs and relative order of the original catalogue stay stable.
+// The integral VAL/VSS barrels do not expose a second suppressor mounting point.
+for (const platform of familyIds) {
+	const definitions = WEAPONS.filter((weapon) => RECEIVER_INFO[weapon.id]!.platform === platform);
+	const weapon = definitions[0]!;
+	const calibers = [...new Set(definitions.map((definition) => RECEIVER_INFO[definition.id]!.caliber))];
+	const label = modulePlatformLabel(platform);
+	const factoryWeight = (slot: ModuleSlot) => MODULE_MODELS.find((item) => item.id === FACTORY_KITS[weapon.id]![slot])?.stats.weight ?? 0.3;
+	const family = { platforms: [platform], calibers };
+	for (const caliber of calibers) {
+		const providesMounts = platform === "val" ? [] : [`thread:${caliber}`];
+		model(`barrel-${platform}-${caliber}-heavy`, `Утолщённый ствол «Опора» · ${label}`, "barrel", `+5 урона, −10 отдачи, +6 надёжности. Вес ×1,4 и −13 удобства.${platform === "val" ? " Встроенное дульное устройство; внешние насадки не устанавливаются." : " Резьба только своего калибра."}`, {
+			...family, calibers: [caliber], appearance: "heavy", value: 190, rarity: "rare", workshopLevel: 3, lootTier: 3, providesMounts,
+			stats: stats({ weight: factoryWeight("barrel") * 1.4, damage: 5, ergonomics: -13, recoil: -10, reliability: 6 }),
+		});
+		model(`barrel-${platform}-${caliber}-fluted`, `Ствол с долами «Грань» · ${label}`, "barrel", `+6 урона, −6 отдачи, +3 надёжности. Вес ×1,1 и −4 удобства; дорогая обработка.${platform === "val" ? " Встроенное дульное устройство; внешние насадки не устанавливаются." : " Резьба только своего калибра."}`, {
+			...family, calibers: [caliber], appearance: "fluted", value: 285, rarity: "epic", workshopLevel: 4, lootTier: 4, providesMounts,
+			stats: stats({ weight: factoryWeight("barrel") * 1.1, damage: 6, ergonomics: -4, recoil: -6, reliability: 3 }),
+		});
+	}
+	if (weapon.category !== "pistol") {
+		model(`handguard-${platform}-wood`, `Деревянное цевьё «Классика» · ${label}`, "handguard", "+4 удобства, +3 надёжности; немного тяжелее штатного. Планок для прицела и рукояти нет.", {
+			...family, appearance: "wood", value: 60, rarity: "common", workshopLevel: 1, lootTier: 1,
+			stats: stats({ weight: factoryWeight("handguard") + 0.1, ergonomics: 4, reliability: 3 }),
+		});
+		model(`handguard-${platform}-vented`, `Перфорированное цевьё «Обдув» · ${label}`, "handguard", "+3 удобства, +2 надёжности. Нижняя планка позволяет поставить рукоять; верхней планки нет.", {
+			...family, appearance: "vented", value: 125, rarity: "uncommon", workshopLevel: 2, lootTier: 2, providesMounts: ["rail-bottom"],
+			stats: stats({ weight: factoryWeight("handguard") + 0.08, ergonomics: 3, reliability: 2 }),
+		});
+		model(`handguard-${platform}-carbon`, `Карбоновое цевьё «Нить» · ${label}`, "handguard", "+7 удобства, меньше веса и две планки для прицела и рукояти. Надёжность −4.", {
+			...family, appearance: "carbon", value: 235, rarity: "rare", workshopLevel: 3, lootTier: 3, providesMounts: ["rail-top", "rail-bottom"],
+			stats: stats({ weight: Math.max(0.08, factoryWeight("handguard") - 0.1), ergonomics: 7, reliability: -4 }),
+		});
+		model(`stock-${platform}-skeleton`, `Скелетный приклад «Рама» · ${label}`, "stock", "+14 удобства, почти вдвое легче. Отдача +13, надёжность −3.", {
+			...family, appearance: "skeleton", value: 115, rarity: "uncommon", workshopLevel: 2, lootTier: 2,
+			stats: stats({ weight: factoryWeight("stock") * 0.55, ergonomics: 14, recoil: 13, reliability: -3 }),
+		});
+		model(`stock-${platform}-precision`, `Регулируемый приклад «Точность» · ${label}`, "stock", "Отдача −17 и надёжность +4. Регулируемая щека и массивная опора: +0,45 кг, −12 удобства.", {
+			...family, appearance: "precision", value: 275, rarity: "epic", workshopLevel: 4, lootTier: 4,
+			stats: stats({ weight: factoryWeight("stock") + 0.45, ergonomics: -12, recoil: -17, reliability: 4 }),
+		});
+		model(`stock-${platform}-padded`, `Приклад с затыльником «Мягкий» · ${label}`, "stock", "Отдача −7, надёжность +4. Резиновый затыльник добавляет 0,12 кг; удобство −2.", {
+			...family, appearance: "padded", value: 75, rarity: "common", workshopLevel: 1, lootTier: 1,
+			stats: stats({ weight: factoryWeight("stock") + 0.12, ergonomics: -2, recoil: -7, reliability: 4 }),
+		});
+	}
+	for (const caliber of calibers) {
+		const fixedFeed = ["mosin", "mp133", "pkp"].includes(platform);
+		const windowLabel = platform === "mp133" ? "Трубчатый магазин с индикатором" : platform === "mosin" ? "Магазин с отметками подачи" : platform === "pkp" ? "Коробка с окном контроля ленты" : "Магазин с окном";
+		const compactLabel = platform === "mp133" ? "Короткий трубчатый магазин" : platform === "mosin" ? "Облегчённая магазинная коробка" : platform === "pkp" ? "Компактная коробка для ленты" : "Компактный магазин";
+		model(`magazine-${platform}-${caliber}-window`, `${windowLabel} «Контроль» · ${label}`, "magazine", `+5 удобства, но +0,08 кг и −1 надёжности. Расход патронов штатный.${fixedFeed ? " Сохраняет штатную систему подачи этой платформы." : " Окно и отметки отличают его от закрытого магазина."}`, {
+			...family, calibers: [caliber], appearance: "window", value: 110, rarity: "uncommon", workshopLevel: 2, lootTier: 2,
+			stats: stats({ weight: factoryWeight("magazine") + 0.08, ergonomics: 5, reliability: -1 }),
+		});
+		model(`magazine-${platform}-${caliber}-compact`, `${compactLabel} «Короткий» · ${label}`, "magazine", "+12 удобства, вес ×0,65, расход патронов ×0,8. Меньший запас снижает огневую мощь на 5.", {
+			...family, calibers: [caliber], appearance: "compact", value: 55, rarity: "common", workshopLevel: 1, lootTier: 1,
+			stats: stats({ weight: factoryWeight("magazine") * 0.65, damage: -5, ergonomics: 12, ammoMultiplier: 0.8 }),
+		});
+		if (["ak", "rpk", "saiga", "vityaz", "kedr", "val"].includes(platform)) {
+			model(`magazine-${platform}-${caliber}-drum`, `Барабанный магазин «Бубен» · ${label}`, "magazine", "+6 огневой мощи, −5 отдачи. +0,8 кг, −17 удобства и −5 надёжности; расход патронов ×1,35.", {
+				...family, calibers: [caliber], appearance: "drum", value: 210, rarity: "rare", workshopLevel: 3, lootTier: 3,
+				stats: stats({ weight: factoryWeight("magazine") + 0.8, damage: 6, ergonomics: -17, recoil: -5, reliability: -5, ammoMultiplier: 1.35 }),
+			});
+		}
+	}
+}
+
+model("optic-micro", "Микроколлиматор «Искра»", "optic", "+2 урона, +8 удобства, вес 0,14 кг. Надёжность −1; нужна верхняя планка.", {
+	appearance: "micro", value: 155, rarity: "uncommon", workshopLevel: 2, lootTier: 2, requiresMount: "rail-top", stats: stats({ damage: 2, ergonomics: 8, reliability: -1, weight: 0.14 }),
+});
+model("optic-holo", "Голографический прицел «Рамка»", "optic", "+6 урона без потери удобства. Вес 0,38 кг, надёжность −2; нужна верхняя планка.", {
+	appearance: "holo", value: 260, rarity: "rare", workshopLevel: 3, lootTier: 3, requiresMount: "rail-top", stats: stats({ damage: 6, reliability: -2, weight: 0.38 }),
+});
+model("optic-prism", "Призматический прицел 3× «Клин»", "optic", "+8 урона, +3 надёжности. Вес 0,42 кг и −5 удобства; нужна верхняя планка.", {
+	appearance: "prism", value: 295, rarity: "rare", workshopLevel: 3, lootTier: 3, requiresMount: "rail-top", stats: stats({ damage: 8, ergonomics: -5, reliability: 3, weight: 0.42 }),
+});
+model("optic-scout", "Короткая оптика 2× «След»", "optic", "+5 урона, +1 надёжности. Вес 0,35 кг и −2 удобства; нужна верхняя планка.", {
+	appearance: "scout", value: 185, rarity: "uncommon", workshopLevel: 2, lootTier: 2, requiresMount: "rail-top", stats: stats({ damage: 5, ergonomics: -2, reliability: 1, weight: 0.35 }),
+});
+model("optic-longscope", "Длинная оптика 8× «Горизонт»", "optic", "+14 урона. Вес 0,95 кг, −18 удобства и −2 надёжности; нужна верхняя планка.", {
+	appearance: "longscope", value: 430, rarity: "epic", workshopLevel: 4, lootTier: 4, requiresMount: "rail-top", stats: stats({ damage: 14, ergonomics: -18, reliability: -2, weight: 0.95 }),
+});
+model("optic-dovetail-reflex", "Боковой коллиматор «Сверчок»", "optic", "+4 урона, +3 удобства и +1 надёжности. Вес 0,31 кг; нужен штатный боковой кронштейн.", {
+	appearance: "dovetail-reflex", value: 195, rarity: "uncommon", workshopLevel: 2, lootTier: 2, requiresMount: "dovetail", stats: stats({ damage: 4, ergonomics: 3, reliability: 1, weight: 0.31 }),
+});
+
+for (const caliber of [...new Set(Object.values(RECEIVER_INFO).map((info) => info.caliber))]) {
+	const mount = { calibers: [caliber], requiresMount: `thread:${caliber}` };
+	model(`muzzle-${caliber}-flash`, `Пламегаситель «Лепесток» · ${caliber}`, "muzzle", "Отдача −3, надёжность +2. Вес 0,13 кг и −1 удобства; нужна резьба своего калибра.", {
+		...mount, appearance: "flash", value: 65, rarity: "common", workshopLevel: 1, lootTier: 1, stats: stats({ recoil: -3, ergonomics: -1, reliability: 2, weight: 0.13 }),
+	});
+	model(`muzzle-${caliber}-ported`, `Компенсатор с портами «Соты» · ${caliber}`, "muzzle", "+1 урона, −9 отдачи. Вес 0,19 кг и −3 удобства; нужна резьба своего калибра.", {
+		...mount, appearance: "ported", value: 140, rarity: "uncommon", workshopLevel: 2, lootTier: 2, stats: stats({ damage: 1, recoil: -9, ergonomics: -3, weight: 0.19 }),
+	});
+	if (!["12g", "20g"].includes(caliber)) {
+		model(`muzzle-${caliber}-compact-suppressor`, `Короткий глушитель «Тень» · ${caliber}`, "muzzle", "+2 урона и −4 отдачи. Вес 0,34 кг, −5 удобства и −3 надёжности; нужна резьба своего калибра.", {
+			...mount, appearance: "compact-suppressor", value: 285, rarity: "rare", workshopLevel: 3, lootTier: 3, stats: stats({ damage: 2, recoil: -4, ergonomics: -5, reliability: -3, weight: 0.34 }),
+		});
+	}
+}
+
+model("foregrip-stubby", "Короткая рукоять «Пень»", "foregrip", "Отдача −7, удобство +1. Вес 0,2 кг; нужна нижняя планка.", {
+	appearance: "stubby", value: 75, rarity: "common", workshopLevel: 1, lootTier: 1, requiresMount: "rail-bottom", stats: stats({ recoil: -7, ergonomics: 1, weight: 0.2 }),
+});
+model("foregrip-angled", "Наклонный упор «Ладонь»", "foregrip", "Отдача −5, удобство +6. Вес 0,18 кг; нужна нижняя планка.", {
+	appearance: "angled", value: 110, rarity: "uncommon", workshopLevel: 2, lootTier: 2, requiresMount: "rail-bottom", stats: stats({ recoil: -5, ergonomics: 6, weight: 0.18 }),
+});
+model("foregrip-bipod", "Сошки «Опора»", "foregrip", "Отдача −18, надёжность +3. Массивная опора весит 0,7 кг и снижает удобство на 13; нужна нижняя планка.", {
+	appearance: "bipod", value: 265, rarity: "epic", workshopLevel: 4, lootTier: 4, requiresMount: "rail-bottom", stats: stats({ recoil: -18, ergonomics: -13, reliability: 3, weight: 0.7 }),
+});
+model("foregrip-folding", "Складная рукоять «Шарнир»", "foregrip", "Отдача −10 без потери удобства. Вес 0,26 кг, надёжность −2; нужна нижняя планка.", {
+	appearance: "folding", value: 165, rarity: "rare", workshopLevel: 3, lootTier: 3, requiresMount: "rail-bottom", stats: stats({ recoil: -10, reliability: -2, weight: 0.26 }),
+});
 export const MODULE_BY_ID: Record<string, ModuleModel> = Object.fromEntries(MODULE_MODELS.map((item) => [item.id, item]));

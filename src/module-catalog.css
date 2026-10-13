@@ -1,0 +1,14 @@
+.module-storage-head .module-catalog-total{display:block;margin-top:8px;color:#c9d8b1;font-size:12px}
+.module-filters{grid-template-columns:minmax(120px,1fr) minmax(120px,1fr) minmax(120px,1fr) minmax(190px,1.8fr)}
+.module-catalog-tools{display:flex;align-items:center;justify-content:space-between;gap:14px;margin:12px 0 17px}
+.module-catalog-tools>span{font-size:12px;color:#b5c69c;line-height:1.7}
+.module-catalog-pagination{display:flex;align-items:center;justify-content:center;gap:14px;margin:18px 0 5px;flex-wrap:wrap}
+.module-catalog-pagination>span{font:11px "IBM Plex Mono",monospace;color:#c3d1ad}
+.module-catalog-pagination .button{min-width:115px}
+.bench-build-mounts{display:flex;flex-wrap:wrap;gap:5px;margin:12px 0;font-size:10px;line-height:1.8;color:#c4d0ac}
+.bench-build-mounts>strong{margin-right:4px}
+.bench-build-mounts>span{border:1px solid #62794b;padding:1px 7px;border-radius:4px;background:#243522}
+.recipe-card .module-traits{margin-bottom:12px}
+.module-fit .mount-missing{color:#dbbe94}
+@media(max-width:1000px){.module-filters{grid-template-columns:repeat(3,minmax(0,1fr))}.module-search{grid-column:1/-1}}
+@media(max-width:640px){.module-filters{grid-template-columns:repeat(2,minmax(0,1fr))}.module-catalog-tools{align-items:flex-start}.module-catalog-tools>span{font-size:11px}.module-catalog-tools .text-button{font-size:11px}.module-catalog-pagination{gap:9px}.module-catalog-pagination .button{min-width:100px}.bench-build-mounts{font-size:11px}}
