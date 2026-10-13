@@ -1,6 +1,7 @@
 import { SAVE_VERSION, parseSave, type ActionResult, type GameState } from './game/engine';
 import type { GameActionSnapshot, GameCommand, GameSnapshot } from './game/commands';
 import { MAX_GAME_SAVE_LENGTH } from './game-save';
+import { readMarketSnapshot, type MarketSnapshot } from './game/flea';
 
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const integer = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
@@ -57,6 +58,7 @@ export function createAuthoritativeClient(options: AuthoritativeClientOptions) {
   let phase: AuthoritativeStatus['phase'] = 'connecting', message = 'Подключаемся к серверному убежищу.';
   let chain: Promise<unknown> = Promise.resolve();
   let joining: Promise<GameSnapshot> | null = null, polling: Promise<GameSnapshot> | null = null;
+  let marketReading: Promise<MarketSnapshot> | null = null, marketSnapshot: MarketSnapshot | null = null;
   const controllers = new Set<AbortController>();
   const transport = options.fetch ?? globalThis.fetch;
   const notify = () => options.onStatus?.({ phase, message, busy: actionPending });
@@ -77,21 +79,23 @@ export function createAuthoritativeClient(options: AuthoritativeClientOptions) {
   function fail(error: unknown, version: number, account: string | null): GameApiError {
     const issue = error instanceof GameApiError ? error : new GameApiError(0, 'network');
     if (isCurrent(version, account)) {
+      marketSnapshot = null;
       phase = issue.status === 401 || ['identity_changed', 'account_changed', 'game_identity_changed', 'join_required', 'session_required'].includes(issue.code) ? 'changed' : 'offline';
-      if (phase === 'changed') current = null;
+      if (phase === 'changed') { current = null; marketSnapshot = null; }
       message = issue.message; notify();
     }
     return issue;
   }
 
-  async function request(path: 'join' | 'state' | 'action', version: number, account: string | null, command?: GameCommand): Promise<unknown> {
+  async function request(path: 'join' | 'state' | 'action' | 'market', version: number, account: string | null, command?: GameCommand): Promise<unknown> {
     requireCurrent(version, account);
     const expected = path === 'join' ? undefined : current?.identity.id;
     if (path !== 'join' && !expected) throw new GameApiError(409, 'not_ready');
     const controller = new AbortController(); controllers.add(controller);
     const timer = globalThis.setTimeout(() => controller.abort(), 15_000);
     try {
-      const response = await transport(`/api/game/${path}`, { method: path === 'state' ? 'GET' : 'POST', body: path === 'state' ? undefined : JSON.stringify(path === 'action' ? { revision: current!.revision, command } : {}), credentials: 'same-origin', mode: 'same-origin', cache: 'no-store', redirect: 'error', headers: { Accept: 'application/json', ...(path !== 'state' ? { 'Content-Type': 'application/json' } : {}), ...(account ? { 'x-prapor-account': account } : {}), ...(expected ? { 'x-prapor-game': expected } : {}) }, signal: controller.signal });
+      const reading = path === 'state' || path === 'market';
+      const response = await transport(`/api/game/${path}`, { method: reading ? 'GET' : 'POST', body: reading ? undefined : JSON.stringify(path === 'action' ? { revision: current!.revision, command } : {}), credentials: 'same-origin', mode: 'same-origin', cache: 'no-store', redirect: 'error', headers: { Accept: 'application/json', ...(!reading ? { 'Content-Type': 'application/json' } : {}), ...(account ? { 'x-prapor-account': account } : {}), ...(expected ? { 'x-prapor-game': expected } : {}) }, signal: controller.signal });
       const body: unknown = await response.json().catch(() => null);
       requireCurrent(version, account);
       if (!response.ok) {
@@ -108,7 +112,7 @@ export function createAuthoritativeClient(options: AuthoritativeClientOptions) {
   }
 
   function resetIdentity(): void {
-    generation++; current = null; accountId = options.getAccountId(); joining = null; polling = null; actionPending = false;
+    generation++; current = null; accountId = options.getAccountId(); joining = null; polling = null; marketReading = null; marketSnapshot = null; actionPending = false;
     for (const controller of controllers) controller.abort(); controllers.clear();
     phase = 'connecting'; message = 'Подключаемся к серверному убежищу.'; notify();
   }
@@ -150,7 +154,7 @@ export function createAuthoritativeClient(options: AuthoritativeClientOptions) {
     if (!current || phase !== 'online') return Promise.resolve({ ok: false, message: new GameApiError(409, 'not_ready').message });
     if (actionPending) return Promise.resolve({ ok: false, message: new GameApiError(409, 'busy').message });
     const version = generation, account = accountId, expected = current.identity.id;
-    actionPending = true; notify();
+    actionPending = true; marketSnapshot = null; notify();
     return enqueue(async () => {
       try {
         const next = readAuthoritativeAction(await request('action', version, account, command));
@@ -164,11 +168,36 @@ export function createAuthoritativeClient(options: AuthoritativeClientOptions) {
           return { ok: false, message: issue.message };
         }
         return { ok: false, message: fail(issue, version, account).message };
-      } finally { if (version === generation) { actionPending = false; notify(); } }
+      } finally { if (version === generation) { actionPending = false; marketSnapshot = null; notify(); } }
     });
   }
 
-  return { join, poll, action, resetIdentity, isReady: () => current !== null && phase === 'online' && !destroyed, isBusy: () => actionPending, getSnapshot: () => current,
+  function market(): Promise<MarketSnapshot> {
+    synchronizeIdentity();
+    if (destroyed) return Promise.reject(new GameApiError(0,'destroyed'));
+    if (!current || phase !== 'online') return Promise.reject(new GameApiError(409,'not_ready'));
+    if (marketReading) return marketReading;
+    const version = generation, account = accountId, expected = current.identity.id;
+    const result = enqueue(async () => {
+      try {
+        const next = readMarketSnapshot(await request('market',version,account));
+        requireCurrent(version,account);
+        if (next.identity.id !== expected || next.identity.kind !== (account ? 'account' : 'guest')) throw new GameApiError(401,'identity_changed');
+        marketSnapshot = next;
+        return next;
+      } catch (error) {
+        if (isCurrent(version,account)) marketSnapshot = null;
+        const issue = error instanceof GameApiError ? error : new GameApiError(0,'invalid_response');
+        if (issue.status === 401) throw fail(issue,version,account);
+        throw issue;
+      }
+    });
+    marketReading = result;
+    void result.finally(()=>{if(marketReading===result)marketReading=null;}).catch(()=>{});
+    return result;
+  }
+
+  return { join, poll, action, market, resetIdentity, isReady: () => current !== null && phase === 'online' && !destroyed, isBusy: () => actionPending, getSnapshot: () => current, getMarketSnapshot: () => marketSnapshot,
     get ready() { return current !== null && phase === 'online' && !destroyed; }, get busy() { return actionPending; },
-    destroy: () => { destroyed = true; generation++; current = null; joining = null; polling = null; for (const controller of controllers) controller.abort(); controllers.clear(); } };
+    destroy: () => { destroyed = true; generation++; current = null; joining = null; polling = null; marketReading = null; marketSnapshot = null; for (const controller of controllers) controller.abort(); controllers.clear(); } };
 }

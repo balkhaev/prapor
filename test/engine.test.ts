@@ -45,6 +45,7 @@ function dispatchLegacyRaid(state: GameState, scavId: string, mapId: string, now
 		const raid = state.raids.find((raid) => raid.id === result.raidId)!;
 		raid.expedition = null;
 		delete raid.strategy;
+		delete raid.lootVersion;
 	}
 	return result;
 }
