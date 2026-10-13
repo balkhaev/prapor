@@ -1,5 +1,6 @@
 import { MODULE_BY_ID, MODULE_SLOT_LABELS, type ModuleSlot } from "./game/modules";
 import { RESOURCE_RECIPE_BY_ID, ROOM_DEFINITIONS, type RoomInstance, type ShelterRoomType } from "./game/shelter";
+import { FIELD_KITS } from "./game/shelter-logistics";
 
 export interface ProductionSnapshot {
 	progress: number;
@@ -9,7 +10,7 @@ export interface ProductionSnapshot {
 	reason: string | null;
 }
 export type ProductionStage = "idle" | "preparation" | "assembly" | "inspection" | "complete" | "construction";
-export type ProductionProductKind = "module" | "ammo" | "scrap" | "medicine" | "intel" | null;
+export type ProductionProductKind = "module" | "ammo" | "scrap" | "medicine" | "intel" | "field-kit" | null;
 export const SHELTER_PRODUCTION_STAGES = [
 	{ id: "preparation", label: "Подготовка", start: 0, end: .22 },
 	{ id: "assembly", label: "Сборка", start: .22, end: .84 },
@@ -71,6 +72,7 @@ export function getShelterProductionPresentation(room: RoomInstance, production:
 	let kind: ProductionProductKind = model ? "module" : null;
 	let quantity = model ? 1 : 0;
 	if (job.kind === "resource") {
+		if (job.output.fieldKit) { kind = "field-kit"; quantity = 1; }
 		for (const resource of ["ammo", "scrap", "medicine", "intel"] as const) {
 			if (job.output.supplies[resource] > 0) { kind = resource; quantity = job.output.supplies[resource]; break; }
 		}
@@ -84,7 +86,7 @@ export function getShelterProductionPresentation(room: RoomInstance, production:
 	const reason = production?.reason ?? (!completed && !active ? "Производство на паузе" : null);
 	return {
 		jobId: job.id, modelId: model?.id ?? null, moduleSlot: model?.slot ?? null,
-		productName: model?.label ?? recipe?.label ?? (kind && kind !== "module" ? RESOURCE_NAMES[kind] : "Производственный заказ"),
+		productName: model?.label ?? recipe?.label ?? (job.output.fieldKit ? FIELD_KITS[job.output.fieldKit].label : kind && kind !== "module" && kind !== "field-kit" ? RESOURCE_NAMES[kind] : "Производственный заказ"),
 		productKind: kind, quantity, progress, stage: completed ? "complete" : stage.id,
 		stageLabel: completed ? "Готово" : PROCESS_LABELS[room.type][phase],
 		stageProgress: completed ? 1 : Math.max(0, Math.min(1, (progress - stage.start) / (stage.end - stage.start))),

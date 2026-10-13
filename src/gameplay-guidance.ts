@@ -2,7 +2,7 @@ import { CONTRACTS, MAPS, MAP_BY_ID, type Contract, type RaidMap, type Supplies 
 import {
 	GEAR_MODELS, GEAR_MODEL_BY_ID, MODULE_MODELS, RESOURCE_RECIPES, ROOM_DEFINITIONS, getContractLockReason, getContractProgress, getGearCraftReason,
 	getMarketReason, getModuleCapacity, getModuleProductionQuote, getRaidGroup, getRaidGroupKey, getRaidQuote, getResourceProductionQuote,
-	getRoomProductionState, getWeaponStats, getWorkerAssignmentReason, xpForLevel,
+	getRoomProductionState, getWeaponStats, getWorkerAssignmentReason, xpForLevel, FIELD_KITS, getFieldKitStock,
 	type GameState, type Raid, type RoomInstance, type Scav,
 } from "./game/engine";
 import { getCommandSummary } from "./command-summary";
@@ -126,6 +126,12 @@ function blockedRaidStep(state: GameState, map: RaidMap): NextStep {
 	if (state.supplies.ammo < quote.ammo) return resourceStep(state, "ammo", quote.reason!);
 	if (state.supplies.intel < quote.intel) return resourceStep(state, "intel", quote.reason!);
 	if (state.supplies.medicine < quote.medicine) return step("prepare", { kind: "scav", scavId: scav.id, label: "Проверить личную аптечку", detail: `${quote.reason} Пополни медикаменты или сними аптечку с комплекта; без неё выход возможен, но полевой перевязки не будет.` });
+	if (quote.fieldKit && getFieldKitStock(state)[quote.fieldKit] === 0) {
+		const kit = FIELD_KITS[quote.fieldKit], recipe = RESOURCE_RECIPES.find(item => item.id === kit.recipeId)!;
+		const room = [...state.shelter.rooms].sort(roomOrder).find(item => item.type === recipe.roomType && item.status === "ready");
+		if (room) return step("prepare", { kind: "room", roomId: room.id, scavId: scav.id, tab: getRoomProductionState(state, room).rate > 0 ? "production" : "staff",
+			label: `Подготовить ${kit.label.toLowerCase()}`, detail: `${scav.name} ждёт выбранный полевой комплект. Изготовь его в комнате «${ROOM_DEFINITIONS[room.type].label}» и освободи бойца для выхода. Можно также выбрать выход без комплекта в его личном деле.` });
+	}
 	return step("prepare", { kind: "scav", scavId: scav.id, label: "Проверить готовность бойца", detail: quote.reason ?? "Проверь здоровье, оружие и комплект перед следующим выходом." });
 }
 /** Hypothetical staffing uses the real quote without changing ownership, money or orders. */

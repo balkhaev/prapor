@@ -36,9 +36,11 @@ import { AMMO_BY_ID, getAmmoModel, getAmmoEffect, getAmmoSupplyMultiplier, isAmm
 export * from "./ammunition";
 import { RAID_OBJECTIVES, RAID_PREPARATIONS, getRaidStrategy, getRaidStrategyEffects, parseRaidPlan, parseRaidStrategy, parseSectorIntel, parseSectorIntelRecord, settleSectorIntel, type RaidObjective, type RaidPreparation, type RaidPlan, type RaidStrategy, type SectorIntel } from "./raid-strategy";
 export * from "./raid-strategy";
+import { FIELD_KITS, FIELD_KIT_CAPACITY, getProductionReserve, getFieldKitStock, ensureShelterLogistics, getFieldKitEffects, type FieldKit, type FieldKitSelection } from "./shelter-logistics";
+export * from "./shelter-logistics";
 
 export const SAVE_KEY = "prapor.save.v1";
-export const SAVE_VERSION = 13;
+export const SAVE_VERSION = 14;
 export const MAX_OFFLINE_MS = 8 * 60 * 60 * 1000;
 export const MAX_ROOM_LEVEL = 5;
 
@@ -73,6 +75,7 @@ export interface Scav {
 	autoRaid: { mapId: string; enabled: boolean; minHealth: number; runs: number; waitingReason: string | null; maxDepth: number };
 	/** A future order; changes never alter an already paid sortie. */
 	raidPlan?: RaidPlan;
+	fieldKit?: FieldKitSelection;
 }
 export interface Expedition {
 	stage: number; status: "travel" | "choice"; branch: ExpeditionBranch;
@@ -113,6 +116,7 @@ export interface Raid {
 	/** Each physical sortie stays independent; this links its coordinated party. */
 	squad?: SquadRaidSnapshot;
 	strategy?: RaidStrategy;
+	fieldKit?: FieldKit;
 }
 export interface RaidReport {
 	id: string;
@@ -140,6 +144,7 @@ export interface RaidReport {
 	strategy?: RaidStrategy;
 	sectorOutcome?: SectorIntel;
 	reconCompleted?: boolean;
+	fieldKit?: FieldKit;
 }
 export interface GameState {
 	schemaVersion: number;
@@ -604,6 +609,7 @@ function roomWorkRate(state: GameState, room: RoomInstance): number {
 }
 function roomById(state: GameState, roomId: string): RoomInstance | undefined { return state.shelter.rooms.find((room) => room.id === roomId); }
 function roomOutputReason(state: GameState, job: ProductionJob): string | null {
+	if (job.output.fieldKit && getFieldKitStock(state)[job.output.fieldKit] >= FIELD_KIT_CAPACITY) return "Полка комплектов полна. Готовый комплект сохранён в очереди.";
 	if (job.output.moduleModelId && state.modules.length >= getModuleCapacity(state)) return "Стойка деталей полна. Готовая деталь сохранена в очереди.";
 	const capacity = getSupplyCapacity(state);
 	for (const key of Object.keys(job.output.supplies) as (keyof Supplies)[]) if (job.output.supplies[key] > 0 && state.supplies[key] + job.output.supplies[key] > capacity[key]) return "Склад полон. Вся готовая партия сохранена в очереди.";
@@ -612,7 +618,34 @@ function roomOutputReason(state: GameState, job: ProductionJob): string | null {
 function productionCostReason(state: GameState, cost: ShelterCost): string | null {
 	if (state.money < cost.money) return `Нужно ${cost.money} ₽.`;
 	for (const key of Object.keys(cost.supplies) as (keyof Supplies)[]) if (state.supplies[key] < cost.supplies[key]) return "Для партии не хватает припасов.";
+	const reserve = getProductionReserve(state);
+	if (state.money - cost.money < reserve.money) return `Заказ затронет резерв ${reserve.money} ₽ для рейдов.`;
+	for (const key of Object.keys(cost.supplies) as (keyof Supplies)[]) if (cost.supplies[key] > 0 && state.supplies[key] - cost.supplies[key] < reserve.supplies[key]) return "Заказ затронет резерв припасов для рейдов.";
 	return null;
+}
+/** Only unpaid production checks the target. An already reserved batch is always honoured. */
+function productionTargetReason(state: GameState, room: RoomInstance, recipe: typeof RESOURCE_RECIPE_BY_ID[string]): string | null {
+	if (!room.repeat || room.recipeId !== recipe.id || room.stockTarget === undefined) return null;
+	if (recipe.outputKit) return getFieldKitStock(state)[recipe.outputKit] + 1 > room.stockTarget ? "Цель запаса достигнута. Следующая партия начнётся после расхода комплектов." : null;
+	for (const key of Object.keys(recipe.output) as (keyof Supplies)[]) if (recipe.output[key] > 0 && state.supplies[key] + recipe.output[key] > room.stockTarget) return "Цель запаса достигнута: новая партия целиком не помещается. Производство возобновится после расхода припасов.";
+	return null;
+}
+export function setProductionReserve(state: GameState, cost: ShelterCost, now = Date.now()): ActionResult {
+	let reserve: ShelterCost;
+	try { reserve = parseProductionReserve(cost); } catch { return fail("Некорректный резерв производства."); }
+	if (!isTime(now)) return fail("Некорректный резерв производства.");
+	rebaseClock(state, now); simulateAdvance(state, now, new Set(), new Set(state.shelter.rooms.map(room => room.id)));
+	ensureShelterLogistics(state).reserve = reserve;
+	settleShelter(state, now);
+	return ok("Резерв для выходов установлен. Уже оплаченные партии продолжают работу.");
+}
+export function setRoomStockTarget(state: GameState, roomId: string, target: number | null, now = Date.now()): ActionResult {
+	const current = roomById(state, roomId), recipe = current?.recipeId ? ownValue(RESOURCE_RECIPE_BY_ID, current.recipeId) : null;
+	if (!isTime(now) || !current || !recipe || (target !== null && (!Number.isInteger(target) || target < 0 || target > (recipe.outputKit ? FIELD_KIT_CAPACITY : 1e6)))) return fail("Некорректная цель запаса или не выбран рецепт.");
+	rebaseClock(state, now); simulateAdvance(state, now, new Set(), new Set([roomId]));
+	if (target === null) delete current.stockTarget; else current.stockTarget = target;
+	settleShelter(state, now);
+	return ok(target === null ? "Производство без цели запаса." : `Повторение поддерживает запас до ${target}. Уже оплаченная партия будет доставлена.`);
 }
 function reserveProduction(state: GameState, cost: ShelterCost) {
 	state.money -= cost.money;
@@ -724,7 +757,7 @@ export function getModuleProductionQuote(state: GameState, roomId: string, model
 	else if (model.slot === "receiver" && !state.discoveredWeapons.includes(model.weaponId!)) reason = "Сначала найди эту оружейную платформу в рейде.";
 	else if (room.level < model.workshopLevel) reason = `Нужна эта мастерская уровня ${model.workshopLevel}.`;
 	else if (room.queue.length >= 5) reason = "В очереди уже пять заказов.";
-	else if (state.money < model.craftCost.money || state.supplies.scrap < model.craftCost.scrap) reason = `Нужно ${model.craftCost.money} ₽ и ${model.craftCost.scrap} деталей.`;
+	else reason = productionCostReason(state, { money: model.craftCost.money, supplies: { ...emptySupplies(), scrap: model.craftCost.scrap } });
 	return { money: model?.craftCost.money ?? 0, scrap: model?.craftCost.scrap ?? 0, duration, reason };
 }
 export function queueModuleProduction(state: GameState, roomId: string, modelId: string, now = Date.now()): ActionResult {
@@ -744,14 +777,18 @@ export function getResourceProductionQuote(state: GameState, roomId: string, rec
 	let reason: string | null = null;
 	if (!room || !recipe || recipe.roomType !== room.type) reason = "Рецепт не подходит этому помещению.";
 	else if (room.status !== "ready") reason = "Помещение ещё не готово.";
+	else if (room.level < (recipe.minLevel ?? 1)) reason = `Нужно это помещение уровня ${recipe.minLevel}.`;
+	else if (productionTargetReason(state, room, recipe)) reason = productionTargetReason(state, room, recipe);
 	else if (roomWorkRate(state, room) === 0) reason = "Назначь здорового рабочего.";
 	else {
-		reason = productionCostReason(state, recipe.cost);
-		if (!reason && roomOutputReason(state, { output: { supplies: recipe.output, moduleModelId: null } } as ProductionJob)) {
+		reason = productionTargetReason(state, room, recipe) ?? productionCostReason(state, recipe.cost);
+		if (!reason && roomOutputReason(state, { output: { supplies: recipe.output, moduleModelId: null, ...(recipe.outputKit ? { fieldKit: recipe.outputKit } : {}) } } as ProductionJob)) {
 			reason = "На складе нет места для новой партии. Материалы ещё не списаны.";
 		}
 	}
-	return { money: recipe?.cost.money ?? 0, supplies: { ...(recipe?.cost.supplies ?? emptySupplies()) }, duration: recipe?.durationSeconds ?? 0, reason };
+	const rate = room ? roomWorkRate(state, room) : 0;
+	const block: "target" | "reserve" | "capacity" | "worker" | "level" | "resources" | null = !reason ? null : reason.startsWith("Цель запаса") ? "target" : reason.includes("резерв") ? "reserve" : reason.startsWith("На складе") ? "capacity" : reason.startsWith("Назначь") ? "worker" : reason.startsWith("Нужно это помещение") ? "level" : "resources";
+	return { money: recipe?.cost.money ?? 0, supplies: { ...(recipe?.cost.supplies ?? emptySupplies()) }, duration: recipe?.durationSeconds ?? 0, actualDuration: recipe && rate > 0 ? recipe.durationSeconds * 1000 / rate : null, outputKit: recipe?.outputKit, block, reason };
 }
 export function setRoomRecipe(state: GameState, roomId: string, recipeId: string | null, repeat: boolean, now = Date.now()): ActionResult {
 	if (!isTime(now) || typeof repeat !== "boolean") return fail("Некорректное время или режим.");
@@ -759,10 +796,36 @@ export function setRoomRecipe(state: GameState, roomId: string, recipeId: string
 	rebaseClock(state, now); simulateAdvance(state, now, new Set(), recipeId === null || !repeat ? new Set([roomId]) : new Set());
 	const room = roomById(state, roomId), recipe = recipeId === null ? null : ownValue(RESOURCE_RECIPE_BY_ID, recipeId);
 	if (!room || room.status !== "ready" || (recipeId !== null && (!recipe || recipe.roomType !== room.type))) return fail("Помещение или рецепт не готовы.");
+	if (recipe && room.level < (recipe.minLevel ?? 1)) return fail(`Нужно это помещение уровня ${recipe.minLevel}.`);
+	const changedRecipe = room.recipeId !== recipeId;
+	if (changedRecipe) delete room.stockTarget;
 	room.recipeId = recipeId; room.repeat = recipeId !== null && repeat;
-	room.pending = recipeId !== null && room.queue.length === 0 && (!wasRepeating || repeat);
+	room.pending = recipeId !== null && (changedRecipe || (room.queue.length === 0 && (!wasRepeating || repeat)));
 	if (recipe && room.queue.length === 0 && (room.repeat || room.pending)) tryStartResourceJob(state, room, now);
 	return ok(recipe ? "Рецепт выбран. Партия начнётся при наличии персонала, припасов и места." : "Повторение отключено. Оплаченная партия остаётся в очереди.");
+}
+export function getFieldKitProductionQuote(state: GameState, roomId: string, kit: FieldKit) {
+	const room = roomById(state, roomId), recipe = Object.hasOwn(FIELD_KITS, kit) ? RESOURCE_RECIPE_BY_ID[FIELD_KITS[kit].recipeId] : null;
+	let reason: string | null = null;
+	if (!room || !recipe || room.type !== recipe.roomType) reason = "Комплект не подходит этому помещению.";
+	else if (room.status !== "ready") reason = "Помещение ещё не готово.";
+	else if (room.queue.length >= (room.type === "workshop" ? 5 : 1)) reason = "Производственная очередь заполнена.";
+	else if (getFieldKitStock(state)[kit] >= FIELD_KIT_CAPACITY) reason = "Полка комплектов полна.";
+	else reason = productionCostReason(state, recipe.cost);
+	const rate = room ? roomWorkRate(state, room) : 0;
+	return { money: recipe?.cost.money ?? 0, supplies: { ...(recipe?.cost.supplies ?? emptySupplies()) }, duration: recipe?.durationSeconds ?? 0, actualDuration: recipe && rate > 0 ? recipe.durationSeconds * 1000 / rate : null, outputKit: recipe?.outputKit, reason };
+}
+export function queueFieldKitProduction(state: GameState, roomId: string, kit: FieldKit, now = Date.now()): ActionResult {
+	if (!isTime(now) || !Object.hasOwn(FIELD_KITS, kit)) return fail("Некорректный комплект или время.");
+	advance(state, now);
+	const quote = getFieldKitProductionQuote(state, roomId, kit); if (quote.reason) return fail(quote.reason);
+	const room = roomById(state, roomId)!, recipe = RESOURCE_RECIPE_BY_ID[FIELD_KITS[kit].recipeId]!;
+	const paid = structuredClone(recipe.cost), candidates = prepareAchievementPayment(state, paid);
+	reserveProduction(state, paid);
+	const job: ProductionJob = { id: id(state, "job"), kind: "resource", recipeId: recipe.id, modelId: null, workDone: 0, workRequired: recipe.durationSeconds * 1_000_000, paid,
+		output: { supplies: { ...recipe.output }, moduleModelId: null, fieldKit: kit }, createdAt: now };
+	room.queue.push(job); noteAchievementPaid(state, room, job, candidates);
+	return ok(`${FIELD_KITS[kit].label}: один комплект заказан. Материалы зарезервированы один раз.`);
 }
 export function cancelProduction(state: GameState, roomId: string, jobId: string, now = Date.now()): ActionResult {
 	if (!isTime(now)) return fail("Некорректное время.");
@@ -791,7 +854,7 @@ function tryStartResourceJob(state: GameState, room: RoomInstance, now: number):
 	reserveProduction(state, recipe.cost);
 	room.pending = false;
 	room.queue.push({ id: id(state, "job"), kind: "resource", recipeId: recipe.id, modelId: null, workDone: 0,
-		workRequired: recipe.durationSeconds * 1_000_000, paid: structuredClone(recipe.cost), output: { supplies: { ...recipe.output }, moduleModelId: null }, createdAt: now });
+		workRequired: recipe.durationSeconds * 1_000_000, paid: structuredClone(recipe.cost), output: { supplies: { ...recipe.output }, moduleModelId: null, ...(recipe.outputKit ? { fieldKit: recipe.outputKit } : {}) }, createdAt: now });
 	noteAchievementPaid(state, room, room.queue[0]!, candidates);
 	return true;
 }
@@ -817,6 +880,7 @@ function settleShelter(state: GameState, now: number, stoppedAtBoundary: Readonl
 		if (job && job.workDone >= job.workRequired && !roomOutputReason(state, job)) {
 			const item = job.output.moduleModelId ? createModule(state, job.output.moduleModelId, now) : null;
 			if (item) state.modules.push(item);
+			if (job.output.fieldKit) ensureShelterLogistics(state).kits[job.output.fieldKit]++;
 			for (const key of Object.keys(job.output.supplies) as (keyof Supplies)[]) { state.supplies[key] += job.output.supplies[key]; noteAchievementSupply(state, key, job.output.supplies[key]); }
 			room.queue.shift(); room.cycles++;
 			changed = true;
@@ -1135,6 +1199,7 @@ export function getRaidQuote(state: GameState, scav: Scav, map: RaidMap) {
 	const ammo = getRaidAmmoCost(scav, map, state);
 	const intel = map.intelCost + preparation.intel;
 	const medicine = scav.loadout.medkit ? 1 : 0;
+	const fieldKit = scav.fieldKit && scav.fieldKit !== "none" ? scav.fieldKit : null;
 	let reason: string | null = null;
 	const weapon = state.weapons.find((item) => item.id === scav.weaponInstanceId);
 	if (scav.status === "raiding") reason = "Боец уже в рейде.";
@@ -1148,10 +1213,11 @@ export function getRaidQuote(state: GameState, scav: Scav, map: RaidMap) {
 	else if (state.supplies.ammo < ammo) reason = `Нужно ${ammo} патронов.`;
 	else if (state.supplies.intel < intel) reason = `Нужно ${intel} разведданных${preparation.intel ? " с учётом подготовки" : ""}.`;
 	else if (state.supplies.medicine < medicine) reason = "В комплекте аптечка: нужен 1 медикамент.";
+	else if (fieldKit && getFieldKitStock(state)[fieldKit] < 1) reason = `Нужен ${FIELD_KITS[fieldKit].label.toLowerCase()}: изготовь его в убежище или выбери выход без комплекта.`;
 	const baseChance = getRaidChance(state, scav, map);
 	return { money, ammo, intel, medicine, chance: baseChance === 0 ? 0 : clamp(baseChance + effects.chanceBonus, .22, .97),
 		duration: Math.max(20, Math.min(600, Math.round(getRaidDuration(state, scav, map) * effects.durationMultiplier))), reason,
-		strategy, preparationMoney: preparation.money, preparationIntel: preparation.intel,
+		strategy, fieldKit, preparationMoney: preparation.money, preparationIntel: preparation.intel,
 		ammunition: weapon ? getAmmoEffect(weapon, scav.loadout.ammoType, map.id, "scavenge", 1, scav.tactic) : null };
 }
 
@@ -1192,6 +1258,12 @@ export function setRaidPlan(state: GameState, scavId: string, objective: RaidObj
 	if (!scav || !Object.hasOwn(RAID_OBJECTIVES, objective) || !Object.hasOwn(RAID_PREPARATIONS, preparation)) return fail("Боец или план выхода не найдены.");
 	scav.raidPlan = { objective, preparation };
 	return ok(`План ${scav.status === "raiding" ? "следующего выхода" : "выхода"}: ${RAID_OBJECTIVES[objective].label}. ${RAID_PREPARATIONS[preparation].label}.`);
+}
+export function setFieldKit(state: GameState, scavId: string, kit: FieldKitSelection): ActionResult {
+	const scav = state.scavs.find(person => person.id === scavId);
+	if (!scav || (kit !== "none" && !Object.hasOwn(FIELD_KITS, kit))) return fail("Боец или комплект не найдены.");
+	if (kit === "none") delete scav.fieldKit; else scav.fieldKit = kit;
+	return ok(`${scav.name}: ${kit === "none" ? "выход без комплекта поддержки" : FIELD_KITS[kit].label.toLowerCase()}${scav.status === "raiding" ? " для следующего выхода" : ""}.`);
 }
 
 export function getAutoRaidStatus(state: GameState, scav: Scav): string {
@@ -1243,6 +1315,7 @@ function startRaid(state: GameState, scav: Scav, map: RaidMap, now: number, isAu
 		seed: takeSeed(state), isAuto, tactic: scav.tactic,
 		armorLevel: scav.gear.armor, backpackLevel: scav.gear.backpack,
 		strategy: { ...quote.strategy },
+		...(quote.fieldKit ? { fieldKit: quote.fieldKit } : {}),
 		expedition: { stage: 1, status: "travel", branch: "scavenge", cargo: { money: 0, supplies: emptySupplies(), weaponIds: [], modules: [] },
 			legacyLoot: false, gunCombatBonus: (60 - weaponStats.recoil) / 1000,
 			weaponMechanics: { power: weaponStats.power, reliability: weaponStats.reliability, firstBonus: weaponEffect.bonus, wearMultiplier: getWeaponMechanics(weapon).wearMultiplier },
@@ -1261,6 +1334,7 @@ function startRaid(state: GameState, scav: Scav, map: RaidMap, now: number, isAu
 	state.supplies.ammo -= quote.ammo;
 	state.supplies.intel -= quote.intel;
 	state.supplies.medicine -= quote.medicine;
+	if (quote.fieldKit) ensureShelterLogistics(state).kits[quote.fieldKit]--;
 	scav.status = "raiding";
 	scav.autoRaid.waitingReason = null;
 	renewRaidOutcomeSeed(state, raid);
@@ -1806,15 +1880,15 @@ function reachCheckpoint(state: GameState, raid: Raid, now: number, party?: { in
 	const protection = (armor?.protection ?? 0) * expedition.loadout.armorCondition / 100 + (helmet?.protection ?? 0) * (expedition.loadout.helmetCondition ?? 0) / 100;
 	const ammunition = expedition.ammunition ? getAmmoEffect(weapon, expedition.loadout.ammoType, map.id, expedition.branch, expedition.stage, raid.tactic) : null;
 	const injury = TACTICS[raid.tactic].injuryMultiplier * (1 - raid.armorLevel * 0.1) * (1 - protection * 2)
-		* (expedition.perks.includes("fieldMedic") ? 0.5 : 1) * (expedition.loadout.medkit ? 0.75 : 1) * (party?.injuryMultiplier ?? 1) * (ammunition?.injuryMultiplier ?? 1);
+		* (expedition.perks.includes("fieldMedic") ? 0.5 : 1) * (expedition.loadout.medkit ? 0.75 : 1) * (party?.injuryMultiplier ?? 1) * (ammunition?.injuryMultiplier ?? 1) * getFieldKitEffects(raid.fieldKit).injuryMultiplier;
 	if (raid.squad) {
 		const actions = raid.squad.actions.filter((action) => action.actorId === scav.id || action.targetId === scav.id);
 		expedition.trail.push({ at: now, label: `Отряд · этап ${expedition.stage}`, text: actions.map((action) => action.text).join(" ").slice(0, 400), kind: actions.some((action) => action.kind === "hesitation") ? "danger" : "neutral" });
 	}
 	weapon.durability = Math.max(0, weapon.durability - Math.ceil((5 + random() * (7 + map.danger * 8) + expedition.stage * 2)
-		* (expedition.perks.includes("gunsmith") ? 0.5 : 1) * (expedition.weaponMechanics?.wearMultiplier ?? 1) * (expedition.ammunition?.wearMultiplier ?? 1)));
+		* (expedition.perks.includes("gunsmith") ? 0.5 : 1) * (expedition.weaponMechanics?.wearMultiplier ?? 1) * (expedition.ammunition?.wearMultiplier ?? 1) * getFieldKitEffects(raid.fieldKit).wearMultiplier));
 	if (weapon.modules.receiver) weapon.modules.receiver.durability = weapon.durability;
-	if (!expedition.legacyLoot) for (const [slot, part] of Object.entries(weapon.modules)) if (slot !== "receiver") part.durability = Math.max(0, part.durability - (expedition.perks.includes("gunsmith") ? 1 : 2 + expedition.stage));
+	if (!expedition.legacyLoot) for (const [slot, part] of Object.entries(weapon.modules)) if (slot !== "receiver") part.durability = Math.max(0, part.durability - (expedition.perks.includes("gunsmith") ? 1 : 2 + expedition.stage) * getFieldKitEffects(raid.fieldKit).wearMultiplier);
 	wearEquippedGear(state, scav, expedition.stage, !success);
 	if (!success) {
 		expedition.trail.push({ at: now, label: `Засада · этап ${expedition.stage}`, text: (`Маршрут «${EXPEDITION_BRANCHES[expedition.branch].label}» сорван. Невынесенный груз потерян.${discoveriesText ? ` По рации передано: ${discoveriesText}.` : ""}${streetText}`).slice(0, 400), kind: "danger" });
@@ -1929,7 +2003,7 @@ function finishExpedition(state: GameState, raid: Raid, success: boolean, now: n
 		at: now, success, lostScav: false, lostWeapon: false, money: 0, supplies: emptySupplies(), weaponId: null,
 		weaponAutoSold: false, description: "", isAuto: raid.isAuto, tactic: raid.tactic, events: [], depth: expedition.stage,
 		discoveries: [...expedition.discoveries], lostCargo: success ? null : structuredClone(expedition.cargo), moduleIds: [],
-		...(raid.strategy ? { strategy: { ...raid.strategy } } : {}), ...(expedition.reconCompleted ? { reconCompleted: true } : {}) };
+		...(raid.strategy ? { strategy: { ...raid.strategy } } : {}), ...(expedition.reconCompleted ? { reconCompleted: true } : {}), ...(raid.fieldKit ? { fieldKit: raid.fieldKit } : {}) };
 	state.stats.raidsCompleted++; scav.raids++;
 	if (raid.isAuto) { state.stats.autoRaidsCompleted++; scav.autoRaid.runs++; }
 	const oldLevel = scav.level;
@@ -2450,33 +2524,40 @@ function parseExpedition(value: unknown, version: number): Expedition | null {
 	return expedition;
 }
 function sameSupplies(a: Supplies, b: Supplies): boolean { return (Object.keys(a) as (keyof Supplies)[]).every((key) => a[key] === b[key]); }
-function parseProductionJob(value: unknown, roomType: ShelterRoomType): ProductionJob {
+function parseFieldKit(value: unknown): FieldKit { return known(value, FIELD_KITS) as FieldKit; }
+function parseProductionReserve(value: unknown): ShelterCost {
+	const reserve = record(value), supplies = record(reserve.supplies);
+	fields(reserve, ["money", "supplies"]); fields(supplies, ["ammo", "medicine", "scrap", "intel"]);
+	return { money: number(reserve.money, 1e9, 0, true), supplies: { ammo: number(supplies.ammo, 1e6, 0, true), medicine: number(supplies.medicine, 1e6, 0, true), scrap: number(supplies.scrap, 1e6, 0, true), intel: number(supplies.intel, 1e6, 0, true) } };
+}
+function parseProductionJob(value: unknown, roomType: ShelterRoomType, version: number): ProductionJob {
 	const source = record(value);
 	fields(source, ["id", "kind", "recipeId", "modelId", "workDone", "workRequired", "paid", "output", "createdAt"]);
 	if (source.kind !== "module" && source.kind !== "resource") throw new Error("production-kind");
 	const paid = record(source.paid), output = record(source.output);
-	fields(paid, ["money", "supplies"]); fields(output, ["supplies", "moduleModelId"]);
+	fields(paid, ["money", "supplies"]); fields(output, ["supplies", "moduleModelId", ...(version >= 14 ? ["fieldKit"] : [])]);
 	const job: ProductionJob = { id: string(source.id), kind: source.kind, recipeId: string(source.recipeId),
 		modelId: source.modelId === null ? null : known(source.modelId, MODULE_BY_ID), workDone: number(source.workDone, 1e12, 0, true),
 		workRequired: number(source.workRequired, 1e12, 1, true), paid: { money: number(paid.money), supplies: parseSupplies(paid.supplies) },
-		output: { supplies: parseSupplies(output.supplies), moduleModelId: output.moduleModelId === null ? null : known(output.moduleModelId, MODULE_BY_ID) }, createdAt: number(source.createdAt) };
+		output: { supplies: parseSupplies(output.supplies), moduleModelId: output.moduleModelId === null ? null : known(output.moduleModelId, MODULE_BY_ID), ...(version >= 14 && Object.hasOwn(output, "fieldKit") ? { fieldKit: parseFieldKit(output.fieldKit) } : {}) }, createdAt: number(source.createdAt) };
 	if (job.workDone > job.workRequired) throw new Error("production-work");
 	if (job.kind === "module") {
 		const model = job.modelId ? ownValue(MODULE_BY_ID, job.modelId) : null;
-		if (!model || roomType !== "workshop" || job.recipeId !== `module:${model.id}` || job.output.moduleModelId !== model.id
+		if (!model || roomType !== "workshop" || job.recipeId !== `module:${model.id}` || job.output.moduleModelId !== model.id || job.output.fieldKit
 			|| !sameSupplies(job.output.supplies, emptySupplies()) || job.paid.money !== model.craftCost.money
 			|| !sameSupplies(job.paid.supplies, { ...emptySupplies(), scrap: model.craftCost.scrap })
 			|| job.workRequired !== Math.max(25, Math.round(35 + model.value * 0.25)) * 1_000_000) throw new Error("module-order");
 	} else {
 		const recipe = ownValue(RESOURCE_RECIPE_BY_ID, job.recipeId);
-		if (!recipe || recipe.roomType !== roomType || job.modelId !== null || job.output.moduleModelId !== null
+		if (!recipe || recipe.roomType !== roomType || job.modelId !== null || job.output.moduleModelId !== null || job.output.fieldKit !== recipe.outputKit
+			|| (version < 14 && (recipe.minLevel || recipe.outputKit))
 			|| job.workRequired !== recipe.durationSeconds * 1_000_000 || job.paid.money !== recipe.cost.money
 			|| !sameSupplies(job.paid.supplies, recipe.cost.supplies) || !sameSupplies(job.output.supplies, recipe.output)) throw new Error("resource-order");
 	}
 	return job;
 }
-function parseShelter(value: unknown): GameState["shelter"] {
-	const source = record(value); fields(source, ["rooms", "sites", "expansions"]);
+function parseShelter(value: unknown, version: number): GameState["shelter"] {
+	const source = record(value); fields(source, ["rooms", "sites", "expansions", ...(version >= 14 ? ["logistics"] : [])]);
 	const parseSite = (value: unknown): ShelterSite => {
 		const site = record(value); fields(site, ["column", "row"]);
 		return { column: number(site.column, SHELTER_COORDINATE_LIMIT, -SHELTER_COORDINATE_LIMIT, true), row: number(site.row, SHELTER_COORDINATE_LIMIT, 0, true) };
@@ -2507,13 +2588,14 @@ function parseShelter(value: unknown): GameState["shelter"] {
 	if (expansions.some((site) => !frontier.has(`${site.column}:${site.row}`))) throw new Error("disconnected-expansion");
 	const rooms = array(source.rooms, MAX_SHELTER_SITES, (value): RoomInstance => {
 		const roomSource = record(value);
-		fields(roomSource, ["id", "type", "column", "row", "level", "status", "construction", "workerIds", "queue", "recipeId", "repeat", "pending", "cycles"]);
+		fields(roomSource, ["id", "type", "column", "row", "level", "status", "construction", "workerIds", "queue", "recipeId", "repeat", "pending", "cycles", ...(version >= 14 ? ["stockTarget"] : [])]);
 		const type = known(roomSource.type, ROOM_DEFINITIONS) as ShelterRoomType;
 		if (!["ready", "building", "upgrading"].includes(roomSource.status as string)) throw new Error("room-status");
 		const room: RoomInstance = { id: string(roomSource.id), type, column: number(roomSource.column, SHELTER_COORDINATE_LIMIT, -SHELTER_COORDINATE_LIMIT, true), row: number(roomSource.row, SHELTER_COORDINATE_LIMIT, 0, true),
 			level: number(roomSource.level, 5, 0, true), status: roomSource.status as RoomInstance["status"], construction: null,
-			workerIds: array(roomSource.workerIds, 3, (value) => string(value)), queue: array(roomSource.queue, 5, (value) => parseProductionJob(value, type)),
-			recipeId: roomSource.recipeId === null ? null : known(roomSource.recipeId, RESOURCE_RECIPE_BY_ID), repeat: bool(roomSource.repeat), pending: bool(roomSource.pending), cycles: number(roomSource.cycles, 1e9, 0, true) };
+			workerIds: array(roomSource.workerIds, 3, (value) => string(value)), queue: array(roomSource.queue, 5, (value) => parseProductionJob(value, type, version)),
+			recipeId: roomSource.recipeId === null ? null : known(roomSource.recipeId, RESOURCE_RECIPE_BY_ID), repeat: bool(roomSource.repeat), pending: bool(roomSource.pending), cycles: number(roomSource.cycles, 1e9, 0, true),
+			...(version >= 14 && Object.hasOwn(roomSource, "stockTarget") ? { stockTarget: number(roomSource.stockTarget, 1e6, 0, true) } : {}) };
 		if (room.id !== `room-${room.column}-${room.row}` && room.id !== `room-${room.type}`) throw new Error("room-id");
 		if (!siteKeys.has(`${room.column}:${room.row}`)) throw new Error("room-on-rock");
 		if (room.workerIds.length > getRoomWorkerCapacity(room) || room.queue.some((job, index) => index > 0 && job.workDone !== 0)
@@ -2521,6 +2603,10 @@ function parseShelter(value: unknown): GameState["shelter"] {
 			|| (room.recipeId !== null && ownValue(RESOURCE_RECIPE_BY_ID, room.recipeId)!.roomType !== room.type)
 			|| (room.recipeId === null && (room.repeat || room.pending))) throw new Error("room-production");
 		if (room.queue.some((job) => job.kind === "module" && ownValue(MODULE_BY_ID, job.modelId!)!.workshopLevel > room.level)) throw new Error("room-recipe-level");
+		const recipe = room.recipeId ? ownValue(RESOURCE_RECIPE_BY_ID, room.recipeId)! : null;
+		if ((recipe && (room.level < (recipe.minLevel ?? 1) || (version < 14 && (recipe.minLevel || recipe.outputKit))))
+			|| room.queue.some(job => job.kind === "resource" && room.level < (ownValue(RESOURCE_RECIPE_BY_ID, job.recipeId)!.minLevel ?? 1))
+			|| (room.stockTarget !== undefined && (!recipe || (recipe.outputKit && room.stockTarget > FIELD_KIT_CAPACITY)))) throw new Error("room-recipe-level");
 		if (roomSource.construction !== null) {
 			const building = record(roomSource.construction), cost = record(building.cost);
 			fields(building, ["workDone", "workRequired", "targetLevel", "cost"]); fields(cost, ["money", "scrap"]);
@@ -2535,7 +2621,12 @@ function parseShelter(value: unknown): GameState["shelter"] {
 		return room;
 	});
 	if (roomKeys.some((key) => !rooms.some((room) => room.id === `room-${key}` && room.type === key && room.level >= 1))) throw new Error("foundation-room");
-	return { rooms, sites, expansions };
+	let logistics: ShelterState["logistics"];
+	if (version >= 14 && Object.hasOwn(source, "logistics")) {
+		const policy = record(source.logistics), kits = record(policy.kits); fields(policy, ["reserve", "kits"]); fields(kits, ["maintenance", "trauma"]);
+		logistics = { reserve: parseProductionReserve(policy.reserve), kits: { maintenance: number(kits.maintenance, FIELD_KIT_CAPACITY, 0, true), trauma: number(kits.trauma, FIELD_KIT_CAPACITY, 0, true) } };
+	}
+	return { rooms, sites, expansions, ...(logistics ? { logistics } : {}) };
 }
 function parseScavProfile(value: unknown): ScavProfile {
 	const source = record(value); fields(source, ["backgroundId", "traitId", "drawbackId", "talents", "candidateId"]);
@@ -2644,7 +2735,7 @@ function validateStorySources(state: GameState, scav: Pick<Scav, "name" | "story
 }
 function parseScav(value: unknown, version: number): Scav {
 	const source = record(value);
-	fields(source, ["id", "name", "personality", "appearance", "level", "xp", "health", "combat", "scouting", "weaponInstanceId", "status", "raids", ...(version >= 2 ? ["tactic", "gear", "autoRaid"] : []), ...(version >= 3 ? ["loadout"] : []), ...(version >= 5 ? ["assignment"] : []), ...(version >= 6 ? ["profile"] : []), ...(version >= 7 ? ["story"] : []), ...(version >= 12 ? ["raidPlan"] : [])]);
+	fields(source, ["id", "name", "personality", "appearance", "level", "xp", "health", "combat", "scouting", "weaponInstanceId", "status", "raids", ...(version >= 2 ? ["tactic", "gear", "autoRaid"] : []), ...(version >= 3 ? ["loadout"] : []), ...(version >= 5 ? ["assignment"] : []), ...(version >= 6 ? ["profile"] : []), ...(version >= 7 ? ["story"] : []), ...(version >= 12 ? ["raidPlan"] : []), ...(version >= 14 ? ["fieldKit"] : [])]);
 	if (!["ready", "raiding", "wounded"].includes(source.status as string))
 		throw new Error("status");
 	let gear: Scav["gear"] = { armor: 0, backpack: 0 };
@@ -2684,14 +2775,16 @@ function parseScav(value: unknown, version: number): Scav {
 		story: version >= 7 ? parseScavStory(source.story) : createScavStory(string(source.id), 0, false),
 		autoRaid,
 		...(version >= 12 && Object.hasOwn(source, "raidPlan") ? { raidPlan: parseRaidPlan(source.raidPlan) } : {}),
+		...(version >= 14 && Object.hasOwn(source, "fieldKit") ? { fieldKit: source.fieldKit === "none" ? "none" as const : parseFieldKit(source.fieldKit) } : {}),
 	};
 }
 function parseRaid(value: unknown, version: number): Raid {
 	const source = record(value);
-	fields(source, ["id", "scavId", "scavName", "scavAppearance", "mapId", "weaponInstanceId", "startedAt", "endsAt", "chance", "lootBonus", "seed", "outcomeSeed", ...(version >= 2 ? ["isAuto", "tactic", "armorLevel", "backpackLevel"] : []), ...(version >= 3 ? ["expedition"] : []), ...(version >= 10 ? ["squad"] : []), ...(version >= 12 ? ["strategy"] : [])]);
+	fields(source, ["id", "scavId", "scavName", "scavAppearance", "mapId", "weaponInstanceId", "startedAt", "endsAt", "chance", "lootBonus", "seed", "outcomeSeed", ...(version >= 2 ? ["isAuto", "tactic", "armorLevel", "backpackLevel"] : []), ...(version >= 3 ? ["expedition"] : []), ...(version >= 10 ? ["squad"] : []), ...(version >= 12 ? ["strategy"] : []), ...(version >= 14 ? ["fieldKit"] : [])]);
 	const startedAt = number(source.startedAt);
 	const endsAt = number(source.endsAt);
 	const expedition = version >= 3 ? parseExpedition(source.expedition, version) : null;
+	if (version >= 14 && Object.hasOwn(source, "fieldKit") && (!expedition || expedition.legacyLoot || !Object.hasOwn(source, "strategy"))) throw new Error("field-kit-sortie");
 	if ((expedition?.status === "choice" ? endsAt < startedAt : endsAt <= startedAt) || endsAt - startedAt > 600_000)
 		throw new Error("duration");
 	return {
@@ -2714,11 +2807,13 @@ function parseRaid(value: unknown, version: number): Raid {
 		expedition,
 		...(version >= 10 && Object.hasOwn(source, "squad") ? { squad: parseSquadRaidSnapshot(source.squad, false, version) as SquadRaidSnapshot } : {}),
 		...(version >= 12 && Object.hasOwn(source, "strategy") ? { strategy: parseRaidStrategy(source.strategy) } : {}),
+		...(version >= 14 && Object.hasOwn(source, "fieldKit") ? { fieldKit: parseFieldKit(source.fieldKit) } : {}),
 	};
 }
 function parseReport(value: unknown, version: number): RaidReport {
 	const source = record(value);
-	fields(source, ["id", "raidId", "scavName", "scavAppearance", "mapId", "at", "success", "lostScav", "lostWeapon", "money", "supplies", "weaponId", "weaponAutoSold", "description", ...(version >= 2 ? ["isAuto", "tactic", "events"] : []), ...(version >= 3 ? ["depth", "discoveries", "lostCargo"] : []), ...(version >= 4 ? ["moduleIds"] : []), ...(version >= 10 ? ["squad"] : []), ...(version >= 12 ? ["strategy", "sectorOutcome", "reconCompleted"] : [])]);
+	fields(source, ["id", "raidId", "scavName", "scavAppearance", "mapId", "at", "success", "lostScav", "lostWeapon", "money", "supplies", "weaponId", "weaponAutoSold", "description", ...(version >= 2 ? ["isAuto", "tactic", "events"] : []), ...(version >= 3 ? ["depth", "discoveries", "lostCargo"] : []), ...(version >= 4 ? ["moduleIds"] : []), ...(version >= 10 ? ["squad"] : []), ...(version >= 12 ? ["strategy", "sectorOutcome", "reconCompleted"] : []), ...(version >= 14 ? ["fieldKit"] : [])]);
+	if (version >= 14 && Object.hasOwn(source, "fieldKit") && !Object.hasOwn(source, "strategy")) throw new Error("field-kit-report");
 	return {
 		id: string(source.id),
 		raidId: string(source.raidId),
@@ -2746,6 +2841,7 @@ function parseReport(value: unknown, version: number): RaidReport {
 		...(version >= 12 && Object.hasOwn(source, "strategy") ? { strategy: parseRaidStrategy(source.strategy) } : {}),
 		...(version >= 12 && Object.hasOwn(source, "sectorOutcome") ? { sectorOutcome: parseSectorIntel(source.sectorOutcome) } : {}),
 		...(version >= 12 && Object.hasOwn(source, "reconCompleted") ? { reconCompleted: bool(source.reconCompleted) } : {}),
+		...(version >= 14 && Object.hasOwn(source, "fieldKit") ? { fieldKit: parseFieldKit(source.fieldKit) } : {}),
 	};
 }
 
@@ -2754,7 +2850,7 @@ export function parseSave(raw: string, options: { publicSnapshot?: boolean } = {
 	try {
 		if (typeof raw !== "string" || raw.length > 1_000_000) return null;
 		const source = record(JSON.parse(raw));
-		if (source.schemaVersion !== 1 && source.schemaVersion !== 2 && source.schemaVersion !== 3 && source.schemaVersion !== 4 && source.schemaVersion !== 5 && source.schemaVersion !== 6 && source.schemaVersion !== 7 && source.schemaVersion !== 8 && source.schemaVersion !== 9 && source.schemaVersion !== 10 && source.schemaVersion !== 11 && source.schemaVersion !== 12 && source.schemaVersion !== SAVE_VERSION) return null;
+		if (source.schemaVersion !== 1 && source.schemaVersion !== 2 && source.schemaVersion !== 3 && source.schemaVersion !== 4 && source.schemaVersion !== 5 && source.schemaVersion !== 6 && source.schemaVersion !== 7 && source.schemaVersion !== 8 && source.schemaVersion !== 9 && source.schemaVersion !== 10 && source.schemaVersion !== 11 && source.schemaVersion !== 12 && source.schemaVersion !== 13 && source.schemaVersion !== SAVE_VERSION) return null;
 		const version = source.schemaVersion;
 		fields(source, ["schemaVersion", "createdAt", "lastUpdated", "money", "supplies", "xp", "level", "base", "scavs", "weapons", "raids", "history", "claimedContracts", "discoveredWeapons", "stats", "clock", "rng", "nextId", ...(version >= 3 ? ["gearItems", "blueprints"] : []), ...(version >= 4 ? ["modules"] : []), ...(version >= 5 ? ["shelter"] : []), ...(version >= 6 ? ["recruitment"] : []), ...(version >= 7 ? ["memorials"] : []), ...(version >= 8 ? ["social"] : []), ...(version >= 9 ? ["achievements"] : []), ...(version >= 12 ? ["sectorIntel"] : [])]);
 		const base = record(source.base);
@@ -2807,7 +2903,7 @@ export function parseSave(raw: string, options: { publicSnapshot?: boolean } = {
 			gearItems: version >= 3 ? array(source.gearItems, 28, parseGear) : [],
 			blueprints: version >= 3 ? array(source.blueprints, Object.keys(BLUEPRINTS).length, (value) => known(value, BLUEPRINTS)) : ["light_vest", "scout_pack"],
 			modules: version >= 4 ? array(source.modules, 1000, parseModule) : [],
-			shelter: version >= 5 ? parseShelter(source.shelter) : initialShelter(base as Record<string, number>),
+			shelter: version >= 5 ? parseShelter(source.shelter, version) : initialShelter(base as Record<string, number>),
 			recruitment: version >= 6 ? parseRecruitment(source.recruitment, version) : { rng: 1, generation: 1, tier: 0, boardTier: 0, boardSeed: 1, board: [], hiredCandidateIds: [] },
 			memorials: version >= 7 ? array(source.memorials, MAX_SCAV_MEMORIALS, parseScavMemorial) : [],
 			social: version >= 8 ? parseSquadSocialState(source.social) : { pairs: [], losses: [] },

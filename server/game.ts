@@ -30,9 +30,16 @@ const ids = (max: number, min = 0): Rule => value => Array.isArray(value) && val
 const coord = integer(-engine.SHELTER_COORDINATE_LIMIT, engine.SHELTER_COORDINATE_LIMIT), rowCoord = integer(0, engine.SHELTER_COORDINATE_LIMIT);
 const slot = choose(...engine.MODULE_SLOTS);
 const gear = choose('armor', 'backpack', 'helmet');
+const fieldKit = choose(...Object.keys(engine.FIELD_KITS));
+const productionReserve: Rule = value => {
+  if (!object(value) || !exact(value, ['money', 'supplies']) || !integer(0, 1e9)(value.money) || !object(value.supplies)) return false;
+  return exact(value.supplies, ['ammo', 'medicine', 'scrap', 'intel']) && Object.values(value.supplies).every(integer(0, 1e6));
+};
 const COMMAND_RULES: Record<GameCommandType, Rule[]> = {
   excavateShelter: [coord, rowCoord], buildRoom: [choose(...Object.keys(engine.ROOM_DEFINITIONS)), coord, rowCoord], upgradeRoom: [id],
   assignWorker: [id, nullableId], queueModuleProduction: [id, id], setRoomRecipe: [id, nullableId, bool], cancelProduction: [id, id],
+  setProductionReserve: [productionReserve], setRoomStockTarget: [id, value => value === null || integer(0, 1e6)(value)],
+  setFieldKit: [id, choose('none', ...Object.keys(engine.FIELD_KITS))], queueFieldKitProduction: [id, fieldKit],
   installModule: [id, id], removeModule: [id, slot], assembleWeapon: [id], disassembleWeapon: [id], sellModule: [id], recycleModule: [id], repairModule: [id],
   buySupplies: [id], craftGear: [id], equipGear: [id, gear, nullableId], repairGear: [id], recycleGear: [id],
   setLoadoutOption: [id, choose('ammoType', 'medkit'), value => typeof value === 'boolean' || engine.isAmmoType(value)],

@@ -1,6 +1,7 @@
 import type { GameState, Raid, RaidReport, Scav } from './game/engine';
 import { MAP_BY_ID, type Supplies } from './game/data';
 import { getRaidPlan, getSectorIntel, RAID_OBJECTIVES, RAID_PREPARATIONS, SECTOR_KNOWLEDGE_CHANCE, SECTOR_PRESSURE_CHANCE, type RaidObjective, type RaidStrategy } from './game/raid-strategy';
+import { FIELD_KITS, getFieldKitStock } from './game/shelter-logistics';
 
 const e = (value: unknown) => String(value).replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]!));
 const n = (value: number) => Math.floor(value).toLocaleString('ru-RU');
@@ -17,6 +18,14 @@ function strategyLabel(strategy: Pick<RaidStrategy, 'objective' | 'preparation'>
 	return `${RAID_OBJECTIVES[strategy.objective].label} · ${RAID_PREPARATIONS[strategy.preparation].label}`;
 }
 
+export function fieldKitEditor(state: GameState, scav: Scav): string {
+	const stock = getFieldKitStock(state), selection = scav.fieldKit ?? 'none';
+	const kit = selection === 'none' ? null : FIELD_KITS[selection];
+	const room = kit ? state.shelter.rooms.find(item => item.type === (selection === 'maintenance' ? 'workshop' : 'medbay')) : null;
+	const effect = selection === 'maintenance' ? 'Износ оружия и установленных модулей −40% на всех этапах.' : selection === 'trauma' ? 'Травмы бойца −35% на всех этапах.' : 'Без расхода комплектов. Изготавливай поддержку в мастерской или медблоке.';
+	return `<div class="raid-field-kit"><label class="field-label">Комплект из убежища<select data-field-kit="${e(scav.id)}" data-focus-key="field-kit" aria-label="Комплект для выхода ${e(scav.name)}"><option value="none" ${selection === 'none' ? 'selected' : ''}>Без комплекта</option>${(['maintenance', 'trauma'] as const).map(id => `<option value="${id}" ${selection === id ? 'selected' : ''}>${e(FIELD_KITS[id].label)} · на складе ${stock[id]}</option>`).join('')}</select></label><p class="raid-field-kit-note ${kit && !stock[selection as keyof typeof stock] ? 'raid-field-kit-warning' : ''}">${e(effect)} ${kit ? `Расход: 1 комплект на бойца при каждой отправке, включая автовыход. Шанс пройти этап не меняется.${stock[selection as keyof typeof stock] === 0 ? ' На складе нет комплекта — отправка будет ждать производства.' : ''}` : ''}</p>${kit ? `<button class="text-button" ${room ? `data-action="open-work-room" data-id="${e(room.id)}"` : 'data-page="base"'}>${room ? `Изготовить: ${selection === 'maintenance' ? 'мастерская' : 'медблок'} →` : 'Построить комнату →'}</button>` : ''}</div>`;
+}
+
 /** Configures the next departure; the running sortie reads its own snapshot. */
 export function raidPlanEditor(state: GameState, scav: Scav, mapId: string): string {
 	const plan = getRaidPlan(scav), objective = RAID_OBJECTIVES[plan.objective], preparation = RAID_PREPARATIONS[plan.preparation];
@@ -28,7 +37,7 @@ export function raidPlanEditor(state: GameState, scav: Scav, mapId: string): str
 	const preparationText = plan.preparation === 'scouted'
 		? `${n(preparation.money)} ₽ и ${preparation.intel} разведданных на этого бойца: +${Math.round(preparation.chanceBonus * 100)} п.п. к шансу и −${Math.round((1 - preparation.durationMultiplier) * 100)}% времени на всех этапах. Оплата один раз, при отправке.`
 		: 'Без дополнительной оплаты. Можно заранее проверить маршрут за 20 ₽ и 2 разведданных на каждого бойца.';
-	return `<section class="raid-plan-editor" aria-label="План выхода ${e(scav.name)}"><div class="raid-plan-heading"><span class="eyebrow">${busy ? 'План следующего выхода' : 'Задача на выход'}</span><small>${e(MAP_BY_ID[mapId]?.name ?? 'Выбранный сектор')}</small></div><div class="raid-plan-fields"><label class="field-label">Что искать<select data-raid-objective="${e(scav.id)}" data-focus-key="raid-objective" aria-label="Цель выхода ${e(scav.name)}">${objectiveIds.map(id => `<option value="${id}" ${plan.objective === id ? 'selected' : ''}>${e(RAID_OBJECTIVES[id].label)}</option>`).join('')}</select></label><label class="field-label">Подготовка маршрута<select data-raid-preparation="${e(scav.id)}" data-focus-key="raid-preparation" aria-label="Подготовка выхода ${e(scav.name)}">${(Object.keys(RAID_PREPARATIONS) as (keyof typeof RAID_PREPARATIONS)[]).map(id => `<option value="${id}" ${plan.preparation === id ? 'selected' : ''}>${e(RAID_PREPARATIONS[id].label)}${id === 'scouted' ? ` · ${preparationCost(id)}` : ''}</option>`).join('')}</select></label></div><p class="raid-plan-effect">${e(effects)}</p><p class="raid-plan-preparation">${e(preparationText)}</p><small class="raid-plan-note">${busy ? 'Приказы уже идущего выхода сохранены. Эти настройки действуют со следующей отправки, в том числе в автосерии.' : 'Цель меняет добычу, но груз попадает на склад только после эвакуации. Эти настройки действуют и в автосерии.'}</small></section>`;
+	return `<section class="raid-plan-editor" aria-label="План выхода ${e(scav.name)}"><div class="raid-plan-heading"><span class="eyebrow">${busy ? 'План следующего выхода' : 'Задача на выход'}</span><small>${e(MAP_BY_ID[mapId]?.name ?? 'Выбранный сектор')}</small></div><div class="raid-plan-fields"><label class="field-label">Что искать<select data-raid-objective="${e(scav.id)}" data-focus-key="raid-objective" aria-label="Цель выхода ${e(scav.name)}">${objectiveIds.map(id => `<option value="${id}" ${plan.objective === id ? 'selected' : ''}>${e(RAID_OBJECTIVES[id].label)}</option>`).join('')}</select></label><label class="field-label">Подготовка маршрута<select data-raid-preparation="${e(scav.id)}" data-focus-key="raid-preparation" aria-label="Подготовка выхода ${e(scav.name)}">${(Object.keys(RAID_PREPARATIONS) as (keyof typeof RAID_PREPARATIONS)[]).map(id => `<option value="${id}" ${plan.preparation === id ? 'selected' : ''}>${e(RAID_PREPARATIONS[id].label)}${id === 'scouted' ? ` · ${preparationCost(id)}` : ''}</option>`).join('')}</select></label></div><p class="raid-plan-effect">${e(effects)}</p><p class="raid-plan-preparation">${e(preparationText)}</p>${fieldKitEditor(state, scav)}<small class="raid-plan-note">${busy ? 'Приказы уже идущего выхода сохранены. Эти настройки действуют со следующей отправки, в том числе в автосерии.' : 'Цель меняет добычу, но груз попадает на склад только после эвакуации. Эти настройки действуют и в автосерии.'}</small></section>`;
 }
 
 function preparationCost(id: keyof typeof RAID_PREPARATIONS): string {
@@ -39,7 +48,7 @@ function preparationCost(id: keyof typeof RAID_PREPARATIONS): string {
 /** A compact personal order in the squad picker, without assuming party-wide plans. */
 export function raidPlanSummary(scav: Scav): string {
 	const plan = getRaidPlan(scav);
-	return `<span class="raid-plan-summary">${e(RAID_OBJECTIVES[plan.objective].label)} · ${plan.preparation === 'scouted' ? `Разведка: ${preparationCost(plan.preparation)} за бойца` : 'Без разведподготовки'}</span>`;
+	return `<span class="raid-plan-summary">${e(RAID_OBJECTIVES[plan.objective].label)} · ${plan.preparation === 'scouted' ? `Разведка: ${preparationCost(plan.preparation)} за бойца` : 'Без разведподготовки'}${scav.fieldKit && scav.fieldKit !== 'none' ? ` · ${e(FIELD_KITS[scav.fieldKit].label)} ×1` : ''}</span>`;
 }
 
 export function sectorIntelPanel(state: GameState, mapId: string): string {
@@ -50,8 +59,9 @@ export function sectorIntelPanel(state: GameState, mapId: string): string {
 }
 
 /** Only a recorded snapshot describes a running sortie or historical receipt. */
-export function planBrief(item: Pick<Raid, 'strategy'> | Pick<RaidReport, 'strategy'>): string {
-	return item.strategy ? `<small class="raid-plan-brief">Задача: ${e(strategyLabel(item.strategy))}</small>` : '';
+export function planBrief(item: Pick<Raid, 'strategy' | 'fieldKit'> | Pick<RaidReport, 'strategy' | 'fieldKit'>): string {
+	const kit = item.fieldKit ? `${e(FIELD_KITS[item.fieldKit].label)}: ${item.fieldKit === 'maintenance' ? 'износ оружия и модулей −40%' : 'травмы −35%'}` : item.fieldKit === null ? 'Без комплекта из убежища' : '';
+	return item.strategy || kit ? `<small class="raid-plan-brief">${item.strategy ? `Задача: ${e(strategyLabel(item.strategy))}` : ''}${kit ? `${item.strategy ? ' · ' : ''}Комплект: ${kit}` : ''}</small>` : '';
 }
 
 export function raidStrategyResults(report: RaidReport, receipts: readonly RaidReport[] = [report]): string {
@@ -66,6 +76,6 @@ export function raidStrategyResults(report: RaidReport, receipts: readonly RaidR
 		const delivered = objective.supply
 			? `На склад доставлено ${supplyAmount(objective.supply, receipt.success ? receipt.supplies[objective.supply] : 0)} по целевой задаче.`
 			: 'Общий поиск; доставленная добыча перечислена ниже.';
-		return `<p><strong>${e(name)}</strong><span>${e(strategyLabel(strategy))}. ${e(delivered)}</span></p>`;
+		return `<p><strong>${e(name)}</strong><span>${e(strategyLabel(strategy))}. ${e(delivered)}${receipt.fieldKit ? ` В выходе использован ${e(FIELD_KITS[receipt.fieldKit].label)}; ${receipt.fieldKit === 'maintenance' ? 'износ оружия и модулей −40%' : 'травмы −35%'} на всех этапах.` : receipt.fieldKit === null ? ' Без комплекта из убежища.' : ''}</span></p>`;
 	}).join('')}${report.sectorOutcome ? `<small class="raid-strategy-sector-result">Обстановка после выхода: знание ${report.sectorOutcome.knowledge} / 5 · патрули ${report.sectorOutcome.pressure} / 6. Это зафиксированный итог выхода.</small>` : ''}</div>`;
 }

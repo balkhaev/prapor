@@ -11,7 +11,7 @@ const NOW = 1_792_000_000_000;
 function funded() {
 	const state = createGame(NOW);
 	state.money = 20_000;
-	state.supplies = { ammo: 50, medicine: 0, scrap: 30, intel: 0 };
+	state.supplies = { ammo: 50, medicine: 5, scrap: 30, intel: 5 };
 	return state;
 }
 function room(state: GameState, type: RoomInstance["type"]) {
@@ -145,13 +145,14 @@ describe("truthful shelter production presentation", () => {
 				advance(state, NOW + quote.duration * 1000);
 				target = room(state, recipe.roomType);
 			}
+			target.level = Math.max(target.level, recipe.minLevel ?? 1);
 			expect(assignWorker(state, state.scavs[0]!.id, target.id, state.lastUpdated).ok).toBe(true);
 			expect(setRoomRecipe(state, target.id, recipe.id, false, state.lastUpdated).ok).toBe(true);
 			const projection = present(state, target), output = (["ammo", "scrap", "medicine", "intel"] as const).find((key) => recipe.output[key] > 0)!;
 			expect(projection.jobId).toBe(target.queue[0]!.id);
 			expect(projection.productName).toBe(recipe.label);
-			expect(projection.productKind).toBe(output);
-			expect(projection.quantity).toBe(recipe.output[output]);
+			expect(projection.productKind).toBe(recipe.outputKit ? "field-kit" : output);
+			expect(projection.quantity).toBe(recipe.outputKit ? 1 : recipe.output[output]);
 			expect(projection.moduleSlot).toBeNull();
 			expect(projection.modelId).toBeNull();
 			expect(projection.active).toBe(true);
