@@ -101,7 +101,7 @@ const NEW_TEMPLATES: Record<LiveDistrictId, string[]> = {
 const intersects = (a: { x: number; y: number; width: number; height: number }, b: { x: number; y: number; width: number; height: number }, margin = 0): boolean =>
   a.x < b.x + b.width + margin && a.y < b.y + b.height + margin && a.x + a.width + margin > b.x && a.y + a.height + margin > b.y;
 function recommendedRoutes(districts: LiveDistrict[], pois: LivePoi[]): LiveWorldRoute[] {
-  const labels: Record<LivePurpose, { name: string; description: string }> = {
+  const labels: Record<Exclude<LivePurpose, 'boss'>, { name: string; description: string }> = {
     pvp: { name: 'Горячие точки', description: 'Центральные спорные посты. Здесь вероятны встречи с игроками и чужими патрулями.' },
     pve: { name: 'Охраняемые места', description: 'Путь от ближнего поста к мастерским и охраняемым дворам. Игроки тоже могут встретиться.' },
     loot: { name: 'Маршрут за припасами', description: 'Ближние сумки и разные хранилища по дороге в глубину района. Содержимое определяется сервером.' },

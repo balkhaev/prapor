@@ -78,6 +78,10 @@ describe('authoritative trophy barter and collection', () => {
       let itemIds: string[] = [], spareId = '';
       seed(path, player, value => {
         value.lootItems = [];
+        // Keep the campaign's actual 28-slot stand below capacity across all 30 recipes.
+        // Previously verified, unequipped gear can leave this fixture between exchanges.
+        const worn = new Set(value.scavs.flatMap(scav => [scav.loadout.armorItemId, scav.loadout.helmetItemId, scav.loadout.backpackItemId]));
+        value.gearItems = value.gearItems.filter(item => worn.has(item.id));
         // Put an identical spare first: the submitted objects, rather than a suggested recipe, must be removed.
         const spare = { id: `loot-${value.nextId++}`, modelId: offer.requirements[0]!.modelId, foundAt: NOW };
         value.lootItems.push(spare); spareId = spare.id; itemIds = giveRecipe(value, offer);
@@ -101,9 +105,9 @@ describe('authoritative trophy barter and collection', () => {
       else expect(loadout.protection).toBeGreaterThanOrEqual(model.protection);
       expect(parseSave(saveGame(player.snapshot.state))).not.toBeNull();
     }
-    expect(received).toHaveLength(26); const beforeRestart = structuredClone(player.snapshot);
+    expect(received).toHaveLength(30); const beforeRestart = structuredClone(player.snapshot);
     service.close(); const restored = setup(path), same = await client(restored, player.cookie);
-    expect(snapshotValue(same.snapshot)).toEqual(snapshotValue(beforeRestart)); expect(same.snapshot.state.gearItems).toHaveLength(26);
+    expect(snapshotValue(same.snapshot)).toEqual(snapshotValue(beforeRestart)); expect(same.snapshot.state.gearItems).toEqual(beforeRestart.state.gearItems);
   });
 
   test('stale, extra, wrong and another owner selections fail without consuming trophies; a repeated request cannot mint twice', async () => {

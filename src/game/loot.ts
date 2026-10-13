@@ -1,5 +1,6 @@
 import { MAP_BY_ID, type Rarity, type Supplies } from "./data";
 import type { ExpeditionBranch } from "./systems";
+import { BOSS_SAVE_VERSION, type BossId } from './bosses';
 
 export type LootCategory = "tools" | "electronics" | "medicine" | "provisions" | "valuables" | "intel" | "junk";
 export interface LootItem { id: string; modelId: string; foundAt: number }
@@ -9,6 +10,8 @@ export interface LootModel {
 	/** Only these low-value objects are sold automatically on confirmed delivery. */
 	autoSell?: true;
 	releasedIn?: number;
+	/** Only awarded after defeating this boss; never part of ordinary random pools. */
+	bossId?: BossId;
 }
 export const LOOT_CATEGORY_LABELS: Record<LootCategory, string> = {
 	tools: "Инструменты", electronics: "Электроника", medicine: "Медицина", provisions: "Провизия", valuables: "Ценности", intel: "Документы", junk: "Мусор",
@@ -68,6 +71,10 @@ export const LOOT_MODELS: LootModel[] = [
 	{ ...item("plastic-shard", "Обломок пластика", "Мусор · автопродажа при доставке. Треснувший кусок корпуса без полезных деталей.", "junk", "common", .06, 8, {}), autoSell: true, releasedIn: 24 },
 	{ ...item("dead-battery", "Потёкшая батарейка", "Мусор · автопродажа при доставке. Повреждённый элемент питания, непригодный для оборудования.", "junk", "common", .1, 12, {}), autoSell: true, releasedIn: 24 },
 	{ ...item("broken-circuit", "Обгоревшая плата", "Мусор · автопродажа при доставке. Дорожки и компоненты уничтожены, целым материалом не считается.", "junk", "common", .15, 18, {}), autoSell: true, releasedIn: 24 },
+	{ ...item('boss-bugor-sign', 'Знак Бугра', 'Именной знак главаря Посёлка. Трофей за победу; можно обменять на патрульную броню или продать по своей цене.', 'valuables', 'rare', .15, 360, { scrap: 5, intel: 2 }, 2, 2), releasedIn: BOSS_SAVE_VERSION, bossId: 'bugor' },
+	{ ...item('boss-lesnik-compass', 'Компас Лесника', 'Компас хозяина лесных дворов. Трофей за победу; целый предмет даёт экспедиционный рюкзак через бартер.', 'intel', 'rare', .2, 430, { scrap: 2, intel: 5 }, 2, 3), releasedIn: BOSS_SAVE_VERSION, bossId: 'lesnik' },
+	{ ...item('boss-liteyshchik-key', 'Ключ Литейщика', 'Ключ от защищённой промышленной секции. Трофей за победу; обмен на плитник сохраняет деньги и детали базы.', 'intel', 'epic', .12, 690, { scrap: 4, intel: 8 }, 3, 5), releasedIn: BOSS_SAVE_VERSION, bossId: 'liteyshchik' },
+	{ ...item('boss-komendant-seal', 'Печать Коменданта', 'Печать командира тяжёлых складов. Легендарный трофей за победу; бартер выдаёт исправную тяжёлую броню.', 'intel', 'legendary', .15, 1020, { scrap: 10, intel: 10 }, 3, 7), releasedIn: BOSS_SAVE_VERSION, bossId: 'komendant' },
 ];
 export const LOOT_MODEL_BY_ID: Record<string, LootModel> = Object.fromEntries(LOOT_MODELS.map(model => [model.id, model]));
 export const JUNK_MODELS: readonly LootModel[] = LOOT_MODELS.filter(model => model.autoSell === true);
@@ -103,17 +110,17 @@ export function balanceLootPool(pool: readonly { model: LootModel; weight: numbe
 	return valid.map(entry => ({ model: entry.model, weight: entry.model.autoSell ? entry.weight / junkTotal * junkShare
 		: entry.weight / totals[entry.model.rarity] * budget[entry.model.rarity] / availableBudget * usefulShare })).filter(entry => entry.weight > 0);
 }
-export function getRaidLootPool(mapId: string, branch: ExpeditionBranch, depth: number, catalogVersion = LOOT_BALANCE_VERSION): { model: LootModel; weight: number }[] {
+export function getRaidLootPool(mapId: string, branch: ExpeditionBranch, depth: number, catalogVersion = BOSS_SAVE_VERSION): { model: LootModel; weight: number }[] {
 	if (!Object.hasOwn(MAP_BY_ID, mapId) || !Object.hasOwn(branchCategories, branch) || !Number.isInteger(depth) || depth < 1 || depth > 3) return [];
 	const level = MAP_BY_ID[mapId]!.level;
-	const pool = LOOT_MODELS.filter(model => lootAvailableInCatalog(model.id, catalogVersion) && model.minDepth <= depth && model.minSectorLevel <= level).map(model => ({ model,
+	const pool = LOOT_MODELS.filter(model => !model.bossId && lootAvailableInCatalog(model.id, catalogVersion) && model.minDepth <= depth && model.minSectorLevel <= level).map(model => ({ model,
 		weight: ({ common: 7, uncommon: 4, rare: 1.5, epic: .45, legendary: .15 }[model.rarity])
 			* (sectorCategories[mapId]!.includes(model.category) ? 3 : .6) * (branchCategories[branch].includes(model.category) ? 1.8 : 1)
 			* (model.rarity === "rare" || model.rarity === "epic" ? 1 + (depth - 1) * .25 + (level - 1) * .08 : 1),
 	}));
 	return catalogVersion < LOOT_BALANCE_VERSION ? pool : balanceLootPool(pool, depth, undefined, branch);
 }
-export function rollRaidLoot(mapId: string, branch: ExpeditionBranch, depth: number, random: () => number, catalogVersion = LOOT_BALANCE_VERSION): LootModel[] {
+export function rollRaidLoot(mapId: string, branch: ExpeditionBranch, depth: number, random: () => number, catalogVersion = BOSS_SAVE_VERSION): LootModel[] {
 	const pool = getRaidLootPool(mapId, branch, depth, catalogVersion); if (!pool.length) return [];
 	const count = 1 + (random() < (branch === "scavenge" ? .3 : .15) + (depth - 1) * .12 ? 1 : 0);
 	const result: LootModel[] = [], total = pool.reduce((sum, entry) => sum + entry.weight, 0);

@@ -51,10 +51,12 @@ export * from "./barter";
 import { getLootRequirementQuote, type LootRequirement } from "./loot-uses";
 export * from "./loot-uses";
 import { getRaidGearLootPool, getRaidGearValue, rollRaidGearLoot } from "./raid-gear-loot";
+import { BOSS_SAVE_VERSION, BOSS_BY_ID, getBoss, getBossForMap, type BossId, type BossDefinition } from "./bosses";
+export * from "./bosses";
 export * from "./raid-gear-loot";
 
 export const SAVE_KEY = "prapor.save.v1";
-export const SAVE_VERSION = 25;
+export const SAVE_VERSION = 26;
 export const MAX_PENDING_LOOT_DELIVERIES = 128;
 export const PENDING_LOOT_RAID_LIMIT = 96;
 export const MAX_OFFLINE_MS = 8 * 60 * 60 * 1000;
@@ -145,6 +147,12 @@ export interface Expedition {
 	medical?: RaidMedicalState;
 	/** Paid sorties retain the loot catalogue that existed when they departed. */
 	lootCatalogVersion?: number;
+	bossEncounter?: BossEncounter;
+}
+/** Only retained physical reward IDs are recorded; another party member never owns this receipt. */
+export interface BossEncounter {
+	bossId: BossId; stage: number; at: number; defeated: boolean; carrierRaidId: string | null;
+	bounty: number; lootItemIds: string[]; gearItemIds: string[]; moduleItemIds: string[];
 }
 export interface Raid {
 	id: string;
@@ -172,6 +180,8 @@ export interface Raid {
 	fieldKit?: FieldKit;
 	/** New finds use a private independent stream; migrated sorties retain their paid loot rules. */
 	lootVersion?: 1;
+	/** Frozen at paid dispatch, independent of the fighter's next order. */
+	bossHunt?: BossId;
 }
 export interface RaidReport {
 	id: string;
@@ -207,8 +217,12 @@ export interface RaidReport {
 	lootPending?: LootItem[];
 	gearItems?: GearItem[];
 	gearPending?: GearItem[];
+	bossHunt?: BossId;
+	bossEncounter?: BossEncounter;
+	/** The fixed boss module remains intact when the component rack is full. */
+	modulePending?: ModuleInstance[];
 }
-export interface LootDelivery { id: string; raidId: string; at: number; items: LootItem[]; gearItems?: GearItem[] }
+export interface LootDelivery { id: string; raidId: string; at: number; items: LootItem[]; gearItems?: GearItem[]; moduleItems?: ModuleInstance[] }
 export interface GameState {
 	schemaVersion: number;
 	createdAt: number;
@@ -235,6 +249,7 @@ export interface GameState {
 	sectorIntel?: Record<string, SectorIntel>;
 	lootItems?: LootItem[];
 	pendingLoot?: LootDelivery[];
+	bossCooldowns?: Partial<Record<BossId, number>>;
 	stats: {
 		raidsWon: number;
 		raidsCompleted: number;
@@ -294,6 +309,7 @@ function rebaseClock(state: GameState, now: number) {
 		raid.endsAt = raid.expedition?.status === "choice" ? Math.max(0, raid.endsAt - shift) : raid.endsAt - shift;
 		if (raid.expedition) for (const event of raid.expedition.trail) event.at = Math.max(0, event.at - shift);
 		if (raid.expedition?.medical) raid.expedition.medical.start.body.painUntil = Math.max(0, raid.expedition.medical.start.body.painUntil - shift);
+		if (raid.expedition?.bossEncounter) raid.expedition.bossEncounter.at = Math.max(0, raid.expedition.bossEncounter.at - shift);
 		if (raid.squad) for (const member of raid.squad.members) {
 			if (member.medicalAt !== undefined) member.medicalAt = Math.max(0, member.medicalAt - shift);
 			if (member.medical) member.medical.body.painUntil = Math.max(0, member.medical.body.painUntil - shift);
@@ -315,12 +331,14 @@ function rebaseClock(state: GameState, now: number) {
 		report.at = Math.max(0, report.at - shift);
 		for (const event of report.events) event.at = Math.max(0, event.at - shift);
 		if (report.medical) report.medical.body.painUntil = Math.max(0, report.medical.body.painUntil - shift);
+		if (report.bossEncounter) report.bossEncounter.at = Math.max(0, report.bossEncounter.at - shift);
 		if (report.squad) for (const member of report.squad.members) {
 			if (member.medicalAt !== undefined) member.medicalAt = Math.max(0, member.medicalAt - shift);
 			if (member.medical) member.medical.body.painUntil = Math.max(0, member.medical.body.painUntil - shift);
 		}
 	}
 	for (const delivery of state.pendingLoot ?? []) delivery.at = Math.max(0, delivery.at - shift);
+	for (const bossId of Object.keys(state.bossCooldowns ?? {}) as BossId[]) state.bossCooldowns![bossId] = Math.max(0, state.bossCooldowns![bossId]! - shift);
 	state.createdAt = Math.min(state.createdAt, now);
 	state.lastUpdated = now;
 }
@@ -1171,10 +1189,13 @@ export function claimLootDelivery(state: GameState, deliveryId: string): ActionR
 	if (!delivery) return fail("Посылка с трофеями не найдена или уже получена.");
 	if ((state.lootItems?.length ?? 0) + delivery.items.length > getLootCapacity(state)) return fail(`Для всей посылки нужно ${delivery.items.length} свободных мест на складе трофеев.`);
 	if (state.gearItems.length + (delivery.gearItems?.length ?? 0) > 28) return fail(`Для всей посылки нужно ${delivery.gearItems?.length ?? 0} свободных мест на стойке снаряжения.`);
+	if (state.modules.length + (delivery.moduleItems?.length ?? 0) > getModuleCapacity(state)) return fail(`Для всей посылки нужно ${delivery.moduleItems?.length ?? 0} свободных мест на стойке деталей.`);
 	(state.lootItems ??= []).push(...delivery.items);
 	state.gearItems.push(...(delivery.gearItems ?? []));
+	state.modules.push(...(delivery.moduleItems ?? []));
+	if (delivery.moduleItems?.length) noteAchievementLoot(state, delivery.raidId, delivery.moduleItems.map(item => item.id));
 	state.pendingLoot = state.pendingLoot!.filter(value => value.id !== delivery.id);
-	return ok(`Посылка получена: ${delivery.items.length} целых трофеев${delivery.gearItems?.length ? ` и ${delivery.gearItems.length} предметов снаряжения` : ""}. Их можно оставить, выдать бойцам или продать по своему выбору.`);
+	return ok(`Посылка получена: ${delivery.items.length} целых трофеев${delivery.gearItems?.length ? `, ${delivery.gearItems.length} предметов снаряжения` : ""}${delivery.moduleItems?.length ? `, ${delivery.moduleItems.length} оружейных деталей` : ""}. Их можно оставить, выдать бойцам или продать по своему выбору.`);
 }
 export function sellLootItem(state: GameState, itemId: string): ActionResult {
 	const item = state.lootItems?.find(item => item.id === itemId); if (!item) return fail("Трофей не найден.");
@@ -1446,8 +1467,11 @@ export function getRaidAmmoCost(scav: Scav, map: RaidMap, state?: GameState): nu
 		* (weapon ? getWeaponRole(weapon).ammoMultiplier * getWeaponStats(weapon).ammoMultiplier : 1) * (state ? getLoadoutStats(state, scav).ammoMultiplier : 1)));
 }
 
-export function getRaidQuote(state: GameState, scav: Scav, map: RaidMap) {
+export function getRaidQuote(state: GameState, scav: Scav, map: RaidMap, now = state.lastUpdated) {
 	const strategy = getRaidStrategy(state, scav, map.id), effects = getRaidStrategyEffects(strategy);
+	const boss = strategy.objective === 'boss' ? getBossForMap(map.id) : null;
+	const bossCooldownUntil = boss && (state.bossCooldowns?.[boss.id] ?? 0) > now ? state.bossCooldowns![boss.id]! : null;
+	const bossActive = Boolean(boss && state.raids.some(raid => raid.bossHunt === boss.id));
 	const preparation = RAID_PREPARATIONS[strategy.preparation];
 	const money = 10 + map.level * 5 + preparation.money;
 	const ammo = getRaidAmmoCost(scav, map, state);
@@ -1457,6 +1481,9 @@ export function getRaidQuote(state: GameState, scav: Scav, map: RaidMap) {
 	let reason: string | null = null;
 	const weapon = state.weapons.find((item) => item.id === scav.weaponInstanceId);
 	if (scav.status === "raiding") reason = "Боец уже в рейде.";
+	else if (strategy.objective === 'boss' && !boss) reason = "В этом секторе нет цели для охоты на босса.";
+	else if (bossActive) reason = "Отряд уже охотится на этого босса. Дождись завершения выхода.";
+	else if (bossCooldownUntil) reason = `Босс вернётся через ${Math.ceil((bossCooldownUntil - now) / 1000)} сек.`;
 	else if ((state.pendingLoot?.length ?? 0) >= PENDING_LOOT_RAID_LIMIT) reason = "Сначала забери посылки с трофеями: место для новых возвращений заканчивается.";
 	else if (scav.assignment) reason = "Боец работает в убежище. Сначала освободи его от работы.";
 	else if (state.level < map.level) reason = `Сектор откроется на ${map.level} уровне.`;
@@ -1473,13 +1500,14 @@ export function getRaidQuote(state: GameState, scav: Scav, map: RaidMap) {
 	return { money, ammo, intel, medicine, chance: baseChance === 0 ? 0 : clamp(baseChance + effects.chanceBonus, .22, .97),
 		duration: Math.max(20, Math.min(600, Math.round(getRaidDuration(state, scav, map) * effects.durationMultiplier))), reason,
 		strategy, fieldKit, preparationMoney: preparation.money, preparationIntel: preparation.intel,
+		...(strategy.objective === 'boss' ? { boss, bossCooldownUntil, bossAvailable: Boolean(boss && !bossActive && !bossCooldownUntil) } : {}),
 		ammunition: weapon ? getAmmoEffect(weapon, scav.loadout.ammoType, map.id, "scavenge", 1, scav.tactic) : null };
 }
 
-function raidBlockReason(state: GameState, scav: Scav, map: RaidMap, minHealth = 25): string | null {
+function raidBlockReason(state: GameState, scav: Scav, map: RaidMap, minHealth = 25, now = state.lastUpdated): string | null {
 	if (scav.health < minHealth) return `Восстановление до ${minHealth}% здоровья.`;
 	if (!isScavMedicallyReady(scav, minHealth)) return scav.medicalTreatment ? 'Курс лечения ещё не завершён.' : 'Нужно остановить кровь и восстановить подвижность.';
-	return getRaidQuote(state, scav, map).reason;
+	return getRaidQuote(state, scav, map, now).reason;
 }
 
 export function getGearCost(scav: Scav, slot: GearSlot): UpgradeCost {
@@ -1550,9 +1578,9 @@ export function getRaidPhase(raid: Raid, now: number): { label: string; progress
 /** Internal dispatch never advances time: automatic repeat uses the simulation cursor. */
 function startRaid(state: GameState, scav: Scav, map: RaidMap, now: number, isAuto: boolean, frozenQuote?: ReturnType<typeof getRaidQuote>): ActionResult {
 	if (scav.status === "raiding") return fail("Дикий уже в рейде.");
-	const reason = raidBlockReason(state, scav, map, isAuto ? scav.autoRaid.minHealth : 25);
+	const reason = frozenQuote ? frozenQuote.reason : raidBlockReason(state, scav, map, isAuto ? scav.autoRaid.minHealth : 25, now);
 	if (reason) return fail(reason);
-	const quote = frozenQuote ?? getRaidQuote(state, scav, map);
+	const quote = frozenQuote ?? getRaidQuote(state, scav, map, now);
 	const stats = getLoadoutStats(state, scav);
 	const weapon = state.weapons.find((item) => item.id === scav.weaponInstanceId)!;
 	const weaponStats = getWeaponStats(weapon);
@@ -1572,6 +1600,7 @@ function startRaid(state: GameState, scav: Scav, map: RaidMap, now: number, isAu
 		armorLevel: scav.gear.armor, backpackLevel: scav.gear.backpack,
 		strategy: { ...quote.strategy },
 		lootVersion: 1,
+		...(quote.boss ? { bossHunt: quote.boss.id } : {}),
 		...(quote.fieldKit ? { fieldKit: quote.fieldKit } : {}),
 		expedition: { stage: 1, status: "travel", branch: "scavenge", cargo: { money: 0, supplies: emptySupplies(), weaponIds: [], modules: [] },
 			legacyLoot: false, gunCombatBonus: (60 - weaponStats.recoil) / 1000,
@@ -1968,6 +1997,14 @@ export function claimContract(
 	return ok(`«${contract.name}»: награда получена.`);
 }
 
+function getPaidBoss(raid: Raid): BossDefinition | null {
+	return raid.bossHunt && raid.strategy?.objective === 'boss' && raid.lootVersion === 1
+		&& !raid.expedition?.legacyLoot && (raid.expedition?.lootCatalogVersion ?? 0) >= BOSS_SAVE_VERSION ? getBoss(raid.bossHunt) : null;
+}
+function getTargetBoss(raid: Raid, stage: number, branch: ExpeditionBranch): BossDefinition | null {
+	const boss = getPaidBoss(raid);
+	return boss && boss.depth === stage && branch === 'combat' && !raid.expedition?.bossEncounter ? boss : null;
+}
 function getIndividualExpeditionChoices(state: GameState, raid: Raid, selectedPerk?: RunPerk) {
 	const expedition = raid.expedition;
 	if (!expedition || expedition.stage >= 3) return [];
@@ -1979,10 +2016,11 @@ function getIndividualExpeditionChoices(state: GameState, raid: Raid, selectedPe
 	return (Object.keys(EXPEDITION_BRANCHES) as ExpeditionBranch[]).map((branch) => {
 		const definition = EXPEDITION_BRANCHES[branch];
 		const stage = expedition.stage + 1;
+		const boss = getTargetBoss(raid, stage, branch);
 		const money = 10 + map.level * 5 + (stage - 1) * 8;
 		const ammo = Math.max(1, Math.ceil(map.ammoCost * TACTICS[raid.tactic].ammoMultiplier * definition.ammoMultiplier
-			* expedition.ammoMultiplier * (expedition.ammunition?.ammoMultiplier ?? (expedition.loadout.ammoType === "piercing" ? 1.65 : 1))) + (perks.includes("pathfinder") ? 1 : 0));
-		const intel = map.intelCost + (branch === "recon" ? 1 : 0);
+			* expedition.ammoMultiplier * (expedition.ammunition?.ammoMultiplier ?? (expedition.loadout.ammoType === "piercing" ? 1.65 : 1))) + (perks.includes("pathfinder") ? 1 : 0)) + (boss?.extraAmmo ?? 0);
+		const intel = map.intelCost + (branch === "recon" ? 1 : 0) + (boss?.extraIntel ?? 0);
 		const currentStats = weapon ? getWeaponStats(weapon) : null;
 		const snapshot = expedition.weaponMechanics;
 		const mechanicalBonus = snapshot && weapon && currentStats
@@ -1990,13 +2028,14 @@ function getIndividualExpeditionChoices(state: GameState, raid: Raid, selectedPe
 				+ getWeaponRouteEffect(weapon, map.id, branch, raid.tactic, currentStats).bonus - snapshot.firstBonus
 			: branch === "combat" ? expedition.gunCombatBonus : 0;
 		const ammunition = expedition.ammunition && weapon ? getAmmoEffect(weapon, expedition.loadout.ammoType, map.id, branch, stage, raid.tactic) : null;
-		const chance = clamp(expedition.baseChance - (stage - 1) * 0.09 + definition.chanceBonus
+		const ordinaryChance = clamp(expedition.baseChance - (stage - 1) * 0.09 + definition.chanceBonus
 			+ mechanicalBonus
 			+ (ammunition ? ammunition.bonus - expedition.ammunition!.firstBonus : 0)
 			+ (weapon ? getWeaponRole(weapon).branches[branch] ?? 0 : 0)
 			+ (perks.includes("careful") ? 0.06 : 0) - (perks.includes("haggler") ? 0.04 : 0), 0.15, 0.97);
+		const chance = boss ? clamp(ordinaryChance - boss.chancePenalty, .15, .97) : ordinaryChance;
 		const unboundedDuration = Math.max(20, Math.round(expedition.baseDuration * (1 + (stage - 1) * 0.16)
-			* definition.durationMultiplier * (perks.includes("pathfinder") ? 0.8 : 1)));
+			* definition.durationMultiplier * (perks.includes("pathfinder") ? 0.8 : 1))) + (boss?.extraSeconds ?? 0);
 		const duration = raid.strategy ? Math.min(600, unboundedDuration) : unboundedDuration;
 		let reason: string | null = null;
 		if (expedition.status !== "choice") reason = "Дождись контрольной точки.";
@@ -2005,7 +2044,7 @@ function getIndividualExpeditionChoices(state: GameState, raid: Raid, selectedPe
 		else if (state.money < money) reason = `Нужно ${money} ₽ на следующий этап.`;
 		else if (state.supplies.ammo < ammo) reason = `Нужно ${ammo} патронов.`;
 		else if (state.supplies.intel < intel) reason = `Нужно ${intel} разведданных.`;
-		return { branch, label: definition.label, description: definition.description, money, ammo, intel, chance, duration, reason, ammunition };
+		return { branch, label: boss ? `Бой: ${boss.name}` : definition.label, description: boss ? boss.description : definition.description, money, ammo, intel, chance, duration, reason, ammunition, ...(boss ? { boss } : {}) };
 	});
 }
 
@@ -2133,9 +2172,38 @@ function wearEquippedGear(state: GameState, scav: Scav, stage: number, failed: b
 		if (item) item.durability = Math.max(0, item.durability - (key === "backpackItemId" ? 3 + stage : 4 + stage * 2 + (failed ? 8 : 0)));
 	}
 }
+function emptyBossEncounter(boss: BossDefinition, now: number): BossEncounter {
+	return { bossId: boss.id, stage: boss.depth, at: now, defeated: false, carrierRaidId: null, bounty: 0, lootItemIds: [], gearItemIds: [], moduleItemIds: [] };
+}
+function retainBossReceipt(expedition: Expedition) {
+	const encounter = expedition.bossEncounter;
+	if (!encounter) return;
+	encounter.lootItemIds = encounter.lootItemIds.filter(itemId => expedition.cargo.lootItems?.some(item => item.id === itemId));
+	encounter.gearItemIds = encounter.gearItemIds.filter(itemId => expedition.cargo.gearItems?.some(item => item.id === itemId));
+	encounter.moduleItemIds = encounter.moduleItemIds.filter(itemId => expedition.cargo.modules.some(item => item.id === itemId));
+}
+function grantBossReward(state: GameState, raid: Raid, boss: BossDefinition, now: number) {
+	const expedition = raid.expedition!, encounter = expedition.bossEncounter!;
+	encounter.defeated = true; encounter.carrierRaidId = raid.id; encounter.bounty = boss.bounty;
+	for (const modelId of [boss.trophyModelId, boss.lootModelId]) {
+		const item: LootItem = { id: id(state, 'loot'), modelId, foundAt: now };
+		(expedition.cargo.lootItems ??= []).push(item); encounter.lootItemIds.push(item.id);
+	}
+	const gear: GearItem = { id: id(state, 'gear'), modelId: boss.gearModelId, durability: 90 };
+	(expedition.cargo.gearItems ??= []).push(gear); encounter.gearItemIds.push(gear.id);
+	const part = createModule(state, boss.moduleModelId, now, 90);
+	expedition.cargo.modules.push(part); encounter.moduleItemIds.push(part.id);
+	const weaponId = getModuleDefinition(part).weaponId;
+	if (weaponId && !state.discoveredWeapons.includes(weaponId)) state.discoveredWeapons.push(weaponId);
+	expedition.cargo.money += boss.bounty;
+	fitCargo(expedition.cargo, expedition.capacity, raid.strategy?.objective, true); retainBossReceipt(expedition);
+	(state.bossCooldowns ??= {})[boss.id] = now + boss.live.respawnMs;
+}
 /** Resolve a checkpoint exactly once. A successful manual checkpoint remains an active raid. */
 function reachCheckpoint(state: GameState, raid: Raid, now: number, party?: { injuryMultiplier: number; rescuedBy: string | null }): RaidReport | null {
 	const expedition = raid.expedition!;
+	const boss = getTargetBoss(raid, expedition.stage, expedition.branch);
+	if (boss) expedition.bossEncounter = emptyBossEncounter(boss, now);
 	const objective = RAID_OBJECTIVES[raid.strategy?.objective ?? "general"];
 	const map = ownValue(MAP_BY_ID, raid.mapId)!;
 	const scav = state.scavs.find((item) => item.id === raid.scavId)!;
@@ -2175,6 +2243,7 @@ function reachCheckpoint(state: GameState, raid: Raid, now: number, party?: { in
 		expedition.trail.push({ at: now, label: `Ранения · этап ${expedition.stage}`, text: medicalResult.events.join(' ').slice(0, 400) || 'Повреждений нет.', kind: medicalResult.dead || !medicalResult.stable ? 'danger' : 'neutral' });
 	}
 	if (!success) {
+		if (boss) expedition.trail.push({ at: now, label: `Босс · ${boss.name}`, text: 'Бой сорван. Главарь удержал позицию; награда не получена.', kind: 'danger' });
 		expedition.trail.push({ at: now, label: `Засада · этап ${expedition.stage}`, text: (`Маршрут «${EXPEDITION_BRANCHES[expedition.branch].label}» сорван. Невынесенный груз потерян.${discoveriesText ? ` По рации передано: ${discoveriesText}.` : ""}${streetText}`).slice(0, 400), kind: "danger" });
 		const legacyDamage = Math.ceil((32 + random() * 35 + expedition.stage * 4) * injury);
 		if (!medicalResult) { scav.health = Math.max(0, scav.health - legacyDamage); delete scav.body; }
@@ -2230,7 +2299,7 @@ function reachCheckpoint(state: GameState, raid: Raid, now: number, party?: { in
 			if (model.slot === "receiver" && !state.discoveredWeapons.includes(model.weaponId!)) state.discoveredWeapons.push(model.weaponId!);
 		}
 	}
-	if (raid.lootVersion === 1) {
+	if (raid.lootVersion === 1 && !boss) {
 		const lootRandom = generator(((raid.outcomeSeed ?? raid.seed) ^ Math.imul(expedition.stage, 0x4e731ac5)) >>> 0);
 		const finds = rollRaidLoot(map.id, expedition.branch, expedition.stage, lootRandom, expedition.lootCatalogVersion ?? 16);
 		expedition.cargo.lootItems ??= [];
@@ -2241,7 +2310,10 @@ function reachCheckpoint(state: GameState, raid: Raid, now: number, party?: { in
 			for (const find of rollRaidGearLoot(map.id, expedition.branch, expedition.stage, gearRandom, expedition.lootCatalogVersion)) expedition.cargo.gearItems.push({ id: id(state, "gear"), modelId: find.model.id, durability: find.durability });
 		}
 	}
+	if (boss && !raid.squad) grantBossReward(state, raid, boss, now);
 	fitCargo(expedition.cargo, expedition.capacity, raid.strategy?.objective, raid.lootVersion === 1);
+	retainBossReceipt(expedition);
+	if (boss) expedition.trail.push({ at: now, label: `Босс · ${boss.name}`, text: raid.squad ? 'Отряд завершает общий бой. Добыча будет выдана один раз, если все бойцы пройдут этап.' : `Главарь побеждён. Награда и ${boss.bounty} ₽ остаются под риском в рюкзаке до эвакуации.`, kind: raid.squad ? 'neutral' : 'loot' });
 	expedition.trail.push({ at: now, label: `Контрольная точка ${expedition.stage}`, text: (`Маршрут «${EXPEDITION_BRANCHES[expedition.branch].label}» пройден. В рюкзаке ${expedition.cargo.money} ₽, ${getCargoWeight(expedition.cargo)} ед. груза и ${expedition.cargo.weaponIds.length} ед. оружия.${discoveriesText ? ` Передано: ${discoveriesText}.` : ""}${streetText}`).slice(0, 400), kind: "loot" });
 	expedition.status = "choice";
 	const candidates = (Object.keys(RUN_PERKS) as RunPerk[]).filter((perk) => !expedition.perks.includes(perk));
@@ -2254,7 +2326,8 @@ function reachCheckpoint(state: GameState, raid: Raid, now: number, party?: { in
 		return finishExpedition(state, raid, true, now);
 	}
 	if (expedition.stage < expedition.autoDepth) {
-		const branch: ExpeditionBranch = raid.tactic === "cautious" ? "recon" : raid.tactic === "bold" ? "combat" : "scavenge";
+		const hunt = getPaidBoss(raid);
+		const branch: ExpeditionBranch = hunt?.depth === expedition.stage + 1 ? 'combat' : raid.tactic === "cautious" ? "recon" : raid.tactic === "bold" ? "combat" : "scavenge";
 		const result = continueAtCheckpoint(state, raid, branch, expedition.offers[0]!, now);
 		if (result.ok) return null;
 	}
@@ -2285,6 +2358,7 @@ function completeStrategySortie(state: GameState, reports: RaidReport[]) {
 }
 function reachSquadCheckpoint(state: GameState, raid: Raid, now: number): RaidReport[] {
 	const squad = raid.squad!, group = getRaidGroup(state, raid), reports: RaidReport[] = [];
+	const boss = getTargetBoss(raid, raid.expedition!.stage, raid.expedition!.branch);
 	const medicalOutcomes = getSquadRawOutcomes(squad, raid.mapId);
 	for (const member of group) {
 		const report = reachCheckpoint(state, member, now, { injuryMultiplier: squadInjuryMultiplier(squad, member.scavId), rescuedBy: squad.actions.find((action) => action.kind === "rescue" && action.targetId === member.scavId)?.actorId ?? null });
@@ -2313,6 +2387,16 @@ function reachSquadCheckpoint(state: GameState, raid: Raid, now: number): RaidRe
 		}
 		attachSquadReports(state, squad, reports);
 	} else {
+		if (boss) {
+			const carrier = group.find(member => member.id === squad.leaderRaidId)!;
+			grantBossReward(state, carrier, boss, now);
+			for (const member of group) {
+				const encounter = member.expedition!.bossEncounter!;
+				encounter.defeated = true; encounter.carrierRaidId = carrier.id;
+				const event = member.expedition!.trail.find(item => item.at === now && item.label === `Босс · ${boss.name}`)!;
+				event.kind = 'loot'; event.text = `${boss.name} побеждён отрядом. ${carrier.scavName} несёт общую награду и ${boss.bounty} ₽ до эвакуации.`;
+			}
+		}
 		const offers = group[0]!.expedition!.offers;
 		for (const member of group) member.expedition!.offers = [...offers];
 	}
@@ -2330,6 +2414,7 @@ function finishExpedition(state: GameState, raid: Raid, success: boolean, now: n
 		weaponAutoSold: false, description: "", isAuto: raid.isAuto, tactic: raid.tactic, events: [], depth: expedition.stage,
 		discoveries: [...expedition.discoveries], lostCargo: success ? null : structuredClone(expedition.cargo), moduleIds: [],
 		...(raid.strategy ? { strategy: { ...raid.strategy } } : {}), ...(expedition.reconCompleted ? { reconCompleted: true } : {}), ...(raid.fieldKit ? { fieldKit: raid.fieldKit } : {}),
+		...(raid.bossHunt ? { bossHunt: raid.bossHunt } : {}), ...(expedition.bossEncounter ? { bossEncounter: structuredClone(expedition.bossEncounter) } : {}),
 		...(raid.lootVersion === 1 ? { lootItems: [], lootPending: [], ...((expedition.lootCatalogVersion ?? 16) >= 24 ? { gearItems: [], gearPending: [] } : {}) } : {}) };
 	if (expedition.medical) report.medical = { body: structuredClone(getScavBody(scav)), inventory: structuredClone(expedition.medical.inventory) };
 	state.stats.raidsCompleted++; scav.raids++;
@@ -2360,7 +2445,9 @@ function finishExpedition(state: GameState, raid: Raid, success: boolean, now: n
 			report.moduleIds.push(part.modelId);
 			const model = getModuleDefinition(part);
 			if (model.slot === "receiver") { state.stats.weaponsFound++; if (["rare", "epic", "legendary"].includes(ownValue(WEAPON_BY_ID, model.weaponId!)!.rarity)) state.stats.rareWeaponsFound++; }
-			if (state.modules.length < getModuleCapacity(state)) { state.modules.push(part); noteAchievementLoot(state, raid.id, [part.id]); } else report.money += getModuleSaleValue(part);
+			if (state.modules.length < getModuleCapacity(state)) { state.modules.push(part); noteAchievementLoot(state, raid.id, [part.id]); }
+			else if (expedition.bossEncounter?.moduleItemIds.includes(part.id)) (report.modulePending ??= []).push(structuredClone(part));
+			else report.money += getModuleSaleValue(part);
 		}
 		for (const item of expedition.cargo.lootItems ?? []) {
 			if (getLootModel(item).autoSell) {
@@ -2378,7 +2465,7 @@ function finishExpedition(state: GameState, raid: Raid, success: boolean, now: n
 			if (state.gearItems.length < 28) { state.gearItems.push(item); report.gearItems!.push(structuredClone(item)); }
 			else report.gearPending!.push(structuredClone(item));
 		}
-		if (report.lootPending?.length || report.gearPending?.length) (state.pendingLoot ??= []).push({ id: id(state, "delivery"), raidId: raid.id, at: now, items: structuredClone(report.lootPending ?? []), ...(report.gearPending?.length ? { gearItems: structuredClone(report.gearPending) } : {}) });
+		if (report.lootPending?.length || report.gearPending?.length || report.modulePending?.length) (state.pendingLoot ??= []).push({ id: id(state, "delivery"), raidId: raid.id, at: now, items: structuredClone(report.lootPending ?? []), ...(report.gearPending?.length ? { gearItems: structuredClone(report.gearPending) } : {}), ...(report.modulePending?.length ? { moduleItems: structuredClone(report.modulePending) } : {}) });
 		const expectedMoney = report.money;
 		report.money = addMoney(state, report.money);
 		report.description = `Эвакуация после этапа ${expedition.stage}. Груз доставлен${report.weaponAutoSold ? "; лишний трофей продан" : ""}.`;
@@ -2386,6 +2473,7 @@ function finishExpedition(state: GameState, raid: Raid, success: boolean, now: n
 		if (report.money < expectedMoney || report.lootAutoSold?.some(sale => sale.money < getLootTraderPrice(sale.item))) report.description += " Выплата ограничена пределом кошелька или учёта заработка.";
 		if (report.gearPending?.length) report.description += ` Посылка ждёт места: ${report.lootPending?.length ?? 0} трофеев и ${report.gearPending.length} предметов снаряжения.`;
 		else if (report.lootPending?.length) report.description += ` Склад трофеев полон: ${report.lootPending.length} предметов ждут в посылке. Освободи место и забери их целыми.`;
+		if (report.modulePending?.length) report.description += ' Деталь босса сохранена в посылке до освобождения стойки.';
 		const discarded = getCargoWeight({ money: 0, supplies: {
 			ammo: expedition.cargo.supplies.ammo - report.supplies.ammo, medicine: expedition.cargo.supplies.medicine - report.supplies.medicine,
 			scrap: expedition.cargo.supplies.scrap - report.supplies.scrap, intel: expedition.cargo.supplies.intel - report.supplies.intel }, weaponIds: [], modules: [] });
@@ -2405,6 +2493,7 @@ function finishExpedition(state: GameState, raid: Raid, success: boolean, now: n
 		report.description = `Выход сорван на этапе ${expedition.stage}. Невынесенный груз потерян. ${rescuedBy ? `Товарищ ${raid.squad?.members.find((member) => member.scavId === rescuedBy)?.scavName ?? "из отряда"} спас бойца и его оружие личной аптечкой.` : report.lostScav ? "Боец пропал." : report.lostWeapon ? "Боец вернулся без оружия." : "Боец вернулся раненым."}`;
 	}
 	if (report.discoveries.length) report.description += " Переданные чертежи сохранены.";
+	if (report.bossHunt) report.description = report.description.slice(0, 300);
 	noteAchievementRaidFinished(state, raid, report);
 	if (!report.lostScav) {
 		scav.level = Math.min(15, 1 + Math.floor(Math.sqrt(scav.xp / 60)));
@@ -2695,6 +2784,9 @@ function simulateAdvance(state: GameState, now: number, stoppedAtBoundary: Reado
 			const map = ownValue(MAP_BY_ID, scav.autoRaid.mapId);
 			const weapon = state.weapons.find((item) => item.id === scav.weaponInstanceId);
 			if (!map || state.level < map.level || !weapon || weapon.durability < 10) continue;
+			const boss = getRaidStrategy(state, scav, map.id).objective === 'boss' ? getBossForMap(map.id) : null;
+			const cooldown = boss ? state.bossCooldowns?.[boss.id] ?? 0 : 0;
+			if (cooldown > cursor) next = Math.min(next, cooldown);
 			if (!isScavMedicallyReady(scav, scav.autoRaid.minHealth)) {
 				const wait = medicalRecoveryWait(state, scav, scav.autoRaid.minHealth);
 				next = Math.min(next, cursor + Math.max(1, wait));
@@ -2724,6 +2816,7 @@ function simulateAdvance(state: GameState, now: number, stoppedAtBoundary: Reado
 		}
 	});
 	if (discarded > 0) for (const scav of state.scavs) if (scav.medicalTreatment) { scav.medicalTreatment.startedAt += discarded; scav.medicalTreatment.endsAt += discarded; }
+	if (discarded > 0) for (const bossId of Object.keys(state.bossCooldowns ?? {}) as BossId[]) if (state.bossCooldowns![bossId]! > end) state.bossCooldowns![bossId]! += discarded;
 	state.lastUpdated = now;
 	summary.money = state.money - beforeMoney;
 	return summary;
@@ -2905,10 +2998,34 @@ function parseReportMedicine(value: unknown): NonNullable<RaidReport['medical']>
 	const source = record(value); fields(source, ['body', 'inventory']);
 	return { body: parseHealth(source.body), inventory: parseMedicalInventory(source.inventory) };
 }
+function parseBossEncounter(value: unknown): BossEncounter {
+	const source = record(value);
+	fields(source, ['bossId', 'stage', 'at', 'defeated', 'carrierRaidId', 'bounty', 'lootItemIds', 'gearItemIds', 'moduleItemIds']);
+	const encounter: BossEncounter = { bossId: known(source.bossId, BOSS_BY_ID) as BossId, stage: number(source.stage, 3, 2, true), at: number(source.at), defeated: bool(source.defeated),
+		carrierRaidId: source.carrierRaidId === null ? null : string(source.carrierRaidId), bounty: number(source.bounty, 350, 0, true),
+		lootItemIds: array(source.lootItemIds, 2, value => string(value)), gearItemIds: array(source.gearItemIds, 1, value => string(value)), moduleItemIds: array(source.moduleItemIds, 1, value => string(value)) };
+	const boss = getBoss(encounter.bossId)!;
+	unique([...encounter.lootItemIds, ...encounter.gearItemIds, ...encounter.moduleItemIds]);
+	if (encounter.stage !== boss.depth || encounter.carrierRaidId !== null && !/^raid-[1-9]\d*$/.test(encounter.carrierRaidId)
+		|| encounter.lootItemIds.some(itemId => !/^loot-[1-9]\d*$/.test(itemId)) || encounter.gearItemIds.some(itemId => !/^gear-[1-9]\d*$/.test(itemId)) || encounter.moduleItemIds.some(itemId => !/^module-[1-9]\d*$/.test(itemId))
+		|| encounter.defeated !== (encounter.carrierRaidId !== null) || !encounter.defeated && (encounter.bounty || encounter.lootItemIds.length || encounter.gearItemIds.length || encounter.moduleItemIds.length)) throw new Error('boss-encounter');
+	return encounter;
+}
+function validateBossReceipt(encounter: BossEncounter, boss: BossDefinition, raidId: string, nextId: number, loot: LootItem[], gear: GearItem[], modules?: ModuleInstance[]) {
+	if (encounter.bossId !== boss.id || encounter.carrierRaidId && Number(encounter.carrierRaidId.slice(5)) >= nextId
+		|| [...encounter.lootItemIds, ...encounter.gearItemIds, ...encounter.moduleItemIds].some(itemId => Number(itemId.split('-')[1]) >= nextId)) throw new Error('boss-receipt-id');
+	const carrier = encounter.defeated && encounter.carrierRaidId === raidId;
+	if (!carrier && (encounter.bounty || encounter.lootItemIds.length || encounter.gearItemIds.length || encounter.moduleItemIds.length) || carrier && encounter.bounty !== boss.bounty) throw new Error('boss-carrier');
+	const rewardLoot = encounter.lootItemIds.map(itemId => loot.find(item => item.id === itemId));
+	if (rewardLoot.some(item => !item || ![boss.trophyModelId, boss.lootModelId].includes(item.modelId)) || new Set(rewardLoot.map(item => item!.modelId)).size !== rewardLoot.length
+		|| encounter.gearItemIds.some(itemId => !gear.some(item => item.id === itemId && item.modelId === boss.gearModelId && item.durability === 90))
+		|| modules && encounter.moduleItemIds.some(itemId => !modules.some(item => item.id === itemId && item.modelId === boss.moduleModelId && item.durability === 90))
+		|| loot.some(item => getLootModel(item).bossId && (!carrier || item.modelId !== boss.trophyModelId || !encounter.lootItemIds.includes(item.id)))) throw new Error('boss-receipt-items');
+}
 function parseExpedition(value: unknown, version: number): Expedition | null {
 	if (value === null) return null;
 	const source = record(value);
-	fields(source, ["stage", "status", "branch", "cargo", "perks", "offers", "discoveries", "loadout", "autoDepth", "baseChance", "baseDuration", "capacity", "ammoMultiplier", "trail", ...(version >= 4 ? ["legacyLoot", "gunCombatBonus"] : []), ...(version >= 11 ? ["weaponMechanics"] : []), ...(version >= 12 ? ["reconCompleted"] : []), ...(version >= 13 ? ["ammunition"] : []), ...(version >= ARSENAL_SAVE_VERSION ? ["lootCatalogVersion"] : []), ...(version >= 18 ? ['medical'] : [])]);
+	fields(source, ["stage", "status", "branch", "cargo", "perks", "offers", "discoveries", "loadout", "autoDepth", "baseChance", "baseDuration", "capacity", "ammoMultiplier", "trail", ...(version >= 4 ? ["legacyLoot", "gunCombatBonus"] : []), ...(version >= 11 ? ["weaponMechanics"] : []), ...(version >= 12 ? ["reconCompleted"] : []), ...(version >= 13 ? ["ammunition"] : []), ...(version >= ARSENAL_SAVE_VERSION ? ["lootCatalogVersion"] : []), ...(version >= 18 ? ['medical'] : []), ...(version >= 26 ? ["bossEncounter"] : [])]);
 	const loadout = record(source.loadout);
 	fields(loadout, ["armorModelId", "armorCondition", "helmetModelId", "helmetCondition", "packModelId", "packCondition", "ammoType", "medkit"]);
 	if (source.status !== "travel" && source.status !== "choice") throw new Error("checkpoint-status");
@@ -2928,7 +3045,7 @@ function parseExpedition(value: unknown, version: number): Expedition | null {
 		discoveries: array(source.discoveries, Object.keys(BLUEPRINTS).length, (value) => known(value, BLUEPRINTS)),
 		loadout: { armorModelId, armorCondition: number(loadout.armorCondition, 100), helmetModelId, helmetCondition, packModelId, packCondition: number(loadout.packCondition, 100), ammoType: parseAmmoType(loadout.ammoType, version), medkit: bool(loadout.medkit) },
 		autoDepth: number(source.autoDepth, 3, 1, true), baseChance: number(source.baseChance, 1), baseDuration: number(source.baseDuration, 600, 20),
-		capacity: number(source.capacity, version >= 6 ? 50 : 42, version >= 6 ? 8 : 10), ammoMultiplier: number(source.ammoMultiplier, 4, 0.2), trail: parseEvents(source.trail, version >= 18 ? 24 : 9) };
+		capacity: number(source.capacity, version >= 6 ? 50 : 42, version >= 6 ? 8 : 10), ammoMultiplier: number(source.ammoMultiplier, 4, 0.2), trail: parseEvents(source.trail, version >= 26 ? 28 : version >= 18 ? 24 : 9) };
 	if (version >= 18 && Object.hasOwn(source, 'medical')) {
 		const medical = record(source.medical); fields(medical, ['version', 'inventory', 'start']);
 		if (medical.version !== 1 || expedition.legacyLoot) throw new Error('medical-version');
@@ -2947,6 +3064,7 @@ function parseExpedition(value: unknown, version: number): Expedition | null {
 	}
 	if (!expedition.ammunition && expedition.loadout.ammoType !== "standard" && expedition.loadout.ammoType !== "piercing") throw new Error("missing-ammunition");
 	if (version >= 12 && Object.hasOwn(source, "reconCompleted")) expedition.reconCompleted = bool(source.reconCompleted);
+	if (version >= 26 && Object.hasOwn(source, "bossEncounter")) expedition.bossEncounter = parseBossEncounter(source.bossEncounter);
 	if (version >= ARSENAL_SAVE_VERSION && Object.hasOwn(source, "lootCatalogVersion")) expedition.lootCatalogVersion = number(source.lootCatalogVersion, version, ARSENAL_SAVE_VERSION, true);
 	unique(expedition.perks); unique(expedition.offers); unique(expedition.discoveries);
 	if (expedition.perks.length !== expedition.stage - 1 || expedition.offers.some((perk) => expedition.perks.includes(perk))
@@ -3233,13 +3351,13 @@ function parseScav(value: unknown, version: number): Scav {
 		profile: version >= 6 ? parseScavProfile(source.profile) : neutralScavProfile(),
 		story: version >= 7 ? parseScavStory(source.story) : createScavStory(string(source.id), 0, false),
 		autoRaid,
-		...(version >= 12 && Object.hasOwn(source, "raidPlan") ? { raidPlan: parseRaidPlan(source.raidPlan) } : {}),
+		...(version >= 12 && Object.hasOwn(source, "raidPlan") ? { raidPlan: parseRaidPlan(source.raidPlan, version) } : {}),
 		...(version >= 14 && Object.hasOwn(source, "fieldKit") ? { fieldKit: source.fieldKit === "none" ? "none" as const : parseFieldKit(source.fieldKit) } : {}),
 	};
 }
 function parseRaid(value: unknown, version: number): Raid {
 	const source = record(value);
-	fields(source, ["id", "scavId", "scavName", "scavAppearance", "mapId", "weaponInstanceId", "startedAt", "endsAt", "chance", "lootBonus", "seed", "outcomeSeed", ...(version >= 2 ? ["isAuto", "tactic", "armorLevel", "backpackLevel"] : []), ...(version >= 3 ? ["expedition"] : []), ...(version >= 10 ? ["squad"] : []), ...(version >= 12 ? ["strategy"] : []), ...(version >= 14 ? ["fieldKit"] : []), ...(version >= 16 ? ["lootVersion"] : [])]);
+	fields(source, ["id", "scavId", "scavName", "scavAppearance", "mapId", "weaponInstanceId", "startedAt", "endsAt", "chance", "lootBonus", "seed", "outcomeSeed", ...(version >= 2 ? ["isAuto", "tactic", "armorLevel", "backpackLevel"] : []), ...(version >= 3 ? ["expedition"] : []), ...(version >= 10 ? ["squad"] : []), ...(version >= 12 ? ["strategy"] : []), ...(version >= 14 ? ["fieldKit"] : []), ...(version >= 16 ? ["lootVersion"] : []), ...(version >= 26 ? ["bossHunt"] : [])]);
 	const startedAt = number(source.startedAt);
 	const endsAt = number(source.endsAt);
 	const expedition = version >= 3 ? parseExpedition(source.expedition, version) : null;
@@ -3267,14 +3385,15 @@ function parseRaid(value: unknown, version: number): Raid {
 		backpackLevel: version === 1 ? 0 : number(source.backpackLevel, 3, 0, true),
 		expedition,
 		...(version >= 10 && Object.hasOwn(source, "squad") ? { squad: parseSquadRaidSnapshot(source.squad, false, version) as SquadRaidSnapshot } : {}),
-		...(version >= 12 && Object.hasOwn(source, "strategy") ? { strategy: parseRaidStrategy(source.strategy) } : {}),
+		...(version >= 12 && Object.hasOwn(source, "strategy") ? { strategy: parseRaidStrategy(source.strategy, version) } : {}),
 		...(version >= 14 && Object.hasOwn(source, "fieldKit") ? { fieldKit: parseFieldKit(source.fieldKit) } : {}),
 		...(version >= 16 && Object.hasOwn(source, "lootVersion") ? { lootVersion: 1 as const } : {}),
+		...(version >= 26 && Object.hasOwn(source, "bossHunt") ? { bossHunt: known(source.bossHunt, BOSS_BY_ID) as BossId } : {}),
 	};
 }
 function parseReport(value: unknown, version: number): RaidReport {
 	const source = record(value);
-	fields(source, ["id", "raidId", "scavName", "scavAppearance", "mapId", "at", "success", "lostScav", "lostWeapon", "money", "supplies", "weaponId", "weaponAutoSold", "description", ...(version >= 2 ? ["isAuto", "tactic", "events"] : []), ...(version >= 3 ? ["depth", "discoveries", "lostCargo"] : []), ...(version >= 4 ? ["moduleIds"] : []), ...(version >= 10 ? ["squad"] : []), ...(version >= 12 ? ["strategy", "sectorOutcome", "reconCompleted"] : []), ...(version >= 14 ? ["fieldKit"] : []), ...(version >= 16 ? ["lootItems", "lootAutoSold"] : []), ...(version >= 18 ? ['medical'] : []), ...(version >= 20 ? ["lootPending"] : []), ...(version >= 24 ? ["gearItems", "gearPending"] : [])]);
+	fields(source, ["id", "raidId", "scavName", "scavAppearance", "mapId", "at", "success", "lostScav", "lostWeapon", "money", "supplies", "weaponId", "weaponAutoSold", "description", ...(version >= 2 ? ["isAuto", "tactic", "events"] : []), ...(version >= 3 ? ["depth", "discoveries", "lostCargo"] : []), ...(version >= 4 ? ["moduleIds"] : []), ...(version >= 10 ? ["squad"] : []), ...(version >= 12 ? ["strategy", "sectorOutcome", "reconCompleted"] : []), ...(version >= 14 ? ["fieldKit"] : []), ...(version >= 16 ? ["lootItems", "lootAutoSold"] : []), ...(version >= 18 ? ['medical'] : []), ...(version >= 20 ? ["lootPending"] : []), ...(version >= 24 ? ["gearItems", "gearPending"] : []), ...(version >= 26 ? ["bossHunt", "bossEncounter", "modulePending"] : [])]);
 	if (version >= 14 && Object.hasOwn(source, "fieldKit") && !Object.hasOwn(source, "strategy")) throw new Error("field-kit-report");
 	return {
 		id: string(source.id),
@@ -3298,9 +3417,9 @@ function parseReport(value: unknown, version: number): RaidReport {
 		moduleIds: version >= 4 ? array(source.moduleIds, 12, (value) => versionedModuleId(value, version)) : [],
 		isAuto: version === 1 ? false : bool(source.isAuto),
 		tactic: version === 1 ? "balanced" : known(source.tactic, TACTICS) as RaidTactic,
-		events: version === 1 ? [] : parseEvents(source.events, version >= 18 ? 25 : version >= 3 ? 10 : 4),
+		events: version === 1 ? [] : parseEvents(source.events, version >= 26 ? 29 : version >= 18 ? 25 : version >= 3 ? 10 : 4),
 		...(version >= 10 && Object.hasOwn(source, "squad") ? { squad: parseSquadRaidSnapshot(source.squad, true, version) as SquadRaidReport } : {}),
-		...(version >= 12 && Object.hasOwn(source, "strategy") ? { strategy: parseRaidStrategy(source.strategy) } : {}),
+		...(version >= 12 && Object.hasOwn(source, "strategy") ? { strategy: parseRaidStrategy(source.strategy, version) } : {}),
 		...(version >= 12 && Object.hasOwn(source, "sectorOutcome") ? { sectorOutcome: parseSectorIntel(source.sectorOutcome) } : {}),
 		...(version >= 12 && Object.hasOwn(source, "reconCompleted") ? { reconCompleted: bool(source.reconCompleted) } : {}),
 		...(version >= 14 && Object.hasOwn(source, "fieldKit") ? { fieldKit: parseFieldKit(source.fieldKit) } : {}),
@@ -3309,6 +3428,9 @@ function parseReport(value: unknown, version: number): RaidReport {
 		...(version >= 20 && Object.hasOwn(source, "lootPending") ? { lootPending: array(source.lootPending, 6, value => parseLootItemForVersion(value, version)) } : {}),
 		...(version >= 24 && Object.hasOwn(source, "gearItems") ? { gearItems: array(source.gearItems, 3, parseRaidGearItem) } : {}),
 		...(version >= 24 && Object.hasOwn(source, "gearPending") ? { gearPending: array(source.gearPending, 3, parseRaidGearItem) } : {}),
+		...(version >= 26 && Object.hasOwn(source, "bossHunt") ? { bossHunt: known(source.bossHunt, BOSS_BY_ID) as BossId } : {}),
+		...(version >= 26 && Object.hasOwn(source, "bossEncounter") ? { bossEncounter: parseBossEncounter(source.bossEncounter) } : {}),
+		...(version >= 26 && Object.hasOwn(source, "modulePending") ? { modulePending: array(source.modulePending, 1, value => parseModule(value, version)) } : {}),
 		...(version >= 16 && Object.hasOwn(source, "lootAutoSold") ? { lootAutoSold: array(source.lootAutoSold, 6, value => {
 			const sale = record(value); fields(sale, ["item", "money"]); const item = parseLootItemForVersion(sale.item, version), boundedJunk = version >= 21 && getLootModel(item).autoSell;
 			const money = number(sale.money, 10000, boundedJunk ? 0 : 1, true), price = getLootTraderPrice(item);
@@ -3324,7 +3446,7 @@ export function parseSave(raw: string, options: { publicSnapshot?: boolean } = {
 		const source = record(JSON.parse(raw));
 		if (typeof source.schemaVersion !== "number" || !Number.isInteger(source.schemaVersion) || source.schemaVersion < 1 || source.schemaVersion > SAVE_VERSION) return null;
 		const version = source.schemaVersion;
-		fields(source, ["schemaVersion", "createdAt", "lastUpdated", "money", "supplies", "xp", "level", "base", "scavs", "weapons", "raids", "history", "claimedContracts", "discoveredWeapons", "stats", "clock", "rng", "nextId", ...(version >= 3 ? ["gearItems", "blueprints"] : []), ...(version >= 4 ? ["modules"] : []), ...(version >= 5 ? ["shelter"] : []), ...(version >= 6 ? ["recruitment"] : []), ...(version >= 7 ? ["memorials"] : []), ...(version >= 8 ? ["social"] : []), ...(version >= 9 ? ["achievements"] : []), ...(version >= 12 ? ["sectorIntel"] : []), ...(version >= 16 ? ["lootItems"] : []), ...(version >= 20 ? ["pendingLoot"] : [])]);
+		fields(source, ["schemaVersion", "createdAt", "lastUpdated", "money", "supplies", "xp", "level", "base", "scavs", "weapons", "raids", "history", "claimedContracts", "discoveredWeapons", "stats", "clock", "rng", "nextId", ...(version >= 3 ? ["gearItems", "blueprints"] : []), ...(version >= 4 ? ["modules"] : []), ...(version >= 5 ? ["shelter"] : []), ...(version >= 6 ? ["recruitment"] : []), ...(version >= 7 ? ["memorials"] : []), ...(version >= 8 ? ["social"] : []), ...(version >= 9 ? ["achievements"] : []), ...(version >= 12 ? ["sectorIntel"] : []), ...(version >= 16 ? ["lootItems"] : []), ...(version >= 20 ? ["pendingLoot"] : []), ...(version >= 26 ? ["bossCooldowns"] : [])]);
 		const base = record(source.base);
 		const stats = record(source.stats);
 		const clock = record(source.clock);
@@ -3381,10 +3503,11 @@ export function parseSave(raw: string, options: { publicSnapshot?: boolean } = {
 			social: version >= 8 ? parseSquadSocialState(source.social) : { pairs: [], losses: [] },
 			achievements: version >= 9 ? parseAchievementState(source.achievements, (value) => parseWeapon(value, version)) : createAchievementState(),
 			...(version >= 12 && Object.hasOwn(source, "sectorIntel") ? { sectorIntel: parseSectorIntelRecord(source.sectorIntel) } : {}),
+			...(version >= 26 && Object.hasOwn(source, 'bossCooldowns') ? { bossCooldowns: Object.fromEntries(Object.entries(record(source.bossCooldowns)).map(([bossId, until]) => [known(bossId, BOSS_BY_ID), number(until)])) as Partial<Record<BossId, number>> } : {}),
 			...(version >= 16 && Object.hasOwn(source, "lootItems") ? { lootItems: array(source.lootItems, 512, value => parseLootItemForVersion(value, version)) } : {}),
 			...(version >= 20 && Object.hasOwn(source, "pendingLoot") ? { pendingLoot: array(source.pendingLoot, MAX_PENDING_LOOT_DELIVERIES, value => {
-				const delivery = record(value); fields(delivery, ["id", "raidId", "at", "items", ...(version >= 24 ? ["gearItems"] : [])]);
-				return { id: string(delivery.id), raidId: string(delivery.raidId), at: number(delivery.at), items: array(delivery.items, 6, value => parseLootItemForVersion(value, version)), ...(version >= 24 && Object.hasOwn(delivery, "gearItems") ? { gearItems: array(delivery.gearItems, 3, parseRaidGearItem) } : {}) };
+				const delivery = record(value); fields(delivery, ["id", "raidId", "at", "items", ...(version >= 24 ? ["gearItems"] : []), ...(version >= 26 ? ["moduleItems"] : [])]);
+				return { id: string(delivery.id), raidId: string(delivery.raidId), at: number(delivery.at), items: array(delivery.items, 6, value => parseLootItemForVersion(value, version)), ...(version >= 24 && Object.hasOwn(delivery, "gearItems") ? { gearItems: array(delivery.gearItems, 3, parseRaidGearItem) } : {}), ...(version >= 26 && Object.hasOwn(delivery, "moduleItems") ? { moduleItems: array(delivery.moduleItems, 1, value => parseModule(value, version)) } : {}) };
 			}) } : {}),
 			stats: {
 				raidsWon: number(stats.raidsWon, 1e9, 0, true),
@@ -3433,7 +3556,7 @@ export function parseSave(raw: string, options: { publicSnapshot?: boolean } = {
 			...state.weapons.flatMap((weapon) => Object.values(weapon.modules).map((item) => item.id)),
 			...state.raids.flatMap((raid) => raid.expedition?.cargo.modules.map((item) => item.id) ?? []),
 			...(state.lootItems ?? []).map(item => item.id),
-			...(state.pendingLoot ?? []).flatMap(delivery => [delivery.id, ...delivery.items.map(item => item.id), ...(delivery.gearItems ?? []).map(item => item.id)]),
+			...(state.pendingLoot ?? []).flatMap(delivery => [delivery.id, ...delivery.items.map(item => item.id), ...(delivery.gearItems ?? []).map(item => item.id), ...(delivery.moduleItems ?? []).map(item => item.id)]),
 			...state.raids.flatMap(raid => raid.expedition?.cargo.lootItems?.map(item => item.id) ?? []),
 			...state.raids.flatMap(raid => raid.expedition?.cargo.gearItems?.map(item => item.id) ?? []),
 			...state.shelter.rooms.flatMap((room) => room.queue.map((job) => job.id)),
@@ -3443,13 +3566,24 @@ export function parseSave(raw: string, options: { publicSnapshot?: boolean } = {
 		unique(allIds);
 		if ((state.lootItems?.length ?? 0) > getLootCapacity(state)) throw new Error("loot-inventory");
 		if ((state.pendingLoot?.length ?? 0) + state.raids.filter(raid => raid.lootVersion === 1).length > MAX_PENDING_LOOT_DELIVERIES) throw new Error("loot-delivery-reserve");
+		for (const [bossId, until] of Object.entries(state.bossCooldowns ?? {})) if (until! > state.lastUpdated + getBoss(bossId)!.live.respawnMs) throw new Error('boss-cooldown');
+		for (const bossId of Object.keys(BOSS_BY_ID) as BossId[]) {
+			const formations = new Set(state.raids.filter(raid => raid.bossHunt === bossId).map(raid => raid.squad?.leaderRaidId ?? raid.id));
+			if (formations.size > 1) throw new Error('boss-concurrent-hunt');
+		}
 		unique((state.pendingLoot ?? []).map(delivery => delivery.raidId));
 		for (const delivery of state.pendingLoot ?? []) {
 			if (!/^delivery-[1-9]\d*$/.test(delivery.id) || !/^raid-[1-9]\d*$/.test(delivery.raidId)
-				|| Number(delivery.raidId.slice(5)) >= state.nextId || delivery.at > state.lastUpdated || !delivery.items.length && !(delivery.gearItems?.length)
+				|| Number(delivery.raidId.slice(5)) >= state.nextId || delivery.at > state.lastUpdated || !delivery.items.length && !(delivery.gearItems?.length) && !(delivery.moduleItems?.length)
 				|| state.raids.some(raid => raid.id === delivery.raidId)) throw new Error("loot-delivery");
 			const report = state.history.find(report => report.raidId === delivery.raidId);
-			if (report && (!report.success || report.at !== delivery.at || JSON.stringify(report.lootPending ?? []) !== JSON.stringify(delivery.items) || JSON.stringify(report.gearPending ?? []) !== JSON.stringify(delivery.gearItems ?? []))) throw new Error("loot-delivery-receipt");
+			if (report && (!report.success || report.at !== delivery.at || JSON.stringify(report.lootPending ?? []) !== JSON.stringify(delivery.items) || JSON.stringify(report.gearPending ?? []) !== JSON.stringify(delivery.gearItems ?? []) || JSON.stringify(report.modulePending ?? []) !== JSON.stringify(delivery.moduleItems ?? []))) throw new Error("loot-delivery-receipt");
+			for (const part of delivery.moduleItems ?? []) {
+				const boss = Object.values(BOSS_BY_ID).find(boss => boss.moduleModelId === part.modelId);
+				if (!boss || part.durability !== 90 || !/^module-[1-9]\d*$/.test(part.id) || state.bossCooldowns?.[boss.id] === undefined
+					|| report && (!report.bossEncounter?.defeated || report.bossHunt !== boss.id || !report.bossEncounter.moduleItemIds.includes(part.id))) throw new Error('boss-module-delivery');
+			}
+			if (delivery.items.some(item => getLootModel(item).bossId && state.bossCooldowns?.[getLootModel(item).bossId!] === undefined)) throw new Error('boss-trophy-delivery');
 		}
 		for (const part of [...state.modules, ...state.weapons.flatMap((weapon) => Object.values(weapon.modules)), ...state.raids.flatMap((raid) => raid.expedition?.cargo.modules ?? [])]) if (!part.id.startsWith("module-")) throw new Error("module-id");
 		unique(state.claimedContracts);
@@ -3529,6 +3663,8 @@ export function parseSave(raw: string, options: { publicSnapshot?: boolean } = {
 			if (!memorial.story.memories.some((memory) => memory.kind === "lost" && memory.sourceId === memorial.raidId && memory.mapId === memorial.mapId && memory.at === memorial.at)) throw new Error("memorial-last-moment");
 		}
 		for (const raid of state.raids) {
+			const boss = raid.bossHunt ? getPaidBoss(raid) : null;
+			if (Boolean(raid.bossHunt) !== (raid.strategy?.objective === 'boss') || raid.bossHunt && (!boss || boss.mapId !== raid.mapId)) throw new Error('boss-hunt-source');
 			if (!raid.id.startsWith("raid-")) throw new Error("raid-id");
 			if (
 				!state.scavs.some(
@@ -3548,6 +3684,12 @@ export function parseSave(raw: string, options: { publicSnapshot?: boolean } = {
 			)
 				throw new Error("raid-time");
 			if (raid.expedition) {
+				const encounter = raid.expedition.bossEncounter;
+				const bossLoot = (raid.expedition.cargo.lootItems ?? []).filter(item => getLootModel(item).bossId);
+				if (bossLoot.length && !encounter || encounter && (!boss || !encounter.defeated || encounter.stage > raid.expedition.stage || encounter.at > state.lastUpdated || encounter.at > raid.endsAt
+					|| raid.expedition.stage === encounter.stage && (raid.expedition.status !== 'choice' || raid.expedition.branch !== 'combat')
+					|| state.bossCooldowns?.[encounter.bossId] === undefined || encounter.carrierRaidId !== raid.id && !raid.squad?.members.some(member => member.raidId === encounter.carrierRaidId))) throw new Error('boss-checkpoint-source');
+				if (encounter) validateBossReceipt(encounter, boss!, raid.id, state.nextId, raid.expedition.cargo.lootItems ?? [], raid.expedition.cargo.gearItems ?? [], raid.expedition.cargo.modules);
 				const scav = state.scavs.find((item) => item.id === raid.scavId)!;
 				if (raid.expedition.medical && (!scav.body || raid.expedition.status === 'travel' && (JSON.stringify(scav.body) !== JSON.stringify(raid.expedition.medical.start.body) || JSON.stringify(raid.expedition.medical.inventory) !== JSON.stringify(raid.expedition.medical.start.inventory)))) throw new Error('medical-sortie');
 				if (raid.expedition.medical) {
@@ -3579,6 +3721,9 @@ export function parseSave(raw: string, options: { publicSnapshot?: boolean } = {
 			if (raid.strategy && (!raid.expedition || raid.strategy.knowledge > (state.sectorIntel?.[raid.mapId]?.knowledge ?? 0))) throw new Error("strategy-sector-source");
 			if (raid.squad) {
 				for (const member of getRaidGroup(state, raid)) if (Boolean(member.strategy) !== Boolean(raid.strategy)
+					|| member.bossHunt !== raid.bossHunt
+					|| Boolean(member.expedition?.bossEncounter) !== Boolean(raid.expedition?.bossEncounter)
+					|| member.expedition?.bossEncounter && raid.expedition?.bossEncounter && (member.expedition.bossEncounter.bossId !== raid.expedition.bossEncounter.bossId || member.expedition.bossEncounter.at !== raid.expedition.bossEncounter.at || member.expedition.bossEncounter.defeated !== raid.expedition.bossEncounter.defeated || member.expedition.bossEncounter.carrierRaidId !== raid.expedition.bossEncounter.carrierRaidId)
 					|| member.strategy && raid.strategy && (member.strategy.knowledge !== raid.strategy.knowledge || member.strategy.pressure !== raid.strategy.pressure)) throw new Error("strategy-squad-source");
 			}
 		}
@@ -3598,11 +3743,22 @@ export function parseSave(raw: string, options: { publicSnapshot?: boolean } = {
 			}
 		}
 		for (const report of state.history) {
+			const boss = report.bossHunt ? getBoss(report.bossHunt) : null, encounter = report.bossEncounter;
+			if (Boolean(report.bossHunt) !== (report.strategy?.objective === 'boss') || boss && boss.mapId !== report.mapId
+				|| encounter && (!boss || encounter.stage > report.depth || encounter.at > report.at || encounter.carrierRaidId !== null && encounter.carrierRaidId !== report.raidId && !report.squad?.members.some(member => member.raidId === encounter.carrierRaidId)
+					|| encounter.defeated && state.bossCooldowns?.[encounter.bossId] === undefined || !encounter.defeated && !report.squad && report.success)) throw new Error('boss-report-source');
 			if (!report.id.startsWith("report-") || !/^raid-[1-9]\d*$/.test(report.raidId) || Number(report.raidId.slice(5)) >= state.nextId) throw new Error("report-id");
 			if ((report.lostScav && !report.lostWeapon) || (report.success && (report.lostScav || report.lostWeapon))) throw new Error("report-outcome");
 			if (report.medical && report.lostScav === isAlive(report.medical.body)) throw new Error('medical-report');
 			const receipt = [...(report.lootItems ?? []), ...(report.lootPending ?? []), ...(report.lootAutoSold ?? []).map(sale => sale.item), ...(report.lostCargo?.lootItems ?? [])];
 			const gearReceipt = [...(report.gearItems ?? []), ...(report.gearPending ?? []), ...(report.lostCargo?.gearItems ?? [])];
+			if (receipt.some(item => getLootModel(item).bossId) && !encounter) throw new Error('boss-trophy-source');
+			if (encounter) {
+				validateBossReceipt(encounter, boss!, report.raidId, state.nextId, receipt, gearReceipt, report.lostCargo?.modules);
+				if (report.success && encounter.moduleItemIds.length && !report.moduleIds.includes(boss!.moduleModelId)) throw new Error('boss-module-receipt');
+			}
+			if (report.modulePending && (!report.success || !encounter?.defeated || report.modulePending.length !== 1
+				|| report.modulePending.some(part => part.modelId !== boss!.moduleModelId || part.durability !== 90 || !encounter.moduleItemIds.includes(part.id) || !/^module-[1-9]\d*$/.test(part.id) || Number(part.id.slice(7)) >= state.nextId))) throw new Error('boss-module-pending');
 			unique(gearReceipt.map(item => item.id));
 			if (gearReceipt.length > report.depth || (Object.hasOwn(report, "gearItems") || Object.hasOwn(report, "gearPending") || gearReceipt.length) && !report.strategy
 				|| !report.success && ((report.gearItems?.length ?? 0) > 0 || (report.gearPending?.length ?? 0) > 0)
@@ -3620,7 +3776,8 @@ export function parseSave(raw: string, options: { publicSnapshot?: boolean } = {
 				|| report.sectorOutcome.knowledge > (state.sectorIntel?.[report.mapId]?.knowledge ?? 0))) throw new Error("strategy-report-sector");
 			if (report.squad) for (const member of report.squad.members) {
 				const peer = state.history.find(other => other.raidId === member.raidId);
-				if (peer && (Boolean(peer.strategy) !== Boolean(report.strategy) || JSON.stringify(peer.sectorOutcome) !== JSON.stringify(report.sectorOutcome))) throw new Error("strategy-report-party");
+				if (peer && (Boolean(peer.strategy) !== Boolean(report.strategy) || JSON.stringify(peer.sectorOutcome) !== JSON.stringify(report.sectorOutcome) || peer.bossHunt !== report.bossHunt
+					|| Boolean(peer.bossEncounter) !== Boolean(encounter) || peer.bossEncounter && encounter && (peer.bossEncounter.at !== encounter.at || peer.bossEncounter.defeated !== encounter.defeated || peer.bossEncounter.carrierRaidId !== encounter.carrierRaidId))) throw new Error("strategy-report-party");
 			}
 		}
 		if (

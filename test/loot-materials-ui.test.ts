@@ -17,7 +17,7 @@ const button=(html:string,action:string)=>html.match(new RegExp(`<button[^>]*dat
 
 test('junk and useful items have distinct, truthful dispositions at every rarity',()=>{
   const state=createGame(NOW),before=saveGame(state),html=fleaPage(state,view);
-  expect(LOOT_MODELS).toHaveLength(50);expect(JUNK_MODELS).toHaveLength(12);expect(USEFUL_LOOT_MODELS).toHaveLength(38);expect(html).toContain('Находок: 50');expect(html).toContain('Легендарное');
+  expect(LOOT_MODELS).toHaveLength(54);expect(JUNK_MODELS).toHaveLength(12);expect(USEFUL_LOOT_MODELS).toHaveLength(42);expect(html).toContain('Находок: 54');expect(html).toContain('Легендарное');
   for(const model of JUNK_MODELS){const row=lootUsesPanel(model.id);expect(row).toContain('автопродажа при доставке');expect(row).toContain('Не используется в рецептах');expect(row).not.toContain('К бартеру');expect(getLootUses(model.id)).toEqual([]);}
   for(const model of USEFUL_LOOT_MODELS){expect(lootUsesPanel(model.id)).toContain('К бартеру');expect(lootUsesPanel(model.id)).not.toContain('автопродажа');}
   expect(html).toContain('Автопродажа');expect(html).toContain(LOOT_MODEL_BY_ID['military-cpu']!.label);expect(html).toContain(LOOT_MODEL_BY_ID['prototype-optics']!.label);expect(saveGame(state)).toBe(before);

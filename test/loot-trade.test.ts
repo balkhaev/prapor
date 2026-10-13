@@ -37,13 +37,13 @@ describe("named physical raid loot", () => {
 		const premature = structuredClone(old); premature.schemaVersion = 14; expect(parseSave(saveGame(premature))).toBeNull();
 		const contaminated = withoutMedical(structuredClone(state)); contaminated.schemaVersion = 15; expect(parseSave(saveGame(contaminated))).toBeNull();
 	});
-	test("all 50 finds have distinct identities, weights and prices; useful trophies offer salvage while marked junk sells", () => {
-		expect(LOOT_MODELS).toHaveLength(50); expect(new Set(LOOT_MODELS.map(item => item.id)).size).toBe(50);
+	test("all 54 finds have distinct identities, weights and prices; useful trophies offer salvage while marked junk sells", () => {
+		expect(LOOT_MODELS).toHaveLength(54); expect(new Set(LOOT_MODELS.map(item => item.id)).size).toBe(54);
 		expect(new Set(LOOT_MODELS.map(item => item.category)).size).toBe(7);
 		for (const model of LOOT_MODELS) {
 			expect(model.weight).toBeGreaterThan(0); expect(model.guidePrice).toBeGreaterThanOrEqual(model.autoSell ? 2 : 25); expect(model.guidePrice).toBeLessThanOrEqual(1050);
 			expect(Object.values(model.salvage).some(value => value > 0)).toBe(!model.autoSell);
-			expect(MAPS.some(map => getRaidLootPool(map.id, "scavenge", 3).some(entry => entry.model.id === model.id))).toBe(true);
+			expect(MAPS.some(map => getRaidLootPool(map.id, "scavenge", 3).some(entry => entry.model.id === model.id))).toBe(!model.bossId);
 		}
 	});
 	test("sector and branch pools differ, and closed-zone valuables require the promised depth", () => {

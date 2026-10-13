@@ -1,11 +1,12 @@
 import { MAP_BY_ID, type Rarity } from "../src/game/data";
 import {
 	advance, continueExpedition, createGame, dispatchRaid, extractRaid, craftGear, equipGear,
-	getExpeditionChoices, getRaidGearValue, xpForLevel, type ActionResult,
+	getExpeditionChoices, getRaidGearValue, setRaidPlan, xpForLevel, type ActionResult,
 } from "../src/game/engine";
 import { LOOT_MODELS, getLootModel, getLootTraderPrice, getRaidLootPool } from "../src/game/loot";
 import { getMarketFees } from "../src/game/flea";
 import { getLootDecisionProfile, getLootHuntOptions } from "../src/game/loot-value";
+import { BOSSES } from "../src/game/bosses";
 
 const NOW = 1_792_000_000_000;
 const requested = Number(Bun.argv[2]);
@@ -76,7 +77,48 @@ for (const sector of ["courtyard", "depot", "factory", "bunker"]) {
 	}
 }
 
+const bossRows = [];
+for (const boss of BOSSES) for (const preparation of ['bare', 'armored-and-scouted'] as const) {
+	let fought = 0, victories = 0, deliveredTrophies = 0, chanceSum = 0;
+	for (let seed = 1; seed <= samples; seed++) {
+		const state = createGame(NOW), scav = state.scavs[0]!;
+		state.level = 9; state.xp = xpForLevel(9); state.money = 20_000;
+		state.supplies = { ammo: 72, medicine: 8, scrap: 40, intel: 12 };
+		if (preparation === 'armored-and-scouted') {
+			for (const model of ['plate_armor', 'cargo_pack']) {
+				if (!state.blueprints.includes(model)) state.blueprints.push(model);
+				requireAction(craftGear(state, model));
+				const item = state.gearItems.find(item => item.modelId === model)!;
+				requireAction(equipGear(state, scav.id, model === 'plate_armor' ? 'armor' : 'backpack', item.id));
+			}
+		}
+		state.supplies.scrap = 0; state.rng = Math.imul(seed, 0x9e3779b1) >>> 0 || 1;
+		requireAction(setRaidPlan(state, scav.id, 'boss', preparation === 'bare' ? 'none' : 'scouted'));
+		requireAction(dispatchRaid(state, scav.id, boss.mapId, NOW));
+		for (let guard = 0; state.raids.length && guard < 4; guard++) {
+			const raid = state.raids[0]!;
+			advance(state, raid.endsAt);
+			if (!state.raids.length) break;
+			if (raid.expedition!.stage >= boss.depth) requireAction(extractRaid(state, raid.id, state.lastUpdated));
+			else {
+				const perk = raid.expedition!.offers[0]!, choice = getExpeditionChoices(state, raid, perk).find(choice => choice.branch === 'combat')!;
+				if (choice.reason) requireAction(extractRaid(state, raid.id, state.lastUpdated));
+				else {
+					if (choice.boss) { fought++; chanceSum += choice.chance; }
+					requireAction(continueExpedition(state, raid.id, 'combat', perk, state.lastUpdated));
+				}
+			}
+		}
+		const report = state.history[0]!;
+		victories += Number(report.bossEncounter?.defeated ?? false);
+		deliveredTrophies += Number(report.lootItems?.some(item => item.modelId === boss.trophyModelId) ?? false);
+	}
+	bossRows.push({ boss: boss.id, preparation, attemptedBossFights: fought, averagePaidFightChancePct: fought ? round(chanceSum * 100 / fought) : null,
+		victoriesPerDeparturePct: round(victories * 100 / samples), trophyDeliveredPerDeparturePct: round(deliveredTrophies * 100 / samples) });
+}
+
 console.log(JSON.stringify({ samples,
+	bossConditions: 'Same fresh Boroda/SKS and seeds. Bare pack versus actually crafted plate armor/cargo frame plus paid scouted approach. Boss goal is explicitly selected, combat branches lead to the required depth and extraction immediately follows a passed target stage. Paid chances count only actual affordable boss fights; victories and delivered trophies divide by all departures, including approach failures, early retreat, injuries and cargo trimming. No bonus reward or guaranteed victory is injected.',
 	conditions: "Fresh Boroda/SKS, 100% health and condition, balanced tactic, no armor/support kit, neutral sector, reputation9 only to open all sectors. Ordinary small bag or actually crafted/equipped cargo frame. Each condition uses the same seeds; the first genuinely offered perk is selected. Money stays above passive allowance; no production runs. Failures deliver zero loot. Named trophies, actual gear and free modules count separately after bag trimming; stash is empty. Gear found in this run is not equipped automatically. Repairs, hiring, weapon/module value and sale of gear or supplies are excluded from cash and named trophy proceeds. Guide price is not a measured market price; hypothetical net assumes every separate named trophy gets a real buyer at its guide, deducting both fees. No simulated buyer or actual flea trade is performed.",
 	catalog: LOOT_MODELS.map(model => ({ model: model.id, label: model.label, rarity: model.rarity, weight: model.weight,
 		guide: model.guidePrice, disposition: model.autoSell ? "junk-auto-sale" : "useful-player-choice", guaranteedVendor: getLootTraderPrice({ id: "loot-1", modelId: model.id, foundAt: NOW }),
@@ -87,4 +129,4 @@ console.log(JSON.stringify({ samples,
 		bestCurrent: getLootHuntOptions(model.id).slice(0, 3), bestPaidV24: getLootHuntOptions(model.id, 24)[0],
 		valueChoices: getLootDecisionProfile(model.id),
 	})),
-	rows }, null, 2));
+	rows, bossRows }, null, 2));

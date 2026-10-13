@@ -40,13 +40,13 @@ describe('live rare hunting and usable module distribution', () => {
     }
   });
 
-  test('every useful named trophy and wearable model has a real authored future source shared by server and hunting guidance', () => {
+  test('every ordinary useful trophy and wearable model has a real authored future source; boss trophies stay exclusive', () => {
     const named = new Set(world.containers.flatMap(anchor => {
       const pool = getLiveNamedLootPool(world, anchor);
       expect(getLiveLootPool('perimeter', anchor)).toEqual(pool);
       return pool.filter(entry => entry.weight > 0).map(entry => entry.model.id);
     }));
-    for (const model of USEFUL_LOOT_MODELS) expect(named.has(model.id), model.label).toBe(true);
+    for (const model of USEFUL_LOOT_MODELS) expect(named.has(model.id), model.label).toBe(!model.bossId);
     const gear = new Set(world.containers.flatMap(anchor => {
       const source = getLiveLootSource(world, anchor);
       return getLiveLootFamilyOdds(anchor.lootTable).gear > 0 ? getRaidGearLootPool(source.sector, source.branch, source.depth).filter(entry => entry.weight > 0).map(entry => entry.model.id) : [];
