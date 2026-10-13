@@ -1,3 +1,4 @@
+import { withoutRaidStrategy } from "./legacy-strategy-fixture";
 import { describe, expect, test } from "bun:test";
 import {
 	SAVE_VERSION, advance, continueExpedition, craftModule, createGame, dispatchRaid, dispatchSquadRaid,
@@ -127,7 +128,7 @@ describe("weapon mechanics remain real through raid clocks and saves", () => {
 
 	test("a pre-mechanics v10 active decision retains its old branch rules and settles identically after migration", () => {
 		const { state } = checkpoint(), raw = JSON.parse(saveGame(state));
-		raw.schemaVersion = 10;
+		withoutRaidStrategy(raw); raw.schemaVersion = 10;
 		for (const raid of raw.raids) delete raid.expedition.weaponMechanics;
 		const legacy = parseSave(JSON.stringify(raw))!;
 		expect(legacy).not.toBeNull();

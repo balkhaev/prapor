@@ -11,6 +11,7 @@
     "test": "bun test",
     "balance": "bun scripts/balance.ts",
     "balance:armory": "bun scripts/armory-balance.ts",
+    "balance:strategy": "bun scripts/strategy-balance.ts",
     "build": "vite build",
     "start": "bun server.ts"
   },
