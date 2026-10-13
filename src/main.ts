@@ -3102,6 +3102,19 @@ liveMode = createLiveMode({
 	world: document.querySelector<HTMLElement>('#live-world')!,
 	dock: document.querySelector<HTMLElement>('#command-dock')!,
 	getAccountId: () => signedInUser?.id ?? null,
+	getGameId: () => authoritative?.getSnapshot()?.identity.id ?? null,
+	isGameReady: () => Boolean(authoritative?.isReady()),
+	getStock: () => serverReady ? {ammo:state.supplies.ammo,medicine:state.supplies.medicine,money:state.money} : null,
+	onEconomyChange: () => {
+		fleaReadGeneration++; fleaView.market=null; fleaView.loading=false;
+		authoritative?.invalidateMarket();
+		void refreshServerProgress().then(ready=>{if(ready&&page==='flea')void refreshFleaMarket();});
+	},
+	onMarket: () => {
+		fleaReadGeneration++; fleaView.market=null; fleaView.loading=false; authoritative?.invalidateMarket();
+		setView('base'); page='flea'; fleaView.tab='inventory'; render();
+		void refreshServerProgress().then(ready=>{if(ready&&page==='flea')void refreshFleaMarket();});
+	},
 	onExit: () => setView("base"),
 	onAccount: () => document.querySelector<HTMLButtonElement>('.account-launcher')?.click(),
 	onError: message => toast(message, false),

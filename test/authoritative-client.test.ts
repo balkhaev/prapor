@@ -107,4 +107,25 @@ describe('authoritative shelter transport', () => {
     expect(applied).toEqual(['guest-1', 'account-new']); expect(client.getSnapshot()?.identity.kind).toBe('account');
     client.destroy();
   });
+  test('a live economy change discards an older market read and keeps the shelter session ready', async () => {
+    let release!: (response: Response)=>void, reads=0;
+    const market=(serverNow:number)=>({identity:snapshot().identity,serverNow,offers:[],mine:[],receivables:0});
+    const client=createAuthoritativeClient({getAccountId:()=>null,onSnapshot:()=>{},fetch:transport(async url=>{
+      if(!url.endsWith('/market'))return response(snapshot());
+      reads++;
+      if(reads===1)return new Promise<Response>(resolve=>{release=resolve;});
+      return response(market(3000));
+    })});
+    try {
+      await client.join();
+      const before=client.market().catch(()=>null);await tick();
+      client.invalidateMarket();
+      const after=client.market();
+      release(response(market(2000)));
+      expect(await before).toBeNull();
+      expect((await after).serverNow).toBe(3000);
+      expect(client.getMarketSnapshot()?.serverNow).toBe(3000);
+      expect(client.isReady()).toBe(true);expect(reads).toBe(2);
+    } finally {client.destroy();}
+  });
 });

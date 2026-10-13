@@ -9,6 +9,9 @@ import { getMarketCommission, getMarketListingFee, MARKET_MAX_ACTIVE, MARKET_MAX
 import type { MarketListing, MarketSnapshot } from '../src/game/flea';
 import type { AccountService } from './accounts';
 import type { GameActionSnapshot, GameCommand, GameCommandType, GameIdentity, GameSnapshot } from '../src/game/commands';
+import { LOOT_MODEL_BY_ID } from '../src/game/loot';
+import { LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT } from '../src/game/live';
+import { LiveEconomyError, type LiveDelivery, type LiveEconomy, type LiveSupplyRequest, type LiveSupplyReceipt } from './live-economy';
 
 export interface GameOptions {
   dbPath: string; secureCookies?: boolean; allowedOrigins?: string[];
@@ -18,6 +21,8 @@ export interface GameOptions {
 }
 export interface GameService {
   fetch(request: Request, clientAddress?: string): Promise<Response | null>;
+  /** Private bridge used by the live simulation; no HTTP reward endpoint exists. */
+  liveEconomy: LiveEconomy;
   healthy(): boolean; close(): void;
 }
 interface GameRow { identity: string; id: string; name: string; state: string; revision: number }
@@ -124,6 +129,24 @@ async function readJson(request: Request): Promise<Record<string, unknown>> {
 }
 const hash = (token: string) => createHash('sha256').update(token).digest('hex');
 const COOKIE_SECONDS = 30 * 24 * 60 * 60;
+const uuid = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
+const timestamp = integer(0, 1e15);
+function readLiveDelivery(value: unknown): LiveDelivery {
+  if (!object(value) || !exact(value, ['id', 'owner', 'gameId', 'createdAt', 'money', 'items']) || !uuid(value.id) || !id(value.owner) || !uuid(value.gameId)
+    || !timestamp(value.createdAt) || !integer(0, 1e9)(value.money) || !Array.isArray(value.items) || value.items.length > LIVE_LOOT_CAPACITY) throw new LiveEconomyError(400, 'invalid_live_delivery');
+  const items = value.items.map(item => {
+    if (!object(item) || !exact(item, ['id', 'modelId', 'foundAt']) || !uuid(item.id) || typeof item.modelId !== 'string' || !Object.hasOwn(LOOT_MODEL_BY_ID, item.modelId)
+      || !timestamp(item.foundAt)) throw new LiveEconomyError(400, 'invalid_live_delivery');
+    return { id: item.id, modelId: item.modelId, foundAt: item.foundAt as number };
+  });
+  if (new Set(items.map(item => item.id)).size !== items.length || items.reduce((sum, item) => sum + LOOT_MODEL_BY_ID[item.modelId]!.weight, 0) > LIVE_LOOT_WEIGHT + 1e-9) throw new LiveEconomyError(400, 'invalid_live_delivery');
+  return { id: value.id, owner: value.owner as string, gameId: value.gameId, createdAt: value.createdAt as number, money: value.money as number, items };
+}
+function readLiveSupply(value: unknown): LiveSupplyRequest {
+  if (!object(value) || !exact(value, ['id', 'owner', 'gameId', 'createdAt', 'ammo', 'medkits']) || !uuid(value.id) || !id(value.owner) || !uuid(value.gameId)
+    || !timestamp(value.createdAt) || !integer(0, 60)(value.ammo) || !integer(0, 2)(value.medkits)) throw new LiveEconomyError(400, 'invalid_live_supply');
+  return { id: value.id, owner: value.owner as string, gameId: value.gameId, createdAt: value.createdAt as number, ammo: value.ammo as number, medkits: value.medkits as number };
+}
 export function readGameOptions(env: Record<string, string | undefined>, accounts?: GameOptions['accounts']): GameOptions {
   const production = env.NODE_ENV === 'production';
   return { dbPath: env.GAME_DB_PATH ?? (process.platform === 'win32' && !production ? 'F:/AI/prapor/game.sqlite' : '/app/data/game.sqlite'), secureCookies: production, accounts,
@@ -151,7 +174,11 @@ export function createGameService(options: GameOptions): GameService {
       commission INTEGER NOT NULL CHECK(commission>=1),proceeds INTEGER NOT NULL CHECK(proceeds>=0),created_at INTEGER NOT NULL,
       status TEXT NOT NULL CHECK(status IN ('active','sold','cancelled')),sold_at INTEGER,claimed_at INTEGER);
     CREATE INDEX IF NOT EXISTS authoritative_market_active ON authoritative_market(status,created_at);
-    CREATE INDEX IF NOT EXISTS authoritative_market_owner ON authoritative_market(owner,status,claimed_at);`);
+    CREATE INDEX IF NOT EXISTS authoritative_market_owner ON authoritative_market(owner,status,claimed_at);
+    CREATE TABLE IF NOT EXISTS authoritative_live_links(identity TEXT PRIMARY KEY REFERENCES authoritative_games(identity),game_id TEXT NOT NULL UNIQUE REFERENCES authoritative_games(id),linked_at INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS authoritative_live_deliveries(id TEXT PRIMARY KEY,owner TEXT NOT NULL REFERENCES authoritative_live_links(identity),payload TEXT NOT NULL,receipt TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS authoritative_live_items(id TEXT PRIMARY KEY,delivery_id TEXT NOT NULL REFERENCES authoritative_live_deliveries(id));
+    CREATE TABLE IF NOT EXISTS authoritative_live_supplies(id TEXT PRIMARY KEY,owner TEXT NOT NULL REFERENCES authoritative_live_links(identity),payload TEXT NOT NULL,receipt TEXT NOT NULL);`);
   const read = db.query<GameRow, [string]>('SELECT identity,id,name,state,revision FROM authoritative_games WHERE identity=?');
   const update = db.query('UPDATE authoritative_games SET state=?,revision=?,name=? WHERE identity=?');
   const guests = db.query<{ identity: string; name: string }, [string, number]>('SELECT g.identity,p.name FROM authoritative_guests g JOIN authoritative_games p ON p.identity=g.identity WHERE g.token_hash=? AND g.expires_at>?');
@@ -164,9 +191,9 @@ export function createGameService(options: GameOptions): GameService {
       for (const [key, bucket] of limits) if (bucket.expires <= time) limits.delete(key);
       db.transaction(() => {
         db.query('DELETE FROM authoritative_guests WHERE expires_at<=?').run(time);
-        // A token can expire; persistent escrow and sale payments must never vanish with it.
-        db.query("DELETE FROM authoritative_market WHERE owner LIKE 'guest:%' AND owner NOT IN (SELECT identity FROM authoritative_guests) AND owner NOT IN (SELECT owner FROM authoritative_market WHERE status='active' OR (status='sold' AND claimed_at IS NULL))").run();
-        db.query("DELETE FROM authoritative_games WHERE identity LIKE 'guest:%' AND identity NOT IN (SELECT identity FROM authoritative_guests) AND identity NOT IN (SELECT owner FROM authoritative_market WHERE status='active' OR (status='sold' AND claimed_at IS NULL))").run();
+        // A token can expire; escrow, payments and pending live deliveries must never vanish with it.
+        db.query("DELETE FROM authoritative_market WHERE owner LIKE 'guest:%' AND owner NOT IN (SELECT identity FROM authoritative_guests) AND owner NOT IN (SELECT identity FROM authoritative_live_links) AND owner NOT IN (SELECT owner FROM authoritative_market WHERE status='active' OR (status='sold' AND claimed_at IS NULL))").run();
+        db.query("DELETE FROM authoritative_games WHERE identity LIKE 'guest:%' AND identity NOT IN (SELECT identity FROM authoritative_guests) AND identity NOT IN (SELECT identity FROM authoritative_live_links) AND identity NOT IN (SELECT owner FROM authoritative_market WHERE status='active' OR (status='sold' AND claimed_at IS NULL))").run();
       })();
       lastCleanup = time;
     }
@@ -221,7 +248,77 @@ export function createGameService(options: GameOptions): GameService {
     receivables: db.query<{ total: number }, [string]>("SELECT COALESCE(SUM(proceeds),0) AS total FROM authoritative_market WHERE owner=? AND status='sold' AND claimed_at IS NULL").get(identity.key)!.total,
   });
   const validateTransfer = (state: engine.GameState) => {
-    if (!engine.parseSave(engine.saveGame(state))) throw new Error('Market transfer produced an invalid authoritative game');
+    if (!engine.parseSave(engine.saveGame(state))) throw new Error('Economy transfer produced an invalid authoritative game');
+  };
+  const linkedGame = (owner: string, gameId: string) => {
+    const link = db.query<{ game_id: string }, [string]>('SELECT game_id FROM authoritative_live_links WHERE identity=?').get(owner), row = read.get(owner);
+    if (!link || !row || link.game_id !== gameId || row.id !== gameId) throw new LiveEconomyError(401, 'game_identity_changed');
+    const kind = owner.startsWith('account:') ? 'account' as const : 'guest' as const;
+    return { row, identity: { key: owner, kind, name: row.name } };
+  };
+  const liveEconomy: LiveEconomy = {
+    resolve(request) {
+      try {
+        if (closed) throw new LiveEconomyError(503, 'service_unavailable');
+        if (!hosts.has(new URL(request.url).host)) throw new LiveEconomyError(403, 'host_not_allowed');
+        if (request.method !== 'GET' && (!origins.has(request.headers.get('origin') ?? '') || request.headers.get('sec-fetch-site') === 'cross-site')) throw new LiveEconomyError(403, 'origin_not_allowed');
+        return db.transaction(() => {
+          const { identity, row } = current(request);
+          db.query('INSERT OR IGNORE INTO authoritative_live_links(identity,game_id,linked_at) VALUES(?,?,?)').run(identity.key, row.id, now());
+          linkedGame(identity.key, row.id);
+          return { key: identity.key, gameId: row.id, name: identity.name };
+        })();
+      } catch (error) { if (error instanceof GameError) throw new LiveEconomyError(error.status, error.code); throw error; }
+    },
+    deliver(input) {
+      if (closed) throw new LiveEconomyError(503, 'service_unavailable');
+      const parcel = readLiveDelivery(input), payload = JSON.stringify(parcel);
+      return db.transaction(() => {
+        const { identity, row } = linkedGame(parcel.owner, parcel.gameId);
+        const previous = db.query<{ payload: string; receipt: string }, [string]>('SELECT payload,receipt FROM authoritative_live_deliveries WHERE id=?').get(parcel.id);
+        if (previous) {
+          if (previous.payload !== payload) throw new LiveEconomyError(409, 'live_delivery_changed');
+          return JSON.parse(previous.receipt) as { ok: boolean; message: string };
+        }
+        const { snapshot, before } = advanceRow(row, identity), state = structuredClone(snapshot.state);
+        for (const item of parcel.items) {
+          if (db.query('SELECT id FROM authoritative_live_items WHERE id=?').get(item.id)) throw new LiveEconomyError(409, 'live_item_already_delivered');
+          const received = receiveTradeAsset(state, { kind: 'loot', item: { id: 'loot-1', modelId: item.modelId, foundAt: item.foundAt } }, snapshot.serverNow, true);
+          if (!received.ok) return { ok: false, message: 'На складе нет места для всей посылки. Освободите место и заберите доставку.' };
+          state.lootItems!.at(-1)!.foundAt = item.foundAt;
+        }
+        const credited = creditMarketMoney(state, parcel.money);
+        if (!credited.ok) return { ok: false, message: 'Доставка ждёт свободного места в кошельке.' };
+        validateTransfer(state);
+        const receipt = { ok: true, message: `На склад доставлено ${parcel.items.length} трофеев${parcel.money ? ` и ${parcel.money} ₽` : ''}.` };
+        db.query('INSERT INTO authoritative_live_deliveries(id,owner,payload,receipt) VALUES(?,?,?,?)').run(parcel.id, parcel.owner, payload, JSON.stringify(receipt));
+        for (const item of parcel.items) db.query('INSERT INTO authoritative_live_items(id,delivery_id) VALUES(?,?)').run(item.id, parcel.id);
+        snapshot.state = state;
+        persistSnapshot(identity, snapshot, before, true);
+        return receipt;
+      })();
+    },
+    supply(input) {
+      if (closed) throw new LiveEconomyError(503, 'service_unavailable');
+      const request = readLiveSupply(input), payload = JSON.stringify(request);
+      return db.transaction(() => {
+        const { identity, row } = linkedGame(request.owner, request.gameId);
+        const previous = db.query<{ payload: string; receipt: string }, [string]>('SELECT payload,receipt FROM authoritative_live_supplies WHERE id=?').get(request.id);
+        if (previous) {
+          if (previous.payload !== payload) throw new LiveEconomyError(409, 'live_supply_changed');
+          return JSON.parse(previous.receipt) as LiveSupplyReceipt;
+        }
+        const { snapshot, before } = advanceRow(row, identity), state = structuredClone(snapshot.state);
+        const ammo = Math.min(request.ammo, Math.floor(state.supplies.ammo)), medkits = Math.min(request.medkits, Math.floor(state.supplies.medicine));
+        state.supplies.ammo -= ammo; state.supplies.medicine -= medkits;
+        validateTransfer(state);
+        const receipt: LiveSupplyReceipt = { ammo, medkits, message: ammo || medkits ? `Из убежища взято ${ammo} патронов и ${medkits} аптечек.` : 'На складе нет патронов и аптечек для пополнения.' };
+        db.query('INSERT INTO authoritative_live_supplies(id,owner,payload,receipt) VALUES(?,?,?,?)').run(request.id, request.owner, payload, JSON.stringify(receipt));
+        snapshot.state = state;
+        persistSnapshot(identity, snapshot, before, true);
+        return receipt;
+      })();
+    },
   };
   const executeMarket = (identity: Identity, snapshot: GameSnapshot, command: GameCommand): engine.ActionResult | null => {
     const fail = (message: string): engine.ActionResult => ({ ok: false, message });
@@ -281,7 +378,7 @@ export function createGameService(options: GameOptions): GameService {
     snapshot.state = state;
     return { ok: true, message: `Получено ${listing.proceeds} ₽ за ${listing.label}. Комиссия ${listing.commission} ₽ удержана.` };
   };
-  return { fetch: async (request, clientAddress = 'unknown') => {
+  return { liveEconomy, fetch: async (request, clientAddress = 'unknown') => {
     const url = new URL(request.url), path = url.pathname;
     if (path !== '/api/game' && !path.startsWith('/api/game/')) return null;
     try {

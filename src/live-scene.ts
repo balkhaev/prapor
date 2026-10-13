@@ -1,5 +1,6 @@
 import type { LiveCommand, LiveEntity, LiveEvent, LiveObstacle, LivePoint, LiveSnapshot, LiveTerrain } from './game/live';
 import { scavDirection, type ScavDirection } from './scav-isometric';
+import { liveDropLabel, liveLootTotals } from './live-loot-ui';
 
 type AtlasFrame = { frame: { x: number; y: number; w: number; h: number }; spriteSourceSize: { x: number; y: number; w: number; h: number }; sourceSize: { w: number; h: number } };
 type Atlas = { image: HTMLImageElement; frames: Record<string, AtlasFrame> };
@@ -212,7 +213,15 @@ export class LiveScene {
     const objects: { depth: number; paint: () => void }[] = [];
     for (const [index, obstacle] of world.obstacles.entries()) objects.push({ depth: obstacle.x + obstacle.y + (obstacle.width + obstacle.height) / 2, paint: () => this.obstacle(obstacle, index) });
     for (const drop of snapshot.drops) objects.push({ depth: drop.x + drop.y, paint: () => {
-      const p = this.project(drop), size = this.overview ? 3 : 8; this.polygon([{ x: p.x - size, y: p.y - size / 2 }, { x: p.x, y: p.y - size }, { x: p.x + size, y: p.y - size / 2 }, { x: p.x, y: p.y + 1 }], '#d2a662', '#efd49a'); if (!this.overview) { c.fillStyle = '#9b753e'; c.fillRect(p.x - 6, p.y - 3, 12, 8); this.label(`${Math.floor(drop.amount)} ₽`, p.x, p.y + 22, '#ebc98d', 9); }
+      const p = this.project(drop), size = this.overview ? 3 : 8;
+      const valuable = (drop.items?.length ?? 0) > 0;
+      this.polygon([{ x: p.x - size, y: p.y - size / 2 }, { x: p.x, y: p.y - size }, { x: p.x + size, y: p.y - size / 2 }, { x: p.x, y: p.y + 1 }], valuable ? '#cfa155' : '#d2a662', '#efd49a');
+      if (!this.overview) {
+        c.fillStyle = '#9b753e'; c.fillRect(p.x - 6, p.y - 3, 12, 8);
+        const label = liveDropLabel(drop);
+        this.label(label.length > 35 ? `${label.slice(0, 32)}…` : label, p.x, p.y + 22, '#ebc98d', 9);
+        if (valuable) this.label(`≈ ${liveLootTotals(drop.items!).guide.toLocaleString('ru-RU')} ₽`, p.x, p.y + 35, '#c6bd9a', 8);
+      }
     } });
     this.hitTargets = [];
     for (const entity of snapshot.entities) objects.push({ depth: entity.x + entity.y + .1, paint: () => this.paintEntity(entity, now) });
