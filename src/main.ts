@@ -3,6 +3,7 @@ import "./gear-style.css";
 import "./module-catalog.css";
 import "./achievements.css";
 import "./gameplay.css";
+import "./raid-strategy.css";
 import {
 	ATTACHMENT_LABELS,
 	CATEGORY_LABELS,
@@ -157,6 +158,8 @@ import { sectorArt, roomMiniArt } from "./command-art";
 import { getCommandSummary, type CommandSummary, type CommandRoomTab, type RoomCommandStatus } from "./command-summary";
 import { getGameplayGuidance } from "./gameplay-guidance";
 import { gameplayFocus, gameplayRoadmap } from "./gameplay-ui";
+import { raidPlanEditor, sectorIntelPanel } from "./raid-strategy-ui";
+import { getRaidPlan, setRaidPlan, type RaidObjective, type RaidPreparation } from "./game/engine";
 import { MIN_SHELTER_ZOOM, MAX_SHELTER_ZOOM } from "./shelter-camera";
 import { getShelterProductionPresentation, getShelterProductionStages, SHELTER_PRODUCTION_STAGES, type ProductionPresentation } from "./shelter-production";
 import { projectShelterBounds, shelterRoomPolygon, shelterRoomPosition, SHELTER_ROOM_WIDTH, SHELTER_ROOM_HEIGHT } from "./shelter-isometric";
@@ -1340,7 +1343,7 @@ function loadoutEditor(scav: Scav, trainingExpanded = false) {
 }
 function sortiePreview(scav: Scav) {
 	const map = MAP_BY_ID[selectedMap]!, quote = getRaidQuote(state, scav, map);
-	return `<section class="inspector-section sortie-section"><h3>${scav.status === "raiding" ? "Следующая экспедиция" : "Новая экспедиция"}</h3><label class="field-label">Сектор<select data-inspector-map data-focus-key="map" aria-label="Сектор для экспедиции">${MAPS.map((sector) => `<option value="${sector.id}" ${sector.id === selectedMap ? "selected" : ""} ${state.level < sector.level ? "disabled" : ""}>${e(sector.name)}${state.level < sector.level ? ` · ур. ${sector.level}` : ""}</option>`).join("")}</select></label>${raidRelationsPanel(state, scav, selectedMap)}<div class="sortie-preview"><span><strong data-chance="${scav.id}">${Math.round(quote.chance * 100)}% успеха</strong><small>Первый этап</small></span><span><strong>${seconds(quote.duration)}</strong><small>До точки связи</small></span><span><strong data-dispatch-cost="${scav.id}">${n(quote.money)} ₽ + ${quote.ammo} патр.${quote.intel ? ` + ${quote.intel} разв.` : ""}${quote.medicine ? ` + ${quote.medicine} мед.` : ""}</strong><small>На входе</small></span></div><p class="field-hint">До трёх этапов. После каждого — эвакуация или риск дальше. Добыча остаётся в рюкзаке до возвращения; чертежи сохраняются сразу.</p></section>`;
+	return `<section class="inspector-section sortie-section"><h3>${scav.status === "raiding" ? "Следующая экспедиция" : "Новая экспедиция"}</h3><label class="field-label">Сектор<select data-inspector-map data-focus-key="map" aria-label="Сектор для экспедиции">${MAPS.map((sector) => `<option value="${sector.id}" ${sector.id === selectedMap ? "selected" : ""} ${state.level < sector.level ? "disabled" : ""}>${e(sector.name)}${state.level < sector.level ? ` · ур. ${sector.level}` : ""}</option>`).join("")}</select></label>${raidPlanEditor(state, scav, selectedMap)}${sectorIntelPanel(state, selectedMap)}${raidRelationsPanel(state, scav, selectedMap)}<div class="sortie-preview"><span><strong data-chance="${scav.id}">${Math.round(quote.chance * 100)}% успеха</strong><small>Первый этап</small></span><span><strong>${seconds(quote.duration)}</strong><small>До точки связи</small></span><span><strong data-dispatch-cost="${scav.id}">${n(quote.money)} ₽ + ${quote.ammo} патр.${quote.intel ? ` + ${quote.intel} разв.` : ""}${quote.medicine ? ` + ${quote.medicine} мед.` : ""}</strong><small>На входе</small></span></div><p class="field-hint">До трёх этапов. После каждого — эвакуация или риск дальше. Добыча остаётся в рюкзаке до возвращения; чертежи сохраняются сразу.</p></section>`;
 }
 function inspectorFooter(scav: Scav, raid: Raid | undefined) {
 	if (raid?.squad) return `<footer class="inspector-actions"><div><strong>Совместный рейд · ${getRaidGroup(state, raid).length} бойца</strong><span>Приказ касается всего состава</span></div><button class="button secondary" data-watch-raid="${getRaidGroupKey(raid)}" data-focus-key="party-watch">Наблюдать отряд →</button></footer>`;
@@ -1851,7 +1854,7 @@ function render() {
 		}</div>`;
 	if (page === "raids") {
 		const map = MAP_BY_ID[selectedMap]!;
-		panel.innerHTML = `${squadRaidComposer(state, squadDraft, selectedMap)}${raidRepresentatives(state.raids).filter(raid=>raid.squad&&raid.expedition?.status!=="choice").map(raid=>squadRaidOngoing(state,raid)).join("")}${operationsBar()}<div class="section-head"><h2>Выбери сектор</h2><button class="text-button" data-action="toggle-map" aria-expanded="${showTacticalMap}">${icon("raids", 16)} ${showTacticalMap ? "Скрыть карту" : "Тактическая карта"}</button></div><div class="maps">${MAPS.map((m, i) => `<button class="map-card ${m.id === selectedMap ? "selected" : ""} ${state.level < m.level ? "locked" : ""}" data-map="${m.id}" aria-pressed="${m.id === selectedMap}" ${state.level < m.level ? "disabled" : ""}><span class="map-graphic" style="--map-color:${m.accent}">${icon("raids", 70)}</span><span class="map-index">СЕКТОР 0${i + 1}${state.level < m.level ? ` · ${icon("lock", 10)} УР. ${m.level}` : ""}</span><h3>${e(m.name)}</h3><p>${e(m.subtitle)}</p><div class="map-meta"><span>${seconds(m.duration)} · ${m.ammoCost} патр.${m.intelCost ? ` · ${m.intelCost} разв.` : ""}</span><span>${m.reward[0]}–${m.reward[1]} ₽</span></div></button>`).join("")}</div><div class="selected-sector"><div><span class="eyebrow">Выбранный сектор</span><h3>${e(map.name)}</h3><p>${e(map.description)}</p></div><span class="sector-reward"><strong>${map.reward[0]}–${map.reward[1]} ₽</strong><small>Добыча первого этапа</small></span></div><div class="section-head"><h2>Снаряжение отряда</h2><button class="button secondary small" data-action="recruit">${icon("people", 15)} Выбрать кандидата →</button></div><div class="card-grid scav-grid">${state.scavs.map(scavCard).join("") || '<div class="empty">Отряд потерян. Найми нового дикого бесплатно и начни снова.</div>'}</div><p class="muted roster-capacity">Отряд: ${state.scavs.length} / ${getScavCapacity(state)} · Улучшай радиорубку, чтобы нанимать больше диких. Медблок восстанавливает здоровье со временем.</p>`;
+		panel.innerHTML = `${squadRaidComposer(state, squadDraft, selectedMap)}${raidRepresentatives(state.raids).filter(raid=>raid.squad&&raid.expedition?.status!=="choice").map(raid=>squadRaidOngoing(state,raid)).join("")}${operationsBar()}<div class="section-head"><h2>Выбери сектор</h2><button class="text-button" data-action="toggle-map" aria-expanded="${showTacticalMap}">${icon("raids", 16)} ${showTacticalMap ? "Скрыть карту" : "Тактическая карта"}</button></div><div class="maps">${MAPS.map((m, i) => `<button class="map-card ${m.id === selectedMap ? "selected" : ""} ${state.level < m.level ? "locked" : ""}" data-map="${m.id}" aria-pressed="${m.id === selectedMap}" ${state.level < m.level ? "disabled" : ""}><span class="map-graphic" style="--map-color:${m.accent}">${icon("raids", 70)}</span><span class="map-index">СЕКТОР 0${i + 1}${state.level < m.level ? ` · ${icon("lock", 10)} УР. ${m.level}` : ""}</span><h3>${e(m.name)}</h3><p>${e(m.subtitle)}</p><div class="map-meta"><span>${seconds(m.duration)} · ${m.ammoCost} патр.${m.intelCost ? ` · ${m.intelCost} разв.` : ""}</span><span>${m.reward[0]}–${m.reward[1]} ₽</span></div></button>`).join("")}</div><div class="selected-sector"><div><span class="eyebrow">Выбранный сектор</span><h3>${e(map.name)}</h3><p>${e(map.description)}</p></div><span class="sector-reward"><strong>${map.reward[0]}–${map.reward[1]} ₽</strong><small>Добыча первого этапа</small></span></div>${sectorIntelPanel(state, selectedMap)}<div class="section-head"><h2>Снаряжение отряда</h2><button class="button secondary small" data-action="recruit">${icon("people", 15)} Выбрать кандидата →</button></div><div class="card-grid scav-grid">${state.scavs.map(scavCard).join("") || '<div class="empty">Отряд потерян. Найми нового дикого бесплатно и начни снова.</div>'}</div><p class="muted roster-capacity">Отряд: ${state.scavs.length} / ${getScavCapacity(state)} · Улучшай радиорубку, чтобы нанимать больше диких. Медблок восстанавливает здоровье со временем.</p>`;
 	}
 	if (page === "arsenal") renderArsenal();
 	if (page === "recruits") panel.innerHTML = recruitmentPanel(state);
@@ -2616,6 +2619,16 @@ document.addEventListener("change", async (event) => {
 	const target = event.target as HTMLInputElement | HTMLSelectElement;
 	storedProgressChanged();
 	if ((!ownsSaveLease || saveConflict || protectedSave) && target.id !== 'save-file') return;
+	if (target.dataset.raidObjective || target.dataset.raidPreparation) {
+		const scavId = target.dataset.raidObjective ?? target.dataset.raidPreparation!;
+		const scav = state.scavs.find(person => person.id === scavId);
+		if (!scav) return;
+		const plan = getRaidPlan(scav), focusKey = target.dataset.focusKey;
+		act(setRaidPlan(state, scavId, target.dataset.raidObjective ? target.value as RaidObjective : plan.objective,
+			target.dataset.raidPreparation ? target.value as RaidPreparation : plan.preparation));
+		if (focusKey) document.querySelector<HTMLSelectElement>(`#inspector-root [data-focus-key="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
+		return;
+	}
 	if (target.hasAttribute("data-live-raid-select")) { watchRaid(target.value); document.querySelector<HTMLSelectElement>('[data-live-raid-select]')?.focus({ preventScroll: true }); return; }
 	if (target.dataset.squadMember) {
 		const id = target.dataset.squadMember;

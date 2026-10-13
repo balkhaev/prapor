@@ -1,3 +1,4 @@
+import { withoutRaidStrategy } from "./legacy-strategy-fixture";
 import { describe, expect, test } from "bun:test";
 import { MAPS } from "../src/game/data";
 import {
@@ -64,7 +65,7 @@ function freeze<T>(value: T): T {
 }
 
 function legacyV5(state: GameState) {
-	const source = JSON.parse(saveGame(state));
+	const source = withoutRaidStrategy(JSON.parse(saveGame(state)));
 	source.schemaVersion = 5;
 	delete source.recruitment;
 	delete source.memorials; delete source.social; delete source.achievements;

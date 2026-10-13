@@ -1,3 +1,4 @@
+import { withoutRaidStrategy } from "./legacy-strategy-fixture";
 import { describe, expect, test } from "bun:test";
 import {
 	advance, assembleWeapon, buySupplies, continueExpedition, craftGear, craftModule,
@@ -470,6 +471,7 @@ describe("achievement decisions use real sortie and inventory events", () => {
 		const oldState = campaign(), raid = firstCheckpoint(oldState, 1);
 		nextCheckpoint(oldState, raid, "combat");
 		expect(extractRaid(oldState, raid.id, oldState.lastUpdated).ok).toBe(true);
+		withoutRaidStrategy(oldState);
 		const oldSave = JSON.parse(saveGame(oldState));
 		oldSave.schemaVersion = 8;
 		delete oldSave.achievements;

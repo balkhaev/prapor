@@ -1,3 +1,4 @@
+import { withoutRaidStrategy } from "./legacy-strategy-fixture";
 import { describe, expect, test } from "bun:test";
 import { MAPS } from "../src/game/data";
 import {
@@ -293,7 +294,7 @@ describe("coordinated two and three scav expeditions", () => {
 
 	test("a v8 solo raid keeps its original paid costs, seed, duration, chance and true solo relationship provenance", () => {
 		const state = funded(); expect(dispatchRaid(state, state.scavs[0]!.id, "courtyard", state.lastUpdated).ok).toBe(true);
-		const before = structuredClone(state), raw = JSON.parse(saveGame(state));
+		const before = withoutRaidStrategy(structuredClone(state)), raw = withoutRaidStrategy(JSON.parse(saveGame(state)));
 		raw.schemaVersion = 8; delete raw.achievements;
 		for (const raid of before.raids) if (raid.expedition) delete raid.expedition.weaponMechanics;
 		for (const raid of raw.raids) if (raid.expedition) delete raid.expedition.weaponMechanics;
@@ -316,6 +317,7 @@ describe("coordinated two and three scav expeditions", () => {
 		expect(queueModuleProduction(state, room.id, "factory-sks-stock", state.lastUpdated).ok).toBe(true);
 		expect(dispatchRaid(state, state.scavs[0]!.id, "courtyard", state.lastUpdated).ok).toBe(true);
 		advance(state, state.lastUpdated + 131);
+		withoutRaidStrategy(state);
 		for (const raid of state.raids) if (raid.expedition) delete raid.expedition.weaponMechanics;
 		const raw = JSON.parse(saveGame(state)); raw.schemaVersion = 9;
 		for (const raid of raw.raids) delete raid.squad; for (const report of raw.history) delete report.squad;
