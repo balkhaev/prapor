@@ -113,7 +113,8 @@ test "$(docker inspect "prapor-game:$commit" --format '{{index .Config.Labels "o
 app_uid=$(docker run --rm --entrypoint id "prapor-game:$commit" -u)
 app_gid=$(docker run --rm --entrypoint id "prapor-game:$commit" -g)
 install -d -m 755 /data/prapor
-install -d -m 700 -o "$app_uid" -g "$app_gid" /data/prapor/data
+install -d -m 700 /data/prapor/data
+chown "$app_uid:$app_gid" /data/prapor/data
 install -m 644 "$scratch/source/infra/production.compose.yaml" /data/prapor/compose.yaml.next
 install -m 600 "$scratch/release.env" /data/prapor/release.env.next
 mv /data/prapor/compose.yaml.next /data/prapor/compose.yaml
