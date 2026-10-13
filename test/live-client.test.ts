@@ -30,9 +30,9 @@ describe('live wire parser', () => {
     expect(() => readLiveSnapshot(duplicated)).toThrow(LiveApiError);
   });
   test('rejects off-map positions, unbounded world and invalid kit', () => {
-    const offMap = fixture(); offMap.entities[0]!.x = 128;
+    const offMap = fixture(); offMap.entities[0]!.x = offMap.world.width;
     expect(() => readLiveSnapshot(offMap)).toThrow(LiveApiError);
-    const world = fixture(); world.world.obstacles[0]!.width = 128;
+    const world = fixture(); world.world.obstacles[0]!.width = world.world.width + 1;
     expect(() => readLiveSnapshot(world)).toThrow(LiveApiError);
     const kit = fixture(); kit.self.ammo = -1;
     expect(() => readLiveSnapshot(kit)).toThrow(LiveApiError);
@@ -48,7 +48,7 @@ describe('live wire parser', () => {
     expect(() => readLiveSnapshot(unknown)).toThrow(LiveApiError);
     const duplicate = fixture(); duplicate.server.maps.push({ ...duplicate.server.maps[0]! });
     expect(() => readLiveStatus(duplicate.server)).toThrow(LiveApiError);
-    const zone = fixture(); zone.world.zones[0]!.width = 129;
+    const zone = fixture(); zone.world.zones[0]!.width = zone.world.width + 1;
     expect(() => readLiveSnapshot(zone)).toThrow(LiveApiError);
     const role = fixture(); Object.assign(role.entities[1]!, { role: 'admin' });
     expect(() => readLiveSnapshot(role)).toThrow(LiveApiError);
@@ -63,7 +63,7 @@ describe('live wire parser', () => {
     expect(() => readLiveSnapshot(target)).toThrow(LiveApiError);
     const travel = fixture(); travel.self.travelReadyAt = -1;
     expect(() => readLiveSnapshot(travel)).toThrow(LiveApiError);
-    for (const edit of [{ from: { x: -1, y: 2 } }, { to: { x: 128, y: 2 } }, { damage: -5 }, { damage: 200 }]) {
+    for (const edit of [{ from: { x: -1, y: 2 } }, { to: { x: source.world.width, y: 2 } }, { damage: -5 }, { damage: 200 }]) {
       const shot = fixture(); shot.events = [{ ...source.events[1]!, ...edit }];
       expect(() => readLiveSnapshot(shot)).toThrow(LiveApiError);
     }
@@ -111,7 +111,7 @@ describe('live wire parser', () => {
       value => { value.world.paths![0]!.points[0]!.x = value.world.width; },
       value => { value.world.paths![0]!.points[0]!.y = -1; },
       value => { value.world.paths![0]!.points = Array.from({ length: 257 }, () => ({ x: 1, y: 1 })); },
-      value => { value.world.paths = Array.from({ length: 129 }, (_, index) => ({ ...value.world.paths![0]!, id: `path-${index}` })); },
+      value => { value.world.paths = Array.from({ length: 257 }, (_, index) => ({ ...value.world.paths![0]!, id: `path-${index}` })); },
       value => { Object.assign(value.world.obstacles[0]!, { kind: 'lava' }); },
       value => { Object.assign(value.world.zones[0]!, { terrain: 'private-loot' }); },
     ];
@@ -126,8 +126,55 @@ describe('live wire parser', () => {
     const full = fixture(); full.self.searching = { id: 'drop-1', readyAt: 5000 };
     expect(readLiveSnapshot(full)).toEqual(full);
     for (const self of [{ ...full.self, purpose: 'immune' }, { ...full.self, districtId: 'client-region' }, { ...full.self, searching: { id: 'drop-1', readyAt: -1 } }]) expect(() => readLiveSnapshot({ ...full, self })).toThrow(LiveApiError);
-    expect(() => readLiveSnapshot({ ...full, visibleChunks: [{ x: 4, y: 0 }] })).toThrow(LiveApiError);
+    expect(() => readLiveSnapshot({ ...full, visibleChunks: [{ x: Math.ceil(full.world.width / full.world.chunkSize), y: 0 }] })).toThrow(LiveApiError);
     const duplicate = fixture(); duplicate.server.districts[1]!.id = 'customs'; expect(() => readLiveStatus(duplicate.server)).toThrow(LiveApiError);
+  });
+  test('expanded worlds accept the new outer bounds, six streaming columns and more than 128 bounded landscape paths', () => {
+    const value = fixture(); value.entities[0]!.x = value.world.width - 1; value.entities[0]!.y = value.world.height - 1;
+    value.visibleChunks = [{ x: 5, y: 5 }];
+    value.world.paths = Array.from({ length: 139 }, (_, index) => ({ id: `road-${index}`, name: 'Дорога', kind: 'road', width: 3, points: [{ x: 0, y: 0 }, { x: 191, y: 191 }] }));
+    expect(readLiveSnapshot(value)).toEqual(value);
+  });
+  test('purpose routes preserve ordered known places without granting immunity or accepting foreign references', () => {
+    const full = fixture();
+    full.world.routes = full.world.districts.flatMap(district => (['pvp', 'pve', 'loot', 'quests'] as const).map(purpose => ({
+      id: `${district.id}-${purpose}`, name: 'Маршрут', description: 'Посетить отмеченные места и вернуться.', districtId: district.id, purpose,
+      poiIds: full.world.pois.filter(poi => poi.districtId === district.id).slice(0, 2).map(poi => poi.id),
+    })));
+    expect(readLiveSnapshot(full)).toEqual(full);
+    const { world: _world, ...update } = full; expect(readLiveSnapshot(update, full.world)).toEqual(full);
+    const legacy = fixture(); delete legacy.world.routes; expect(readLiveSnapshot(legacy)).toEqual(legacy);
+    const edits: Array<(value: LiveSnapshot) => void> = [
+      value => { value.world.routes!.push({ ...value.world.routes![0]! }); },
+      value => { Object.assign(value.world.routes![0]!, { purpose: 'immune' }); },
+      value => { Object.assign(value.world.routes![0]!, { districtId: 'other-server' }); },
+      value => { value.world.routes![0]!.poiIds[0] = 'client-secret-room'; },
+      value => { value.world.routes![0]!.poiIds[0] = value.world.pois.find(poi => poi.districtId !== value.world.routes![0]!.districtId)!.id; },
+      value => { value.world.routes![0]!.poiIds.push(value.world.routes![0]!.poiIds[0]!); },
+      value => { value.world.routes![0]!.poiIds = []; },
+      value => { Object.assign(value.world.routes![0]!, { poiIds: 'poi-0-0' }); },
+      value => { Object.assign(value.world.routes![0]!, { description: { reward: 999999 } }); },
+    ];
+    for (const edit of edits) { const value = structuredClone(full); edit(value); expect(() => readLiveSnapshot(value)).toThrow(LiveApiError); }
+  });
+  test('route summaries keep real stop order and reject duplicate intents, oversize text and hidden command fields', () => {
+    const source = fixture().server;
+    const route = { id: 'customs-loot', name: 'Северная доставка', description: 'Осмотри склады, затем вернись к выходу.', districtId: 'customs' as const, purpose: 'loot' as const, stops: ['Складской терминал', 'Грузовой двор'] };
+    expect(readLiveStatus({ ...source, routes: [route] }).routes).toEqual([route]);
+    expect(readLiveStatus(source).routes).toBeUndefined();
+    for (const routes of [
+      [route, { ...route, id: 'second-route' }],
+      [{ ...route, stops: ['Склад'] }],
+      [{ ...route, stops: ['Склад', 'a'.repeat(121)] }],
+      [{ ...route, description: 'a'.repeat(241) }],
+      [{ ...route, name: 'a'.repeat(81) }],
+      [{ ...route, immunity: true }],
+    ]) expect(() => readLiveStatus({ ...source, routes })).toThrow(LiveApiError);
+    const value = fixture();
+    value.world.routes = [{ ...route, poiIds: value.world.pois.filter(poi => poi.districtId === 'customs').slice(0, 2).map(poi => poi.id) }];
+    // A separate id cannot smuggle a second route for the same district and goal.
+    value.world.routes.push({ ...value.world.routes[0]!, id: 'second-route' });
+    expect(() => readLiveSnapshot(value)).toThrow(LiveApiError);
   });
   test('keeps unopened container contents concealed and rejects unsupported container kinds', () => {
     const full = fixture(), anchor = full.world.containers[0]!;

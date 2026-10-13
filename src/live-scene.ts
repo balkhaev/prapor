@@ -25,6 +25,8 @@ export class LiveScene {
   private camera: LivePoint = { x: 16, y: 12 };
   private zoom = 1;
   private selected: string | null = null;
+  private routePoiIds: string[] = [];
+  private waypointTargets: Array<{ point: LivePoint; x: number; y: number }> = [];
   private hitTargets: { entity: LiveEntity; x: number; y: number }[] = [];
   private controls = document.createElement('div');
   private following = true;
@@ -61,8 +63,9 @@ export class LiveScene {
 
   show(): void { if (this.active) return; this.active = true; this.resize(); this.animate(); }
   hide(): void { this.active = false; cancelAnimationFrame(this.frame); this.frame = 0; }
-  clear(): void { this.snapshot = null; this.motions.clear(); this.selected = null; this.effects = []; this.seenEvents.clear(); this.paint(); }
+  clear(): void { this.snapshot = null; this.motions.clear(); this.selected = null; this.routePoiIds = []; this.waypointTargets = []; this.effects = []; this.seenEvents.clear(); this.paint(); }
   setSelected(id: string | null): void { this.selected = id; }
+  setRoute(poiIds: readonly string[]): void { this.routePoiIds = [...poiIds]; }
   update(snapshot: LiveSnapshot): void {
     const at = performance.now();
     if (this.snapshot?.worldVersion !== snapshot.worldVersion) { this.motions.clear(); this.effects = []; this.seenEvents.clear(); this.selected = null; this.following = true; this.overview = false; this.dragging = null; this.cacheTerrain(snapshot.world); }
@@ -122,6 +125,8 @@ export class LiveScene {
       else this.command({ type: 'move', x: drop.x, y: drop.y });
       return;
     }
+    const waypoint = this.waypointTargets.find(target => Math.hypot(target.x - x, target.y - y) < 12);
+    if (waypoint) { this.command({ type: 'move', ...waypoint.point }); return; }
     const dx = (x - this.origin.x) / (this.tile / 2), dy = (y - this.origin.y) / (this.tile / 4);
     const destination = { x: Math.round((dx + dy) / 2 + this.camera.x), y: Math.round((dy - dx) / 2 + this.camera.y) };
     if (destination.x >= 0 && destination.y >= 0 && destination.x < this.snapshot.world.width && destination.y < this.snapshot.world.height) this.command({ type: 'move', ...destination });
@@ -354,10 +359,6 @@ export class LiveScene {
       }
       c.restore();
     }
-    if (this.overview || this.tile < 12) for (const district of world.districts) {
-      const p = this.project({ x: district.x + district.width / 2, y: district.y + district.height / 2 });
-      this.label(district.name.toUpperCase(), p.x, p.y - 20, '#e5e8c2', this.width < 480 ? 10 : 13);
-    }
     for (const [index, extract] of world.extracts.entries()) {
       const p = this.project(extract); this.polygon(this.quad(extract.x - .7, extract.y - .7, 1.4, 1.4), '#5b8d5655', '#a4cf76');
       const flagHeight = this.overview ? 12 : 40;
@@ -373,16 +374,49 @@ export class LiveScene {
     this.hitTargets = [];
     for (const entity of snapshot.entities) objects.push({ depth: entity.x + entity.y + .1, paint: () => this.paintEntity(entity, now) });
     objects.sort((a, b) => a.depth - b.depth).forEach(object => object.paint());
-    for (const poi of world.pois) {
-      const p = this.project({ x: poi.x + poi.width / 2, y: poi.y + poi.height / 2 });
-      if (p.x < -60 || p.x > this.width + 60 || p.y < -30 || p.y > this.height + 30) continue;
-      if (this.overview || this.tile < 12) {
-        c.fillStyle = poi.danger === 3 ? '#d6a17c' : '#c2ca95'; c.fillRect(p.x - 2, p.y - 2, 4, 4);
-        if (this.width >= 480) this.label(poi.name, p.x, p.y + 12, '#c5d3b0', 7);
-      } else if (this.tile > 30) this.label(poi.name, p.x, p.y, '#d6d3ac', 9);
-    }
+    this.paintLandmarks(world);
+    this.paintWaypoints(world);
     this.paintCombat(now);
     this.minimap(snapshot);
+  }
+  private paintLandmarks(world: LiveWorld): void {
+    const c = this.context, small = this.overview || this.tile < 12;
+    const boxes: Array<{ x: number; y: number; width: number; height: number }> = [];
+    const placeLabel = (name: string, point: LivePoint, size: number, color: string): void => {
+      c.font = `600 ${size}px Manrope, sans-serif`;
+      const width = c.measureText(name).width + 10, height = size + 8;
+      for (const offset of [0, -14, 15, -29, 30]) {
+        const box = { x: point.x - width / 2, y: point.y + offset - size - 4, width, height };
+        if (box.x < 5 || box.x + width > this.width - 5 || box.y < 45 || box.y + height > this.height - 35 || boxes.some(other => box.x < other.x + other.width && box.x + width > other.x && box.y < other.y + other.height && box.y + height > other.y)) continue;
+        boxes.push(box); this.label(name, point.x, point.y + offset, color, size); return;
+      }
+    };
+    if (small) for (const district of world.districts) {
+      const p = this.project({ x: district.x + district.width / 2, y: district.y + district.height / 2 });
+      placeLabel(district.name.toUpperCase(), { x: p.x, y: p.y - 24 }, this.width < 480 ? 11 : 14, '#e5e8c2');
+    }
+    const pois = [...world.pois].sort((a, b) => Number(this.routePoiIds.includes(b.id)) - Number(this.routePoiIds.includes(a.id)) || b.danger - a.danger || b.width * b.height - a.width * a.height);
+    let labelCount = 0;
+    for (const poi of pois) {
+      const p = this.project({ x: poi.x + poi.width / 2, y: poi.y + poi.height / 2 }), chosen = this.routePoiIds.includes(poi.id);
+      if (p.x < -60 || p.x > this.width + 60 || p.y < -30 || p.y > this.height + 30) continue;
+      if (small) {
+        c.fillStyle = chosen ? '#f2d596' : poi.danger === 3 ? '#d6a17c' : '#c2ca95'; c.fillRect(p.x - 2, p.y - 2, 4, 4);
+        if (chosen || this.width >= 480 && labelCount < 12) { placeLabel(poi.name, { x: p.x, y: p.y + 13 }, chosen ? 10 : 8, chosen ? '#f2dfb1' : '#c5d3b0'); labelCount++; }
+      } else if (this.tile > 30) placeLabel(poi.name, p, chosen ? 11 : 9, chosen ? '#f2dfb1' : '#d6d3ac');
+    }
+  }
+  private paintWaypoints(world: LiveWorld): void {
+    const c = this.context; this.waypointTargets = [];
+    for (const [index, id] of this.routePoiIds.entries()) {
+      const point = world.pois.find(poi => poi.id === id)?.entrances[0];
+      if (!point) continue;
+      const p = this.project(point);
+      if (p.x < -20 || p.x > this.width + 20 || p.y < -20 || p.y > this.height + 20) continue;
+      c.beginPath(); c.arc(p.x, p.y, this.overview ? 9 : 11, 0, Math.PI * 2); c.fillStyle = '#e8ce90'; c.fill(); c.strokeStyle = '#2a3a24'; c.lineWidth = 2; c.stroke();
+      c.font = '800 10px Manrope, sans-serif'; c.textAlign = 'center'; c.fillStyle = '#23331f'; c.fillText(String(index + 1), p.x, p.y + 3.5);
+      this.waypointTargets.push({ point, x: p.x, y: p.y });
+    }
   }
   private paintCombat(now: number): void {
     this.effects = this.effects.filter(effect => now - effect.at < 850);
@@ -444,6 +478,12 @@ export class LiveScene {
     for (const obstacle of snapshot.world.obstacles) { if (obstacle.kind === 'water' || obstacle.kind === 'tree') continue; c.fillStyle = obstacle.kind === 'building' ? '#bab7a088' : '#9b9e7c88'; c.fillRect(x + obstacle.x * scale, y + obstacle.y * scale, obstacle.width * scale, obstacle.height * scale); }
     for (const extract of snapshot.world.extracts) { c.fillStyle = '#a9d380'; c.fillRect(x + extract.x * scale - 2, y + extract.y * scale - 2, 4, 4); }
     for (const poi of snapshot.world.pois) { c.fillStyle = poi.danger === 3 ? '#b78665' : '#a6af84'; c.fillRect(x + (poi.x + poi.width / 2) * scale - 1, y + (poi.y + poi.height / 2) * scale - 1, 2, 2); }
+    for (const [index, id] of this.routePoiIds.entries()) {
+      const point = snapshot.world.pois.find(poi => poi.id === id)?.entrances[0];
+      if (!point) continue;
+      const px = x + point.x * scale, py = y + point.y * scale;
+      c.fillStyle = '#e8ce90'; c.beginPath(); c.arc(px, py, 3.5, 0, Math.PI * 2); c.fill(); c.fillStyle = '#24321f'; c.textAlign = 'center'; c.font = '700 6px Manrope, sans-serif'; c.fillText(String(index + 1), px, py + 2);
+    }
     for (const entity of snapshot.entities) { c.fillStyle = entity.id === snapshot.selfId ? '#ffe0a4' : entity.kind === 'player' ? '#81d0e3' : entity.faction === 'raiders' ? '#e48971' : '#ce9778'; c.beginPath(); c.arc(x + entity.x * scale, y + entity.y * scale, entity.id === snapshot.selfId ? 2.8 : 1.6, 0, Math.PI * 2); c.fill(); }
     this.label(snapshot.world.name.toUpperCase(), x + width / 2, y + height + 14, '#a9b596', 8);
   }
