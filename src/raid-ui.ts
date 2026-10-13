@@ -6,6 +6,7 @@ import { MODULE_BY_ID, MODULE_SLOT_LABELS, modulePlatformLabel, type ModuleInsta
 import { scavPortrait } from './art';
 import { moduleArt } from './armory-art';
 import { getRaidFieldFrame, getRaidFieldObjective, getRaidFieldPlan, type RaidFieldPlan } from './raid-field';
+import { getGameplayGuidance } from './gameplay-guidance';
 
 const e = (text: unknown) => String(text).replace(/[&<>"']/g, value => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[value]!));
 const n = (value: number) => Math.floor(value).toLocaleString('ru-RU');
@@ -40,13 +41,40 @@ function reportSucceeded(report: RaidReport): boolean { return report.squad ? re
 function reportStatus(report: RaidReport): string {
  return report.squad ? report.squad.outcomes.some(outcome=>outcome.lostScav)?'ПОТЕРИ':reportSucceeded(report)?'ВЕРНУЛИСЬ':'ОТСТУПИЛИ' : report.success?'ВЕРНУЛСЯ':'ЗАВЕРШЁН';
 }
-function renderRaidResult(state: GameState, report: RaidReport): string {
- if(!report.squad)return `<div class="live-result ${report.success?'':'failed'}"><span class="eyebrow">${report.success?'Доставлено на базу':'Под риском был весь груз'}</span><strong>${report.success?`${n(report.money)} ₽`:'Добыча потеряна'}</strong><p>${e(report.description)}</p><button class="text-button" data-page="journal">Открыть отчёт →</button></div>`;
- const receipts=report.squad.members.flatMap(member=>state.history.filter(item=>item.raidId===member.raidId));
- const money=receipts.reduce((sum,item)=>sum+item.money,0), losses=report.squad.outcomes.filter(outcome=>outcome.lostScav).length, rescued=report.squad.outcomes.filter(outcome=>outcome.rescuedBy).length;
+function raidResultReceipts(state: GameState, report: RaidReport): RaidReport[] {
+ return report.squad ? report.squad.members.flatMap(member => {
+  const receipt = member.raidId === report.raidId ? report : state.history.find(item => item.raidId === member.raidId);
+  return receipt ? [receipt] : [];
+ }) : [report];
+}
+function renderRaidDebrief(state: GameState, report: RaidReport, receipts: RaidReport[]): string {
+ const delivered = receipts.filter(item => item.success), supplies: Supplies = { ammo: 0, medicine: 0, scrap: 0, intel: 0 };
+ for (const receipt of delivered) for (const key of Object.keys(supplies) as (keyof Supplies)[]) supplies[key] += receipt.supplies[key];
+ const money = delivered.reduce((sum, item) => sum + item.money, 0), modules = delivered.reduce((sum, item) => sum + (item.moduleIds?.length ?? 0), 0);
+ const uses = [money > 0 ? `${n(money)} ₽ — на закупки и работу базы.` : '',
+  supplies.scrap > 0 ? `${n(supplies.scrap)} металла — на ремонт, строительство и производство.` : '',
+  supplies.intel > 0 ? `${n(supplies.intel)} разведданных — на выходы в новые секторы.` : '',
+  supplies.ammo > 0 ? 'Патроны пополняют запас для следующего выхода.' : '',
+  supplies.medicine > 0 ? 'Медикаменты — на лечение бойцов и аптечки.' : '',
+  modules > 0 ? 'Модули — для сборки и улучшения оружия; детали сверх вместимости уже проданы.' : '',
+  delivered.some(item => item.weaponId && !item.weaponAutoSold) ? 'Оружейный трофей проверь в арсенале перед выдачей бойцу.' : ''].filter(Boolean);
+ if (!uses.length) uses.push(report.squad && receipts.length < report.squad.members.length
+  ? 'В сохранившихся личных отчётах нет доставленной добычи. Полный итог груза отряда в последних записях не сохранился.'
+  : receipts.some(item => !item.success)
+   ? 'Невынесенный груз не попал в запас базы. Следующий выход готовится из того, что осталось в убежище.'
+   : 'Новой добычи в запасе базы нет. Перед следующим выходом проверь бойца, оружие и припасы.');
+ const discoveries = new Set(receipts.flatMap(item => item.discoveries ?? []));
+ if (discoveries.size) uses.push('Переданные чертежи сохранены: их можно использовать при подготовке снаряжения.');
+ const action = getGameplayGuidance(state).action;
+ return `<div class="gameplay-debrief"><span class="eyebrow">Что даёт этот выход</span><p>${e(uses.join(' '))}</p><span class="eyebrow">Следующий шаг</span><p data-gameplay-next-detail>${e(action.detail)}</p><button class="button secondary" data-action="gameplay-next" data-gameplay-next-label>${e(action.label)} →</button></div>`;
+}
+export function renderRaidResult(state: GameState, report: RaidReport): string {
+ const receipts = raidResultReceipts(state,report), debrief = renderRaidDebrief(state,report,receipts);
+ if(!report.squad)return `<div class="live-result ${report.success?'':'failed'}"><span class="eyebrow">${report.success?'Доставлено на базу':'Груз этого бойца не доставлен'}</span><strong>${report.success?`${n(report.money)} ₽`:'Добыча не доставлена'}</strong><p>${e(report.description)}</p>${debrief}<button class="text-button" data-page="journal">Открыть отчёт →</button></div>`;
+ const money=receipts.filter(item=>item.success).reduce((sum,item)=>sum+item.money,0), losses=report.squad.outcomes.filter(outcome=>outcome.lostScav).length, rescued=report.squad.outcomes.filter(outcome=>outcome.rescuedBy).length;
  const complete=receipts.length===report.squad.members.length;
  const text=[losses?`Погибло: ${losses}.`:'Все вернулись живыми.',rescued?`Спасено товарищами: ${rescued}.`:'',reportSucceeded(report)?'Общий маршрут завершён.':'Отряд прекратил продвижение и отступил вместе.','Каждый доставил только свой сохранённый груз.'].filter(Boolean).join(' ');
- return `<div class="live-result ${reportSucceeded(report)?'':'failed'}"><span class="eyebrow">${complete?'Доставлено всем отрядом':'По оставшимся личным отчётам'}</span><strong>${n(money)} ₽</strong><p>${e(text)}</p><button class="text-button" data-page="journal">Личные отчёты участников →</button></div>`;
+ return `<div class="live-result ${reportSucceeded(report)?'':'failed'}"><span class="eyebrow">${complete?'Подтверждённая доставка отряда':'По сохранившимся личным отчётам'}</span><strong>${n(money)} ₽</strong><p>${e(text)}</p>${debrief}<button class="text-button" data-page="journal">Личные отчёты участников →</button></div>`;
 }
 function planFor(raid: Raid) {
 	const key = `${raid.id}:${raid.seed}:${raid.mapId}:${raid.expedition?.stage ?? 0}:${raid.expedition?.branch ?? 'legacy'}:${raid.tactic}`;
@@ -137,6 +165,10 @@ export function updateLiveRaidPanel(root: HTMLElement, raid: Raid, candidate: Ra
 	set('[data-live-route]', `Осмотрено ${goal.visited.length} / ${goal.totalSearches} · Участок ${goal.segment} / ${goal.segments}`);
 	set('[data-live-action-time]', goal.remainingSeconds ? time(goal.remainingSeconds) : 'НА СВЯЗИ');
 	if (state) {
+		if (report) {
+			const action = getGameplayGuidance(state).action;
+			set('[data-gameplay-next-detail]', action.detail); set('[data-gameplay-next-label]', `${action.label} →`);
+		}
 		const party = getSquadRaidFieldFrame(raid,state.raids,now,undefined,report);
 		if (party) {
 			for (const member of party.members) { const actor=state.scavs.find(person=>person.id===member.scavId); set(`[data-party-health="${member.scavId}"]`,member.lostScav?"Погиб":`${Math.floor(report?member.health:actor?.health??member.health)} здоровья`); set(`[data-party-action="${member.scavId}"]`,member.statusText); }

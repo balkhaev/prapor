@@ -57,7 +57,8 @@ export type ContractMetric =
 	| "rareWeaponsFound"
 	| "gearLevels"
 	| "autoRaidsCompleted"
-	| "mapRaidsWon";
+	| "mapRaidsWon"
+	| "productionCycles";
 export interface Contract {
 	id: string;
 	name: string;
@@ -442,10 +443,20 @@ export const CONTRACTS: Contract[] = [
 		},
 	},
 	{
+		id: "working-shelter",
+		name: "Убежище в деле",
+		description: "Назначь работника и доставь на склад первую партию припасов или оружейный модуль. Оплаченный заказ должен завершиться.",
+		metric: "productionCycles",
+		target: 1,
+		level: 1,
+		requires: ["first-return"],
+		reward: { money: 90, xp: 35, supplies: { scrap: 2 } },
+	},
+	{
 		id: "arms-dealer",
 		requires: ["first-return"],
 		name: "Поставщик",
-		description: "Найди в рейдах 5 единиц оружия.",
+		description: "Долгосрочная коллекция: эвакуируй 5 трофейных пушек. Отдельные оружейные модули не считаются.",
 		metric: "weaponsFound",
 		target: 5,
 		level: 1,
@@ -503,7 +514,7 @@ export const CONTRACTS: Contract[] = [
 	},
 	{
 		id: "veteran-command",
-		requires: ["auto-route", "steady-returns"],
+		requires: ["steady-returns"],
 		name: "Твёрдая рука",
 		description: "Заверши 40 рейдов, даже если не все были удачными.",
 		metric: "raidsCompleted",
@@ -513,7 +524,7 @@ export const CONTRACTS: Contract[] = [
 	},
 	{
 		id: "gear-ready", name: "Подготовка отряда",
-		description: "Установи 2 уровня личной брони или рюкзаков.",
+		description: "Выдай бойцам 2 предмета брони или рюкзака либо повысь личную подготовку на 2 уровня. Можно сочетать оба способа.",
 		metric: "gearLevels", target: 2, level: 1, requires: ["first-return"],
 		reward: { money: 240, xp: 50, supplies: { scrap: 6, medicine: 2 } },
 	},
@@ -533,8 +544,29 @@ export const CONTRACTS: Contract[] = [
 		id: "forest-line", name: "Тихая линия",
 		description: "Успешно вернись из Лесополосы 4 раза.",
 		metric: "mapRaidsWon", mapId: "forest", target: 4, level: 3,
-		requires: ["depot-route", "auto-route"],
+		requires: ["depot-route"],
 		reward: { money: 850, xp: 150, supplies: { intel: 5, medicine: 5 } },
+	},
+	{
+		id: "factory-route", name: "Заводская линия",
+		description: "Успешно вернись с Завода 3 раза. Подготовь отряд к более опасному сектору и наладь снабжение.",
+		metric: "mapRaidsWon", mapId: "factory", target: 3, level: 5,
+		requires: ["forest-line"],
+		reward: { money: 700, xp: 120, supplies: { ammo: 16, intel: 3 } },
+	},
+	{
+		id: "reserve-route", name: "Военный резерв",
+		description: "Успешно вернись из Резерва 3 раза. Сохраняй ценные сборки и эвакуируй груз вовремя.",
+		metric: "mapRaidsWon", mapId: "reserve", target: 3, level: 7,
+		requires: ["factory-route"],
+		reward: { money: 1000, xp: 180, supplies: { scrap: 12, medicine: 4 } },
+	},
+	{
+		id: "bunker-route", name: "Связь с Бункером-7",
+		description: "Успешно вернись из Бункера-7. Даже один вынесенный груз завершает линию освоения секторов.",
+		metric: "mapRaidsWon", mapId: "bunker", target: 1, level: 9,
+		requires: ["reserve-route"],
+		reward: { money: 1400, xp: 250, supplies: { intel: 4, medicine: 6 } },
 	},
 ];
 

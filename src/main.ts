@@ -2,6 +2,7 @@ import "./style.css";
 import "./gear-style.css";
 import "./module-catalog.css";
 import "./achievements.css";
+import "./gameplay.css";
 import {
 	ATTACHMENT_LABELS,
 	CATEGORY_LABELS,
@@ -152,6 +153,8 @@ import { getResolvedModuleMounts, type ModuleModel } from "./game/modules";
 import { scavGearIllustration } from "./scav-gear-art";
 import { sectorArt, roomMiniArt } from "./command-art";
 import { getCommandSummary, type CommandSummary, type CommandRoomTab, type RoomCommandStatus } from "./command-summary";
+import { getGameplayGuidance } from "./gameplay-guidance";
+import { gameplayFocus, gameplayRoadmap } from "./gameplay-ui";
 import { MIN_SHELTER_ZOOM, MAX_SHELTER_ZOOM } from "./shelter-camera";
 import { getShelterProductionPresentation, getShelterProductionStages, SHELTER_PRODUCTION_STAGES, type ProductionPresentation } from "./shelter-production";
 import { projectShelterBounds, shelterRoomPolygon, shelterRoomPosition, SHELTER_ROOM_WIDTH, SHELTER_ROOM_HEIGHT } from "./shelter-isometric";
@@ -1469,7 +1472,7 @@ function openShelterRoom(id: string, requestedTab?: CommandRoomTab) {
 	document.querySelector<HTMLButtonElement>('[data-action="close-context"]')?.focus({ preventScroll: true });
 }
 function commandSummaryKey(summary: CommandSummary) {
-	return JSON.stringify([summary.counts, summary.queuedJobs, summary.freeWorkers, summary.rooms.map((room) => [room.roomId, room.kind, room.title, room.detail, room.cta]), state.scavs.map(scav => [scav.id, scav.story.pending?.eventId, scav.status]), getSocialPresentationKey(state)]);
+	return JSON.stringify([getGameplayGuidance(state), summary.counts, summary.queuedJobs, summary.freeWorkers, summary.rooms.map((room) => [room.roomId, room.kind, room.title, room.detail, room.cta]), state.scavs.map(scav => [scav.id, scav.story.pending?.eventId, scav.status]), getSocialPresentationKey(state)]);
 }
 function focusCommandControl(key: string) {
 	const dock = document.querySelector<HTMLElement>("#command-dock");
@@ -1486,7 +1489,9 @@ function refreshCommandOverview(summary: CommandSummary) {
 	const dock = document.querySelector<HTMLElement>("#command-dock"); if (!dock) return;
 	const activeKey = document.activeElement instanceof HTMLElement && dock.contains(document.activeElement) ? document.activeElement.dataset.focusKey : null;
 	const stripScroll = dock.querySelector<HTMLElement>(".command-system-grid")?.scrollLeft ?? 0;
+	const explanationOpen = dock.querySelector<HTMLDetailsElement>(".gameplay-explanation")?.open ?? false;
 	dock.innerHTML = commandOverview(summary);
+	const explanation = dock.querySelector<HTMLDetailsElement>(".gameplay-explanation"); if (explanation) explanation.open = explanationOpen;
 	const strip = dock.querySelector<HTMLElement>(".command-system-grid"); if (strip) strip.scrollLeft = stripScroll;
 	if (activeKey) focusCommandControl(activeKey);
 }
@@ -1562,16 +1567,19 @@ function renderCommandBoard() {
 	cancelWorkerPlacement(false, true);
 	const dock = document.querySelector<HTMLElement>("#command-dock")!;
 	const room = state.shelter.rooms.find((item) => item.id === selectedRoomId);
-	const oldScroll = dock.querySelector<HTMLElement>(".command-dock-scroll, .live-raid-scroll")?.scrollTop ?? 0;
+	const oldScroll = (dock.querySelector<HTMLElement>(".command-dock-scroll, .live-raid-scroll") ?? dock).scrollTop;
+	const explanationOpen = dock.querySelector<HTMLDetailsElement>(".gameplay-explanation")?.open ?? false;
 	const activeKey = document.activeElement instanceof HTMLElement && dock.contains(document.activeElement) ? document.activeElement.dataset.focusKey : undefined;
 	const mobileContext = window.innerWidth <= 850 && contextMode !== "overview";
 	dock.classList.toggle("context-open", contextMode !== "overview");
 	dock.classList.toggle("raid-dock", worldView === "raid");
+	dock.classList.toggle("gameplay-overview", worldView !== "raid" && contextMode === "overview");
 	dock.setAttribute("role", mobileContext ? "dialog" : "complementary");
 	if (mobileContext) { dock.setAttribute("aria-modal", "true"); dock.setAttribute("aria-label", contextMode === "build" ? "Строительство комнаты" : "Управление комнатой"); }
 	else { dock.removeAttribute("aria-modal"); dock.setAttribute("aria-label", "Сводка и управление объектом"); }
 	dock.innerHTML = worldView === "raid" ? renderLiveRaidPanel(state, watchedRaid(), watchedReport(), liveCheckpointControls(watchedRaid())) : contextMode === "room" && room ? managedRoomPanel(room) : contextMode === "build" && selectedShelterSite ? `<header class="command-context-head"><span class="eyebrow">Новая комната</span><button class="icon-button" data-action="close-context" data-focus-key="context-close" aria-label="Закрыть строительство">×</button></header><div class="command-dock-scroll">${buildSitePanel(selectedShelterSite.column, selectedShelterSite.row)}</div>` : commandOverview();
-	const scroll = dock.querySelector<HTMLElement>(".command-dock-scroll, .live-raid-scroll"); if (scroll) scroll.scrollTop = oldScroll;
+	const scroll = dock.querySelector<HTMLElement>(".command-dock-scroll, .live-raid-scroll") ?? dock; scroll.scrollTop = oldScroll;
+	const explanation = dock.querySelector<HTMLDetailsElement>(".gameplay-explanation"); if (explanation) explanation.open = explanationOpen;
 	if (activeKey) {
 		const replacement = dock.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(activeKey)}"]`);
 		if (replacement?.getClientRects().length && !replacement.closest("[inert]")) replacement.focus({ preventScroll: true });
@@ -1610,10 +1618,8 @@ function commandOverview(summary = getCommandSummary(state)) {
 	const productionTarget = summary.attention[0] ?? summary.rooms.find((room) => room.kind === "running") ?? summary.rooms.find((room) => room.tab === "production") ?? summary.rooms[0];
 	const counts = `${running} работают · ${waiting} ждут`;
 	const needsOrder = state.raids.find((raid) => raid.expedition?.status === "choice");
-	const personal = state.scavs.find(scav => scav.story.pending && scav.status !== "raiding");
 	const socialEvents = getSquadSocialEvents(state);
-	const personalStep = personal ? `<button class="command-next-action" data-scav="${personal.id}" data-focus-key="personal-${personal.id}" aria-label="Личный разговор с ${e(personal.name)}"><span class="command-next-mark" aria-hidden="true">${icon("people",17)}</span><span class="command-next-copy"><strong>${e(personal.name)} · личный разговор</strong><small>Есть чем поделиться ${icon("arrow",12)}</small></span></button>` : "";
-	const nextSteps = [personalStep, needsOrder ? `<button class="command-next-action next-raid" data-watch-raid="${needsOrder.id}" aria-label="${e(needsOrder.scavName)} ждёт приказа на контрольной точке"><span class="command-next-mark" aria-hidden="true">${icon("raids",17)}</span><span class="command-next-copy"><strong>${e(needsOrder.scavName)} · контрольная точка</strong><small>Выбрать маршрут или вернуться ${icon("arrow",12)}</small></span></button>` : "", ...summary.attention.slice(0, needsOrder ? 1 : 2).map(commandNextAction)].join("");
+	const nextSteps = summary.attention.filter(item => item.priority >= 75).slice(0, needsOrder ? 1 : 2).map(commandNextAction).join("");
 	const system = (name: string, symbol: string, detail: string, attributes: string, label = `${name}: ${detail}`, attention = false) => `<button class="command-system" ${attributes} aria-label="${e(label)}"><span class="system-symbol" aria-hidden="true">${icon(symbol,20)}</span><span><strong>${e(name)}</strong><b>${e(detail)}</b></span>${attention ? '<i class="system-attention"></i>' : ""}</button>`;
 	const tools = [
 		system("Производство", "scrap", `${summary.queuedJobs} заказов · ${staffed} рабочих`, `data-command-room="${productionTarget?.roomId ?? ""}" data-command-tab="${productionTarget?.tab ?? "production"}" data-focus-key="command-production"`),
@@ -1624,7 +1630,7 @@ function commandOverview(summary = getCommandSummary(state)) {
 		system("Журнал", "journal", last ? `${last.scavName}: ${last.success ? "вернулся" : "потери"}` : "Отчёты о выходах", 'data-page="journal"'),
 		system("Память отряда", "intel", `${state.blueprints.length} открытий`, 'data-action="open-discoveries"'),
 	].join("");
-	return `<div class="command-overview-head"><span class="eyebrow">Дела базы</span><strong>${counts}</strong><small>${summary.freeWorkers} свободных бойцов${summary.counts.building ? ` · ${summary.counts.building} строек` : ""}${state.shelter.expansions.length ? ` · стен в работе: ${state.shelter.expansions.length}` : ""}</small></div><div class="command-priority-band"><span class="command-priority-counts">${counts}</span>${nextSteps || `<div class="command-flow-status">${icon(summary.counts.building ? "time" : "check",19)}<span><strong>${summary.counts.building ? "Строительство идёт" : running ? "Производство идёт" : summary.counts.ready ? "Партии готовы" : "Готовы к новому выходу"}</strong><small>${summary.queuedJobs} заказов · ${summary.freeWorkers} свободны</small></span></div>`}</div><div class="command-system-grid">${tools}</div>`;
+	return `${gameplayFocus(getGameplayGuidance(state))}${nextSteps ? `<div class="gameplay-attention"><span class="eyebrow">Оплаченная работа ждёт</span>${nextSteps}</div>` : ""}<div class="command-overview-head"><span class="eyebrow">Дела базы</span><strong>${counts}</strong><small>${summary.freeWorkers} свободных бойцов${summary.counts.building ? ` · ${summary.counts.building} строек` : ""}${state.shelter.expansions.length ? ` · стен в работе: ${state.shelter.expansions.length}` : ""}</small></div><div class="command-system-grid">${tools}</div>`;
 }
 function renderShelter() {
 	const recipeScroll = panel.querySelector<HTMLElement>(".room-module-recipes")?.scrollTop ?? 0;
@@ -1744,7 +1750,7 @@ function contractCard(contract: Contract) {
 		available = !lockReason,
 		ready = available && progress >= contract.target;
 	const supplies = Object.entries(contract.reward.supplies).map(([key, amount]) => `<span title="${({ ammo: "Патроны", medicine: "Медикаменты", scrap: "Детали", intel: "Разведданные" } as Record<string, string>)[key]}">${icon(key, 12)} +${amount}</span>`).join("");
-	return `<article class="contract ${lockReason && !claimed ? "contract-locked" : ""}"><div class="contract-mark">${icon(claimed ? "check" : lockReason ? "lock" : "contracts", 21)}</div><div class="contract-copy"><h3>${e(contract.name)}</h3><p>${e(contract.description)}</p><div class="progress"><i style="width:${Math.min(100, (progress / contract.target) * 100)}%"></i></div><small>${n(Math.min(contract.target, progress))} / ${n(contract.target)}</small>${lockReason && !claimed ? `<div class="contract-lock">${icon("lock", 11)} ${e(lockReason)}</div>` : ""}<div class="reward-supplies">${supplies}</div></div><div class="contract-reward"><span>+${n(contract.reward.money)} ₽</span><span class="muted">+${contract.reward.xp} опыта</span><button class="button secondary small" data-action="claim" data-id="${contract.id}" ${!ready || claimed ? "disabled" : ""}>${claimed ? "Выполнено" : lockReason ? "Закрыт" : ready ? "Забрать" : "В работе"}</button></div></article>`;
+	return `<article data-contract="${e(contract.id)}" class="contract ${lockReason && !claimed ? "contract-locked" : ""}"><div class="contract-mark">${icon(claimed ? "check" : lockReason ? "lock" : "contracts", 21)}</div><div class="contract-copy"><h3>${e(contract.name)}</h3><p>${e(contract.description)}</p><div class="progress"><i style="width:${Math.min(100, (progress / contract.target) * 100)}%"></i></div><small>${n(Math.min(contract.target, progress))} / ${n(contract.target)}</small>${lockReason && !claimed ? `<div class="contract-lock">${icon("lock", 11)} ${e(lockReason)}</div>` : ""}<div class="reward-supplies">${supplies}</div></div><div class="contract-reward"><span>+${n(contract.reward.money)} ₽</span><span class="muted">+${contract.reward.xp} опыта</span><button class="button secondary small" data-action="claim" data-id="${contract.id}" ${!ready || claimed ? "disabled" : ""}>${claimed ? "Выполнено" : lockReason ? "Закрыт" : ready ? "Забрать" : "В работе"}</button></div></article>`;
 }
 function journalCard(report: RaidReport) {
 	return `<details class="journal-entry" data-report="${report.id}"><summary><time>${new Date(report.at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</time><div class="journal-copy"><strong>${e(report.scavName)} · ${e(MAP_BY_ID[report.mapId]!.name)}</strong><p>${e(report.description)}</p><div class="journal-meta"><span>${report.isAuto ? "АВТОВЫХОД" : "ЭКСПЕДИЦИЯ"} · этапов ${report.depth} · ${e(TACTICS[report.tactic].label)}</span><span>${report.money ? `+${n(report.money)} ₽ · ` : ""}Детали +${report.supplies.scrap} · патроны +${report.supplies.ammo}</span></div></div><b class="tag report-result ${report.success ? "success" : "failure"}">${report.success ? "ВЕРНУЛСЯ" : report.lostScav ? "ПОТЕРЯН" : "ПРОВАЛ"}</b><span class="journal-expand">${icon("arrow", 14)}</span></summary><div class="journal-detail">${report.moduleIds.length ? `<div class="module-loot-strip">${report.moduleIds.map((id) => { const model = MODULE_BY_ID[id]; return model ? `<span class="cargo-module" style="--rarity:${RARITY_COLORS[model.rarity]}">${moduleArt(model)}<span><strong>${e(model.label)}</strong><small>Доставлено на базу</small></span></span>` : ""; }).join("")}</div>` : ""}${report.discoveries.length ? `<div class="report-memory">${icon("intel", 18)} Сохранены открытия: ${report.discoveries.map((id) => e(BLUEPRINTS[id]?.label ?? id)).join(" · ")}</div>` : ""}${report.lostCargo ? `<p class="risk-note">Потеряна добыча из рюкзака: ≈ ${n(getCargoValue(report.lostCargo))} ₽. Постоянные открытия остались у базы.</p>` : ""}${report.weaponId ? `<div class="report-trophy" style="--rarity:${RARITY_COLORS[WEAPON_BY_ID[report.weaponId]!.rarity]}">${icon("arsenal", 21)}<div><strong>${e(WEAPON_BY_ID[report.weaponId]!.name)}</strong><span>${report.weaponAutoSold ? "Продано: арсенал заполнен" : "Найдено и отправлено в арсенал"}</span></div></div>` : ""}<ol class="route-timeline">${report.events.map((event, i) => `<li class="event-${event.kind}"><div class="timeline-marker">${String(i + 1).padStart(2, "0")}</div><div><div class="timeline-label"><strong>${e(event.label)}</strong><time>${new Date(event.at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time></div><p>${e(event.text)}</p></div></li>`).join("")}</ol><div class="report-bottom"><span>Разведданные +${report.supplies.intel} · медикаменты +${report.supplies.medicine}</span><span>${report.lostScav ? "Боец потерян" : report.lostWeapon ? "Оружие потеряно" : "Отчёт закрыт"}</span></div></div></details>`;
@@ -1852,7 +1858,7 @@ function render() {
 	if (page === "base") renderShelter();
 	if (page === "contracts") {
 		const contracts = CONTRACTS.filter((contract) => contractFilter === "all" || (contractFilter === "done") === state.claimedContracts.includes(contract.id));
-		panel.innerHTML = `<div class="arsenal-toolbar"><div class="filters">${(["open", "done", "all"] as const).map((filter) => `<button data-contract-filter="${filter}" class="${contractFilter === filter ? "active" : ""}">${filter === "open" ? "Поручения" : filter === "done" ? "Выполнены" : "Все"}</button>`).join("")}</div><span class="tag">${state.claimedContracts.length} / ${CONTRACTS.length} ЗАКРЫТО</span></div><div class="contract-brief">${icon("contracts", 22)}<p>Поручения дают рубли, опыт и припасы для следующего выхода. Завершай цепочку: награды открывают новые задания, а репутация — новые сектора.</p></div>${contracts.map(contractCard).join("") || '<div class="empty">Здесь пока нет поручений. Заверши первый контракт и возвращайся.</div>'}`;
+		panel.innerHTML = `${gameplayRoadmap(state)}<div class="arsenal-toolbar"><div class="filters">${(["open", "done", "all"] as const).map((filter) => `<button data-contract-filter="${filter}" class="${contractFilter === filter ? "active" : ""}">${filter === "open" ? "Поручения" : filter === "done" ? "Выполнены" : "Все"}</button>`).join("")}</div><span class="tag">${state.claimedContracts.length} / ${CONTRACTS.length} ЗАКРЫТО</span></div><div class="contract-brief">${icon("contracts", 22)}<p>Получай награды основной цепочки, чтобы переходить к следующей цели. Коллекция, стройка и постоянные приказы дают дополнительные поручения.</p></div>${contracts.map(contractCard).join("") || '<div class="empty">Здесь пока нет поручений. Заверши первый контракт и возвращайся.</div>'}`;
 	}
 	if (page === "journal")
 		panel.innerHTML = (state.history.length
@@ -2109,6 +2115,30 @@ function showAutoRaidOrder(scavId: string) {
 	document.querySelector("#modal-root")!.innerHTML = `<div class="modal-backdrop"><section class="modal auto-raid-modal" role="dialog" aria-modal="true" aria-labelledby="auto-title"><span class="eyebrow">Постоянный приказ · ${e(scav.name)}</span><h2 id="auto-title">Автовыходы: ${e(map.name)}</h2><div class="order-brief"><span>${icon("repeat", 19)} Повторять выбранный маршрут</span><span>${icon("medicine", 19)} Выходить при ${scav.autoRaid.minHealth} / 100 здоровья</span><span>${icon("backpack", 19)} Эвакуироваться на глубине ${scav.autoRaid.maxDepth} / 3</span><span>${icon("time", 19)} Работать и офлайн · до 8 часов</span></div><p>Дикий будет повторять маршрут до глубины ${scav.autoRaid.maxDepth}, затем эвакуируется автоматически. Приказ действует, пока хватает рублей на логистику, патронов, разведданных и исправного снаряжения. Он работает и офлайн; ручные выходы продолжаются только после твоего выбора.</p><p class="order-risk">Каждый повтор несёт риск: можно потерять дикого и его оружие. Броня снижает потери, но не гарантирует возвращение.</p><p>Кнопка «Остановить автовыходы» отменяет будущие выходы. Текущая экспедиция останется в пути с исходной глубиной эвакуации.</p><div class="detail-actions"><button class="button" data-action="confirm-auto" data-id="${scav.id}" data-route="${map.id}" data-min-health="${scav.autoRaid.minHealth}">${scav.autoRaid.enabled ? "Изменить приказ" : "Включить автовыходы"}</button><button class="button ghost" data-action="close-modal">Назад к бойцу</button></div></section></div>`;
 	focusModal();
 }
+function followGameplayAction(origin: HTMLElement) {
+	const action = getGameplayGuidance(state).action;
+	closeModal(); closeInspector();
+	toolOrigin = origin;
+	if (action.mapId && MAP_BY_ID[action.mapId] && state.level >= MAP_BY_ID[action.mapId]!.level) selectedMap = action.mapId;
+	if (action.kind === "watch" && action.raidId) { watchRaid(action.raidId); return; }
+	if (action.kind === "room" && action.roomId) { setView("base"); openShelterRoom(action.roomId, action.tab); return; }
+	if (action.kind === "scav" && action.scavId) { openInspector(action.scavId); return; }
+	if (action.kind === "raid") {
+		page = "raids"; render();
+		if (action.scavId) openInspector(action.scavId);
+		else document.querySelector<HTMLButtonElement>('[data-action="close-tools"]')?.focus();
+		return;
+	}
+	if (action.kind === "market") { page = "arsenal"; arsenalTab = "market"; }
+	else if (action.kind === "arsenal") { page = "arsenal"; arsenalTab = "weapons"; }
+	else if (action.kind === "recruits") page = "recruits";
+	else if (action.kind === "room") page = "base";
+	else { page = "contracts"; contractFilter = "open"; }
+	render();
+	const claim = action.contractId ? panel.querySelector<HTMLButtonElement>(`[data-action="claim"][data-id="${CSS.escape(action.contractId)}"]`) : null;
+	if (claim && !claim.disabled) { claim.scrollIntoView({ block: "center", behavior: scrollBehavior() }); claim.focus({ preventScroll: true }); }
+	else document.querySelector<HTMLButtonElement>('[data-action="close-tools"]')?.focus();
+}
 document.addEventListener("click", (event) => {
 	storedProgressChanged();
 	if ((event.target as Element).closest("#tool-root, #inspector-root, #modal-root, #command-dock, #context-shade, button, select, input, summary")) holdWorldInput();
@@ -2126,6 +2156,7 @@ document.addEventListener("click", (event) => {
 		return;
 	}
 	if (target.dataset.workerHandle) { beginKeyboardAssignment(target.dataset.workerHandle); return; }
+	if (target.dataset.action === "gameplay-next") { followGameplayAction(target); return; }
 	if (target.dataset.action === "toggle-sound") { void toggleGameSound(); return; }
 	if (target.hasAttribute("data-worker-cancel")) { cancelWorkerPlacement(true, true); return; }
 	if (target.dataset.workerRoom && workerPlacement?.mode === "keyboard") {
