@@ -96,7 +96,7 @@ function expectInside(svg: string, label: string) {
 
 describe("complete weapon side-profile audit", () => {
 	test("every model keeps its physical paths, valid numbers and unclipped installed geometry on the bench and actor", () => {
-		expect(MODULE_MODELS).toHaveLength(621);
+		expect(MODULE_MODELS).toHaveLength(934);
 		expect(ARMORY_SLOT_ORDER).toEqual(MODULE_SLOTS);
 		for (const model of MODULE_MODELS) {
 			const gun = gunFor(model), saved = JSON.stringify(gun), actor = weaponActorArt(gun), bench = weaponBuildArt(gun), loose = moduleArt(model);
@@ -164,7 +164,9 @@ describe("complete weapon side-profile audit", () => {
 					const group = part(art.svg, "mount")!, foundationPath = outline(group).split(/(?=M)/)[0]!, opening = group.slice(0, group.indexOf(">") + 1);
 					const [left = 0, , right = 0] = geometryBounds(`${opening}<path d="${foundationPath}"/></g>`), [barrelDx = 0] = offset(part(art.svg, "barrel")!);
 					const barrelEnd = Math.max(...pointsForPath(outline(part(art.svg, "barrel")!)).map(([x]) => x)) + barrelDx;
-					const front = ["pp91", "toz", "p90", "mp7", "ump45"].includes(definition.id) ? 601 : 636;
+					const front = ["g36", "aug", "fal", "sr25", "vector", "sr2", "ash12", "vpo209", "svdk", "awm", "m870"].includes(definition.id)
+						? Math.max(...pointsForPath(outline(part(art.svg, "handguard")!)).map(([x]) => x))
+						: ["pp91", "toz", "p90", "mp7", "ump45"].includes(definition.id) ? 601 : 636;
 					expect(left, `${definition.id}/${mount.id} exposed barrel start`).toBeGreaterThanOrEqual(front);
 					expect(right, `${definition.id}/${mount.id} exposed barrel end`).toBeLessThanOrEqual(barrelEnd);
 				}

@@ -39,7 +39,7 @@ function litSks() {
 
 describe("rooted weapon accessory connections", () => {
 	test("30 new physical parts append to all 381 existing IDs with independent optional slots and meaningful costs", () => {
-		expect(MODULE_MODELS).toHaveLength(621);
+		expect(MODULE_MODELS).toHaveLength(934);
 		expect(accessories).toHaveLength(30);
 		expect(accessories.filter((part) => part.slot === "mount")).toHaveLength(14);
 		expect(accessories.filter((part) => part.slot === "flashlight")).toHaveLength(8);

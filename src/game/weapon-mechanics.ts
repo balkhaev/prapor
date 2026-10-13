@@ -27,6 +27,13 @@ export const WEAPON_MECHANICAL_PROFILES: Record<string, NativeProfile> = {
 	ump45: profile("Тяжёлое ближнее прикрытие", .046, -.038), m1911: profile("Одиночный ближний выстрел", .03, -.042),
 	mcx: profile("Короткий карабин для сближения", .022, .018), scarh: profile("Тяжёлый открытый рубеж", -.006, .047),
 	trg42: profile("Дальний болтовой дозор", -.075, .08),
+	g36: profile("Подвижный средний рубеж", .015, .028), aug: profile("Компактный дальний ствол", .03, .027),
+	fal: profile("Классический тяжёлый рубеж", -.015, .042), sr25: profile("Самозарядный дальний контроль", -.04, .067),
+	vector: profile("Быстрый ближний импульс", .073, -.043), fiveseven: profile("Лёгкий точный резерв", .032, -.014),
+	sr2: profile("Манёвренный ближний натиск", .065, -.028), sr1: profile("Тяжёлый пистолетный резерв", .032, -.031),
+	glock20: profile("Короткий мощный резерв", .028, -.036), ash12: profile("Тяжёлый штурм в тесноте", .058, -.044),
+	vpo209: profile("Самозарядный ближний промысел", .02, -.005), svdk: profile("Тяжёлый самозарядный дозор", -.055, .073),
+	awm: profile("Дальний магнум с опоры", -.085, .086, 0, .008), m870: profile("Помповое прикрытие проходов", .055, -.043),
 };
 export interface WeaponEnvironment { label: string; distance: "close" | "mixed" | "far"; darkness: number }
 export const WEAPON_ENVIRONMENTS: Record<string, WeaponEnvironment> = {

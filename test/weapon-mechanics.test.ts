@@ -66,7 +66,7 @@ describe("weapon mechanics and contextual loadout balance", () => {
 			expect(getWeaponStats(weapon).ready).toBe(true);
 			signatures.add(JSON.stringify([profile.closeBonus, profile.rangeBonus, profile.stealthBonus, profile.supportBonus, profile.wearMultiplier]));
 		}
-		expect(WEAPONS).toHaveLength(25);
+		expect(WEAPONS).toHaveLength(39);
 		expect(signatures.size).toBe(WEAPONS.length);
 		expect(effect(factory("pp91"), "factory").bonus).toBeGreaterThan(effect(factory("mosin"), "factory").bonus);
 		expect(effect(factory("mosin"), "forest").bonus).toBeGreaterThan(effect(factory("pp91"), "forest").bonus);

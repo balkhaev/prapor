@@ -2,11 +2,11 @@ import { MODULE_BY_ID, type ModuleModel, type ModuleSlot } from "./game/modules"
 import type { WeaponInstance } from "./game/engine";
 
 /** Generated decorative surface patches follow the native module slot order. */
-export const MODULAR_WEAPON_ART_IDS = ["m4a1", "hk416", "p90", "mp7", "ump45", "m1911", "mcx", "scarh", "trg42"] as const;
+export const MODULAR_WEAPON_ART_IDS = ["m4a1", "hk416", "p90", "mp7", "ump45", "m1911", "mcx", "scarh", "trg42", "g36", "aug", "fal", "sr25", "vector", "fiveseven", "sr2", "sr1", "glock20", "ash12", "vpo209", "svdk", "awm", "m870"] as const;
 export type ModularWeaponArtId = typeof MODULAR_WEAPON_ART_IDS[number];
 export const MODULAR_WEAPON_ART_SLOTS = ["receiver", "barrel", "handguard", "stock", "magazine", "optic", "muzzle", "foregrip"] as const;
-const familyArt: Readonly<Record<string, ModularWeaponArtId>> = { ar: "m4a1", p90: "p90", mp7: "mp7", ump: "ump45", "1911": "m1911", mcx: "mcx", scar: "scarh", trg: "trg42" };
-const caliberArt: Readonly<Record<string, ModularWeaponArtId>> = { "5.56x45": "m4a1", "5.7x28": "p90", "4.6x30": "mp7", ".45acp": "ump45", ".300blk": "mcx", "7.62x51": "scarh", ".338lapua": "trg42" };
+const familyArt: Readonly<Record<string, ModularWeaponArtId>> = { ar: "m4a1", p90: "p90", mp7: "mp7", ump: "ump45", "1911": "m1911", mcx: "mcx", scar: "scarh", trg: "trg42", g36: "g36", aug: "aug", fal: "fal", ar10: "sr25", vector: "vector", fiveseven: "fiveseven", sr2: "sr2", sr1: "sr1", glock: "glock20", ash12: "ash12", tkm: "vpo209", svdk: "svdk", awm: "awm", m870: "m870" };
+const caliberArt: Readonly<Record<string, ModularWeaponArtId>> = { "5.56x45": "m4a1", "5.7x28": "p90", "4.6x30": "mp7", ".45acp": "ump45", ".300blk": "mcx", "7.62x51": "scarh", ".338lapua": "trg42", "9x21": "sr2", "10mm": "glock20", "12.7x55": "ash12", ".366tkm": "vpo209", "9.3x64": "svdk", ".300winmag": "awm" };
 export const modularWeaponArtUrl = (id: ModularWeaponArtId): string => `/art/weapons/modular-${id}.png`;
 type SourceBounds = readonly [number, number, number, number];
 type Atlas = { data: string; width: number; height: number; cells: SourceBounds[] };

@@ -2,7 +2,7 @@ import { type AmmoModel, type AmmoType } from "./game/ammunition";
 
 /** Generated pack atlases use this fixed order; save IDs and model order are independent. */
 export const AMMUNITION_ART_TYPES = ["standard", "piercing", "expanding", "precision", "subsonic", "tracer", "highpressure", "surplus"] as const;
-export const AMMUNITION_ART_CALIBERS = ["9x18", "7.62x25", "9x19", "5.45x39", "7.62x39", "7.62x54", "9x39", "12g", "20g", "5.56x45", "5.7x28", "4.6x30", ".45acp", ".300blk", "7.62x51", ".338lapua"] as const;
+export const AMMUNITION_ART_CALIBERS = ["9x18", "7.62x25", "9x19", "5.45x39", "7.62x39", "7.62x54", "9x39", "12g", "20g", "5.56x45", "5.7x28", "4.6x30", ".45acp", ".300blk", "7.62x51", ".338lapua", "9x21", "10mm", ".366tkm", "12.7x55", "9.3x64", ".300winmag"] as const;
 
 const escape = (value: string) => value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
 
