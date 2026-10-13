@@ -1,0 +1,48 @@
+.command-dock.gameplay-overview:not(.context-open):not(.raid-dock) {display:block;padding:0;overflow-y:auto;scrollbar-width:thin;overscroll-behavior:contain}
+.gameplay-focus {padding:15px 15px 12px;border-bottom:1px solid #a8ad7a66;background:linear-gradient(140deg,#b5aa6424,#263d2e55);min-width:0}
+.gameplay-focus-heading {display:flex;align-items:center;justify-content:space-between;gap:10px}
+.gameplay-focus-heading>span:last-child {font:11px 'IBM Plex Mono',monospace;color:#d5cda5}
+.gameplay-focus h2 {font-size:20px;line-height:1.45;color:#f1e5bd;margin:9px 0 5px}
+.gameplay-purpose,.gameplay-next-detail {font-size:11px;line-height:1.75;color:#d0d3b5;margin:7px 0;overflow-wrap:anywhere}
+.gameplay-goal-progress {display:flex;align-items:center;justify-content:space-between;gap:9px;font-size:9px;color:#c6cca6;margin:11px 0 5px;flex-wrap:wrap}
+.gameplay-goal-progress>span:first-child {font:11px 'IBM Plex Mono',monospace;color:#e4d4a0}
+.gameplay-focus>.progress {height:4px;margin:0 0 14px;background:#172d25}
+.gameplay-focus>.progress>i {background:#d8bd78}
+.gameplay-cycle {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:3px;list-style:none;padding:0;margin:12px 0 11px;counter-reset:gameplay-phase}
+.gameplay-cycle li {counter-increment:gameplay-phase;position:relative;min-width:0;text-align:center;font-size:9px;color:#a9b696;padding:5px 0;border-bottom:2px solid #7f946244;line-height:1.6}
+.gameplay-cycle li:before {content:counter(gameplay-phase);display:block;font:10px 'IBM Plex Mono',monospace;margin-bottom:4px;opacity:.65}
+.gameplay-cycle li.current {color:#f4dea2;border-bottom-color:#d8bd78;background:#b4aa5920;border-radius:4px 4px 0 0}
+.gameplay-cycle li.current:before {opacity:1}
+.gameplay-next {width:100%;justify-content:space-between;margin:7px 0 2px;min-height:40px;text-align:left;white-space:normal;line-height:1.6;font-size:12px}
+.gameplay-explanation {margin-top:10px;border-top:1px solid #a0ac7140;padding-top:9px;font-size:10px;color:#c2caa8}
+.gameplay-explanation summary {cursor:pointer;line-height:1.8;color:#d7d1af}
+.gameplay-explanation>ol {padding-left:19px;margin:11px 0 0}
+.gameplay-explanation li {margin-bottom:9px}.gameplay-explanation li strong {color:#e3d9b7}.gameplay-explanation p {line-height:1.8;margin:3px 0 7px}
+.gameplay-explanation .text-button {font-size:11px;margin:4px 0}
+.gameplay-attention {padding:10px 11px 0;display:grid;gap:6px}.gameplay-attention>.eyebrow {font-size:8px}
+.gameplay-roadmap {border:1px solid #a1ab7977;border-radius:9px;background:linear-gradient(140deg,#6b764033,#29452e66);padding:22px;margin-bottom:22px;min-width:0}
+.gameplay-roadmap-head {display:flex;align-items:center;gap:24px;justify-content:space-between;min-width:0}
+.gameplay-roadmap-head>div {flex:1;min-width:0}.gameplay-roadmap-head h2 {font-size:24px;color:#e9dcb4;margin:8px 0;line-height:1.5}
+.gameplay-roadmap-head p,.gameplay-freedom {font-size:12px;color:#c6d0ac;line-height:1.85;margin:5px 0;overflow-wrap:anywhere}
+.gameplay-roadmap-head>.button {max-width:240px;white-space:normal;text-align:left;line-height:1.7;flex-shrink:0}
+.gameplay-roadmap-steps {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;padding:0;margin:22px 0;list-style:none}
+.gameplay-roadmap-steps li {display:flex;align-items:flex-start;gap:10px;border:1px solid #7c906855;border-radius:6px;padding:13px 10px;min-width:0;background:#243b2c55}
+.gameplay-roadmap-steps li.current {border-color:#cfb779;background:#948b4430}.gameplay-roadmap-steps li.done {border-color:#97ad7280;background:#50663733}
+.gameplay-beat-number {font:13px 'IBM Plex Mono',monospace;color:#a5b58e;flex-shrink:0;padding-top:3px}.current .gameplay-beat-number {color:#f4d58d}.done .gameplay-beat-number {color:#bed89f}
+.gameplay-roadmap-steps li>div {min-width:0}.gameplay-roadmap-steps strong {font-size:12px;line-height:1.7;color:#ddd8b6}
+.gameplay-roadmap-steps p {font-size:10px;color:#b5c4a1;line-height:1.8;margin:5px 0 9px;overflow-wrap:anywhere}
+.gameplay-roadmap-steps small {font-size:9px;line-height:1.7;color:#b9c298}.gameplay-roadmap-steps .current small {color:#e4c891}
+.gameplay-freedom {border-top:1px solid #8c9c6244;padding-top:12px}
+.gameplay-debrief {border-top:1px solid #9ca77355;padding-top:12px;margin-top:12px}.gameplay-debrief p {font-size:11px;line-height:1.85}.gameplay-debrief .button {white-space:normal;text-align:left;line-height:1.7}
+.gameplay-focus button:focus-visible,.gameplay-focus summary:focus-visible,.gameplay-roadmap button:focus-visible {outline:2px solid #ffe0a0;outline-offset:3px}
+@media(max-width:1050px) {.gameplay-roadmap-steps {grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:850px) {.gameplay-focus {padding:13px 14px}.gameplay-focus h2 {font-size:18px}.gameplay-cycle {margin:9px 0}.gameplay-purpose {font-size:11px}.gameplay-roadmap-head {align-items:flex-start;flex-direction:column;gap:12px}.gameplay-roadmap-head>.button {max-width:100%}}
+@media(max-width:500px) {.gameplay-roadmap {padding:16px 12px}.gameplay-roadmap-head h2 {font-size:20px}.gameplay-roadmap-steps {grid-template-columns:1fr;margin:16px 0}.gameplay-roadmap-steps li {padding:10px 12px}.gameplay-roadmap-steps p {margin:3px 0 4px}.gameplay-roadmap-head>.button {width:100%}}
+@media(max-width:850px) {
+	.command-main:not(.raid-watching) {grid-template-rows:max-content max-content 100px max-content max-content;align-content:start;overflow-y:auto}
+	.command-main:not(.raid-watching) .command-stage-layout {height:auto;grid-template-rows:minmax(240px,calc(65vw - 13px)) max-content}
+	.command-dock.gameplay-overview:not(.context-open):not(.raid-dock) {height:auto;max-height:none}
+	.command-dock.gameplay-overview .command-system-grid {height:auto;display:flex;overflow-x:auto;gap:6px;padding:9px}
+	.command-dock.gameplay-overview .command-system {height:auto;flex:0 0 132px;min-height:60px;padding:9px}
+	.command-dock.gameplay-overview .command-overview-head {display:none}
+}

@@ -1061,8 +1061,17 @@ export function getContractProgress(
 	if (contract.metric === "baseLevels")
 		return roomKeys.reduce((total, room) => total + state.base[room], 0);
 	if (contract.metric === "mapsVisited") return state.stats.mapsVisited.length;
-	if (contract.metric === "gearLevels")
-		return state.scavs.reduce((total, scav) => total + scav.gear.armor + scav.gear.backpack, 0);
+	if (contract.metric === "gearLevels") {
+		const equipped = new Set<string>();
+		for (const scav of state.scavs) {
+			for (const [itemId, slot] of [[scav.loadout.armorItemId, "armor"], [scav.loadout.backpackItemId, "backpack"]] as const) {
+				const item = state.gearItems.find((gear) => gear.id === itemId);
+				if (item && ownValue(GEAR_MODEL_BY_ID, item.modelId)?.slot === slot) equipped.add(item.id);
+			}
+		}
+		return equipped.size + state.scavs.reduce((total, scav) => total + scav.gear.armor + scav.gear.backpack, 0);
+	}
+	if (contract.metric === "productionCycles") return state.shelter.rooms.reduce((total, room) => total + room.cycles, 0);
 	if (contract.metric === "mapRaidsWon") return state.stats.mapWins[contract.mapId ?? ""] ?? 0;
 	return state.stats[contract.metric];
 }
