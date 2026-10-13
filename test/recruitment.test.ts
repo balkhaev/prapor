@@ -70,7 +70,7 @@ function legacyV5(state: GameState) {
 	delete source.recruitment;
 	delete source.memorials; delete source.social; delete source.achievements;
 	for (const scav of source.scavs) { delete scav.profile; delete scav.story; }
-	for (const raid of source.raids) if (raid.expedition) delete raid.expedition.weaponMechanics;
+	for (const raid of source.raids) if (raid.expedition) { delete raid.expedition.weaponMechanics; delete raid.expedition.ammunition; }
 	return source;
 }
 

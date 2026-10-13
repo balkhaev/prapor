@@ -53,7 +53,7 @@
       .inspection-stats { display: flex; gap: 16px; flex-wrap: wrap; margin: 12px 0 17px; }
       .inspection-stats span { color: #98a18f; font-size: 10px; }
       .inspection-stats strong { display: block; margin-top: 3px; color: #dedecf; font: 13px 'IBM Plex Mono', monospace; }
-      .inspection-context { display: grid; grid-template-columns: repeat(2, minmax(0, 240px)); gap: 12px; margin: 15px 0 0; }
+      .inspection-context { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 15px 0 0; }
       .build-parts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; padding: 0; margin: 13px 0; list-style: none; }
       .build-parts button { width: 100%; height: 100%; min-height: 62px; text-align: left; padding: 9px 11px; background: #252b25; border: 1px solid #495242; border-radius: 5px; color: #bdc4b3; cursor: pointer; font: 11px Manrope, sans-serif; }
       .build-parts button small { display: block; color: #8f9b83; font: 9px 'IBM Plex Mono', monospace; margin-bottom: 5px; }
@@ -128,8 +128,9 @@
         <div id="weapon-closeup" tabindex="0" aria-label="Крупный вид сборки. При увеличении можно прокручивать по горизонтали и вертикали."></div>
         <p class="inspection-guide">Выберите деталь на оружии или в списке. Увеличенную сборку можно прокручивать.</p>
         <div class="inspection-stats" id="inspection-stats"></div>
-        <div class="inspection-context"><label>Сектор для сравнения<select id="inspection-map" aria-label="Сектор для сравнения сборки"></select></label><label>Тактика<select id="inspection-tactic" aria-label="Тактика для сравнения сборки"></select></label></div>
+        <div class="inspection-context"><label>Сектор для сравнения<select id="inspection-map" aria-label="Сектор для сравнения сборки"></select></label><label>Тактика<select id="inspection-tactic" aria-label="Тактика для сравнения сборки"></select></label><label>Боеприпас<select id="inspection-ammo" aria-label="Боеприпас для сравнения сборки"></select></label></div>
         <div id="inspection-mechanics" aria-live="polite"></div>
+        <div id="inspection-ammunition" aria-live="polite"></div>
         <ul class="build-parts" id="build-parts" aria-label="Детали сборки"></ul>
         <div class="inspection-part empty-inspection" id="inspection-part"></div>
       </details>

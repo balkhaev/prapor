@@ -296,8 +296,8 @@ describe("coordinated two and three scav expeditions", () => {
 		const state = funded(); expect(dispatchRaid(state, state.scavs[0]!.id, "courtyard", state.lastUpdated).ok).toBe(true);
 		const before = withoutRaidStrategy(structuredClone(state)), raw = withoutRaidStrategy(JSON.parse(saveGame(state)));
 		raw.schemaVersion = 8; delete raw.achievements;
-		for (const raid of before.raids) if (raid.expedition) delete raid.expedition.weaponMechanics;
-		for (const raid of raw.raids) if (raid.expedition) delete raid.expedition.weaponMechanics;
+		for (const raid of before.raids) if (raid.expedition) { delete raid.expedition.weaponMechanics; delete raid.expedition.ammunition; }
+		for (const raid of raw.raids) if (raid.expedition) { delete raid.expedition.weaponMechanics; delete raid.expedition.ammunition; }
 		for (const raid of raw.raids) delete raid.squad; for (const report of raw.history) delete report.squad;
 		const restored = parseSave(JSON.stringify(raw))!;
 		expect(restored).not.toBeNull(); expect(restored.schemaVersion).toBe(SAVE_VERSION);
@@ -318,7 +318,7 @@ describe("coordinated two and three scav expeditions", () => {
 		expect(dispatchRaid(state, state.scavs[0]!.id, "courtyard", state.lastUpdated).ok).toBe(true);
 		advance(state, state.lastUpdated + 131);
 		withoutRaidStrategy(state);
-		for (const raid of state.raids) if (raid.expedition) delete raid.expedition.weaponMechanics;
+		for (const raid of state.raids) if (raid.expedition) { delete raid.expedition.weaponMechanics; delete raid.expedition.ammunition; }
 		const raw = JSON.parse(saveGame(state)); raw.schemaVersion = 9;
 		for (const raid of raw.raids) delete raid.squad; for (const report of raw.history) delete report.squad;
 		const restored = parseSave(JSON.stringify(raw))!;

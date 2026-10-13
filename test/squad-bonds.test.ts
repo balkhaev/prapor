@@ -80,7 +80,7 @@ function v7(state: GameState) {
 	const raw = withoutRaidStrategy(JSON.parse(saveGame(state)));
 	raw.schemaVersion = 7;
 	delete raw.social; delete raw.achievements;
-	for (const raid of raw.raids) if (raid.expedition) delete raid.expedition.weaponMechanics;
+	for (const raid of raw.raids) if (raid.expedition) { delete raid.expedition.weaponMechanics; delete raid.expedition.ammunition; }
 	return raw;
 }
 
@@ -596,7 +596,7 @@ describe("save migration and social provenance", () => {
 		expect(dispatchRaid(original, runner.id, "courtyard", original.lastUpdated).ok).toBe(true);
 		advance(original, original.lastUpdated + 1_000);
 		withoutRaidStrategy(original);
-		for (const raid of original.raids) if (raid.expedition) delete raid.expedition.weaponMechanics;
+		for (const raid of original.raids) if (raid.expedition) { delete raid.expedition.weaponMechanics; delete raid.expedition.ammunition; }
 		const raw = v7(original), migrated = parseSave(JSON.stringify(raw))!;
 		expect(migrated).not.toBeNull();
 		expect(v7(migrated)).toEqual(raw);

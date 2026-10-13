@@ -73,6 +73,7 @@ function legacy(state: GameState, version: number) {
 	source.schemaVersion = version;
 	delete source.memorials; delete source.social; delete source.achievements;
 	if (version < 11) for (const raid of source.raids) if (raid.expedition) delete raid.expedition.weaponMechanics;
+	if (version < 13) for (const raid of source.raids) if (raid.expedition) delete raid.expedition.ammunition;
 	for (const scav of source.scavs) {
 		delete scav.story;
 		if (version < 6) delete scav.appearance;
@@ -528,7 +529,7 @@ describe("strict story saves and conservative historical migration", () => {
 		expect(dispatchRaid(original, original.scavs[1]!.id, "courtyard", NOW).ok).toBe(true);
 		advance(original, NOW + 1_000);
 		withoutRaidStrategy(original);
-		for (const raid of original.raids) if (raid.expedition) delete raid.expedition.weaponMechanics;
+		for (const raid of original.raids) if (raid.expedition) { delete raid.expedition.weaponMechanics; delete raid.expedition.ammunition; }
 		const old = legacy(original, 6), migrated = parseSave(JSON.stringify(old))!;
 		expect(migrated).not.toBeNull();
 		expect(legacy(migrated, 6)).toEqual(old);

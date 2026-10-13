@@ -3,14 +3,14 @@ export function withoutRaidStrategy<T>(value: T): T {
 	const state = value as {
 		sectorIntel?: unknown;
 		scavs?: { raidPlan?: unknown }[];
-		raids?: { strategy?: unknown; expedition?: { reconCompleted?: unknown } | null }[];
+		raids?: { strategy?: unknown; expedition?: { reconCompleted?: unknown; ammunition?: unknown } | null }[];
 		history?: { strategy?: unknown; sectorOutcome?: unknown; reconCompleted?: unknown }[];
 	};
 	delete state.sectorIntel;
 	for (const scav of state.scavs ?? []) delete scav.raidPlan;
 	for (const raid of state.raids ?? []) {
 		delete raid.strategy;
-		if (raid.expedition) delete raid.expedition.reconCompleted;
+		if (raid.expedition) { delete raid.expedition.reconCompleted; delete raid.expedition.ammunition; }
 	}
 	for (const report of state.history ?? []) {
 		delete report.strategy;

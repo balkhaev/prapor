@@ -176,6 +176,7 @@ describe("supplies, preparation and sector strategy", () => {
 		const original = start().state;
 		delete original.scavs[0]!.raidPlan;
 		delete original.raids[0]!.strategy;
+		delete original.raids[0]!.expedition!.ammunition;
 		const raw = JSON.parse(saveGame(original)); raw.schemaVersion = 11;
 		const migrated = parseSave(JSON.stringify(raw));
 		expect(migrated).not.toBeNull();
