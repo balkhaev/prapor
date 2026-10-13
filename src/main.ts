@@ -121,7 +121,7 @@ import { ammunitionCaliberLabel, ammunitionOptions, ammunitionPanel, ammunitionS
 import { createWorld } from "./scene";
 import { gunArt, scavPortrait } from "./art";
 import { weaponBuildArt, moduleArt } from "./armory-art";
-import { modularWeaponArtFamily, modularWeaponArtRevision, preloadModularWeaponArt } from "./modular-weapon-art";
+import { modularWeaponArtFamilies, modularWeaponArtFamily, modularWeaponArtRevision, preloadModularWeaponArt } from "./modular-weapon-art";
 import { MODULE_DISPLAY_SLOTS, moduleCatalogPage, moduleFitsWeaponFamily, moduleModelMatches, moduleMountLabel, moduleSlotHint } from "./module-catalog";
 import { getResolvedModuleMounts, type ModuleModel } from "./game/modules";
 import { scavGearIllustration } from "./scav-gear-art";
@@ -1922,7 +1922,7 @@ function operationsBar() {
 let visibleWeaponArtRequest = "";
 /** Load only owned or currently displayed new parts; startup keeps its small original artwork. */
 function preloadVisibleWeaponArtwork() {
-	const ids = new Set(state.weapons.map((weapon) => weapon.weaponId));
+	const ids = new Set<string>(state.weapons.flatMap(modularWeaponArtFamilies));
 	const modelIds = [...state.modules.map((part) => part.modelId), ...Array.from(document.querySelectorAll("[data-model-id]"), (node) => node.getAttribute("data-model-id"))];
 	for (const modelId of modelIds) {
 		const model = modelId ? MODULE_BY_ID[modelId] : undefined;

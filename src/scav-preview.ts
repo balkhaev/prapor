@@ -4,7 +4,7 @@ import { MAPS, PERSONALITY_BY_ID, WEAPONS } from "./game/data";
 import { getWeaponStats, type WeaponInstance } from "./game/engine";
 import { FACTORY_KITS, MODULE_BY_ID, MODULE_MODELS, MODULE_SLOTS, MODULE_SLOT_LABELS, RECEIVER_INFO, getResolvedModuleMounts, modulePlatformLabel, type ModuleInstance, type ModuleModel, type ModuleSlot } from "./game/modules";
 import { moduleArt, weaponBuildArt } from "./armory-art";
-import { modularWeaponArtFamily, modularWeaponArtRevision, preloadModularWeaponArt } from "./modular-weapon-art";
+import { modularWeaponArtFamilies, modularWeaponArtFamily, modularWeaponArtRevision, preloadModularWeaponArt } from "./modular-weapon-art";
 import { createWeaponShowcaseBuild, weaponShowcasePairArt, type WeaponShowcasePreset } from "./weapon-showcase";
 import { MODULE_DISPLAY_SLOTS, moduleFitsWeaponFamily, moduleModelMatches, moduleMountLabel, moduleSlotHint } from "./module-catalog";
 import { GEAR_MODELS } from "./game/systems";
@@ -58,12 +58,6 @@ const showcase = document.querySelector<HTMLDetailsElement>("#weapon-showcase")!
 const showcaseCategory = select("showcase-category"), showcaseCount = document.querySelector<HTMLElement>("#showcase-count")!;
 let showcasePreset: WeaponShowcasePreset = "factory", showcaseGeneration = 0;
 document.querySelector<HTMLElement>("#showcase-total")!.textContent = String(WEAPONS.length);
-function buildMaterialFamilies(weapon: WeaponInstance): string[] {
-	return [weapon.weaponId, ...Object.values(weapon.modules).flatMap((instance) => {
-		const model = MODULE_BY_ID[instance.modelId], family = model ? modularWeaponArtFamily(model) : undefined;
-		return family ? [family] : [];
-	})];
-}
 function renderShowcase(loadMaterials = true): void {
 	if (!showcase.open) return;
 	const definitions = WEAPONS.filter(weapon => showcaseCategory.value === "all" || weapon.category === showcaseCategory.value);
@@ -76,7 +70,7 @@ function renderShowcase(loadMaterials = true): void {
 	}).join("");
 	if (!loadMaterials) return;
 	const generation = ++showcaseGeneration, revision = modularWeaponArtRevision();
-	void preloadModularWeaponArt(builds.flatMap(buildMaterialFamilies)).then(() => { if (generation === showcaseGeneration && modularWeaponArtRevision() !== revision) renderShowcase(false); });
+	void preloadModularWeaponArt(builds.flatMap(modularWeaponArtFamilies)).then(() => { if (generation === showcaseGeneration && modularWeaponArtRevision() !== revision) renderShowcase(false); });
 }
 showcase.addEventListener("toggle",() => { if (showcase.open) renderShowcase(); else ++showcaseGeneration; });
 showcaseCategory.addEventListener("change",() => renderShowcase());
@@ -298,7 +292,7 @@ updateSelections(true);
 function preloadSelectedBuildArt(): void {
 	const weapon = selectedWeapon(); if (!weapon) return;
 	const revision = modularWeaponArtRevision(weapon);
-	void preloadModularWeaponArt(buildMaterialFamilies(weapon)).then(() => {
+	void preloadModularWeaponArt(modularWeaponArtFamilies(weapon)).then(() => {
 		if (selectedWeapon() === weapon && modularWeaponArtRevision(weapon) !== revision) updateSelections(false);
 	});
 }
