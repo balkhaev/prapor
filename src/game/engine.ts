@@ -43,14 +43,16 @@ import { BODY_PARTS, BODY_PART_MAX_HP, canDeploy, createHealth, getRecoveryWaitM
 export * from './health';
 import { RAID_MEDICAL_KIT, raidMedicalInventory, resolveMedicalEncounter, type RaidMedicalState, type RaidMedicalStart } from './raid-health';
 export * from './raid-health';
-import { getLootModel, getLootTraderPrice, parseLootItem, rollRaidLoot, type LootItem } from "./loot";
+import { getLootModel, getLootTraderPrice, lootAvailableInCatalog, parseLootItemForVersion, rollRaidLoot, type LootItem } from "./loot";
 export * from "./loot";
 export * from "./trade";
 import { getBarterQuote } from "./barter";
 export * from "./barter";
+import { getLootRequirementQuote, type LootRequirement } from "./loot-uses";
+export * from "./loot-uses";
 
 export const SAVE_KEY = "prapor.save.v1";
-export const SAVE_VERSION = 20;
+export const SAVE_VERSION = 21;
 export const MAX_PENDING_LOOT_DELIVERIES = 128;
 export const PENDING_LOOT_RAID_LIMIT = 96;
 export const MAX_OFFLINE_MS = 8 * 60 * 60 * 1000;
@@ -731,6 +733,11 @@ function reserveProduction(state: GameState, cost: ShelterCost) {
 	state.money -= cost.money;
 	for (const key of Object.keys(cost.supplies) as (keyof Supplies)[]) state.supplies[key] -= cost.supplies[key];
 }
+function consumeLootRequirements(state: GameState, itemIds: readonly string[]): LootItem[] {
+	const ids = new Set(itemIds), paid = (state.lootItems ?? []).filter(item => ids.has(item.id));
+	if (ids.size) state.lootItems = state.lootItems!.filter(item => !ids.has(item.id));
+	return structuredClone(paid);
+}
 export function getRoomProductionState(state: GameState, room: RoomInstance) {
 	if (room.construction) return { progress: room.construction.workDone / room.construction.workRequired,
 		remainingSeconds: (room.construction.workRequired - room.construction.workDone) / 1_000_000, rate: 1,
@@ -790,14 +797,16 @@ export function rotateRoom(state: GameState, roomId: string, now = Date.now()): 
 }
 export function getBuildRoomQuote(state: GameState, type: ShelterRoomType, column: number, row: number, rotation: 0 | 1 = 0) {
 	const definition = ownValue(ROOM_DEFINITIONS, type);
+	const loot = getLootRequirementQuote(state, definition?.lootRequirements);
 	let reason: string | null = null;
 	if (!definition) reason = "Помещение не найдено.";
 	else if (state.level < (definition.unlockLevel ?? 1)) reason = `Откроется на ${definition.unlockLevel}-м уровне.`;
 	else {
 		reason = footprintPlacementReason(state, type, column, row, rotation);
 		if (!reason && (state.money < definition.cost.money || state.supplies.scrap < definition.cost.scrap)) reason = `Нужно ${definition.cost.money} ₽ и ${definition.cost.scrap} деталей.`;
+		if (!reason) reason = loot.reason;
 	}
-	return { money: definition?.cost.money ?? 0, scrap: definition?.cost.scrap ?? 0, duration: definition?.buildSeconds ?? 0, reason };
+	return { money: definition?.cost.money ?? 0, scrap: definition?.cost.scrap ?? 0, duration: definition?.buildSeconds ?? 0, lootRequirements: loot.requirements, lootItemIds: loot.itemIds, reason };
 }
 export function getExcavationQuote(state: GameState, column: number, row: number) {
 	let reason: string | null = null;
@@ -819,11 +828,13 @@ export function excavateShelter(state: GameState, column: number, row: number, n
 }
 export function buildRoom(state: GameState, type: ShelterRoomType, column: number, row: number, now = Date.now(), rotation: 0 | 1 = 0): ActionResult {
 	if (!isTime(now) || !Object.hasOwn(ROOM_DEFINITIONS, type)) return fail("Некорректное помещение или время.");
+	const materials = getLootRequirementQuote(state, ROOM_DEFINITIONS[type].lootRequirements); if (materials.reason) return fail(materials.reason);
 	advance(state, now);
 	const quote = getBuildRoomQuote(state, type, column, row, rotation); if (quote.reason) return fail(quote.reason);
+	const paidLoot = consumeLootRequirements(state, quote.lootItemIds);
 	state.money -= quote.money; state.supplies.scrap -= quote.scrap;
 	state.shelter.rooms.push({ id: id(state, "room"), type, column, row, ...(rotation ? { rotation } : {}), level: 0, status: "building",
-		construction: { workDone: 0, workRequired: quote.duration * 1_000_000, targetLevel: 1, cost: { money: quote.money, scrap: quote.scrap } },
+		construction: { workDone: 0, workRequired: quote.duration * 1_000_000, targetLevel: 1, cost: { money: quote.money, scrap: quote.scrap }, ...(paidLoot.length ? { paidLoot } : {}) },
 		workerIds: [], queue: [], recipeId: null, repeat: false, pending: false, cycles: 0 });
 	return ok(`${ROOM_DEFINITIONS[type].label}: строительство началось.`);
 }
@@ -896,6 +907,7 @@ export function queueModuleProduction(state: GameState, roomId: string, modelId:
 }
 export function getResourceProductionQuote(state: GameState, roomId: string, recipeId: string) {
 	const room = roomById(state, roomId), recipe = ownValue(RESOURCE_RECIPE_BY_ID, recipeId);
+	const loot = getLootRequirementQuote(state, recipe?.lootRequirements);
 	let reason: string | null = null;
 	if (!room || !recipe || recipe.roomType !== room.type) reason = "Рецепт не подходит этому помещению.";
 	else if (room.status !== "ready") reason = "Помещение ещё не готово.";
@@ -907,10 +919,11 @@ export function getResourceProductionQuote(state: GameState, roomId: string, rec
 		if (!reason && roomOutputReason(state, { output: { supplies: recipe.output, moduleModelId: null, ...(recipe.outputKit ? { fieldKit: recipe.outputKit } : {}) } } as ProductionJob)) {
 			reason = "На складе нет места для новой партии. Материалы ещё не списаны.";
 		}
+		if (!reason) reason = loot.reason;
 	}
 	const rate = room ? roomWorkRate(state, room) : 0;
 	const block: "target" | "reserve" | "capacity" | "worker" | "level" | "resources" | null = !reason ? null : reason.startsWith("Цель запаса") ? "target" : reason.includes("резерв") ? "reserve" : reason.startsWith("На складе") ? "capacity" : reason.startsWith("Назначь") ? "worker" : reason.startsWith("Нужно это помещение") ? "level" : "resources";
-	return { money: recipe?.cost.money ?? 0, supplies: { ...(recipe?.cost.supplies ?? emptySupplies()) }, duration: recipe?.durationSeconds ?? 0, actualDuration: recipe && rate > 0 ? recipe.durationSeconds * 1000 / rate : null, outputKit: recipe?.outputKit, block, reason };
+	return { money: recipe?.cost.money ?? 0, supplies: { ...(recipe?.cost.supplies ?? emptySupplies()) }, duration: recipe?.durationSeconds ?? 0, actualDuration: recipe && rate > 0 ? recipe.durationSeconds * 1000 / rate : null, outputKit: recipe?.outputKit, lootRequirements: loot.requirements, lootItemIds: loot.itemIds, block, reason };
 }
 export function setRoomRecipe(state: GameState, roomId: string, recipeId: string | null, repeat: boolean, now = Date.now()): ActionResult {
 	if (!isTime(now) || typeof repeat !== "boolean") return fail("Некорректное время или режим.");
@@ -967,16 +980,18 @@ export function cancelProduction(state: GameState, roomId: string, jobId: string
 	}
 	room.repeat = false;
 	room.pending = false;
-	return ok(job.workDone === 0 ? "Не начатый заказ отменён: все материалы возвращены. Повторение выключено." : "Начатый заказ отменён без возврата материалов. Повторение выключено.");
+	return ok((job.workDone === 0 ? "Не начатый заказ отменён: рубли и припасы возвращены. Повторение выключено." : "Начатый заказ отменён без возврата материалов. Повторение выключено.") + (job.paidLoot?.length ? " Целые трофеи израсходованы при запуске и не возвращаются." : ""));
 }
 function tryStartResourceJob(state: GameState, room: RoomInstance, now: number): boolean {
-	if (!room.recipeId || room.queue.length || getResourceProductionQuote(state, room.id, room.recipeId).reason) return false;
+	if (!room.recipeId || room.queue.length) return false;
+	const quote = getResourceProductionQuote(state, room.id, room.recipeId); if (quote.reason) return false;
 	const recipe = ownValue(RESOURCE_RECIPE_BY_ID, room.recipeId)!;
 	const candidates = prepareAchievementPayment(state, recipe.cost);
+	const paidLoot = consumeLootRequirements(state, quote.lootItemIds);
 	reserveProduction(state, recipe.cost);
 	room.pending = false;
 	room.queue.push({ id: id(state, "job"), kind: "resource", recipeId: recipe.id, modelId: null, workDone: 0,
-		workRequired: recipe.durationSeconds * 1_000_000, paid: structuredClone(recipe.cost), output: { supplies: { ...recipe.output }, moduleModelId: null, ...(recipe.outputKit ? { fieldKit: recipe.outputKit } : {}) }, createdAt: now });
+		workRequired: recipe.durationSeconds * 1_000_000, paid: structuredClone(recipe.cost), output: { supplies: { ...recipe.output }, moduleModelId: null, ...(recipe.outputKit ? { fieldKit: recipe.outputKit } : {}) }, createdAt: now, ...(paidLoot.length ? { paidLoot } : {}) });
 	noteAchievementPaid(state, room, room.queue[0]!, candidates);
 	return true;
 }
@@ -2143,7 +2158,7 @@ function reachCheckpoint(state: GameState, raid: Raid, now: number, party?: { in
 	}
 	if (raid.lootVersion === 1) {
 		const lootRandom = generator(((raid.outcomeSeed ?? raid.seed) ^ Math.imul(expedition.stage, 0x4e731ac5)) >>> 0);
-		const finds = rollRaidLoot(map.id, expedition.branch, expedition.stage, lootRandom);
+		const finds = rollRaidLoot(map.id, expedition.branch, expedition.stage, lootRandom, expedition.lootCatalogVersion ?? 16);
 		expedition.cargo.lootItems ??= [];
 		for (const model of finds) expedition.cargo.lootItems.push({ id: id(state, "loot"), modelId: model.id, foundAt: now });
 	}
@@ -2269,6 +2284,12 @@ function finishExpedition(state: GameState, raid: Raid, success: boolean, now: n
 			if (state.modules.length < getModuleCapacity(state)) { state.modules.push(part); noteAchievementLoot(state, raid.id, [part.id]); } else report.money += getModuleSaleValue(part);
 		}
 		for (const item of expedition.cargo.lootItems ?? []) {
+			if (getLootModel(item).autoSell) {
+				const money = getLootTraderPrice(item);
+				(report.lootAutoSold ??= []).push({ item: structuredClone(item), money });
+				report.money += money;
+				continue;
+			}
 			state.lootItems ??= [];
 			if (state.lootItems.length < getLootCapacity(state)) { state.lootItems.push(item); report.lootItems!.push(structuredClone(item)); }
 			else report.lootPending!.push(structuredClone(item));
@@ -2276,6 +2297,7 @@ function finishExpedition(state: GameState, raid: Raid, success: boolean, now: n
 		if (report.lootPending?.length) (state.pendingLoot ??= []).push({ id: id(state, "delivery"), raidId: raid.id, at: now, items: structuredClone(report.lootPending) });
 		addMoney(state, report.money);
 		report.description = `Эвакуация после этапа ${expedition.stage}. Груз доставлен${report.weaponAutoSold ? "; лишний трофей продан" : ""}.`;
+		if (report.lootAutoSold?.length) report.description += ` Мусор продан автоматически: ${report.lootAutoSold.length} шт., +${report.lootAutoSold.reduce((sum, sale) => sum + sale.money, 0)} ₽.`;
 		if (report.lootPending?.length) report.description += ` Склад трофеев полон: ${report.lootPending.length} предметов ждут в посылке. Освободи место и забери их целыми.`;
 		const discarded = getCargoWeight({ money: 0, supplies: {
 			ammo: expedition.cargo.supplies.ammo - report.supplies.ammo, medicine: expedition.cargo.supplies.medicine - report.supplies.medicine,
@@ -2767,7 +2789,7 @@ function parseLoadout(value: unknown, version: number): Loadout {
 function parseCargo(value: unknown, version: number): Cargo {
 	const source = record(value);
 	fields(source, ["money", "supplies", "weaponIds", ...(version >= 4 ? ["modules"] : []), ...(version >= 16 ? ["lootItems"] : [])]);
-	return { money: number(source.money, 1e8), supplies: parseSupplies(source.supplies), weaponIds: array(source.weaponIds, 3, (value) => versionedWeaponId(value, version)), modules: version >= 4 ? array(source.modules, 12, (value) => parseModule(value, version)) : [], ...(version >= 16 && Object.hasOwn(source, "lootItems") ? { lootItems: array(source.lootItems, 6, parseLootItem) } : {}) };
+	return { money: number(source.money, 1e8), supplies: parseSupplies(source.supplies), weaponIds: array(source.weaponIds, 3, (value) => versionedWeaponId(value, version)), modules: version >= 4 ? array(source.modules, 12, (value) => parseModule(value, version)) : [], ...(version >= 16 && Object.hasOwn(source, "lootItems") ? { lootItems: array(source.lootItems, 6, value => parseLootItemForVersion(value, version)) } : {}) };
 }
 function parseEvents(value: unknown, max: number): RaidReport["events"] {
 	return array(value, max, (value) => {
@@ -2851,18 +2873,19 @@ function parseProductionReserve(value: unknown): ShelterCost {
 }
 function parseProductionJob(value: unknown, roomType: ShelterRoomType, version: number): ProductionJob {
 	const source = record(value);
-	fields(source, ["id", "kind", "recipeId", "modelId", "workDone", "workRequired", "paid", "output", "createdAt"]);
+	fields(source, ["id", "kind", "recipeId", "modelId", "workDone", "workRequired", "paid", "output", "createdAt", ...(version >= 21 ? ["paidLoot"] : [])]);
 	if (source.kind !== "module" && source.kind !== "resource") throw new Error("production-kind");
 	const paid = record(source.paid), output = record(source.output);
 	fields(paid, ["money", "supplies"]); fields(output, ["supplies", "moduleModelId", ...(version >= 14 ? ["fieldKit"] : [])]);
 	const job: ProductionJob = { id: string(source.id), kind: source.kind, recipeId: string(source.recipeId),
 		modelId: source.modelId === null ? null : versionedModuleId(source.modelId, version), workDone: number(source.workDone, 1e12, 0, true),
 		workRequired: number(source.workRequired, 1e12, 1, true), paid: { money: number(paid.money), supplies: parseSupplies(paid.supplies) },
-		output: { supplies: parseSupplies(output.supplies), moduleModelId: output.moduleModelId === null ? null : versionedModuleId(output.moduleModelId, version), ...(version >= 14 && Object.hasOwn(output, "fieldKit") ? { fieldKit: parseFieldKit(output.fieldKit) } : {}) }, createdAt: number(source.createdAt) };
+		output: { supplies: parseSupplies(output.supplies), moduleModelId: output.moduleModelId === null ? null : versionedModuleId(output.moduleModelId, version), ...(version >= 14 && Object.hasOwn(output, "fieldKit") ? { fieldKit: parseFieldKit(output.fieldKit) } : {}) }, createdAt: number(source.createdAt),
+		...(version >= 21 && Object.hasOwn(source, "paidLoot") ? { paidLoot: array(source.paidLoot, 16, value => parseLootItemForVersion(value, version)) } : {}) };
 	if (job.workDone > job.workRequired) throw new Error("production-work");
 	if (job.kind === "module") {
 		const model = job.modelId ? ownValue(MODULE_BY_ID, job.modelId) : null;
-		if (!model || roomType !== "workshop" || job.recipeId !== `module:${model.id}` || job.output.moduleModelId !== model.id || job.output.fieldKit
+		if (!model || roomType !== "workshop" || job.recipeId !== `module:${model.id}` || job.output.moduleModelId !== model.id || job.output.fieldKit || job.paidLoot
 			|| !sameSupplies(job.output.supplies, emptySupplies()) || job.paid.money !== model.craftCost.money
 			|| !sameSupplies(job.paid.supplies, { ...emptySupplies(), scrap: model.craftCost.scrap })
 			|| job.workRequired !== Math.max(25, Math.round(35 + model.value * 0.25)) * 1_000_000) throw new Error("module-order");
@@ -2870,10 +2893,15 @@ function parseProductionJob(value: unknown, roomType: ShelterRoomType, version: 
 		const recipe = ownValue(RESOURCE_RECIPE_BY_ID, job.recipeId);
 		if (!recipe || recipe.roomType !== roomType || job.modelId !== null || job.output.moduleModelId !== null || job.output.fieldKit !== recipe.outputKit
 			|| (version < 14 && (recipe.minLevel || recipe.outputKit))
+			|| (version < 21 && recipe.lootRequirements) || (recipe.lootRequirements ? !job.paidLoot || !matchesLootPayment(job.paidLoot, recipe.lootRequirements) : job.paidLoot !== undefined)
 			|| job.workRequired !== recipe.durationSeconds * 1_000_000 || job.paid.money !== recipe.cost.money
 			|| !sameSupplies(job.paid.supplies, recipe.cost.supplies) || !sameSupplies(job.output.supplies, recipe.output)) throw new Error("resource-order");
 	}
 	return job;
+}
+function matchesLootPayment(items: LootItem[], requirements: readonly LootRequirement[]): boolean {
+	return new Set(items.map(item => item.id)).size === items.length && items.length === requirements.reduce((sum, value) => sum + value.quantity, 0)
+		&& requirements.every(value => items.filter(item => item.modelId === value.modelId).length === value.quantity);
 }
 function parseShelter(value: unknown, version: number): GameState["shelter"] {
 	const source = record(value); fields(source, ["rooms", "sites", "expansions", ...(version >= 14 ? ["logistics"] : [])]);
@@ -2929,14 +2957,16 @@ function parseShelter(value: unknown, version: number): GameState["shelter"] {
 			|| (room.recipeId === null && (room.repeat || room.pending))) throw new Error("room-production");
 		if (room.queue.some((job) => job.kind === "module" && ownValue(MODULE_BY_ID, job.modelId!)!.workshopLevel > room.level)) throw new Error("room-recipe-level");
 		const recipe = room.recipeId ? ownValue(RESOURCE_RECIPE_BY_ID, room.recipeId)! : null;
-		if ((recipe && (room.level < (recipe.minLevel ?? 1) || (version < 14 && (recipe.minLevel || recipe.outputKit))))
+		if ((recipe && (room.level < (recipe.minLevel ?? 1) || (version < 14 && (recipe.minLevel || recipe.outputKit)) || (version < 21 && recipe.lootRequirements)))
 			|| room.queue.some(job => job.kind === "resource" && room.level < (ownValue(RESOURCE_RECIPE_BY_ID, job.recipeId)!.minLevel ?? 1))
 			|| (room.stockTarget !== undefined && (!recipe || (recipe.outputKit && room.stockTarget > FIELD_KIT_CAPACITY)))) throw new Error("room-recipe-level");
 		if (roomSource.construction !== null) {
 			const building = record(roomSource.construction), cost = record(building.cost);
-			fields(building, ["workDone", "workRequired", "targetLevel", "cost"]); fields(cost, ["money", "scrap"]);
+			fields(building, ["workDone", "workRequired", "targetLevel", "cost", ...(version >= 21 ? ["paidLoot"] : [])]); fields(cost, ["money", "scrap"]);
 			room.construction = { workDone: number(building.workDone, 1e12, 0, true), workRequired: number(building.workRequired, 1e12, 1, true),
-				targetLevel: number(building.targetLevel, 5, 1, true), cost: { money: number(cost.money), scrap: number(cost.scrap) } };
+				targetLevel: number(building.targetLevel, 5, 1, true), cost: { money: number(cost.money), scrap: number(cost.scrap) },
+				...(version >= 21 && Object.hasOwn(building, "paidLoot") ? { paidLoot: array(building.paidLoot, 16, value => parseLootItemForVersion(value, version)) } : {}) };
+			if (room.construction.paidLoot && (room.status !== "building" || !matchesLootPayment(room.construction.paidLoot, ROOM_DEFINITIONS[type].lootRequirements ?? []))) throw new Error("construction-loot-payment");
 			const expected = room.status === "building" ? ROOM_DEFINITIONS[type].cost : { money: Math.round(180 * room.level ** 1.7), scrap: 5 + room.level * 3 };
 			const seconds = room.status === "building" ? ROOM_DEFINITIONS[type].buildSeconds : 45 + room.level * 25;
 			if (room.status === "ready" || room.construction.targetLevel !== room.level + 1 || room.construction.workDone > room.construction.workRequired
@@ -3174,10 +3204,10 @@ function parseReport(value: unknown, version: number): RaidReport {
 		...(version >= 12 && Object.hasOwn(source, "reconCompleted") ? { reconCompleted: bool(source.reconCompleted) } : {}),
 		...(version >= 14 && Object.hasOwn(source, "fieldKit") ? { fieldKit: parseFieldKit(source.fieldKit) } : {}),
 		...(version >= 18 && Object.hasOwn(source, 'medical') ? { medical: parseReportMedicine(source.medical) } : {}),
-		...(version >= 16 && Object.hasOwn(source, "lootItems") ? { lootItems: array(source.lootItems, 6, parseLootItem) } : {}),
-		...(version >= 20 && Object.hasOwn(source, "lootPending") ? { lootPending: array(source.lootPending, 6, parseLootItem) } : {}),
+		...(version >= 16 && Object.hasOwn(source, "lootItems") ? { lootItems: array(source.lootItems, 6, value => parseLootItemForVersion(value, version)) } : {}),
+		...(version >= 20 && Object.hasOwn(source, "lootPending") ? { lootPending: array(source.lootPending, 6, value => parseLootItemForVersion(value, version)) } : {}),
 		...(version >= 16 && Object.hasOwn(source, "lootAutoSold") ? { lootAutoSold: array(source.lootAutoSold, 6, value => {
-			const sale = record(value); fields(sale, ["item", "money"]); const item = parseLootItem(sale.item), money = number(sale.money, 10000, 1, true);
+			const sale = record(value); fields(sale, ["item", "money"]); const item = parseLootItemForVersion(sale.item, version), money = number(sale.money, 10000, 1, true);
 			if (money !== getLootTraderPrice(item)) throw new Error("loot-sale-price"); return { item, money };
 		}) } : {}),
 	};
@@ -3247,10 +3277,10 @@ export function parseSave(raw: string, options: { publicSnapshot?: boolean } = {
 			social: version >= 8 ? parseSquadSocialState(source.social) : { pairs: [], losses: [] },
 			achievements: version >= 9 ? parseAchievementState(source.achievements, (value) => parseWeapon(value, version)) : createAchievementState(),
 			...(version >= 12 && Object.hasOwn(source, "sectorIntel") ? { sectorIntel: parseSectorIntelRecord(source.sectorIntel) } : {}),
-			...(version >= 16 && Object.hasOwn(source, "lootItems") ? { lootItems: array(source.lootItems, 512, parseLootItem) } : {}),
+			...(version >= 16 && Object.hasOwn(source, "lootItems") ? { lootItems: array(source.lootItems, 512, value => parseLootItemForVersion(value, version)) } : {}),
 			...(version >= 20 && Object.hasOwn(source, "pendingLoot") ? { pendingLoot: array(source.pendingLoot, MAX_PENDING_LOOT_DELIVERIES, value => {
 				const delivery = record(value); fields(delivery, ["id", "raidId", "at", "items"]);
-				return { id: string(delivery.id), raidId: string(delivery.raidId), at: number(delivery.at), items: array(delivery.items, 6, parseLootItem) };
+				return { id: string(delivery.id), raidId: string(delivery.raidId), at: number(delivery.at), items: array(delivery.items, 6, value => parseLootItemForVersion(value, version)) };
 			}) } : {}),
 			stats: {
 				raidsWon: number(stats.raidsWon, 1e9, 0, true),
@@ -3302,6 +3332,7 @@ export function parseSave(raw: string, options: { publicSnapshot?: boolean } = {
 			...(state.pendingLoot ?? []).flatMap(delivery => [delivery.id, ...delivery.items.map(item => item.id)]),
 			...state.raids.flatMap(raid => raid.expedition?.cargo.lootItems?.map(item => item.id) ?? []),
 			...state.shelter.rooms.flatMap((room) => room.queue.map((job) => job.id)),
+			...state.shelter.rooms.flatMap(room => [...(room.construction?.paidLoot ?? []), ...room.queue.flatMap(job => job.paidLoot ?? [])].map(item => item.id)),
 			...state.shelter.rooms.filter(room => /^room-[1-9]\d*$/.test(room.id)).map(room => room.id),
 		];
 		unique(allIds);
@@ -3424,7 +3455,7 @@ export function parseSave(raw: string, options: { publicSnapshot?: boolean } = {
 				const helmet = state.gearItems.find((item) => item.id === scav.loadout.helmetItemId);
 				const pack = state.gearItems.find((item) => item.id === scav.loadout.backpackItemId);
 				const loadout = raid.expedition.loadout;
-				if ((raid.expedition.cargo.lootItems ?? []).some(item => getLootModel(item).minDepth > raid.expedition!.stage || getLootModel(item).minSectorLevel > MAP_BY_ID[raid.mapId]!.level)) throw new Error("loot-depth");
+				if ((raid.expedition.cargo.lootItems ?? []).some(item => !lootAvailableInCatalog(item.modelId, raid.expedition!.lootCatalogVersion ?? 16) || getLootModel(item).minDepth > raid.expedition!.stage || getLootModel(item).minSectorLevel > MAP_BY_ID[raid.mapId]!.level)) throw new Error("loot-depth");
 				if (raid.expedition.ammunition) {
 					const model = ownValue(AMMO_BY_ID, raid.expedition.ammunition.modelId)!;
 					const weapon = state.weapons.find((item) => item.id === raid.weaponInstanceId)!;

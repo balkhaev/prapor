@@ -1,6 +1,7 @@
+import { addLootInputs, fundConstructionLoot } from './loot-material-fixture';
 import { describe, expect, test } from "bun:test";
 import {
-	advance, assignWorker, buildRoom, createGame, getBuildRoomQuote, getModuleCapacity,
+	advance, assignWorker, buildRoom, createGame, getBuildRoomQuote, getModuleCapacity, getSupplyCapacity,
 	getRoomProductionState, queueModuleProduction, saveGame, setRoomRecipe,
 	upgradeRoom, MODULE_BY_ID, type GameState, type RoomInstance,
 } from "../src/game/engine";
@@ -12,7 +13,7 @@ function funded() {
 	const state = createGame(NOW);
 	state.money = 20_000;
 	state.supplies = { ammo: 50, medicine: 5, scrap: 30, intel: 5 };
-	return state;
+	return fundConstructionLoot(state);
 }
 function room(state: GameState, type: RoomInstance["type"]) {
 	return state.shelter.rooms.find((candidate) => candidate.type === type)!;
@@ -147,6 +148,8 @@ describe("truthful shelter production presentation", () => {
 			}
 			target.level = Math.max(target.level, recipe.minLevel ?? 1);
 			expect(assignWorker(state, state.scavs[0]!.id, target.id, state.lastUpdated).ok).toBe(true);
+			addLootInputs(state, recipe.lootRequirements);
+			for (const key of ["ammo", "scrap", "medicine", "intel"] as const) if (recipe.output[key] > 0) state.supplies[key] = Math.min(state.supplies[key], getSupplyCapacity(state)[key] - recipe.output[key]);
 			expect(setRoomRecipe(state, target.id, recipe.id, false, state.lastUpdated).ok).toBe(true);
 			const projection = present(state, target), output = (["ammo", "scrap", "medicine", "intel"] as const).find((key) => recipe.output[key] > 0)!;
 			expect(projection.jobId).toBe(target.queue[0]!.id);

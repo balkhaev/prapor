@@ -1,10 +1,12 @@
 import { ROOM_DEFINITIONS, getRoomFootprint, getRoomSites, getShelterSites, getShelterFrontier, getShelterRoomAt, type GameState, type RoomInstance, type ShelterRoomType } from "./game/engine";
+import { getLootRequirementQuote } from './game/loot-uses';
+import { lootRequirementsPanel } from './loot-materials-ui';
 
 const escape = (value: unknown) => String(value).replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
 export interface BuildingPlacement { type: ShelterRoomType; roomId?: string; rotation: 0 | 1; site: { column: number; row: number } | null }
 export function buildingCatalogueReason(state: GameState, type: ShelterRoomType): string | null {
 	const info = ROOM_DEFINITIONS[type], unlock = info.unlockLevel ?? 1;
-	return state.level < unlock ? `Откроется на уровне ${unlock}` : state.money < info.cost.money || state.supplies.scrap < info.cost.scrap ? "Не хватает рублей или деталей" : null;
+	return state.level < unlock ? `Откроется на уровне ${unlock}` : state.money < info.cost.money || state.supplies.scrap < info.cost.scrap ? "Не хватает рублей или деталей" : getLootRequirementQuote(state,info.lootRequirements).reason;
 }
 
 export function territorySummary(state: GameState): string {
@@ -34,13 +36,13 @@ export function buildingCatalogue(state: GameState): string {
 	return `<div class="territory-catalogue">${(Object.keys(ROOM_DEFINITIONS) as ShelterRoomType[]).map(type => {
 		const info = ROOM_DEFINITIONS[type], size = getRoomFootprint({ type }), unlock = info.unlockLevel ?? 1;
 		const reason = buildingCatalogueReason(state, type);
-		return `<article class="territory-blueprint ${state.level < unlock ? "locked" : ""}"><div class="blueprint-footprint" aria-hidden="true" style="--blueprint-columns:${size.width}">${Array.from({ length: size.width * size.height }, () => "<i></i>").join("")}</div><div><h3>${escape(info.label)}</h3><p>${escape(info.description)}</p><span class="tag">${size.width} × ${size.height} участков</span> <small>${info.cost.money} ₽ · ${info.cost.scrap} дет. · ${info.buildSeconds} с</small></div><button class="button secondary small" data-action="place-building" data-room-type="${type}" ${reason ? "disabled" : ""}>${state.level < unlock ? `Уровень ${unlock}` : "Выбрать место"}</button><small class="quote-note" data-blueprint-reason>${reason ?? "Выбери место внутри периметра"}</small></article>`;
+		return `<article class="territory-blueprint ${state.level < unlock ? "locked" : ""}"><div class="blueprint-footprint" aria-hidden="true" style="--blueprint-columns:${size.width}">${Array.from({ length: size.width * size.height }, () => "<i></i>").join("")}</div><div><h3>${escape(info.label)}</h3><p>${escape(info.description)}</p><span class="tag">${size.width} × ${size.height} участков</span> <small>${info.cost.money} ₽ · ${info.cost.scrap} дет. · ${info.buildSeconds} с</small>${lootRequirementsPanel(getLootRequirementQuote(state,info.lootRequirements).requirements,'Предметы для постройки')}</div><button class="button secondary small" data-action="place-building" data-room-type="${type}" ${reason ? "disabled" : ""}>${state.level < unlock ? `Уровень ${unlock}` : "Выбрать место"}</button><small class="quote-note" data-blueprint-reason>${escape(reason ?? "Выбери место внутри периметра")}</small></article>`;
 	}).join("")}</div>`;
 }
 
-export function buildingPlacementControls(placement: BuildingPlacement, reason: string | null): string {
+export function buildingPlacementControls(placement: BuildingPlacement, reason: string | null, state?: GameState): string {
 	const size = getRoomFootprint(placement), info = ROOM_DEFINITIONS[placement.type];
-	return `<div class="building-placement-copy"><strong>${placement.roomId ? "Перенос" : "Строительство"}: ${escape(info.label)} · ${size.width} × ${size.height}</strong><span role="status">${escape(reason ?? (placement.site ? `Участок ${placement.site.column}, ${placement.site.row}. Место подходит.` : "Выбери место на территории. Зелёный контур — можно размещать."))}</span></div><div class="building-placement-actions"><button class="button ghost small" data-action="placement-rotate" ${size.width === size.height ? "disabled" : ""} aria-label="Повернуть постройку">↻ Повернуть</button><button class="button secondary small" data-action="placement-plan">План</button><button class="button small" data-action="placement-confirm" ${!placement.site || reason ? "disabled" : ""}>${placement.roomId ? "Перенести" : `Построить · ${info.cost.money} ₽`}</button><button class="icon-button" data-action="placement-cancel" aria-label="Отменить размещение">×</button></div>`;
+	return `<div class="building-placement-copy"><strong>${placement.roomId ? "Перенос" : "Строительство"}: ${escape(info.label)} · ${size.width} × ${size.height}</strong><span role="status">${escape(reason ?? (placement.site ? `Участок ${placement.site.column}, ${placement.site.row}. Место подходит.` : "Выбери место на территории. Зелёный контур — можно размещать."))}</span>${state&&!placement.roomId?lootRequirementsPanel(getLootRequirementQuote(state,info.lootRequirements).requirements,'Расход при начале стройки'):''}</div><div class="building-placement-actions"><button class="button ghost small" data-action="placement-rotate" ${size.width === size.height ? "disabled" : ""} aria-label="Повернуть постройку">↻ Повернуть</button><button class="button secondary small" data-action="placement-plan">План</button><button class="button small" data-action="placement-confirm" ${!placement.site || reason ? "disabled" : ""}>${placement.roomId ? "Перенести" : `Построить · ${info.cost.money} ₽`}</button><button class="icon-button" data-action="placement-cancel" aria-label="Отменить размещение">×</button></div>`;
 }
 
 export function buildingRelocationControls(room: RoomInstance): string {

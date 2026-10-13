@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { barterGear, claimLootDelivery, createGame, equipGear, getLoadoutStats, getLootCapacity, saveGame, type LootItem } from '../src/game/engine';
 import { BARTER_OFFERS, getBarterQuote } from '../src/game/barter';
 import { GEAR_MODEL_BY_ID } from '../src/game/systems';
-import { LOOT_MODELS } from '../src/game/loot';
+import { USEFUL_LOOT_MODELS } from '../src/game/loot';
 import { barterCards, barterConfirmation, barterPurpose, fleaPage, gearAssignment, pendingLootParcels, raidLootReceipt, type FleaView } from '../src/flea-ui';
 import { readGameSession } from '../src/game-session';
 import { getConfirmedRaidCargo } from '../src/raid-ui';
@@ -13,11 +13,11 @@ const view=(changes:Partial<FleaView>={}):FleaView=>({tab:'barter',search:'',kin
 function add(state:ReturnType<typeof createGame>,modelId:string,quantity=1){for(let i=0;i<quantity;i++)(state.lootItems??=[]).push({id:`loot-${state.nextId++}`,modelId,foundAt:NOW});}
 function readyOffer(){const state=createGame(NOW),offer=BARTER_OFFERS.find(offer=>offer.gearModelId==='padded_vest')!;for(const need of offer.requirements)add(state,need.modelId,need.quantity);return {state,offer};}
 
-test('all 24 named trophies expose a barter purpose in inventory and catalogue, beyond a cash price',()=>{
-  const state=createGame(NOW);for(const model of LOOT_MODELS)add(state,model.id);
+test('all useful named trophies expose a barter purpose in inventory and catalogue, beyond a cash price',()=>{
+  const state=createGame(NOW);for(const model of USEFUL_LOOT_MODELS)add(state,model.id);
   const before=saveGame(state),stock=fleaPage(state,view({tab:'inventory'})),catalog=fleaPage(state,view({tab:'catalog'}));
-  for(const model of LOOT_MODELS){expect(barterPurpose(model.id).length).toBeGreaterThan(0);expect(stock).toContain(`data-model="${model.id}"`);expect(catalog).toContain(`data-model="${model.id}"`);}
-  expect(stock).toContain('Ты сам выбираешь');expect(catalog).toContain('Сохранить для бартера');expect(saveGame(state)).toBe(before);
+  for(const model of USEFUL_LOOT_MODELS){expect(barterPurpose(model.id).length).toBeGreaterThan(0);expect(stock).toContain(`data-model="${model.id}"`);expect(catalog).toContain(`data-model="${model.id}"`);}
+  expect(stock).toContain('Ты сам выбираешь');expect(catalog).toContain('Сохранить для:');expect(catalog).toContain('Бартер ·');expect(saveGame(state)).toBe(before);
 });
 test('barter shows actual owned quantities, missing names, equipment tradeoffs and ready offers first',()=>{
   const {state,offer}=readyOffer(),before=saveGame(state),html=barterCards(state,view());

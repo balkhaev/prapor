@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { barterGear, BARTER_OFFERS, createGame, dispatchRaid, equipGear, getBarterQuote, getGearCraftReason, getLoadoutStats, getRaidQuote, LOOT_MODELS, parseSave, saveGame, takeTradeAsset, type BarterOffer, type GameState, type LootItem } from "../src/game/engine";
+import { barterGear, BARTER_OFFERS, createGame, dispatchRaid, equipGear, getBarterQuote, getGearCraftReason, getLoadoutStats, getRaidQuote, USEFUL_LOOT_MODELS, parseSave, saveGame, takeTradeAsset, type BarterOffer, type GameState, type LootItem } from "../src/game/engine";
 import { MAP_BY_ID } from "../src/game/data";
 import { GEAR_MODELS, GEAR_MODEL_BY_ID } from "../src/game/systems";
 
@@ -15,9 +15,9 @@ function valid(state: GameState) { expect(parseSave(saveGame(state))).toEqual(st
 
 describe("physical trophy barters", () => {
 	test("all named loot feeds balanced exchanges for every wearable gear model", () => {
-		expect(BARTER_OFFERS).toHaveLength(18); expect(new Set(BARTER_OFFERS.map(offer => offer.id)).size).toBe(18);
+		expect(BARTER_OFFERS).toHaveLength(20); expect(new Set(BARTER_OFFERS.map(offer => offer.id)).size).toBe(20);
 		expect(new Set(BARTER_OFFERS.map(offer => offer.gearModelId))).toEqual(new Set(GEAR_MODELS.map(model => model.id)));
-		expect(new Set(BARTER_OFFERS.flatMap(offer => offer.requirements.map(value => value.modelId)))).toEqual(new Set(LOOT_MODELS.map(model => model.id)));
+		expect(new Set(BARTER_OFFERS.flatMap(offer => offer.requirements.map(value => value.modelId)))).toEqual(new Set(USEFUL_LOOT_MODELS.map(model => model.id)));
 		for (const offer of BARTER_OFFERS) {
 			const state = createGame(NOW), quote = getBarterQuote(state, offer.id), model = GEAR_MODEL_BY_ID[offer.gearModelId]!;
 			expect(quote.guideInputValue).toBeGreaterThanOrEqual((model.money + model.scrap * 14.5) * .9);

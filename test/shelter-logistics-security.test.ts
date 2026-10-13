@@ -1,3 +1,4 @@
+import { fundConstructionLoot } from './loot-material-fixture';
 import { withoutMedical } from './legacy-health-fixture';
 import { describe, expect, test } from "bun:test";
 import { withoutLoot } from "./legacy-loot-fixture";
@@ -20,7 +21,7 @@ function funded(seed = 1): GameState {
 	state.rng = Math.imul(seed, 0x9e3779b1) >>> 0 || 1;
 	state.money = 20_000;
 	state.supplies = { ammo: 100, medicine: 0, scrap: 100, intel: 30 };
-	return state;
+	return fundConstructionLoot(state);
 }
 function room(state: GameState, type: RoomInstance["type"]) {
 	return state.shelter.rooms.find((item) => item.type === type)!;

@@ -18,7 +18,7 @@ function valid(state: GameState): GameState { const result = parseSave(saveGame(
 function fullReturn() {
 	const state = createGame(NOW); state.money = 5000; state.supplies.ammo = 72;
 	expect(dispatchRaid(state, state.scavs[0]!.id, "courtyard", NOW).ok).toBe(true);
-	const raid = state.raids[0]!; raid.seed = 9; raid.chance = 1; raid.expedition!.capacity = 50;
+	const raid = state.raids[0]!; raid.seed = 9; raid.chance = 1; raid.expedition!.capacity = 50; raid.expedition!.lootCatalogVersion = 20;
 	advance(state, raid.endsAt); raid.expedition!.cargo.modules = []; raid.expedition!.cargo.weaponIds = [];
 	for (let count = 0; count < getLootCapacity(state); count++) put(state);
 	const cargo = structuredClone(raid.expedition!.cargo), cash = state.money;
@@ -49,7 +49,7 @@ describe("player-owned pending loot deliveries", () => {
 		for (let index = 0; index < getLootCapacity(state); index++) put(state);
 		for (const scav of state.scavs) expect(setAutoRaid(state, scav.id, "courtyard", 25, NOW).ok).toBe(true);
 		const launched = state.scavs.length; expect(state.raids).toHaveLength(launched);
-		for (const raid of state.raids) { raid.seed = 9; raid.chance = 1; }
+		for (const raid of state.raids) { raid.seed = 9; raid.chance = 1; raid.expedition!.lootCatalogVersion = 20; }
 		advance(state, Math.max(...state.raids.map(raid => raid.endsAt)));
 		expect(state.raids).toEqual([]); expect(state.pendingLoot).toHaveLength(PENDING_LOOT_RAID_LIMIT - 1 + launched);
 		expect(state.history.every(report => report.success && report.lootPending!.length > 0)).toBe(true);
