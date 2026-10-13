@@ -399,7 +399,7 @@ describe("shelter save integrity and migration", () => {
 		legacy.schemaVersion = 4;
 		delete legacy.shelter;
 		delete legacy.recruitment;
-		delete legacy.memorials;
+		delete legacy.memorials; delete legacy.social;
 		for (const scav of legacy.scavs) { delete scav.assignment; delete scav.profile; delete scav.story; }
 		const migrated = parseSave(JSON.stringify(legacy))!;
 		expect(migrated).not.toBeNull();

@@ -67,7 +67,7 @@ function legacyV5(state: GameState) {
 	const source = JSON.parse(saveGame(state));
 	source.schemaVersion = 5;
 	delete source.recruitment;
-	delete source.memorials;
+	delete source.memorials; delete source.social;
 	for (const scav of source.scavs) { delete scav.profile; delete scav.story; }
 	return source;
 }

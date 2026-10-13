@@ -24,9 +24,11 @@ export * from "./recruitment";
 import { chooseScavAppearance, defaultScavAppearance, isScavAppearance } from "./scav-appearances";
 import { createScavStory, getScavStoryEffects, noteScavProduction, noteScavRaid, rememberLostScav, validateScavStory, SCAV_STORY_EVENTS, MAX_SCAV_MEMORIES, MAX_SCAV_MEMORIALS, type ScavStory, type ScavMemory, type ScavMemorial, type ScavEventId } from "./scav-stories";
 export * from "./scav-stories";
+import { createSquadSocialState, ensureSquadPairs, removeSquadMember, getRoomSocialEffects, getRaidSocialSupport, creditSquadWork, getSocialProductionWorkers, noteSquadProduction, discardSquadWork, noteSquadDispatch, noteSquadRaid, parseSquadSocialState, validateSquadSocialState, rebaseSquadSocialClock, type SquadSocialState } from "./squad-bonds";
+export * from "./squad-bonds";
 
 export const SAVE_KEY = "prapor.save.v1";
-export const SAVE_VERSION = 7;
+export const SAVE_VERSION = 8;
 export const MAX_OFFLINE_MS = 8 * 60 * 60 * 1000;
 export const MAX_ROOM_LEVEL = 5;
 
@@ -133,6 +135,7 @@ export interface GameState {
 	shelter: ShelterState;
 	recruitment: RecruitmentState;
 	memorials: ScavMemorial[];
+	social: SquadSocialState;
 	stats: {
 		raidsWon: number;
 		raidsCompleted: number;
@@ -198,6 +201,7 @@ function rebaseClock(state: GameState, now: number) {
 		if (person.story.pending) person.story.pending.at = Math.max(0, person.story.pending.at - shift);
 	}
 	for (const memorial of state.memorials) memorial.at = Math.max(0, memorial.at - shift);
+	rebaseSquadSocialClock(state, shift);
 	for (const report of state.history) {
 		report.at = Math.max(0, report.at - shift);
 		for (const event of report.events) event.at = Math.max(0, event.at - shift);
@@ -325,6 +329,7 @@ export function createGame(now = Date.now()): GameState {
 		shelter: initialShelter({ workshop: 1, medbay: 1, radio: 1, storage: 1 }),
 		recruitment: { rng: 1, generation: 1, tier: 0, boardTier: 0, boardSeed: 1, board: [], hiredCandidateIds: [] },
 		memorials: [],
+		social: { pairs: [], losses: [] },
 		stats: {
 			raidsWon: 0,
 			raidsCompleted: 0,
@@ -353,6 +358,7 @@ export function createGame(now = Date.now()): GameState {
 	});
 	for (const modelId of ["handguard-sks-rail", "optic-reflex", "stock-sks-folding", "magazine-sks-7.62x39-quick"]) state.modules.push(createModule(state, modelId, now));
 	state.recruitment = createRecruitmentState(state);
+	ensureSquadPairs(state);
 	return state;
 }
 
@@ -523,9 +529,10 @@ export function getWorkerAffinity(scav: Scav, type: ShelterRoomType): number {
 }
 function roomWorkRate(state: GameState, room: RoomInstance): number {
 	if (room.status !== "ready") return 0;
+	const social = getRoomSocialEffects(state, room.id);
 	const work = room.workerIds.reduce((sum, workerId) => {
 		const scav = state.scavs.find((item) => item.id === workerId);
-		return sum + (scav && scav.status !== "raiding" && scav.health >= 25 ? (700 + getWorkerAffinity(scav, room.type) * 10) * getScavProfileEffects(scav).work * getScavStoryEffects(scav).work : 0);
+		return sum + (scav && scav.status !== "raiding" && scav.health >= 25 ? (700 + getWorkerAffinity(scav, room.type) * 10) * getScavProfileEffects(scav).work * getScavStoryEffects(scav).work * (social.workers.find((worker) => worker.scavId === workerId)?.multiplier ?? 1) : 0);
 	}, 0);
 	return Math.floor(work * (9 + room.level) / 10);
 }
@@ -696,6 +703,7 @@ export function cancelProduction(state: GameState, roomId: string, jobId: string
 		return fail("Заказ уже завершён или не найден.");
 	}
 	room.queue = room.queue.filter((item) => item.id !== jobId);
+	discardSquadWork(state, jobId);
 	if (job.workDone === 0) {
 		addMoney(state, job.paid.money, false);
 		for (const key of Object.keys(job.paid.supplies) as (keyof Supplies)[]) state.supplies[key] += job.paid.supplies[key];
@@ -736,13 +744,15 @@ function settleShelter(state: GameState, now: number, stoppedAtBoundary: Readonl
 			for (const key of Object.keys(job.output.supplies) as (keyof Supplies)[]) state.supplies[key] += job.output.supplies[key];
 			room.queue.shift(); room.cycles++;
 			changed = true;
-			for (const workerId of room.workerIds) {
+			const creditedWorkers = getSocialProductionWorkers(state, room, job);
+			for (const workerId of creditedWorkers) {
 				const scav = state.scavs.find((item) => item.id === workerId); if (!scav) continue;
 				const previous = scav.level; scav.xp += job.kind === "module" ? 3 : 1;
 				noteScavProduction(scav, job.kind === "module", job.id, now);
 				scav.level = Math.min(15, 1 + Math.floor(Math.sqrt(scav.xp / 60)));
 				scav.combat = Math.min(100, scav.combat + (scav.level - previous) * 4); scav.scouting = Math.min(100, scav.scouting + (scav.level - previous) * 3);
 			}
+			noteSquadProduction(state, room, job, creditedWorkers, now);
 		}
 		if (!stoppedAtBoundary.has(room.id) && (room.repeat || room.pending) && room.queue.length === 0 && tryStartResourceJob(state, room, now)) changed = true;
 	}
@@ -753,7 +763,11 @@ function progressShelter(state: GameState, elapsedMs: number) {
 	for (const site of state.shelter.expansions) site.workDone = Math.min(site.workRequired, site.workDone + elapsedMs * 1000);
 	for (const room of state.shelter.rooms) {
 		if (room.construction) room.construction.workDone = Math.min(room.construction.workRequired, room.construction.workDone + elapsedMs * 1000);
-		else if (room.queue[0]) room.queue[0].workDone = Math.min(room.queue[0].workRequired, room.queue[0].workDone + elapsedMs * roomWorkRate(state, room));
+		else if (room.queue[0]) {
+			const job = room.queue[0], before = job.workDone;
+			job.workDone = Math.min(job.workRequired, job.workDone + elapsedMs * roomWorkRate(state, room));
+			creditSquadWork(state, room, job, job.workDone - before);
+		}
 	}
 }
 function nextShelterEvent(state: GameState, cursor: number, end: number): number {
@@ -950,6 +964,7 @@ export function getRaidChance(
 			personality.survivalBonus +
 			getScavProfileEffects(scav).chance +
 			getScavStoryEffects(scav).chance +
+			getRaidSocialSupport(state, scav, map.id).chance +
 			state.base.radio * 0.012 +
 			TACTICS[scav.tactic].chanceBonus + getLoadoutStats(state, scav).protection +
 			(scav.loadout.ammoType === "piercing" ? 0.055 : 0) + (state.blueprints.includes(`route:${map.id}`) ? 0.02 : 0) -
@@ -1132,6 +1147,7 @@ function startRaid(state: GameState, scav: Scav, map: RaidMap, now: number, isAu
 	scav.status = "raiding";
 	scav.autoRaid.waitingReason = null;
 	state.raids.push(raid);
+	noteSquadDispatch(state, raid);
 	if (!state.stats.mapsVisited.includes(map.id)) state.stats.mapsVisited.push(map.id);
 	state.recruitment.tier = Math.max(state.recruitment.tier, getEarnedRecruitmentTier(state)) as RecruitTier;
 	return { ok: true, message: `${scav.name} отправился: ${map.name}.`, raidId: raid.id };
@@ -1296,6 +1312,7 @@ export function hireRecruitCandidate(state: GameState, candidateId: string): Act
 		state.money = Math.max(state.money, firstRun.money);
 		state.supplies.ammo = Math.max(state.supplies.ammo, 3, firstRun.ammo);
 	}
+	ensureSquadPairs(state);
 	return ok(`${scav.name} присоединился к отряду${quote.money === 0 ? " бесплатно: комплект восстановления" : ` за ${quote.money} ₽`}.`);
 }
 /** Compatibility entry point; explicit UI always hires a concrete persisted offer. */
@@ -1316,6 +1333,7 @@ export function dismissScav(state: GameState, scavId: string): ActionResult {
 	const reason = getDismissScavReason(state, scavId); if (reason) return fail(reason);
 	const scav = state.scavs.find((item) => item.id === scavId)!;
 	state.scavs = state.scavs.filter((item) => item.id !== scav.id);
+	removeSquadMember(state, scav.id);
 	return ok(`${scav.name} покинул отряд. Всё оружие и снаряжение осталось на складе.`);
 }
 export function chooseScavTalent(state: GameState, scavId: string, talentId: string): ActionResult {
@@ -1705,6 +1723,7 @@ function finishExpedition(state: GameState, raid: Raid, success: boolean, now: n
 	report.events = [...expedition.trail, { at: now, label: success ? "Эвакуация" : report.lostScav ? "Связь потеряна" : "Отход", text: report.description + (success ? ` Доставлено ${report.money} ₽.` : ""), kind: success ? "success" : "danger" }];
 	noteScavRaid(scav, report);
 	if (report.lostScav) rememberLostScav(state, scav, report);
+	noteSquadRaid(state, scav, report);
 	state.history.unshift(report); state.history.length = Math.min(state.history.length, 40);
 	state.recruitment.tier = Math.max(state.recruitment.tier, getEarnedRecruitmentTier(state)) as RecruitTier;
 	return report;
@@ -1852,6 +1871,7 @@ function finishRaid(state: GameState, raid: Raid): RaidReport {
 	report.events = createRaidEvents(raid, report, map);
 	noteScavRaid(scav, report);
 	if (report.lostScav) rememberLostScav(state, scav, report);
+	noteSquadRaid(state, scav, report);
 	state.history.unshift(report);
 	state.history.length = Math.min(state.history.length, 40);
 	state.recruitment.tier = Math.max(state.recruitment.tier, getEarnedRecruitmentTier(state)) as RecruitTier;
@@ -2421,9 +2441,9 @@ export function parseSave(raw: string): GameState | null {
 	try {
 		if (typeof raw !== "string" || raw.length > 1_000_000) return null;
 		const source = record(JSON.parse(raw));
-		if (source.schemaVersion !== 1 && source.schemaVersion !== 2 && source.schemaVersion !== 3 && source.schemaVersion !== 4 && source.schemaVersion !== 5 && source.schemaVersion !== 6 && source.schemaVersion !== SAVE_VERSION) return null;
+		if (source.schemaVersion !== 1 && source.schemaVersion !== 2 && source.schemaVersion !== 3 && source.schemaVersion !== 4 && source.schemaVersion !== 5 && source.schemaVersion !== 6 && source.schemaVersion !== 7 && source.schemaVersion !== SAVE_VERSION) return null;
 		const version = source.schemaVersion;
-		fields(source, ["schemaVersion", "createdAt", "lastUpdated", "money", "supplies", "xp", "level", "base", "scavs", "weapons", "raids", "history", "claimedContracts", "discoveredWeapons", "stats", "clock", "rng", "nextId", ...(version >= 3 ? ["gearItems", "blueprints"] : []), ...(version >= 4 ? ["modules"] : []), ...(version >= 5 ? ["shelter"] : []), ...(version >= 6 ? ["recruitment"] : []), ...(version >= 7 ? ["memorials"] : [])]);
+		fields(source, ["schemaVersion", "createdAt", "lastUpdated", "money", "supplies", "xp", "level", "base", "scavs", "weapons", "raids", "history", "claimedContracts", "discoveredWeapons", "stats", "clock", "rng", "nextId", ...(version >= 3 ? ["gearItems", "blueprints"] : []), ...(version >= 4 ? ["modules"] : []), ...(version >= 5 ? ["shelter"] : []), ...(version >= 6 ? ["recruitment"] : []), ...(version >= 7 ? ["memorials"] : []), ...(version >= 8 ? ["social"] : [])]);
 		const base = record(source.base);
 		const stats = record(source.stats);
 		const clock = record(source.clock);
@@ -2477,6 +2497,7 @@ export function parseSave(raw: string): GameState | null {
 			shelter: version >= 5 ? parseShelter(source.shelter) : initialShelter(base as Record<string, number>),
 			recruitment: version >= 6 ? parseRecruitment(source.recruitment, version) : { rng: 1, generation: 1, tier: 0, boardTier: 0, boardSeed: 1, board: [], hiredCandidateIds: [] },
 			memorials: version >= 7 ? array(source.memorials, MAX_SCAV_MEMORIALS, parseScavMemorial) : [],
+			social: version >= 8 ? parseSquadSocialState(source.social) : { pairs: [], losses: [] },
 			stats: {
 				raidsWon: number(stats.raidsWon, 1e9, 0, true),
 				raidsCompleted: number(stats.raidsCompleted, 1e9, 0, true),
@@ -2501,6 +2522,7 @@ export function parseSave(raw: string): GameState | null {
 		};
 		if (version < 6) state.recruitment = createRecruitmentState(state);
 		if (version < 7) for (const scav of state.scavs) scav.story = createScavStory(scav.profile.candidateId ?? scav.id, state.createdAt, false);
+		if (version < 8) state.social = createSquadSocialState(state);
 		if (version < 7) {
 			const used = [...state.scavs.map((scav) => scav.appearance ?? defaultScavAppearance(scav.personality)), ...state.recruitment.board.filter((candidate) => candidate.appearance >= 0).map((candidate) => candidate.appearance)];
 			for (const candidate of state.recruitment.board) if (candidate.appearance < 0) { candidate.appearance = chooseRecruitCandidateAppearance(candidate.role, candidate.id, used); used.push(candidate.appearance); }
@@ -2664,6 +2686,7 @@ export function parseSave(raw: string): GameState | null {
 			)
 		)
 			throw new Error("id-sequence");
+		validateSquadSocialState(state);
 		return state;
 	} catch {
 		return null;
