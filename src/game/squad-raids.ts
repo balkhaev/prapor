@@ -4,7 +4,7 @@ import { GEAR_MODEL_BY_ID, EXPEDITION_BRANCHES, type ExpeditionBranch } from "./
 import { MODULE_BY_ID, MODULE_SLOTS, type ModuleSlot } from "./modules";
 import { RECRUIT_TRAITS } from "./recruitment";
 import { defaultScavAppearance, isScavAppearance } from "./scav-appearances";
-import { getRaidQuote, type GameState, type Raid, type RaidReport, type Expedition } from "./engine";
+import { getRaidQuote, getFieldKitStock, FIELD_KITS, type FieldKit, type GameState, type Raid, type RaidReport, type Expedition } from "./engine";
 import { getRaidFieldPlan } from "../raid-field";
 
 export type SquadRaidRole = "point" | "cover" | "medic";
@@ -78,6 +78,10 @@ export function getSquadRaidQuote(state: GameState, scavIds: readonly string[], 
 	if (!result.reason && state.supplies.ammo < result.ammo) result.reason = `Для отряда нужно ${result.ammo} патронов.`;
 	if (!result.reason && state.supplies.intel < result.intel) result.reason = `Для отряда нужно ${result.intel} разведданных.`;
 	if (!result.reason && state.supplies.medicine < result.medicine) result.reason = `Для личных аптечек нужно ${result.medicine} медикаментов.`;
+	for (const kit of Object.keys(FIELD_KITS) as FieldKit[]) {
+		const required = people.filter(person => person?.fieldKit === kit).length;
+		if (!result.reason && getFieldKitStock(state)[kit] < required) result.reason = `Для отряда нужны ${required} комплекта «${FIELD_KITS[kit].label}». Изготовь недостающие или измени личные комплекты.`;
+	}
 	result.rescueKits = result.medicine;
 	return result;
 }

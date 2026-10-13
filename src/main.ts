@@ -4,6 +4,7 @@ import "./module-catalog.css";
 import "./achievements.css";
 import "./gameplay.css";
 import "./raid-strategy.css";
+import "./shelter-logistics.css";
 import {
 	ATTACHMENT_LABELS,
 	CATEGORY_LABELS,
@@ -160,6 +161,8 @@ import { getGameplayGuidance } from "./gameplay-guidance";
 import { gameplayFocus, gameplayRoadmap } from "./gameplay-ui";
 import { raidPlanEditor, sectorIntelPanel } from "./raid-strategy-ui";
 import { getRaidPlan, setRaidPlan, type RaidObjective, type RaidPreparation } from "./game/engine";
+import { FIELD_KITS, getFieldKitStock, getProductionReserve, setProductionReserve, setRoomStockTarget, setFieldKit, getFieldKitProductionQuote, queueFieldKitProduction, type FieldKit, type FieldKitSelection } from "./game/engine";
+import { fieldKitStockPanel, productionReserveEditor, readProductionReserveDraft, readRoomStockTargetDraft, roomStockTargetEditor, roomUpgradeRecipeBenefits, shelterRecipeCard, type ReserveDraft } from "./shelter-logistics-ui";
 import { MIN_SHELTER_ZOOM, MAX_SHELTER_ZOOM } from "./shelter-camera";
 import { getShelterProductionPresentation, getShelterProductionStages, SHELTER_PRODUCTION_STAGES, type ProductionPresentation } from "./shelter-production";
 import { projectShelterBounds, shelterRoomPolygon, shelterRoomPosition, SHELTER_ROOM_WIDTH, SHELTER_ROOM_HEIGHT } from "./shelter-isometric";
@@ -283,6 +286,8 @@ let toolOrigin: HTMLElement | null = null;
 let productionWorkshopId: string | null = null;
 const chosenWorkers = new Map<string, string>();
 const roomRepeatPreferences = new Map<string, boolean>();
+let productionReserveDraft: ReserveDraft | null = null;
+const roomStockTargetDrafts = new Map<string, string>();
 let inspectorOrigin: HTMLElement | null = null;
 let modalOrigin: HTMLElement | null = null;
 let weaponSearch = "";
@@ -567,7 +572,7 @@ function activatePlayerSave(user: AccountUser | null, store: ReturnType<typeof c
 	dismissAchievementNotice(); freshAchievements.clear();
 	playerAccount = user; saveStore = store; state = loaded.state;
 	protectedSave = Boolean(loaded.protectedRaw); raw = loaded.protectedRaw ?? null;
-	selectedPerks.clear(); chosenWorkers.clear(); roomRepeatPreferences.clear();
+	selectedPerks.clear(); chosenWorkers.clear(); roomRepeatPreferences.clear(); productionReserveDraft = null; roomStockTargetDrafts.clear();
 	toolOrigin = null; commandOrigin = null;
 	offlineSummary = loaded.summary && (loaded.summary.elapsedMs >= 60_000 || loaded.summary.completedCount) ? loaded.summary : null;
 	applySession(session); presentationFallback = session.presentation;
@@ -1311,8 +1316,18 @@ function hud() {
 	});
 	document.querySelectorAll<HTMLButtonElement>('[data-action="set-room-recipe"]').forEach((node) => {
 		const quote = getResourceProductionQuote(state, node.dataset.id ?? "", node.dataset.recipeId ?? "");
+		const room = state.shelter.rooms.find(item => item.id === node.dataset.id), recipe = RESOURCE_RECIPES.find(item => item.id === node.dataset.recipeId);
+		node.disabled = !room || room.status !== "ready" || room.level < (recipe?.minLevel ?? 1);
+		const eta = document.querySelector<HTMLElement>(`[data-recipe-duration="${node.dataset.recipeId}"]`); if (eta) eta.textContent = quote.actualDuration == null ? `Базовая работа ${seconds(quote.duration)}` : `С текущими рабочими ≈ ${seconds(Math.ceil(quote.actualDuration))}`;
 		const note = document.querySelector<HTMLElement>(`[data-resource-recipe-note="${node.dataset.recipeId}"]`); if (note) note.textContent = quote.reason ?? "Бойцы запустят партию; результат поступит на склад";
 	});
+	document.querySelectorAll<HTMLButtonElement>('[data-action="queue-field-kit"]').forEach(node => {
+		const kit = node.dataset.kit as FieldKit, quote = getFieldKitProductionQuote(state, node.dataset.id ?? "", kit);
+		node.disabled = Boolean(quote.reason);
+		const note = document.querySelector<HTMLElement>(`[data-field-kit-order-note="${FIELD_KITS[kit].recipeId}"]`); if (note) note.textContent = quote.reason ?? "Оплата сейчас. Заказ займёт место в очереди и дождётся работников; цель повторения на него не влияет.";
+	});
+	const kits = getFieldKitStock(state);
+	document.querySelectorAll<HTMLElement>('[data-field-kit-stock]').forEach(node => { const kit = node.dataset.fieldKitStock as keyof typeof kits; node.textContent = `${kits[kit]} / ${FIELD_KITS[kit].capacity}`; });
 }
 function gearCard(scav: Scav, slot: GearSlot) {
 	const level = scav.gear[slot], max = level >= MAX_GEAR_LEVEL, cost = getGearCost(scav, slot);
@@ -1551,9 +1566,6 @@ function roomName(id: string | null) {
 	const room = state.shelter.rooms.find((item) => item.id === id);
 	return room ? ROOM_DEFINITIONS[room.type].label : "Комната";
 }
-function productionCost(cost: { money: number; supplies: GameState["supplies"] }) {
-	return [cost.money ? `${n(cost.money)} ₽` : "", ...Object.entries(cost.supplies).filter(([, amount]) => amount > 0).map(([key, amount]) => `${amount} ${key === "ammo" ? "патр." : key === "medicine" ? "мед." : key === "scrap" ? "дет." : "разв."}`)].filter(Boolean).join(" + ") || "Без расхода припасов";
-}
 function productionOutput(output: GameState["supplies"]) {
 	return `<div class="recipe-output">${Object.entries(output).filter(([, amount]) => amount > 0).map(([key, amount]) => `<span>${icon(key, 13)} ${supplyName(key)} +${amount}</span>`).join("")}</div>`;
 }
@@ -1566,7 +1578,7 @@ function shelterHomeNote() {
 	const busy = state.shelter.rooms.filter((room) => room.queue.length || room.recipeId);
 	const working = state.scavs.filter((scav) => scav.assignment).length;
 	const blocked = busy.filter((room) => getRoomProductionState(state, room).reason).length;
-	return `<div class="shelter-home-note"><div><span class="eyebrow">Жизнь убежища</span><h3>${working ? `${working} бойцов на рабочих местах` : "Комнатам нужны свои люди"}</h3><p>${blocked ? `${blocked} производств ждут работников, расходников или места на складе.` : busy.length ? `Настроено производств: ${busy.length}. Готовые партии поступают на склад.` : "Назначь бойцов, выбери рецепты и поставь оружейные модули в очередь мастерской."}</p></div><button class="button secondary" data-page="base">Управлять комнатами ${icon("arrow", 16)}</button></div>`;
+	return `<div class="shelter-home-note"><div><span class="eyebrow">Жизнь убежища</span><h3>${working ? `${working} бойцов на рабочих местах` : "Комнатам нужны свои люди"}</h3><p>${blocked ? `${blocked} производств ждут работников, расходников, разрешения резерва или места на складе.` : busy.length ? `Настроено производств: ${busy.length}. Готовые партии поступают на склад.` : "Назначь бойцов, выбери рецепты и поставь оружейные модули в очередь мастерской."}</p></div><button class="button secondary" data-page="base">Управлять комнатами ${icon("arrow", 16)}</button></div>${fieldKitStockPanel(state, true)}`;
 }
 function renderCommandBoard() {
 	cancelWorkerPlacement(false, true);
@@ -1574,6 +1586,7 @@ function renderCommandBoard() {
 	const room = state.shelter.rooms.find((item) => item.id === selectedRoomId);
 	const oldScroll = (dock.querySelector<HTMLElement>(".command-dock-scroll, .live-raid-scroll") ?? dock).scrollTop;
 	const explanationOpen = dock.querySelector<HTMLDetailsElement>(".gameplay-explanation")?.open ?? false;
+	const openLogistics = Array.from(dock.querySelectorAll<HTMLDetailsElement>('details[data-logistics-detail][open]')).map(node => node.dataset.logisticsDetail);
 	const activeKey = document.activeElement instanceof HTMLElement && dock.contains(document.activeElement) ? document.activeElement.dataset.focusKey : undefined;
 	const mobileContext = window.innerWidth <= 850 && contextMode !== "overview";
 	dock.classList.toggle("context-open", contextMode !== "overview");
@@ -1585,6 +1598,7 @@ function renderCommandBoard() {
 	dock.innerHTML = worldView === "raid" ? renderLiveRaidPanel(state, watchedRaid(), watchedReport(), liveCheckpointControls(watchedRaid())) : contextMode === "room" && room ? managedRoomPanel(room) : contextMode === "build" && selectedShelterSite ? `<header class="command-context-head"><span class="eyebrow">Новая комната</span><button class="icon-button" data-action="close-context" data-focus-key="context-close" aria-label="Закрыть строительство">×</button></header><div class="command-dock-scroll">${buildSitePanel(selectedShelterSite.column, selectedShelterSite.row)}</div>` : commandOverview();
 	const scroll = dock.querySelector<HTMLElement>(".command-dock-scroll, .live-raid-scroll") ?? dock; scroll.scrollTop = oldScroll;
 	const explanation = dock.querySelector<HTMLDetailsElement>(".gameplay-explanation"); if (explanation) explanation.open = explanationOpen;
+	dock.querySelectorAll<HTMLDetailsElement>('details[data-logistics-detail]').forEach(node => { node.open = openLogistics.includes(node.dataset.logisticsDetail); });
 	if (activeKey) {
 		const replacement = dock.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(activeKey)}"]`);
 		if (replacement?.getClientRects().length && !replacement.closest("[inert]")) replacement.focus({ preventScroll: true });
@@ -1648,7 +1662,7 @@ function renderShelter() {
 		const info = ROOM_DEFINITIONS[room.type], production = getRoomProductionState(state, room);
 		return `<button class="shelter-site built ${room.status !== "ready" ? "building" : ""} ${production.reason ? "blocked" : ""} ${selectedRoomId === room.id ? "active" : ""}" data-shelter-room="${room.id}" data-focus-key="room-${room.id}" aria-pressed="${selectedRoomId === room.id}" style="--room-color:${info.color}">${icon(roomIcon(room.type), 27)}<strong>${e(info.label)}</strong><span>Ур. ${room.level || "—"} · ${room.workerIds.length} / ${getRoomWorkerCapacity(room)} работников</span><small data-room-status="${room.id}">${e(production.status)}</small><span class="progress"><i data-room-progress="${room.id}" style="width:${Math.round(production.progress * 100)}%"></i></span></button>`;
 	}).join("")}</div><div class="section-head"><h2>Наружные стены</h2><span class="muted">Со стороны улицы — вход</span></div><div class="shelter-floor-grid">${[...frontier, ...state.shelter.expansions].map(({column,row}) => `<button class="shelter-site" data-shelter-column="${column}" data-shelter-row="${row}">${icon("scrap",24)}<strong>${state.shelter.expansions.some((p) => p.column === column && p.row === row) ? "Идут работы" : "Пробить стену"}</strong><span>Участок ${column}, ${row}</span><small>Расширить здание →</small></button>`).join("")}</div>`;
-	panel.innerHTML = `${shelterOverview()}<section class="shelter-sites command-room-index"><div class="shelter-sites-head"><h2>Комнаты и свободные ячейки</h2><span class="eyebrow">ВЫБЕРИ ОБЪЕКТ</span></div>${grid}<p class="field-hint">Управление выбранной комнатой откроется рядом со схемой убежища.</p></section>${discoveriesSection()}`;
+	panel.innerHTML = `${shelterOverview()}${productionReserveEditor(state, "base", productionReserveDraft)}${fieldKitStockPanel(state)}<section class="shelter-sites command-room-index"><div class="shelter-sites-head"><h2>Комнаты и свободные ячейки</h2><span class="eyebrow">ВЫБЕРИ ОБЪЕКТ</span></div>${grid}<p class="field-hint">Управление выбранной комнатой откроется рядом со схемой убежища.</p></section>${discoveriesSection()}`;
 	const recipes = panel.querySelector<HTMLElement>(".room-module-recipes"); if (recipes) recipes.scrollTop = recipeScroll;
 }
 function buildSitePanel(column: number, row: number) {
@@ -1707,7 +1721,7 @@ function managedRoomPanel(room: RoomInstance) {
 	const roomSummary = getCommandSummary(state).rooms.find((item) => item.roomId === room.id)!;
 	const tab = info.production ? roomContextTab : "upgrade";
 	const tabs = info.production ? [["staff","Люди"],["production","Производство"],["upgrade","Развитие"]] : [["upgrade","Развитие"]];
-	const content = tab === "staff" ? roomWorkersPanel(room) : tab === "production" ? `<section class="room-panel-section"><h3>Очередь · ${room.queue.length} / 5</h3>${roomQueuePanel(room)}</section><section class="room-panel-section"><h3>${room.type === "workshop" ? "Оружейные модули" : "Рецепты"}</h3>${room.type === "workshop" ? roomModulesPanel(room) : roomResourcesPanel(room)}</section>` : room.status === "building" ? '<div class="room-queue-empty">Строительство началось. Дождись готовности, затем назначь работников или развивай комнату.</div>' : `<section class="room-panel-section"><h3>Уровень ${room.level} → ${Math.min(5,room.level+1)}</h3><p>Улучшение расширяет возможности комнаты. Люди и оплаченная очередь сохранятся.</p><div class="loadout-stats"><span>Время ${seconds(upgrade.duration)}</span></div><button class="button secondary" data-action="upgrade-room" data-id="${room.id}" ${upgrade.reason ? "disabled" : ""}>Улучшить · ${costLabel(upgrade)}</button><small class="quote-note" data-room-upgrade-note="${room.id}">${e(upgrade.reason ?? "Оплата при начале улучшения")}</small></section>`;
+	const content = tab === "staff" ? roomWorkersPanel(room) : tab === "production" ? `${productionReserveEditor(state, room.id, productionReserveDraft, true)}<section class="room-panel-section"><h3>Очередь · ${room.queue.length} / 5</h3>${roomQueuePanel(room)}</section><section class="room-panel-section"><h3>${room.type === "workshop" ? "Комплекты для выхода" : "Рецепты"}</h3>${roomResourcesPanel(room)}</section>${room.type === "workshop" ? `<section class="room-panel-section"><h3>Оружейные модули</h3>${roomModulesPanel(room)}</section>` : ""}` : room.status === "building" ? '<div class="room-queue-empty">Строительство началось. Дождись готовности, затем назначь работников или развивай комнату.</div>' : `<section class="room-panel-section"><h3>Уровень ${room.level} → ${Math.min(5,room.level+1)}</h3><p>Улучшение ускоряет партии и добавляет рабочие места. Люди и оплаченная очередь сохранятся.</p>${roomUpgradeRecipeBenefits(room)}<div class="loadout-stats"><span>Время ${seconds(upgrade.duration)}</span></div><button class="button secondary" data-action="upgrade-room" data-id="${room.id}" ${upgrade.reason ? "disabled" : ""}>Улучшить · ${costLabel(upgrade)}</button><small class="quote-note" data-room-upgrade-note="${room.id}">${e(upgrade.reason ?? "Оплата при начале улучшения")}</small></section>`;
 	return `<header class="command-context-head"><div><span class="eyebrow">Этаж ${room.row + 1} · секция ${room.column + 1} · ур. ${room.level || "—"}</span><h2>${e(info.label)}</h2></div><button class="icon-button" data-action="close-context" data-focus-key="context-close" aria-label="Закрыть комнату">×</button></header><div class="command-room-banner" data-room-summary="${room.id}" data-room-kind="${roomSummary.kind}" style="--room-accent:${info.color}">${roomMiniArt(room.type,`selected-${room.id}`).replace("<svg ", '<svg aria-hidden="true" ')}<div><strong data-room-status="${room.id}">${e(production.status)}</strong><small data-room-eta="${room.id}">${production.remainingSeconds == null ? "" : `${seconds(production.remainingSeconds)} до готовности`}</small><div class="command-room-meta"><span>${info.production ? `${icon("people",12)} ${room.workerIds.length}/${getRoomWorkerCapacity(room)}` : `${icon("check",12)} Без персонала`}</span>${info.production ? `<span>${icon("scrap",12)} Заказов: ${room.queue.length}</span>` : ""}</div><span class="progress"><i data-room-progress="${room.id}" style="width:${production.progress*100}%"></i></span><button class="text-button room-view-action" data-camera-room="${room.id}" data-focus-key="camera-room-${room.id}">Осмотреть комнату ${icon("arrow",13)}</button></div></div><div class="context-tabs" role="group" aria-label="Управление комнатой">${tabs.map(([id,label]) => `<button data-room-context-tab="${id}" data-focus-key="context-tab-${id}" aria-pressed="${tab===id}" class="${tab===id?"active":""}">${label}</button>`).join("")}</div><div class="command-dock-scroll" id="room-management" tabindex="-1">${productionReadout(room)}<p class="command-room-reason" data-room-reason="${room.id}">${e(production.reason ?? (room.status !== "ready" ? "Работа приостановлена до готовности комнаты" : roomSummary.cta ? roomSummary.detail : ""))}</p>${content}${!info.production ? `<p class="field-hint">${e(info.description)} Работники не требуются.</p>` : ""}</div>`;
 }
 function roomWorkersPanel(room: RoomInstance) {
@@ -1730,15 +1744,12 @@ function roomQueuePanel(room: RoomInstance) {
 		const label = model?.label ?? recipe?.label ?? "Производственная партия";
 		const fraction = job.workRequired ? Math.min(1, job.workDone / job.workRequired) : 0;
 		const current = index === 0;
-		return `<article class="room-job ${current ? "running" : ""}"><div class="room-job-head"><strong>${e(label)}</strong><span ${current ? `data-job-time="${job.id}"` : ""}>${current ? production.remainingSeconds == null ? "ПАУЗА" : seconds(production.remainingSeconds) : `ЗАКАЗ 0${index + 1}`}</span></div>${model ? `<div class="room-job-art">${moduleArt(model)}</div>` : productionOutput(job.output.supplies)}<div class="progress"><i data-job-progress="${job.id}" style="width:${Math.round(fraction * 100)}%"></i></div><p ${current ? `data-job-status="${job.id}"` : ""}>${current ? e(production.reason ?? production.status) : "Ожидает завершения предыдущей партии"}</p><div class="room-job-foot"><span data-job-refund="${job.id}">${job.workDone === 0 ? "Не начат · полный возврат при отмене" : "Работа начата · отмена без возврата"}</span><button class="button ghost small" data-action="cancel-production" data-id="${room.id}" data-job-id="${job.id}" data-focus-key="cancel-${job.id}">Отменить</button></div></article>`;
+		return `<article class="room-job ${current ? "running" : ""}"><div class="room-job-head"><strong>${e(label)}</strong><span ${current ? `data-job-time="${job.id}"` : ""}>${current ? production.remainingSeconds == null ? "ПАУЗА" : seconds(production.remainingSeconds) : `ЗАКАЗ 0${index + 1}`}</span></div>${model ? `<div class="room-job-art">${moduleArt(model)}</div>` : job.output.fieldKit ? `<div class="recipe-output"><span>${e(FIELD_KITS[job.output.fieldKit].label)} +1</span></div>` : productionOutput(job.output.supplies)}<div class="progress"><i data-job-progress="${job.id}" style="width:${Math.round(fraction * 100)}%"></i></div><p ${current ? `data-job-status="${job.id}"` : ""}>${current ? e(production.reason ?? production.status) : "Ожидает завершения предыдущей партии"}</p><div class="room-job-foot"><span data-job-refund="${job.id}">${job.workDone === 0 ? "Не начат · полный возврат при отмене" : "Работа начата · отмена без возврата"}</span><button class="button ghost small" data-action="cancel-production" data-id="${room.id}" data-job-id="${job.id}" data-focus-key="cancel-${job.id}">Отменить</button></div></article>`;
 	}).join("");
 }
 function roomResourcesPanel(room: RoomInstance) {
 	const recipes = RESOURCE_RECIPES.filter((recipe) => recipe.roomType === room.type);
-	return `<label class="loadout-check"><input type="checkbox" data-room-repeat="${room.id}" aria-label="Повторять выбранный рецепт: ${e(ROOM_DEFINITIONS[room.type].label)}" data-focus-key="room-repeat-${room.id}" ${room.recipeId ? room.repeat ? "checked" : "" : roomRepeatPreferences.get(room.id) === true ? "checked" : ""} ${room.status !== "ready" ? "disabled" : ""}><span>Повторять выбранный рецепт<small>Новая партия оплачивается только при запуске. При нехватке ресурсов работа ждёт пополнения.</small></span></label>${room.recipeId ? `<button class="button ghost small" data-action="stop-room-recipe" data-id="${room.id}">Остановить будущие партии</button><small class="quote-note">Оплаченные заказы продолжатся. Их можно отменить в очереди отдельно.</small>` : ""}<div class="resource-recipe-list">${recipes.map((recipe) => {
-		const quote = getResourceProductionQuote(state, room.id, recipe.id), selected = room.recipeId === recipe.id;
-		return `<article class="resource-recipe ${selected ? "selected" : ""}"><div class="resource-recipe-head">${icon(roomIcon(room.type), 21)}<strong>${e(recipe.label)}</strong></div><p>${e(recipe.description)}</p>${productionOutput(recipe.output)}<div class="loadout-stats"><span>Партия: ${productionCost(recipe.cost)}</span><span>Базовая работа ${seconds(quote.duration)}</span></div><button class="button secondary" data-action="set-room-recipe" data-id="${room.id}" data-recipe-id="${recipe.id}" data-focus-key="recipe-${recipe.id}" ${room.status !== "ready" ? "disabled" : ""}>${selected ? "Подтвердить рецепт и режим" : "Выбрать рецепт"}</button><small class="quote-note" data-resource-recipe-note="${recipe.id}">${e(quote.reason ?? "Бойцы запустят партию; результат поступит на склад")}</small></article>`;
-	}).join("")}</div>`;
+	return `<label class="loadout-check"><input type="checkbox" data-room-repeat="${room.id}" aria-label="Повторять выбранный рецепт: ${e(ROOM_DEFINITIONS[room.type].label)}" data-focus-key="room-repeat-${room.id}" ${room.recipeId ? room.repeat ? "checked" : "" : roomRepeatPreferences.get(room.id) === true ? "checked" : ""} ${room.status !== "ready" ? "disabled" : ""}><span>Повторять выбранный рецепт<small>Новая партия оплачивается только при запуске. При нехватке ресурсов, резерве или достижении цели работа ждёт.</small></span></label>${roomStockTargetEditor(state, room, roomStockTargetDrafts.get(room.id))}${room.recipeId ? `<button class="button ghost small" data-action="stop-room-recipe" data-id="${room.id}">Остановить будущие партии</button><small class="quote-note">Оплаченные заказы продолжатся. Их можно отменить в очереди отдельно.</small>` : ""}<div class="resource-recipe-list">${recipes.map(recipe => shelterRecipeCard(state, room, recipe)).join("")}</div>`;
 }
 function roomModulesPanel(room: RoomInstance) {
 	const weapon = state.weapons.find((gun) => gun.id === selectedWeapon) ?? state.weapons[0];
@@ -2267,12 +2278,49 @@ document.addEventListener("click", (event) => {
 			act(assignWorker(state, id, null), "assign");
 			break;
 		case "open-work-room":
-			openShelterRoom(id);
+			openShelterRoom(id, "production");
 			break;
+		case "save-production-reserve": {
+			const editor = target.closest<HTMLElement>('[data-reserve-editor]');
+			if (!editor) break;
+			const values = Object.fromEntries(Array.from(editor.querySelectorAll<HTMLInputElement>('[data-production-reserve]')).map(input => [input.dataset.productionReserve!, input.value])) as ReserveDraft;
+			const cost = readProductionReserveDraft(values);
+			if (!cost) { toast("Резерв: введи целые неотрицательные значения во все поля.", false); break; }
+			const result = setProductionReserve(state, cost);
+			if (result.ok) productionReserveDraft = null;
+			act(result);
+			break;
+		}
+		case "save-room-stock-target": {
+			const room = state.shelter.rooms.find(item => item.id === id);
+			const input = target.closest('.room-stock-target')?.querySelector<HTMLInputElement>('[data-room-stock-target]');
+			if (!room || !input) break;
+			const value = readRoomStockTargetDraft(input.value, room);
+			if (value === undefined) { toast("Цель запаса: введи целое неотрицательное значение в допустимых пределах или очисти поле.", false); break; }
+			const result = setRoomStockTarget(state, id, value);
+			if (result.ok) roomStockTargetDrafts.delete(id);
+			act(result);
+			break;
+		}
+		case "seek-production-resource": {
+			const supply = target.dataset.supply as RaidObjective;
+			if (!["ammo", "medicine", "scrap", "intel"].includes(supply)) break;
+			const scav = state.scavs.find(item => !item.assignment && item.status !== "raiding" && item.health >= 25 && item.weaponInstanceId);
+			if (!scav) { page = "raids"; render(); toast("Освободи рабочего или подготовь свободного бойца для выхода."); break; }
+			const result = setRaidPlan(state, scav.id, supply, getRaidPlan(scav).preparation);
+			if (!result.ok) { act(result); break; }
+			persist(); page = "raids"; render(); openInspector(scav.id);
+			document.querySelector('#inspector-root .sortie-section')?.scrollIntoView({ block: "start", behavior: scrollBehavior() });
+			document.querySelector<HTMLSelectElement>('#inspector-root [data-raid-objective]')?.focus({ preventScroll: true });
+			break;
+		}
 		case "set-room-recipe": {
 			const repeat = document.querySelector<HTMLInputElement>(`[data-room-repeat="${CSS.escape(id)}"]`)?.checked ?? true;
 			roomRepeatPreferences.set(id, repeat);
-			act(setRoomRecipe(state, id, target.dataset.recipeId ?? null, repeat));
+			const oldRecipe = state.shelter.rooms.find(room => room.id === id)?.recipeId;
+			const result = setRoomRecipe(state, id, target.dataset.recipeId ?? null, repeat);
+			if (result.ok && oldRecipe !== target.dataset.recipeId) roomStockTargetDrafts.delete(id);
+			act(result);
 			break;
 		}
 		case "stop-room-recipe":
@@ -2280,6 +2328,9 @@ document.addEventListener("click", (event) => {
 			break;
 		case "queue-room-module":
 			act(queueModuleProduction(state, id, target.dataset.modelId ?? ""));
+			break;
+		case "queue-field-kit":
+			act(queueFieldKitProduction(state, id, target.dataset.kit as FieldKit));
 			break;
 		case "cancel-production": {
 			const summary = advance(state); persist();
@@ -2619,6 +2670,12 @@ document.addEventListener("change", async (event) => {
 	const target = event.target as HTMLInputElement | HTMLSelectElement;
 	storedProgressChanged();
 	if ((!ownsSaveLease || saveConflict || protectedSave) && target.id !== 'save-file') return;
+	if (target.dataset.fieldKit) {
+		const focusKey = target.dataset.focusKey;
+		act(setFieldKit(state, target.dataset.fieldKit, target.value as FieldKitSelection));
+		if (focusKey) document.querySelector<HTMLSelectElement>(`#inspector-root [data-focus-key="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
+		return;
+	}
 	if (target.dataset.raidObjective || target.dataset.raidPreparation) {
 		const scavId = target.dataset.raidObjective ?? target.dataset.raidPreparation!;
 		const scav = state.scavs.find(person => person.id === scavId);
@@ -2719,7 +2776,7 @@ document.addEventListener("change", async (event) => {
 			state = imported.state; protectedSave = false; raw = null;
 			closeModal();
 			closeInspector();
-			selectedPerks.clear(); chosenWorkers.clear(); roomRepeatPreferences.clear();
+			selectedPerks.clear(); chosenWorkers.clear(); roomRepeatPreferences.clear(); productionReserveDraft = null; roomStockTargetDrafts.clear();
 			toolOrigin = null; commandOrigin = null;
 			offlineSummary = imported.summary.elapsedMs >= 60_000 || imported.summary.completedCount ? imported.summary : null;
 			applySession(session);
@@ -2738,6 +2795,13 @@ document.addEventListener("change", async (event) => {
 });
 document.addEventListener("input", (event) => {
 	const input = event.target as HTMLInputElement;
+	if (input.dataset.productionReserve) {
+		const reserve = getProductionReserve(state);
+		productionReserveDraft ??= { money: String(reserve.money), ...Object.fromEntries(Object.entries(reserve.supplies).map(([key, value]) => [key, String(value)])) } as ReserveDraft;
+		productionReserveDraft[input.dataset.productionReserve as keyof ReserveDraft] = input.value;
+		return;
+	}
+	if (input.dataset.roomStockTarget) { roomStockTargetDrafts.set(input.dataset.roomStockTarget, input.value); return; }
 	if (input.hasAttribute("data-room-module-search")) {
 		roomModuleSearch = input.value; const caret = input.selectionStart; renderCommandBoard();
 		const replacement = document.querySelector<HTMLInputElement>("[data-room-module-search]"); replacement?.focus({ preventScroll: true });

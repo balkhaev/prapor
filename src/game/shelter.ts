@@ -1,23 +1,25 @@
 import type { Supplies } from "./data";
+import type { FieldKit, ShelterLogistics } from "./shelter-logistics";
 
 export type ShelterRoomType = "workshop" | "ammo" | "recycler" | "medbay" | "radio" | "storage" | "dormitory";
 export interface ShelterCost { money: number; supplies: Supplies }
 export interface ProductionJob {
 	id: string; kind: "module" | "resource"; recipeId: string; modelId: string | null;
 	workDone: number; workRequired: number; paid: ShelterCost;
-	output: { supplies: Supplies; moduleModelId: string | null }; createdAt: number;
+	output: { supplies: Supplies; moduleModelId: string | null; fieldKit?: FieldKit }; createdAt: number;
 }
 export interface RoomInstance {
 	id: string; type: ShelterRoomType; column: number; row: number; level: number;
 	status: "building" | "ready" | "upgrading";
 	construction: { workDone: number; workRequired: number; targetLevel: number; cost: { money: number; scrap: number } } | null;
 	workerIds: string[]; queue: ProductionJob[]; recipeId: string | null; repeat: boolean; pending: boolean; cycles: number;
+	stockTarget?: number;
 }
 export interface ShelterSite { column: number; row: number }
 export interface ShelterExpansion extends ShelterSite {
 	workDone: number; workRequired: number; cost: { money: number; scrap: number };
 }
-export interface ShelterState { rooms: RoomInstance[]; sites: ShelterSite[]; expansions: ShelterExpansion[] }
+export interface ShelterState { rooms: RoomInstance[]; sites: ShelterSite[]; expansions: ShelterExpansion[]; logistics?: ShelterLogistics }
 export const SHELTER_COLUMNS = 4;
 export const SHELTER_ROWS = 3;
 export const SHELTER_COORDINATE_LIMIT = 128;
@@ -56,11 +58,17 @@ export const ROOM_DEFINITIONS: Record<ShelterRoomType, {
 	dormitory: { label: "Жилой блок", description: "Два новых места для отряда на первом уровне, затем ещё по одному. Рабочие не требуются.", color: "#c1ae94", cost: { money: 240, scrap: 8 }, buildSeconds: 90, workerSkill: "balanced", production: false },
 };
 const supplies = (changes: Partial<Supplies> = {}): Supplies => ({ ammo: 0, medicine: 0, scrap: 0, intel: 0, ...changes });
-export const RESOURCE_RECIPES: { id: string; roomType: ShelterRoomType; label: string; description: string; durationSeconds: number; cost: ShelterCost; output: Supplies }[] = [
+export const RESOURCE_RECIPES: { id: string; roomType: ShelterRoomType; label: string; description: string; durationSeconds: number; cost: ShelterCost; output: Supplies; minLevel?: number; outputKit?: FieldKit }[] = [
 	{ id: "ammo-batch", roomType: "ammo", label: "Партия патронов", description: "12 патронов из одной детали и 10 ₽.", durationSeconds: 40, cost: { money: 10, supplies: supplies({ scrap: 1 }) }, output: supplies({ ammo: 12 }) },
 	{ id: "scrap-batch", roomType: "recycler", label: "Сортировка утиля", description: "6 деталей за 15 ₽ и 2 патрона.", durationSeconds: 55, cost: { money: 15, supplies: supplies({ ammo: 2 }) }, output: supplies({ scrap: 6 }) },
 	{ id: "medicine-batch", roomType: "medbay", label: "Медицинские наборы", description: "3 медикамента из 2 деталей и 20 ₽.", durationSeconds: 75, cost: { money: 20, supplies: supplies({ scrap: 2 }) }, output: supplies({ medicine: 3 }) },
 	{ id: "intel-batch", roomType: "radio", label: "Сводка разведки", description: "3 разведданных за 25 ₽.", durationSeconds: 65, cost: { money: 25, supplies: supplies() }, output: supplies({ intel: 3 }) },
+	{ id: "ammo-careful", roomType: "ammo", minLevel: 2, label: "Экономное снаряжение", description: "18 патронов из 1 детали и 18 ₽. Экономит детали, но требует больше времени.", durationSeconds: 80, cost: { money: 18, supplies: supplies({ scrap: 1 }) }, output: supplies({ ammo: 18 }) },
+	{ id: "scrap-precise", roomType: "recycler", minLevel: 2, label: "Точная разборка", description: "8 деталей за 25 ₽, 2 патрона и 1 разведданное. Больше деталей, но разведка нужна и рейдам.", durationSeconds: 90, cost: { money: 25, supplies: supplies({ ammo: 2, intel: 1 }) }, output: supplies({ scrap: 8 }) },
+	{ id: "medicine-express", roomType: "medbay", minLevel: 2, label: "Срочная медицина", description: "2 медикамента за 30 ₽, 1 деталь и 2 патрона. Быстрее обычной партии, дороже на единицу.", durationSeconds: 30, cost: { money: 30, supplies: supplies({ scrap: 1, ammo: 2 }) }, output: supplies({ medicine: 2 }) },
+	{ id: "intel-analysis", roomType: "radio", minLevel: 2, label: "Анализ находок", description: "4 разведданных за 15 ₽ и 2 детали. Экономит рубли ценой деталей и времени.", durationSeconds: 90, cost: { money: 15, supplies: supplies({ scrap: 2 }) }, output: supplies({ intel: 4 }) },
+	{ id: "maintenance-kit", roomType: "workshop", label: "Ремкомплект для рейда", description: "1 ремкомплект за 25 ₽ и 3 детали. Снижает износ оружия на всём выходе.", durationSeconds: 65, cost: { money: 25, supplies: supplies({ scrap: 3 }) }, output: supplies(), outputKit: "maintenance" },
+	{ id: "trauma-kit", roomType: "medbay", label: "Травмокомплект для рейда", description: "1 травмокомплект за 20 ₽, 1 медикамент и 2 детали. Смягчает ранения на всём выходе.", durationSeconds: 70, cost: { money: 20, supplies: supplies({ medicine: 1, scrap: 2 }) }, output: supplies(), outputKit: "trauma" },
 ];
 export const RESOURCE_RECIPE_BY_ID = Object.fromEntries(RESOURCE_RECIPES.map((recipe) => [recipe.id, recipe])) as Record<string, typeof RESOURCE_RECIPES[number]>;
 export function initialShelter(base: Record<string, number>): ShelterState {

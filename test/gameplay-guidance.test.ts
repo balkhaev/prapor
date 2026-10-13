@@ -5,7 +5,7 @@ import {
 	advance, assignWorker, claimContract, craftGear, createGame, dispatchRaid,
 	dispatchSquadRaid, equipGear, getContractProgress, getRaidQuote,
 	getRoomProductionState, getSupplyCapacity, queueModuleProduction, saveGame,
-	setRoomRecipe, xpForLevel, type GameState, type RoomInstance,
+	setRoomRecipe, setFieldKit, xpForLevel, type GameState, type RoomInstance,
 } from "../src/game/engine";
 
 const NOW = 1_792_000_000_000;
@@ -32,6 +32,15 @@ function checkpoint(squad = false) {
 }
 
 describe("gameplay loop guidance", () => {
+	test("a missing chosen field kit connects raid readiness to its actual producing room", () => {
+		const state = createGame(NOW);
+		for (const scav of state.scavs) expect(setFieldKit(state, scav.id, "maintenance").ok).toBe(true);
+		const saved = saveGame(state);
+		expect(getGameplayGuidance(state).action).toMatchObject({ kind: "room", roomId: room(state, "workshop").id, tab: "staff", label: "Подготовить ремкомплект" });
+		expect(getGameplayGuidance(state).action.detail).toContain("выбрать выход без комплекта");
+		expect(saveGame(state)).toBe(saved);
+	});
+
 	test("new game immediately prepares an affordable solo sortie rather than staffing every room", () => {
 		const state = createGame(NOW), result = getGameplayGuidance(state);
 		expect(result.campaign).toMatchObject({ index: 1, total: 8, contractId: "first-return", progress: 0, target: 1, completed: false });
