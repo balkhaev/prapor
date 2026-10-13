@@ -71,7 +71,8 @@ function renderShowcase(loadMaterials = true): void {
 	showcaseCount.textContent = `${definitions.length} платформ · ${showcasePreset === "factory" ? "штатные комплекты" : "полевые сборки"}`;
 	showcaseCards.innerHTML = builds.map((weapon,index) => {
 		const definition = definitions[index]!, info = RECEIVER_INFO[weapon.weaponId]!;
-		return `<article class="showcase-card${controls.weapon.value === weapon.weaponId ? " selected" : ""}"><h3>${escape(definition.name)}</h3><p>${escape(modulePlatformLabel(info.platform))} · ${escape(info.caliber)} · ${Object.keys(weapon.modules).length} деталей</p><div class="showcase-art">${weaponShowcasePairArt(weapon.weaponId)[showcasePreset]}</div><button type="button" data-showcase-weapon="${weapon.weaponId}" aria-label="Примерить ${escape(definition.name)}">Примерить сборку</button></article>`;
+		const count = Object.keys(weapon.modules).length, partsLabel = count === 1 ? "деталь" : count >= 2 && count <= 4 ? "детали" : "деталей";
+		return `<article class="showcase-card${controls.weapon.value === weapon.weaponId ? " selected" : ""}"><h3>${escape(definition.name)}</h3><p>${escape(modulePlatformLabel(info.platform))} · ${escape(info.caliber)} · ${count} ${partsLabel}</p><div class="showcase-art">${weaponShowcasePairArt(weapon.weaponId)[showcasePreset]}</div><button type="button" data-showcase-weapon="${weapon.weaponId}" aria-label="Примерить ${escape(definition.name)}">Примерить сборку</button></article>`;
 	}).join("");
 	if (!loadMaterials) return;
 	const generation = ++showcaseGeneration, revision = modularWeaponArtRevision();
