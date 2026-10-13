@@ -25,6 +25,13 @@ export function createWeaponShowcaseBuild(weaponId: string, preset: WeaponShowca
 		return false;
 	};
 	const sniper = definition.category === "sniper", pistol = definition.category === "pistol", smg = definition.category === "smg", shotgun = definition.category === "shotgun";
+	// Their compact factory furniture and integral suppressor define the
+	// classic VAL/VSS profile. Show the direct side-mounted sight as a useful
+	// field example without replacing every recognizable part at once.
+	if (["vss","asval"].includes(weaponId)) {
+		tryPart("optic",["dovetail"]);
+		return weapon;
+	}
 	tryPart("barrel",sniper ? ["long","fluted"] : pistol || smg ? ["fluted","short"] : ["fluted","heavy"]);
 	if (!pistol) {
 		tryPart("handguard",["carbon","rail"]);
