@@ -1,3 +1,4 @@
+import { fundConstructionLoot } from './loot-material-fixture';
 import { describe, expect, test } from "bun:test";
 import { getCommandSummary } from "../src/command-summary";
 import {
@@ -14,7 +15,7 @@ function funded(): GameState {
 	const state = createGame(NOW);
 	state.money = 20_000;
 	state.supplies = { ammo: 40, medicine: 0, scrap: 80, intel: 0 };
-	return state;
+	return fundConstructionLoot(state);
 }
 function room(state: GameState, type: RoomInstance["type"]) {
 	return state.shelter.rooms.find((item) => item.type === type)!;

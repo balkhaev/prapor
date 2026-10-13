@@ -1,4 +1,5 @@
 import {expect,test} from 'bun:test';
+import { fundConstructionLoot } from './loot-material-fixture';
 import {advance,buildRoom,createGame,dispatchRaid,excavateShelter,saveGame} from '../src/game/engine';
 import {readGameSession} from '../src/game-session';
 
@@ -65,7 +66,7 @@ test('a selected expanded site survives pending work and completion but is clear
 		expect(restored.site).toEqual(site);expect(restored.context).toBe('build');
 	}
 	expect(saveGame(state)).toBe(before);
-	expect(buildRoom(state,'ammo',-1,1,state.lastUpdated).ok).toBe(true);
+	fundConstructionLoot(state); expect(buildRoom(state,'ammo',-1,1,state.lastUpdated).ok).toBe(true);
 	before=saveGame(state);
 	const occupied=readGameSession({version:1,view:'base',context:'build',site:sites[0]},state);
 	expect(occupied.site).toBeNull();expect(occupied.context).toBe('overview');expect(saveGame(state)).toBe(before);

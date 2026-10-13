@@ -1,3 +1,4 @@
+import { fundConstructionLoot } from './loot-material-fixture';
 import { describe, expect, test } from "bun:test";
 import {
 	advance, assignWorker, buildRoom, cancelProduction, continueExpedition, craftGear, createGame,
@@ -14,7 +15,7 @@ function funded() {
 	const state = createGame(NOW);
 	state.money = 30_000;
 	state.supplies = { ammo: 500, medicine: 6, scrap: 1_000, intel: 100 };
-	return state;
+	return fundConstructionLoot(state);
 }
 function room(state: GameState, type: "workshop" | "medbay" | "recycler") {
 	return state.shelter.rooms.find((item) => item.type === type)!;

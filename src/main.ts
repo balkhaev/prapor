@@ -7,7 +7,7 @@ import "./raid-strategy.css";
 import "./shelter-logistics.css";
 import "./flea.css";
 import "./territory.css";
-import { territorySummary, territoryPlan, buildingCatalogue, buildingCatalogueReason, buildingPlacementControls, buildingRelocationControls, type BuildingPlacement } from "./territory-ui";
+import { territorySummary, territoryBuildings, territoryPlan, buildingCatalogue, buildingCatalogueReason, buildingPlacementControls, buildingRelocationControls, type BuildingPlacement } from "./territory-ui";
 import {
 	ATTACHMENT_LABELS,
 	CATEGORY_LABELS,
@@ -156,8 +156,10 @@ import { mountAccountUI } from "./account-ui";
 
 import { readAccountEmailLink, isAccountEmailFragment, type AccountEmailLink } from "./account-link";
 import { createLiveMode } from "./live-ui";
-import { fleaPage, fleaPricePreview, readFleaOrder, readFleaInteger, raidLootReceipt, raidLootOverflow, barterConfirmation, barterPurpose, type FleaView, type FleaTab, type TradeKindFilter } from './flea-ui';
+import { fleaPage, fleaPricePreview, readFleaOrder, readFleaInteger, raidLootReceipt, raidLootOverflow, barterConfirmation, type FleaView, type FleaTab, type TradeKindFilter } from './flea-ui';
 import { getBarterQuote } from './game/barter';
+import { getLootUses } from './game/loot-uses';
+import { productionLootReceipt, productionRefundLabel } from './loot-materials-ui';
 import { getTradeInventory, getTradeQuote, LOOT_MODEL_BY_ID } from './game/engine';
 import { MARKET_MAX_ACTIVE } from './game/flea';
 
@@ -1300,7 +1302,7 @@ function hud() {
 			const progress = document.querySelector<HTMLElement>(`[data-job-progress="${job.id}"]`); if (progress) progress.style.width = `${Math.min(100, job.workDone / job.workRequired * 100)}%`;
 			const time = document.querySelector<HTMLElement>(`[data-job-time="${job.id}"]`); if (time) time.textContent = production.remainingSeconds == null ? "ПАУЗА" : seconds(production.remainingSeconds);
 			const reason = document.querySelector<HTMLElement>(`[data-job-status="${job.id}"]`); if (reason) reason.textContent = production.reason ?? production.status;
-			const refund = document.querySelector<HTMLElement>(`[data-job-refund="${job.id}"]`); if (refund) refund.textContent = job.workDone === 0 ? "Не начат · полный возврат при отмене" : "Работа начата · отмена без возврата";
+			const refund = document.querySelector<HTMLElement>(`[data-job-refund="${job.id}"]`); if (refund) refund.textContent = productionRefundLabel(job);
 		}
 	}
 	document.querySelectorAll<HTMLButtonElement>('[data-action="upgrade-room"]').forEach((node) => {
@@ -1328,7 +1330,7 @@ function hud() {
 	document.querySelectorAll<HTMLButtonElement>('[data-action="set-room-recipe"]').forEach((node) => {
 		const quote = getResourceProductionQuote(state, node.dataset.id ?? "", node.dataset.recipeId ?? "");
 		const room = state.shelter.rooms.find(item => item.id === node.dataset.id), recipe = RESOURCE_RECIPES.find(item => item.id === node.dataset.recipeId);
-		node.disabled = !room || room.status !== "ready" || room.level < (recipe?.minLevel ?? 1);
+		node.disabled = !room || room.status !== "ready" || room.level < (recipe?.minLevel ?? 1) || Boolean(recipe?.lootRequirements?.length&&quote.reason);
 		const eta = document.querySelector<HTMLElement>(`[data-recipe-duration="${node.dataset.recipeId}"]`); if (eta) eta.textContent = quote.actualDuration == null ? `Базовая работа ${seconds(quote.duration)}` : `С текущими рабочими ≈ ${seconds(Math.ceil(quote.actualDuration))}`;
 		const note = document.querySelector<HTMLElement>(`[data-resource-recipe-note="${node.dataset.recipeId}"]`); if (note) note.textContent = quote.reason ?? "Бойцы запустят партию; результат поступит на склад";
 	});
@@ -1575,7 +1577,7 @@ function paintBuildingPlacement() {
 	document.body.classList.toggle("placing-building", Boolean(buildingPlacement));
 	if (!buildingPlacement) { world?.setBuildingPlacement(null); return; }
 	const focus = banner.contains(document.activeElement) && document.activeElement instanceof HTMLElement ? document.activeElement.dataset.action : null;
-	banner.innerHTML = buildingPlacementControls(buildingPlacement, placementReason());
+	banner.innerHTML = buildingPlacementControls(buildingPlacement, placementReason(), state);
 	if (buildingPlacementBusy) banner.querySelectorAll<HTMLButtonElement>("button").forEach(button => { button.disabled = true; });
 	const size = getRoomFootprint(buildingPlacement);
 	world?.setBuildingPlacement({ type: buildingPlacement.type, roomId: buildingPlacement.roomId, rotation: buildingPlacement.rotation, ...size, ...(buildingPlacement.site ?? {}) });
@@ -1731,7 +1733,8 @@ function commandOverview(summary = getCommandSummary(state)) {
 	return `${gameplayFocus(getGameplayGuidance(state))}${nextSteps ? `<div class="gameplay-attention"><span class="eyebrow">Оплаченная работа ждёт</span>${nextSteps}</div>` : ""}<div class="command-overview-head"><span class="eyebrow">Дела базы</span><strong>${counts}</strong><small>${summary.freeWorkers} свободных бойцов${summary.counts.building ? ` · ${summary.counts.building} строек` : ""}${state.shelter.expansions.length ? ` · участков в подготовке: ${state.shelter.expansions.length}` : ""}</small></div><div class="command-system-grid">${tools}</div>`;
 }
 function renderShelter() {
-	panel.innerHTML = `${territorySummary(state)}<section class="shelter-sites"><div class="shelter-sites-head"><h2>План базы</h2><span class="eyebrow">ПОСТРОЙКИ И ЗЕМЛЯ</span></div>${territoryPlan(state, selectedRoomId)}<p class="field-hint">Выбери постройку для управления и переноса. Участки за периметром можно присоединять к базе.</p></section><div class="section-head"><h2>Построить на базе</h2><span class="muted">Место выбираешь на территории</span></div>${buildingCatalogue(state)}${productionReserveEditor(state, "base", productionReserveDraft)}${fieldKitStockPanel(state)}${discoveriesSection()}`;
+	const planOpen = Boolean(buildingPlacement) || Boolean(panel.querySelector<HTMLDetailsElement>(".territory-layout-tools")?.open);
+	panel.innerHTML = `${territorySummary(state)}<div class="section-head"><h2>Постройки во дворе</h2><span class="muted">Выбери здание для управления</span></div>${territoryBuildings(state, selectedRoomId)}<details class="territory-layout-tools" ${planOpen ? "open" : ""}><summary><span>Планировка и расширение<small>Места для строительства и новая земля</small></span><b>+</b></summary>${territoryPlan(state, selectedRoomId)}<p class="field-hint">Выбери свободное место или присоедини землю за оградой. При размещении сетка помогает проверить площадь постройки.</p></details><div class="section-head"><h2>Построить на базе</h2><span class="muted">Место выбираешь на территории</span></div>${buildingCatalogue(state)}${productionReserveEditor(state, "base", productionReserveDraft)}${fieldKitStockPanel(state)}${discoveriesSection()}`;
 }
 function buildSitePanel(column: number, row: number) {
 	const open = getShelterSites(state.shelter).some(site => site.column === column && site.row === row);
@@ -1809,12 +1812,12 @@ function roomQueuePanel(room: RoomInstance) {
 		const label = model?.label ?? recipe?.label ?? "Производственная партия";
 		const fraction = job.workRequired ? Math.min(1, job.workDone / job.workRequired) : 0;
 		const current = index === 0;
-		return `<article class="room-job ${current ? "running" : ""}"><div class="room-job-head"><strong>${e(label)}</strong><span ${current ? `data-job-time="${job.id}"` : ""}>${current ? production.remainingSeconds == null ? "ПАУЗА" : seconds(production.remainingSeconds) : `ЗАКАЗ 0${index + 1}`}</span></div>${model ? `<div class="room-job-art">${moduleArt(model)}</div>` : job.output.fieldKit ? `<div class="recipe-output"><span>${e(FIELD_KITS[job.output.fieldKit].label)} +1</span></div>` : productionOutput(job.output.supplies)}<div class="progress"><i data-job-progress="${job.id}" style="width:${Math.round(fraction * 100)}%"></i></div><p ${current ? `data-job-status="${job.id}"` : ""}>${current ? e(production.reason ?? production.status) : "Ожидает завершения предыдущей партии"}</p><div class="room-job-foot"><span data-job-refund="${job.id}">${job.workDone === 0 ? "Не начат · полный возврат при отмене" : "Работа начата · отмена без возврата"}</span><button class="button ghost small" data-action="cancel-production" data-id="${room.id}" data-job-id="${job.id}" data-focus-key="cancel-${job.id}">Отменить</button></div></article>`;
+		return `<article class="room-job ${current ? "running" : ""}"><div class="room-job-head"><strong>${e(label)}</strong><span ${current ? `data-job-time="${job.id}"` : ""}>${current ? production.remainingSeconds == null ? "ПАУЗА" : seconds(production.remainingSeconds) : `ЗАКАЗ 0${index + 1}`}</span></div>${model ? `<div class="room-job-art">${moduleArt(model)}</div>` : job.output.fieldKit ? `<div class="recipe-output"><span>${e(FIELD_KITS[job.output.fieldKit].label)} +1</span></div>` : productionOutput(job.output.supplies)}<div class="progress"><i data-job-progress="${job.id}" style="width:${Math.round(fraction * 100)}%"></i></div><p ${current ? `data-job-status="${job.id}"` : ""}>${current ? e(production.reason ?? production.status) : "Ожидает завершения предыдущей партии"}</p>${productionLootReceipt(job)}<div class="room-job-foot"><span data-job-refund="${job.id}">${e(productionRefundLabel(job))}</span><button class="button ghost small" data-action="cancel-production" data-id="${room.id}" data-job-id="${job.id}" data-focus-key="cancel-${job.id}">Отменить</button></div></article>`;
 	}).join("");
 }
 function roomResourcesPanel(room: RoomInstance) {
 	const recipes = RESOURCE_RECIPES.filter((recipe) => recipe.roomType === room.type);
-	return `<label class="loadout-check"><input type="checkbox" data-room-repeat="${room.id}" aria-label="Повторять выбранный рецепт: ${e(ROOM_DEFINITIONS[room.type].label)}" data-focus-key="room-repeat-${room.id}" ${room.recipeId ? room.repeat ? "checked" : "" : roomRepeatPreferences.get(room.id) === true ? "checked" : ""} ${room.status !== "ready" ? "disabled" : ""}><span>Повторять выбранный рецепт<small>Новая партия оплачивается только при запуске. При нехватке ресурсов, резерве или достижении цели работа ждёт.</small></span></label>${roomStockTargetEditor(state, room, roomStockTargetDrafts.get(room.id))}${room.recipeId ? `<button class="button ghost small" data-action="stop-room-recipe" data-id="${room.id}">Остановить будущие партии</button><small class="quote-note">Оплаченные заказы продолжатся. Их можно отменить в очереди отдельно.</small>` : ""}<div class="resource-recipe-list">${recipes.map(recipe => shelterRecipeCard(state, room, recipe)).join("")}</div>`;
+	return `<label class="loadout-check"><input type="checkbox" data-room-repeat="${room.id}" aria-label="Повторять выбранный рецепт: ${e(ROOM_DEFINITIONS[room.type].label)}" data-focus-key="room-repeat-${room.id}" ${room.recipeId ? room.repeat ? "checked" : "" : roomRepeatPreferences.get(room.id) === true ? "checked" : ""} ${room.status !== "ready" ? "disabled" : ""}><span>Повторять выбранный рецепт<small>Новая партия оплачивается только при запуске. При нехватке ресурсов, целых трофеев, резерве или достижении цели работа ждёт. Каждое повторение расходует новый набор предметов.</small></span></label>${roomStockTargetEditor(state, room, roomStockTargetDrafts.get(room.id))}${room.recipeId ? `<button class="button ghost small" data-action="stop-room-recipe" data-id="${room.id}">Остановить будущие партии</button><small class="quote-note">Оплаченные заказы продолжатся. Их можно отменить в очереди отдельно.</small>` : ""}<div class="resource-recipe-list">${recipes.map(recipe => shelterRecipeCard(state, room, recipe)).join("")}</div>`;
 }
 function roomModulesPanel(room: RoomInstance) {
 	const weapon = state.weapons.find((gun) => gun.id === selectedWeapon) ?? state.weapons[0];
@@ -2345,6 +2348,26 @@ document.addEventListener("click", async (event) => {
 	}
 	const id = target.dataset.id ?? "";
 	switch (target.dataset.action) {
+		case 'flea-use-construction':{
+			const type=target.dataset.roomType;
+			if(!type||!Object.hasOwn(ROOM_DEFINITIONS,type))break;
+			page='base';render();
+			const control=panel.querySelector<HTMLButtonElement>(`[data-action="place-building"][data-room-type="${CSS.escape(type)}"]`);
+			control?.closest('.territory-blueprint')?.scrollIntoView({block:'nearest',behavior:scrollBehavior()});
+			if(control&&!control.disabled)control.focus({preventScroll:true});
+			break;
+		}
+		case 'flea-use-production':{
+			const recipe=RESOURCE_RECIPES.find(recipe=>recipe.id===id);
+			if(!recipe)break;
+			const room=state.shelter.rooms.find(room=>room.type===recipe.roomType&&room.status==='ready')??state.shelter.rooms.find(room=>room.type===recipe.roomType);
+			if(!room){page='base';render();toast(`Сначала построй ${ROOM_DEFINITIONS[recipe.roomType].label}.`);break;}
+			openShelterRoom(room.id,'production');
+			const control=document.querySelector<HTMLButtonElement>(`[data-action="set-room-recipe"][data-recipe-id="${CSS.escape(id)}"]`);
+			control?.closest('.resource-recipe')?.scrollIntoView({block:'nearest',behavior:scrollBehavior()});
+			if(control&&!control.disabled)control.focus({preventScroll:true});
+			break;
+		}
 		case 'flea-barter-model':{
 			const modelId=target.dataset.model;
 			if(!modelId||!Object.hasOwn(LOOT_MODEL_BY_ID,modelId))break;
@@ -2400,9 +2423,9 @@ document.addEventListener("click", async (event) => {
 		case 'flea-recycle-loot':{
 			const item=state.lootItems?.find(item=>item.id===id),model=item?LOOT_MODEL_BY_ID[item.modelId]:null,row=getTradeInventory(state).find(item=>item.ref.kind==='loot'&&item.ref.id===id);
 			if(!model||!row)break;
-			const purpose=barterPurpose(model.id);
+			const purpose=getLootUses(model.id).map(use=>`${use.kind==="construction"?"Стройка":use.kind==="production"?"Производство":"Бартер"}: ${use.label} ×${use.quantity}`).join(" · ");
 			const sale=target.dataset.action==='flea-sell-loot',salvage=Object.entries(model.salvage).filter(([,value])=>value>0).map(([key,value])=>`${n(value)} ${({ammo:'патронов',medicine:'медикаментов',scrap:'деталей',intel:'разведданных'} as Record<string,string>)[key]}`).join(' · ');
-			document.querySelector('#modal-root')!.innerHTML=`<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="loot-disposal-title"><h2 id="loot-disposal-title">${sale?'Продать торговцу':'Разобрать'} ${e(row.label)}?</h2><p>${sale?`Торговец сразу выплатит ${n(row.traderPrice??0)} ₽. На барахолке ориентир ${n(row.guidePrice)} ₽; покупатель может предложить другую ценность.`:`Предмет будет израсходован. Убежище получит: ${e(salvage)}. Для ресурсов должно хватать места на складе.`}</p>${purpose?`<p>Этот предмет нужен для бартера: <b>${e(purpose)}</b>. После ${sale?"продажи":"разбора"} он исчезнет из набора.</p>`:""}<div class="detail-actions"><button class="button danger" data-action="flea-confirm-disposal" data-id="${e(id)}" data-kind="${sale?'sale':'recycle'}">${sale?'Продать':'Разобрать'}</button><button class="button ghost" data-action="close-modal">Оставить</button></div></section></div>`;focusModal();break;
+			document.querySelector('#modal-root')!.innerHTML=`<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="loot-disposal-title"><h2 id="loot-disposal-title">${sale?'Продать торговцу':'Разобрать'} ${e(row.label)}?</h2><p>${sale?`Торговец сразу выплатит ${n(row.traderPrice??0)} ₽. На барахолке ориентир ${n(row.guidePrice)} ₽; покупатель может предложить другую ценность.`:`Предмет будет израсходован. Убежище получит: ${e(salvage)}. Для ресурсов должно хватать места на складе.`}</p>${purpose?`<p>Этот предмет нужен для: <b>${e(purpose)}</b>. После ${sale?"продажи":"разбора"} он исчезнет из набора.</p>`:""}<div class="detail-actions"><button class="button danger" data-action="flea-confirm-disposal" data-id="${e(id)}" data-kind="${sale?'sale':'recycle'}">${sale?'Продать':'Разобрать'}</button><button class="button ghost" data-action="close-modal">Оставить</button></div></section></div>`;focusModal();break;
 		}
 		case 'flea-confirm-disposal':{
 			closeModal();act(await gameAction(target.dataset.kind==='sale'?{type:'sellLootItem',args:[id]}:{type:'recycleLootItem',args:[id]}));break;
@@ -2484,7 +2507,7 @@ document.addEventListener("click", async (event) => {
 			break;
 		}
 		case "set-room-recipe": {
-			const repeat = document.querySelector<HTMLInputElement>(`[data-room-repeat="${CSS.escape(id)}"]`)?.checked ?? true;
+			const repeat = target.hasAttribute("data-loot-order") ? false : document.querySelector<HTMLInputElement>(`[data-room-repeat="${CSS.escape(id)}"]`)?.checked ?? false;
 			roomRepeatPreferences.set(id, repeat);
 			const oldRecipe = state.shelter.rooms.find(room => room.id === id)?.recipeId;
 			const result = await gameAction({ type: "setRoomRecipe", args: [id, target.dataset.recipeId ?? null, repeat] });
@@ -2505,7 +2528,7 @@ document.addEventListener("click", async (event) => {
 
 			const room = state.shelter.rooms.find((item) => item.id === id), job = room?.queue.find((item) => item.id === target.dataset.jobId);
 			if (!job) { render();toast("Заказ уже завершён."); break; }
-			document.querySelector("#modal-root")!.innerHTML = `<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="cancel-production-title"><h2 id="cancel-production-title">Отменить производственный заказ?</h2><p>${job.workDone > 0 ? "Работа уже началась: оплаченные материалы и рубли не вернутся." : "Заказ пока не начат. Полная стоимость вернётся, если к моменту отмены он ещё не начнёт работу."} Повторение рецепта выключится; остальные оплаченные заказы останутся.</p><div class="detail-actions"><button class="button danger" data-action="confirm-cancel-production" data-id="${id}" data-job-id="${job.id}">Отменить заказ</button><button class="button ghost" data-action="close-modal">Продолжить работу</button></div></section></div>`;
+			document.querySelector("#modal-root")!.innerHTML = `<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="cancel-production-title"><h2 id="cancel-production-title">Отменить производственный заказ?</h2><p>${job.workDone > 0 ? "Работа уже началась: оплаченные материалы и рубли не вернутся." : job.paidLoot?.length ? "Заказ пока не начат. Рубли и обычные припасы вернутся, если к моменту отмены он ещё не начнёт работу. Целые трофеи уже израсходованы и не возвращаются." : "Заказ пока не начат. Полная стоимость вернётся, если к моменту отмены он ещё не начнёт работу."} Повторение рецепта выключится; остальные оплаченные заказы останутся.</p><div class="detail-actions"><button class="button danger" data-action="confirm-cancel-production" data-id="${id}" data-job-id="${job.id}">Отменить заказ</button><button class="button ghost" data-action="close-modal">Продолжить работу</button></div></section></div>`;
 			focusModal();
 			break;
 		}

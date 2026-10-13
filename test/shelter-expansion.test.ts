@@ -1,3 +1,4 @@
+import { fundConstructionLoot } from './loot-material-fixture';
 import { describe, expect, test } from "bun:test";
 import {
 	advance, buildRoom, createGame, excavateShelter, getBuildRoomQuote, getExcavationQuote,
@@ -10,7 +11,7 @@ function funded(): GameState {
 	const state = createGame(NOW);
 	state.money = 10_000;
 	state.supplies = { ammo: 60, medicine: 0, scrap: 50, intel: 10 };
-	return state;
+	return fundConstructionLoot(state);
 }
 function restored(state: GameState): GameState {
 	const copy = parseSave(saveGame(state));
@@ -125,6 +126,7 @@ describe("expansion save integrity", () => {
 		const original = funded();
 		const value = JSON.parse(saveGame(original));
 		value.schemaVersion = 5;
+		delete value.lootItems;
 		delete value.recruitment;
 		delete value.memorials; delete value.social; delete value.achievements;
 		for (const scav of value.scavs) { delete scav.profile; delete scav.story; }
@@ -134,6 +136,7 @@ describe("expansion save integrity", () => {
 		const withoutPersonalHistory = (game: GameState) => {
 			const copy = JSON.parse(saveGame(game));
 			delete copy.memorials; delete copy.social; delete copy.achievements;
+			delete copy.lootItems;
 			for (const scav of copy.scavs) delete scav.story;
 			return copy;
 		};

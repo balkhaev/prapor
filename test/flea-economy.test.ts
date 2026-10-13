@@ -4,7 +4,7 @@ import { MODULE_MODELS } from "../src/game/modules";
 import { GEAR_MODELS } from "../src/game/systems";
 import { getTradeAssetRow, getTradeQuote, type TradeAsset } from "../src/game/trade";
 import { getMarketFees } from "../src/game/flea";
-import { LOOT_MODELS, getLootTraderPrice } from "../src/game/loot";
+import { USEFUL_LOOT_MODELS, getLootTraderPrice } from "../src/game/loot";
 
 describe("item value and whole-parcel prices", () => {
 	test("every physical module and gear model has a positive price which falls with actual wear", () => {
@@ -38,7 +38,7 @@ describe("item value and whole-parcel prices", () => {
 		expect(quote.guidePrice).toBe(65);
 		expect(quote.asset).toEqual({ kind: "supply", id: "ammo", quantity: 10 });
 		expect(getTradeAssetRow(quote.asset!).guidePrice).toBe(65);
-		for (const model of LOOT_MODELS) {
+		for (const model of USEFUL_LOOT_MODELS) {
 			const item = { id: "loot-1", modelId: model.id, foundAt: 0 }, fees = getMarketFees(model.guidePrice);
 			expect(fees.proceeds - fees.listingFee).toBeGreaterThan(getLootTraderPrice(item));
 		}

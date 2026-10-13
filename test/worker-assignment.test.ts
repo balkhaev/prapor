@@ -1,3 +1,4 @@
+import { fundConstructionLoot } from './loot-material-fixture';
 import { describe, expect, test } from "bun:test";
 import {
 	advance,
@@ -22,7 +23,7 @@ function funded(): GameState {
 	const state = createGame(NOW);
 	state.money = 10_000;
 	state.supplies = { ammo: 100, medicine: 0, scrap: 100, intel: 10 };
-	return state;
+	return fundConstructionLoot(state);
 }
 
 function room(state: GameState, type: "workshop" | "medbay" | "radio" | "storage") {

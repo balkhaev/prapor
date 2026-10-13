@@ -1,3 +1,4 @@
+import { fundConstructionLoot } from './loot-material-fixture';
 import { describe, expect, test } from "bun:test";
 import { advance, assignWorker, buildRoom, createGame, dispatchRaid, excavateShelter, saveGame, setRoomRecipe } from "../src/game/engine";
 import { getRaidFieldPlan } from "../src/raid-field";
@@ -34,7 +35,7 @@ describe("feedback observes actual game transitions", () => {
 		const opened = observeGameFeedback(cursor, state, null, NOW + 20_000);
 		expect(opened.events.map((event) => event.cue)).toEqual(["build"]);
 		cursor = opened.cursor;
-		expect(buildRoom(state, "ammo", -1, 0, NOW + 20_000).ok).toBe(true);
+		fundConstructionLoot(state); expect(buildRoom(state, "ammo", -1, 0, NOW + 20_000).ok).toBe(true);
 		cursor = observeGameFeedback(cursor, state, null, NOW + 20_000).cursor;
 		advance(state, NOW + 80_000);
 		const built = observeGameFeedback(cursor, state, null, NOW + 80_000);

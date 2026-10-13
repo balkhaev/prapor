@@ -8,15 +8,37 @@ type Point = { x: number; y: number };
 type Vertex = readonly [number, number, number?];
 type Material = readonly [number, number, number];
 const C = {
-	ink: 0x142720, seam: 0x243c30, concrete: 0x52624a, floor: 0x40573e,
-	steel: 0x879c82, pale: 0xc7cfad, amber: 0xdfb674, cyan: 0x85bdac,
-	green: 0xafca7b, wood: 0x9b8055, dark: 0x2e4536,
+	ink: 0x26302b, seam: 0x4b5145, concrete: 0x929482, floor: 0x8c795a,
+	steel: 0xa2aba0, pale: 0xe2d9bc, amber: 0xf2c27d, cyan: 0x9cc8be,
+	green: 0xafca7b, wood: 0xac8655, dark: 0x465247,
 };
-const STEEL: Material = [0x82927a, 0x516550, 0x364b39];
+const STEEL: Material = [0xa2a99a, 0x7a887d, 0x576b61];
 const OLIVE: Material = [0x6a7d58, 0x475e41, 0x314936];
-const WOOD: Material = [0x9b8055, 0x715a39, 0x58472e];
-const PALE: Material = [0xc0c6a8, 0x8d9d83, 0x5e7560];
+const WOOD: Material = [0xb49768, 0x8e704b, 0x6e553b];
+const PALE: Material = [0xdfddc6, 0xb7bca7, 0x8f9e8d];
 const BLACK: Material = [0x344d3a, 0x233c2c, 0x193224];
+const STONE: Material = [0x9a9987, 0x747566, 0x5b6256];
+
+function mixColor(color: number, target: number, amount: number): number {
+	const channel = (shift: number) => Math.round(((color >> shift) & 255) * (1 - amount) + ((target >> shift) & 255) * amount);
+	return (channel(16) << 16) | (channel(8) << 8) | channel(0);
+}
+
+interface BuildingFinish { wall: Material; roof: Material; accent: number; timber: boolean }
+function buildingFinish(type: RoomInstance["type"]): BuildingFinish {
+	const accent = Number.parseInt(ROOM_DEFINITIONS[type].color.slice(1), 16);
+	const facade = {
+		workshop: 0xbb9866, ammo: 0x9b9d77, recycler: 0xac8266, medbay: 0xd1d4ba,
+		radio: 0x9fbbc0, storage: 0xaaad96, dormitory: 0xc9ae8e, hangar: 0x9aaeb3,
+	}[type];
+	const roofColor = type === "dormitory" ? 0x856e58 : type === "medbay" ? 0x82978e : type === "workshop" ? 0x7d8273 : 0x718a87;
+	return {
+		wall: [mixColor(facade, 0xf3e6c9, .25), facade, mixColor(facade, 0x34483e, .35)],
+		roof: [mixColor(roofColor, 0xb5c3b5, .22), roofColor, mixColor(roofColor, 0x354c44, .25)],
+		accent,
+		timber: type === "workshop" || type === "dormitory" || type === "storage",
+	};
+}
 
 /** Equipment remains upright: the affine projection applies only to the floor. */
 class RoomPainter {
@@ -79,46 +101,144 @@ class RoomPainter {
 	}
 }
 
-function foundation(a: RoomPainter, occupied: boolean): void {
-	a.box(0, 0, a.width, a.height, 5, [C.floor, 0x293d2d, 0x203528], -5);
-	for (let x = 4; x < a.width - 4; x += 24) for (let y = 4; y < a.height - 3; y += 23) {
-		const w = Math.min(23.4, a.width - 4 - x), d = Math.min(22.4, a.height - 3 - y);
-		a.plane(x, y, w, d, .15, (Math.floor(x / 24) + Math.floor(y / 23)) % 2 ? 0x40583e : 0x465d43, occupied ? 1 : .58);
+function foundation(a: RoomPainter, finish: BuildingFinish): void {
+	// A single raised floor belongs to the building. It never draws a tile on the yard.
+	a.shadow(2, 1, a.width - 5, a.height - 3);
+	a.box(1, 1, a.width - 2, a.height - 2, 5, STONE, -5);
+	a.plane(5, 5, a.width - 10, a.height - 10, .1, finish.timber ? 0xa18a65 : 0x939784);
+	if (finish.timber) {
+		for (let y = 12; y < a.height - 8; y += 11) {
+			a.line([5, y, .3], [a.width - 5, y, .3], 0x5c513b, .55, .48);
+			for (let x = y % 22 + 24; x < a.width - 7; x += 57) a.line([x, y, .35], [x, y + 10, .35], 0x66533c, .4, .35);
+		}
+	} else {
+		// Scuffed concrete has fine irregular marks rather than another square grid.
+		for (let i = 0; i < Math.floor(a.width / 12); i++) {
+			const x = 15 + i * 29 % Math.max(1, a.width - 30), y = 19 + i * 17 % Math.max(1, a.height - 34);
+			a.line([x, y, .3], [x + 7, y + 1.5, .3], 0xc5c3a6, .6, .35);
+		}
 	}
-	a.line([0, a.height, .3], [a.width, a.height, .3], 0x8d9b71, 1.2, .6);
-	a.line([a.width, 0, .3], [a.width, a.height, .3], 0x71825e, 1.2, .6);
-	for (const [x, y] of [[7, a.height - 8], [a.width - 8, a.height - 8], [a.width - 8, 7]]) {
-		a.dot(x!, y!, .5, 1.5, C.ink);
-		a.line([x! - 1, y!, .5], [x! + 1, y!, .5], C.steel, .6, .7);
+	a.line([1, a.height - 1, .3], [a.width - 1, a.height - 1, .3], 0xc4b997, 1.1, .85);
+	a.line([a.width - 1, 1, .3], [a.width - 1, a.height - 1, .3], 0x566455, .8, .7);
+	for (let x = 13; x < a.width - 5; x += 23) a.line([x, a.height - 1, -4], [x, a.height - 1, -.5], 0x4b5548, .6, .55);
+}
+
+function cabinWindow(a: RoomPainter, x: number, y: number, side: "rear" | "left", width = 24): void {
+	const pane = side === "rear"
+		? (offset: number, z: number): Vertex => [x + offset, y, z]
+		: (offset: number, z: number): Vertex => [x, y + offset, z];
+	a.face([pane(0, 10), pane(width, 10), pane(width, 28), pane(0, 28)], 0x5e5c49);
+	a.face([pane(2, 12), pane(width - 2, 12), pane(width - 2, 26), pane(2, 26)], 0xe4b977, .98, 0x6d7e69);
+	a.face([pane(3, 19), pane(width - 3, 19), pane(width - 3, 25), pane(3, 25)], 0xffdf9c, .7, 0xbbae86);
+	a.line(pane(width / 2, 11), pane(width / 2, 27), 0xe4d6b4, 1.1);
+	a.line(pane(1, 18), pane(width - 1, 18), 0xe4d6b4, 1);
+	a.line(pane(-2, 10), pane(width + 2, 10), 0xe4d6b4, 2);
+	a.line(pane(-1, 29), pane(width + 1, 29), 0xe4d6b4, 1.3);
+}
+
+function roof(a: RoomPainter, finish: BuildingFinish): void {
+	const depth = Math.min(20, a.height * .15), ridge = 4;
+	// Only the rear strip is roofed; the cutaway keeps the benches and workers visible.
+	a.face([[-4, -5, 33], [a.width + 4, -5, 33], [a.width + 4, ridge, 41], [-4, ridge, 41]], finish.roof[2]);
+	a.face([[-4, ridge, 41], [a.width + 4, ridge, 41], [a.width + 4, depth, 32], [-4, depth, 32]], finish.roof[0]);
+	for (let x = 1; x < a.width + 3; x += 8) {
+		a.line([x, -5, 33], [x, ridge, 41], finish.roof[0], .65, .65);
+		a.line([x, ridge, 41], [x, depth, 32], finish.roof[2], .75, .7);
+	}
+	a.line([-4, ridge, 41], [a.width + 4, ridge, 41], 0xc9cbb3, 1.4, .85);
+	a.line([-4, depth, 32], [a.width + 4, depth, 32], 0xd2ceb2, 1.6);
+	// Exposed end grain, gutters and a downpipe make the strip read as a real roof.
+	a.face([[-4, -5, 32], [-4, ridge, 40], [-4, depth, 31]], finish.wall[2]);
+	a.line([a.width + 2, depth, 31], [a.width + 2, depth, 3], 0x6c7d6d, 1.5);
+	a.line([a.width + 2, depth, 3], [a.width - 2, depth + 5, 1], 0x6c7d6d, 1.3);
+	if (a.width < 200) {
+		a.box(a.width - 26, -1, 10, 9, 12, STONE, 35);
+		a.box(a.width - 28, -3, 14, 13, 2, STEEL, 47);
+		a.plane(a.width - 24, 1, 6, 5, 49.1, C.ink);
 	}
 }
 
-function walls(a: RoomPainter, accent: number): void {
-	// Rear walls are deliberately cut low so every neighbouring room stays readable.
-	a.box(0, 0, a.width, 5, 27, [0x8d9a7d, 0x617557, 0x3c533b]);
-	a.box(0, 5, 5, a.height - 5, 27, [0x8d9a7d, 0x576c4f, 0x42583e]);
-	for (const height of [6, 14]) {
-		a.line([5, 5.2, height], [a.width - 1, 5.2, height], 0x344c36, .65, .65);
-		a.line([5.2, 5, height], [5.2, a.height - 1, height], 0x344c36, .65, .65);
+function walls(a: RoomPainter, finish: BuildingFinish): void {
+	a.box(0, 0, a.width, 5, 32, finish.wall);
+	a.box(0, 5, 5, a.height - 5, 29, finish.wall);
+	if (finish.timber) {
+		for (const height of [5, 11, 17, 23]) {
+			a.line([5, 5.2, height], [a.width - 2, 5.2, height], 0x735c40, .6, .45);
+			a.line([5.2, 5, height], [5.2, a.height - 3, height], 0x735c40, .6, .45);
+		}
+	} else {
+		for (let x = 14; x < a.width - 7; x += 10) a.line([x, 5.2, 2], [x, 5.2, 30], finish.wall[2], .5, .38);
+		for (let y = 14; y < a.height - 7; y += 10) a.line([5.2, y, 2], [5.2, y, 27], finish.wall[2], .5, .38);
 	}
-	for (let x = 23; x < a.width; x += 29) a.line([x, 5.2, 6], [x, 5.2, 14], 0x344c36, .6, .45);
-	for (let y = 20; y < a.height; y += 27) a.line([5.2, y, 6], [5.2, y, 14], 0x344c36, .6, .45);
-	a.line([9, 6, 23], [a.width - 8, 6, 23], accent, 1.4, .5);
-	a.line([6, 9, 23], [6, a.height - 9, 23], accent, 1.3, .35);
-	// Exterior corner posts and a low front sill distinguish separate buildings.
-	for (const x of [0, a.width - 6]) a.box(x, a.height - 6, 6, 6, 14, OLIVE);
-	a.box(6, a.height - 3, Math.max(1, a.width / 2 - 24), 3, 3, OLIVE);
-	a.box(a.width / 2 + 18, a.height - 3, Math.max(1, a.width / 2 - 24), 3, 3, OLIVE);
-	for (const x of [29, 119]) {
-		a.line([x, 5, 20], [x + 20, 5, 20], C.ink, 3);
-		a.line([x + 2, 5, 20], [x + 18, 5, 20], C.pale, 1.7, .95);
-	}
+	a.box(0, 0, 7, 7, 34, WOOD);
+	a.box(a.width - 7, 0, 7, 7, 34, WOOD);
+	a.box(0, a.height - 7, 7, 7, 30, WOOD);
+	a.line([7, 5.4, 3], [a.width - 7, 5.4, 3], 0xe0cfab, 1.2, .85);
+	a.line([5.4, 7, 3], [5.4, a.height - 7, 3], 0xe0cfab, 1.2, .85);
+	a.line([5.3, 7, 29], [5.3, a.height - 7, 29], 0xe0cfab, 1.4);
+	cabinWindow(a, 25, 5.5, "rear", 28);
+	cabinWindow(a, Math.max(85, a.width - 60), 5.5, "rear", 27);
+	cabinWindow(a, 5.6, a.height * .48, "left", 24);
 	a.box(8, 8, 8, 8, 12, BLACK);
-	a.line([10, 16, 8], [14, 16, 8], accent, 1.2, .75);
+	a.line([10, 16, 8], [14, 16, 8], finish.accent, 1.2, .8);
+	roof(a, finish);
+}
+
+function roomEmblem(a: RoomPainter, type: RoomInstance["type"], x: number, y: number, z: number): void {
+	const line = (x1: number, z1: number, x2: number, z2: number, width = 1.6) => a.line([x + x1, y, z + z1], [x + x2, y, z + z2], C.pale, width);
+	switch (type) {
+		case "medbay": line(0, -5, 0, 5, 2.5); line(-7, 0, 7, 0, 2.5); break;
+		case "radio":
+			line(0, -5, 0, 5); line(-6, 2, 6, 2); line(-9, 5, 9, 5); a.dot(x, y, z + 6, 1.6, C.amber); break;
+		case "storage": case "hangar":
+			line(-7, -4, 7, -4); line(-7, 4, 7, 4); line(-7, -4, -7, 4); line(7, -4, 7, 4); line(0, -4, 0, 4, .8); break;
+		case "dormitory":
+			line(-7, -3, 7, -3); line(-7, -5, -7, 4); line(7, -5, 7, 1); line(-7, 1, 5, 1, 2.3); break;
+		case "ammo": for (const offset of [-5, 1, 7]) { line(offset, -4, offset, 4, 2.2); a.dot(x + offset, y, z + 5, 1, C.amber); } break;
+		case "recycler": line(-6, -2, 0, 5); line(0, 5, 7, -2); line(7, -2, -6, -2); break;
+		case "workshop": line(-6, -5, 5, 5, 2.5); line(5, 5, 9, 4); line(5, 5, 4, 8); break;
+	}
+}
+
+function frontDetails(a: RoomPainter, finish: BuildingFinish, type: RoomInstance["type"]): void {
+	const entrance = a.width * .52;
+	// Front walls are opened to the viewer, with a porch and trimmed cut ends.
+	a.box(6, a.height - 5, Math.max(1, entrance - 28), 5, 5, finish.wall);
+	a.box(entrance + 18, a.height - 5, Math.max(1, a.width - entrance - 25), 5, 5, finish.wall);
+	for (const x of [entrance - 25, entrance + 19]) a.box(x, a.height - 6, 5, 6, 12, WOOD);
+	a.box(a.width - 7, a.height - 7, 7, 7, 17, WOOD);
+	a.box(entrance - 21, a.height - 1, 42, 6, 3.2, STONE, -3.2);
+	a.box(entrance - 18, a.height + 5, 36, 5, 2, STONE, -4.6);
+	a.line([entrance - 20, a.height + 5, .1], [entrance + 20, a.height + 5, .1], C.pale, .85, .7);
+	// A mounted enamel emblem is legible even when room labels are hidden.
+	const signX = 35, signY = a.height - 5;
+	a.box(signX - 14, signY - 1, 28, 3, 17, WOOD, 7);
+	a.face([[signX - 12, signY + 2.2, 9], [signX + 12, signY + 2.2, 9], [signX + 12, signY + 2.2, 22], [signX - 12, signY + 2.2, 22]], mixColor(finish.accent, C.ink, .45));
+	roomEmblem(a, type, signX, signY + 2.5, 15.5);
+	for (const x of [signX - 10, signX + 10]) a.dot(x, signY + 2.6, 20.5, .55, C.pale);
+	// A porch light, planter and rain barrel soften the utilitarian structures.
+	a.box(entrance + 23, a.height - 4, 4, 4, 3, BLACK, 10);
+	a.dot(entrance + 25, a.height, 12, 2.1, C.amber, .85);
+	a.dot(entrance + 25, a.height, 12, 4.6, C.amber, .1);
+	a.box(a.width - 22, a.height - 7, 12, 7, 6, [0xb39362, 0x8e6947, 0x715440]);
+	for (let i = 0; i < 5; i++) {
+		const x = a.width - 20 + i * 2;
+		a.line([x, a.height - 4, 5], [x - 1, a.height - 4, 11 + i % 3], 0x6d8951, .9);
+		a.dot(x - 1, a.height - 4, 11 + i % 3, 1.7, i % 2 ? 0xacc17a : 0x7e9b59);
+	}
+	if (type === "workshop" || type === "recycler" || type === "hangar") {
+		a.box(a.width - 15, 20, 10, 11, 13, finish.roof);
+		a.line([a.width - 15, 31, 3], [a.width - 5, 31, 3], C.pale, .8, .5);
+		a.line([a.width - 15, 31, 10], [a.width - 5, 31, 10], C.pale, .8, .5);
+	}
 }
 
 function hangar(a: RoomPainter): void {
 	const cx = a.width / 2, cy = a.height * .52;
+	for (let x = 68; x < a.width - 40; x += 80) {
+		a.box(x, 6, 5, 5, 29, STEEL);
+		a.line([x, 11, 23], [x + 27, 11, 32], C.pale, .9, .65);
+	}
 	for (let x = 28; x < a.width - 40; x += 48) {
 		a.box(x, 18, 38, 20, 12, STEEL);
 		a.crate(x + 4, 22, 25, 15, 12, 12);
@@ -129,28 +249,32 @@ function hangar(a: RoomPainter): void {
 	a.box(cx - 58, cy - 22, 111, 43, 14, OLIVE, 6);
 	a.box(cx - 49, cy - 18, 31, 35, 14, STEEL, 20);
 	a.plane(cx - 45, cy - 14, 23, 25, 34.2, 0x91b0a6);
+	a.face([[cx - 47, cy + 17.2, 24], [cx - 22, cy + 17.2, 24], [cx - 22, cy + 17.2, 32], [cx - 47, cy + 17.2, 32]], 0xa8c8c1);
+	a.line([cx - 33, cy + 17.5, 24], [cx - 33, cy + 17.5, 32], C.pale, .8);
+	a.line([cx - 43, cy + 17.5, 23], [cx - 37, cy + 17.5, 23], C.ink, .8);
 	a.box(cx - 10, cy - 17, 55, 32, 4, WOOD, 20);
+	for (const y of [cy - 18, cy + 12]) a.line([cx - 8, y, 27], [cx + 44, y, 27], C.wood, 1.4);
+	for (let x = cx - 6; x < cx + 45; x += 12) a.line([x, cy + 12, 20], [x, cy + 12, 27], C.wood, 1.4);
+	for (const x of [cx - 48, cx + 31]) {
+		const wheel = a.p(x + 10, cy + 27, 10);
+		a.g.fillStyle(C.ink).fillEllipse(wheel.x, wheel.y, 11, 12);
+		a.g.fillStyle(C.steel).fillEllipse(wheel.x, wheel.y, 5, 6);
+		a.g.fillStyle(C.ink).fillCircle(wheel.x, wheel.y, 1.2);
+	}
+	for (const x of [cx - 49, cx - 27]) a.dot(x, cy + 21.2, 17, 1.7, C.amber);
 	for (const x of [cx - 75, cx + 69]) { a.box(x, cy - 37, 7, 76, 35, STEEL); a.box(x - 8, cy + 32, 22, 10, 5, BLACK); }
 	a.box(cx - 75, cy - 37, 151, 7, 6, STEEL, 35);
+	for (let x = cx - 70; x < cx + 66; x += 17) a.line([x, cy - 30, 36], [x + 9, cy - 30, 40], C.amber, 2, .7);
+	a.box(cx - 7, cy - 34, 14, 10, 8, BLACK, 31);
 	a.line([cx, cy - 34, 39], [cx, cy - 34, 18], C.amber, 1.4);
+	a.line([cx, cy - 34, 18], [cx + 5, cy - 34, 15], C.amber, 1.3);
+	a.line([cx + 5, cy - 34, 15], [cx + 8, cy - 34, 18], C.amber, 1.3);
 	for (let x = 16; x < a.width - 12; x += 18) a.line([x, a.height - 23, .8], [x + 9, a.height - 23, .8], C.amber, 2, .6);
 	a.table(a.width - 64, a.height - 70, 43, 24, 14, WOOD);
 }
 
-/** Free land stays soil and grass; its boundary becomes clear on hover or selection. */
-export function paintIsometricLand(g: Phaser.GameObjects.Graphics, column: number, row: number, owned: boolean): void {
-	const a = new RoomPainter(g, column, row);
-	a.plane(0, 0, 172, 100, 0, owned ? 0x4b6245 : 0x334835, owned ? .88 : .72);
-	const seed = Math.abs(column * 73 + row * 151);
-	for (let i = 0; i < 22; i++) {
-		const x = 8 + (seed + i * 37) % 158, y = 5 + (seed * 3 + i * 29) % 90;
-		a.line([x, y, .1], [x + 4, y - 2, .1], i % 3 ? 0x78905d : 0x2e4833, .7, .5);
-	}
-	if (!owned) for (const [x, y] of [[0, 0], [172, 100]]) {
-		a.line([x!, y!, 0], [x!, y!, 8], C.wood, 1.3, .7);
-		a.line([x! - 2, y!, 7], [x! + 3, y!, 7], C.amber, 1.4, .8);
-	}
-}
+/** Empty lots share the continuous landscape; they have no visible tile of their own. */
+export function paintIsometricLand(_g: Phaser.GameObjects.Graphics, _column: number, _row: number, _owned: boolean): void {}
 
 function workshop(a: RoomPainter): void {
 	a.table(20, 24, 64, 25, 14, WOOD);
@@ -282,31 +406,35 @@ function dormitory(a: RoomPainter): void {
 }
 
 function construction(a: RoomPainter): void {
-	for (const x of [18, 148]) for (const y of [19, 75]) {
+	const right = a.width - 24, front = a.height - 25;
+	for (const x of [18, right]) for (const y of [19, front]) {
 		a.line([x, y, 0], [x, y, 28], C.steel, 1.4);
 		a.box(x - 2, y - 2, 4, 4, 1.2, STEEL);
 	}
 	for (const z of [12, 27]) {
-		a.line([18, 19, z], [148, 19, z], C.steel, 1.1);
-		a.line([18, 19, z], [18, 75, z], C.steel, 1.1);
+		a.line([18, 19, z], [right, 19, z], C.steel, 1.1);
+		a.line([18, 19, z], [18, front, z], C.steel, 1.1);
 	}
-	a.line([18, 19, 2], [72, 19, 27], C.steel, .8);
-	a.line([72, 19, 27], [148, 19, 2], C.steel, .8);
-	a.plane(21, 15, 125, 10, 12, C.wood);
+	for (let x = 18; x < right; x += 60) {
+		a.line([x, 19, 2], [Math.min(x + 30, right), 19, 27], C.steel, .8);
+		a.line([Math.min(x + 30, right), 19, 27], [Math.min(x + 60, right), 19, 2], C.steel, .8);
+	}
+	a.plane(21, 15, Math.max(1, right - 23), 10, 12, C.wood);
 	for (let i = 0; i < 3; i++) a.box(48 + i * 4, 59 + i * 4, 60, 7, 2, WOOD, i * 2);
 	a.crate(119, 47, 22, 19, 10);
 	a.box(30, 48, 20, 16, 9, [0x7c8770, 0x596d50, 0x405440]);
-	a.line([25, 85, 3], [145, 85, 3], C.amber, 2.5);
-	for (let x = 28; x < 142; x += 11) a.line([x, 85, 2], [x + 5, 85, 4], C.ink, 1.3);
+	a.line([25, a.height - 15, 3], [right - 3, a.height - 15, 3], C.amber, 2.5);
+	for (let x = 28; x < right - 6; x += 11) a.line([x, a.height - 15, 2], [x + 5, a.height - 15, 4], C.ink, 1.3);
 }
 
-/** Draw one cutaway bunker cell; all output is in the shared projected world space. */
+/** Draw a small cutaway building in the shared projected world space. */
 export function paintIsometricRoom(g: Phaser.GameObjects.Graphics, column: number, row: number, room: RoomInstance | null): void {
 	if (!room) { paintIsometricLand(g, column, row, true); return; }
 	const footprint = getRoomFootprint(room), a = new RoomPainter(g, column, row, footprint.width, footprint.height);
-	foundation(a, Boolean(room));
-	walls(a, Number.parseInt(ROOM_DEFINITIONS[room.type].color.slice(1), 16));
+	const finish = buildingFinish(room.type);
+	foundation(a, finish);
 	if (room.status === "building") { construction(a); return; }
+	walls(a, finish);
 	switch (room.type) {
 		case "workshop": workshop(a); break;
 		case "ammo": ammo(a); break;
@@ -317,6 +445,7 @@ export function paintIsometricRoom(g: Phaser.GameObjects.Graphics, column: numbe
 		case "dormitory": dormitory(a); break;
 		case "hangar": hangar(a); break;
 	}
+	frontDetails(a, finish, room.type);
 	if (room.status === "upgrading") construction(a);
 }
 

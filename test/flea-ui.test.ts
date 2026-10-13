@@ -55,7 +55,7 @@ test('market explains real party quantity, protects own escrow and escapes user-
 test('catalog covers every named item, utility, weight and sector depth; legacy session defaults are harmless',()=>{
   const state=createGame(NOW),before=saveGame(state),html=fleaPage(state,view({tab:'catalog'}));
   for(const model of LOOT_MODELS)expect(html).toContain(model.label);
-  expect(html).toContain('Разбор:');expect(html).toContain('₽ за кг');expect(html).toContain('От 3-го этапа');expect(html).toContain('24 ТРОФЕЯ');
+  expect(html).toContain('Разбор:');expect(html).toContain('₽ за кг');expect(html).toContain('От 3-го этапа');expect(html).toContain(`Находок: ${LOOT_MODELS.length}`);
   const restored=readGameSession({version:1,page:'flea',flea:{tab:'mine',search:'x'.repeat(200),kind:'loot'}},state);expect(restored.page).toBe('flea');expect(restored.flea.search).toHaveLength(160);expect(restored.flea.tab).toBe('mine');
   expect(readGameSession({version:1,flea:{tab:'constructor',kind:'__proto__',draft:{price:999}}},state).flea).toEqual({tab:'inventory',search:'',kind:'all'});expect(saveGame(state)).toBe(before);
 });
