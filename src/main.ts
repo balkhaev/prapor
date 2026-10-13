@@ -409,11 +409,15 @@ function requestSaveOwnership() {
 		saveOwnershipPending = false;
 		if (!lock) { updateSaveBanner(); setOverlayState(); return; }
 		if (storedProgressChanged()) { updateSaveBanner(); return; }
-		ownsSaveLease = true; updateSaveBanner(); setOverlayState();
-		persist();
-		await new Promise<void>(resolve => { releaseSaveLease = resolve; });
-		ownsSaveLease = false; releaseSaveLease = null;
-	}).catch(() => { saveOwnershipPending = false; updateSaveBanner(); document.querySelector('#save-banner p')!.textContent = 'Не удалось подключить сохранение. Экспортируй текущую запись и обнови игру.'; });
+		ownsSaveLease = true;
+		try {
+			updateSaveBanner(); setOverlayState();
+			persist();
+			await new Promise<void>(resolve => { releaseSaveLease = resolve; });
+		} finally {
+			ownsSaveLease = false; releaseSaveLease = null;
+		}
+	}).catch(() => { saveOwnershipPending = false; setOverlayState(); updateSaveBanner(); document.querySelector('#save-banner p')!.textContent = 'Не удалось подключить сохранение. Экспортируй текущую запись и обнови игру.'; });
 }
 function flushAndReleaseSave() {
 	persist();
