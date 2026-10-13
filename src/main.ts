@@ -1730,7 +1730,7 @@ function roomQueuePanel(room: RoomInstance) {
 }
 function roomResourcesPanel(room: RoomInstance) {
 	const recipes = RESOURCE_RECIPES.filter((recipe) => recipe.roomType === room.type);
-	return `<label class="loadout-check"><input type="checkbox" data-room-repeat="${room.id}" aria-label="Повторять выбранный рецепт: ${e(ROOM_DEFINITIONS[room.type].label)}" data-focus-key="room-repeat-${room.id}" ${room.recipeId ? room.repeat ? "checked" : "" : roomRepeatPreferences.get(room.id) === false ? "" : "checked"} ${room.status !== "ready" ? "disabled" : ""}><span>Повторять выбранный рецепт<small>Новая партия оплачивается только при запуске. При нехватке ресурсов работа ждёт пополнения.</small></span></label>${room.recipeId ? `<button class="button ghost small" data-action="stop-room-recipe" data-id="${room.id}">Остановить будущие партии</button><small class="quote-note">Оплаченные заказы продолжатся. Их можно отменить в очереди отдельно.</small>` : ""}<div class="resource-recipe-list">${recipes.map((recipe) => {
+	return `<label class="loadout-check"><input type="checkbox" data-room-repeat="${room.id}" aria-label="Повторять выбранный рецепт: ${e(ROOM_DEFINITIONS[room.type].label)}" data-focus-key="room-repeat-${room.id}" ${room.recipeId ? room.repeat ? "checked" : "" : roomRepeatPreferences.get(room.id) === true ? "checked" : ""} ${room.status !== "ready" ? "disabled" : ""}><span>Повторять выбранный рецепт<small>Новая партия оплачивается только при запуске. При нехватке ресурсов работа ждёт пополнения.</small></span></label>${room.recipeId ? `<button class="button ghost small" data-action="stop-room-recipe" data-id="${room.id}">Остановить будущие партии</button><small class="quote-note">Оплаченные заказы продолжатся. Их можно отменить в очереди отдельно.</small>` : ""}<div class="resource-recipe-list">${recipes.map((recipe) => {
 		const quote = getResourceProductionQuote(state, room.id, recipe.id), selected = room.recipeId === recipe.id;
 		return `<article class="resource-recipe ${selected ? "selected" : ""}"><div class="resource-recipe-head">${icon(roomIcon(room.type), 21)}<strong>${e(recipe.label)}</strong></div><p>${e(recipe.description)}</p>${productionOutput(recipe.output)}<div class="loadout-stats"><span>Партия: ${productionCost(recipe.cost)}</span><span>Базовая работа ${seconds(quote.duration)}</span></div><button class="button secondary" data-action="set-room-recipe" data-id="${room.id}" data-recipe-id="${recipe.id}" data-focus-key="recipe-${recipe.id}" ${room.status !== "ready" ? "disabled" : ""}>${selected ? "Подтвердить рецепт и режим" : "Выбрать рецепт"}</button><small class="quote-note" data-resource-recipe-note="${recipe.id}">${e(quote.reason ?? "Бойцы запустят партию; результат поступит на склад")}</small></article>`;
 	}).join("")}</div>`;
@@ -2116,16 +2116,27 @@ function showAutoRaidOrder(scavId: string) {
 	focusModal();
 }
 function followGameplayAction(origin: HTMLElement) {
-	const action = getGameplayGuidance(state).action;
+	const guidance = getGameplayGuidance(state), action = guidance.action;
 	closeModal(); closeInspector();
 	toolOrigin = origin;
 	if (action.mapId && MAP_BY_ID[action.mapId] && state.level >= MAP_BY_ID[action.mapId]!.level) selectedMap = action.mapId;
 	if (action.kind === "watch" && action.raidId) { watchRaid(action.raidId); return; }
 	if (action.kind === "room" && action.roomId) { setView("base"); openShelterRoom(action.roomId, action.tab); return; }
-	if (action.kind === "scav" && action.scavId) { openInspector(action.scavId); return; }
+	if (action.kind === "scav" && action.scavId) {
+		openInspector(action.scavId);
+		if (guidance.campaign.contractId === "gear-ready") {
+			document.querySelector<HTMLElement>(".loadout-section")?.scrollIntoView({ block: "start", behavior: scrollBehavior() });
+			document.querySelector<HTMLButtonElement>('[data-focus-key="equipment-store"]')?.focus({ preventScroll: true });
+		}
+		return;
+	}
 	if (action.kind === "raid") {
 		page = "raids"; render();
-		if (action.scavId) openInspector(action.scavId);
+		if (action.scavId) {
+			openInspector(action.scavId);
+			document.querySelector<HTMLElement>(".sortie-section")?.scrollIntoView({ block: "start", behavior: scrollBehavior() });
+			document.querySelector<HTMLSelectElement>("[data-inspector-map]")?.focus({ preventScroll: true });
+		}
 		else document.querySelector<HTMLButtonElement>('[data-action="close-tools"]')?.focus();
 		return;
 	}
