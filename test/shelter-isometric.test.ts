@@ -5,7 +5,7 @@ import {
 } from "../src/shelter-camera";
 import {
 	projectShelterBounds, projectShelterPoint, SHELTER_ROOM_HEIGHT, SHELTER_ROOM_WIDTH,
-	shelterRectPolygon, shelterRoomPolygon, shelterRoomPosition, unprojectShelterPoint,
+	SHELTER_BUILDING_MAX_VISUAL_HEIGHT, shelterBuildingHitPolygon, shelterRectPolygon, shelterRoomPolygon, shelterRoomPosition, unprojectShelterPoint,
 } from "../src/shelter-isometric";
 import { getShelterLayoutCell, getShelterWalkingRoute } from "../src/shelter-layout";
 import { clientToShelterPoint } from "../src/shelter-motion";
@@ -19,6 +19,22 @@ function expectPoint(actual: { x: number; y: number }, expected: { x: number; y:
 }
 
 describe("isometric shelter presentation", () => {
+	test("building hit hull includes actual roof ridges, eaves and chimney caps at free and rotated origins", () => {
+		const inside = (polygon: { x: number; y: number }[], point: { x: number; y: number }) => polygon.every((a, index) => {
+			const b = polygon[(index + 1) % polygon.length]!;
+			return (b.x - a.x) * (point.y - a.y) - (b.y - a.y) * (point.x - a.x) >= -1e-7;
+		});
+		for (const rect of [roomRect(0, 0), { x: 318.375, y: 286.625, width: 556, height: 232 }, { x: 61.625, y: 208.875, width: 364, height: 364 }]) {
+			const hull = shelterBuildingHitPolygon(rect);
+			const at = (x: number, y: number, z: number) => { const point = projectShelterPoint({ x: rect.x + x, y: rect.y + y }); return { x: point.x, y: point.y - z }; };
+			for (const vertex of [[-4, -5, 33], [rect.width + 4, -5, 33], [-4, 4, 41], [rect.width + 4, 4, 41], [rect.width / 2, 4, 41], [rect.width - 24, 1, 49.1], [rect.width - 18, 6, 49.1], [rect.width * .52, rect.height + 10, -4.6]]) {
+				expect(inside(hull, at(vertex[0]!, vertex[1]!, vertex[2]!))).toBe(true);
+			}
+			expect(inside(hull, at(0, 0, SHELTER_BUILDING_MAX_VISUAL_HEIGHT + 12))).toBe(false);
+			expect(inside(hull, at(rect.width + 40, 0, 0))).toBe(false);
+		}
+	});
+
 	test("free building footprints preserve fractional origins and dimensions in projection", () => {
 		const rect = { x: 318.375, y: 286.625, width: 364, height: 232 };
 		const projected = shelterRectPolygon(rect);
