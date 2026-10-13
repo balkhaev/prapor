@@ -66,9 +66,9 @@ describe("persistent scav model identities", () => {
 	});
 
 	test("every model survives roster and active-raid round trips in the current save schema", () => {
-		expect(SAVE_VERSION).toBe(6);
 		for (const appearance of SCAV_APPEARANCES) {
 			const state = createGame(NOW), scav = state.scavs[0]!;
+			expect(state.schemaVersion).toBe(SAVE_VERSION);
 			scav.appearance = appearance.id;
 			expect(dispatchRaid(state, scav.id, "courtyard", NOW).ok).toBe(true);
 			expect(state.raids[0]!.scavAppearance).toBe(appearance.id);
@@ -112,8 +112,8 @@ describe("persistent scav model identities", () => {
 		expect(loaded.money).toBe(state.money); expect(loaded.supplies).toEqual(state.supplies);
 		expect(loaded.recruitment).toEqual(state.recruitment);
 		expect(loaded.scavs.map((scav) => scav.profile)).toEqual(state.scavs.map((scav) => scav.profile));
-		legacy.schemaVersion = 5; delete legacy.recruitment;
-		for (const scav of legacy.scavs) delete scav.profile;
+		legacy.schemaVersion = 5; delete legacy.recruitment; delete legacy.memorials;
+		for (const scav of legacy.scavs) { delete scav.profile; delete scav.story; }
 		legacy.scavs[2].personality = "careful";
 		const oldRoster = parseSave(JSON.stringify(legacy))!;
 		expect(oldRoster).not.toBeNull();

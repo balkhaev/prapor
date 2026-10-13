@@ -1,5 +1,6 @@
 import { SCAV_NAMES } from "./data";
 import type { GameState, Scav } from "./engine";
+import { chooseScavAppearance, defaultScavAppearance, SCAV_APPEARANCES } from "./scav-appearances";
 
 export type RecruitRole = "assault" | "scout" | "technician";
 export type RecruitTier = 0 | 1 | 2;
@@ -12,7 +13,7 @@ export interface ScavProfile {
 }
 export interface RecruitCandidate {
 	id: string; name: string; role: RecruitRole; backgroundId: string; traitId: string; drawbackId: string;
-	combat: number; scouting: number; cost: number;
+	combat: number; scouting: number; cost: number; appearance: number;
 }
 export interface RecruitmentState {
 	rng: number; generation: number; tier: RecruitTier; boardSeed: number; boardTier: RecruitTier;
@@ -82,7 +83,7 @@ const roleStats: Record<RecruitRole, [number, number]> = { assault: [38, 25], sc
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
 
 export const neutralScavProfile = (): ScavProfile => ({ backgroundId: null, traitId: null, drawbackId: null, talents: [], candidateId: null });
-export function getScavRecruitRole(scav: Scav): RecruitRole | null {
+export function getScavRecruitRole(scav: Pick<Scav, "profile">): RecruitRole | null {
 	return scav.profile?.backgroundId ? RECRUIT_BACKGROUNDS[scav.profile.backgroundId]?.role ?? null : null;
 }
 export function getScavProfileEffects(scav: Scav): ScavProfileEffects {
@@ -101,7 +102,7 @@ export function getScavProfileEffects(scav: Scav): ScavProfileEffects {
 	return effects;
 }
 
-export function getScavTalentOffers(scav: Scav): { level: 2 | 4 | 6; offers: ScavTalentDefinition[] } | null {
+export function getScavTalentOffers(scav: Pick<Scav, "profile" | "level">): { level: 2 | 4 | 6; offers: ScavTalentDefinition[] } | null {
 	const picked = scav.profile?.talents ?? [], level = ([2, 4, 6] as const)[picked.length];
 	if (!level || scav.level < level) return null;
 	const role = getScavRecruitRole(scav);
@@ -133,10 +134,21 @@ export function stepRecruitmentSeed(seed: number): number {
 	value ^= value << 13; value ^= value >>> 17; value ^= value << 5;
 	return value >>> 0 || 1;
 }
-export function buildRecruitmentBoard(seed: number, generation: number, tier: RecruitTier): RecruitCandidate[] {
+export function chooseRecruitCandidateAppearance(role: RecruitRole, identity: string, used: readonly number[] = []): number {
+	const personality = { assault: "veteran", scout: "runner", technician: "collector" }[role];
+	const matching = SCAV_APPEARANCES.filter((entry) => entry.personality === personality && !used.includes(entry.id));
+	if (matching.length) return chooseScavAppearance(personality, identity, used);
+	const available = SCAV_APPEARANCES.filter((entry) => !used.includes(entry.id));
+	if (!available.length) return chooseScavAppearance(personality, identity, used);
+	let hash = 0x811c9dc5;
+	for (const character of identity) hash = Math.imul(hash ^ character.charCodeAt(0), 0x01000193);
+	return available[(hash >>> 0) % available.length]!.id;
+}
+export function buildRecruitmentBoard(seed: number, generation: number, tier: RecruitTier, usedAppearances: readonly number[] = []): RecruitCandidate[] {
 	let cursor = seed >>> 0;
 	const random = () => { cursor = stepRecruitmentSeed(cursor); return cursor / 4294967296; };
 	const usedNames = new Set<string>();
+	const usedLooks = [...usedAppearances];
 	return roles.map((role, index) => {
 		const contactTier = index === generation % 3 ? tier : Math.floor(random() * (tier + 1)) as RecruitTier;
 		const background = Object.values(RECRUIT_BACKGROUNDS).find((entry) => entry.role === role && entry.tier === contactTier)!;
@@ -146,20 +158,22 @@ export function buildRecruitmentBoard(seed: number, generation: number, tier: Re
 		const drawbackId = roleDrawbacks[role][Math.floor(random() * roleDrawbacks[role].length)]!;
 		const [combat, scouting] = roleStats[role];
 		const rolledCombat = combat + contactTier * 4 + Math.floor(random() * 7), rolledScouting = scouting + contactTier * 4 + Math.floor(random() * 7);
-		return { id: `recruit-${generation}-${index}-${seed}`, name, role, backgroundId: background.id, traitId, drawbackId,
+		const id = `recruit-${generation}-${index}-${seed}`, appearance = chooseRecruitCandidateAppearance(role, id, usedLooks);
+		usedLooks.push(appearance);
+		return { id, name, role, backgroundId: background.id, traitId, drawbackId, appearance,
 			combat: rolledCombat, scouting: rolledScouting, cost: 260 + index * 20 + contactTier * 120 + (rolledCombat + rolledScouting - combat - scouting) * 5 };
 	});
 }
-export function createRecruitmentState(state: Pick<GameState, "createdAt" | "rng" | "stats" | "base">): RecruitmentState {
+export function createRecruitmentState(state: Pick<GameState, "createdAt" | "rng" | "stats" | "base"> & Partial<Pick<GameState, "scavs">>): RecruitmentState {
 	// This stream never consumes the campaign RNG or a raid seed, including migrations.
 	const mixed = (state.rng ^ (Math.trunc(state.createdAt) >>> 0) ^ Math.imul(Math.floor(state.createdAt / 4294967296) >>> 0, 0x9e3779b1) ^ 0xa739d2b5) >>> 0;
 	const boardSeed = stepRecruitmentSeed(mixed), tier = getEarnedRecruitmentTier(state);
-	return { rng: stepRecruitmentSeed(boardSeed), boardSeed, boardTier: tier, generation: 1, tier, board: buildRecruitmentBoard(boardSeed, 1, tier), hiredCandidateIds: [] };
+	return { rng: stepRecruitmentSeed(boardSeed), boardSeed, boardTier: tier, generation: 1, tier, board: buildRecruitmentBoard(boardSeed, 1, tier, state.scavs?.map((scav) => scav.appearance ?? defaultScavAppearance(scav.personality))), hiredCandidateIds: [] };
 }
 export const RECOVERY_RECRUIT_ID = "recruit-recovery";
-const recoveryCandidate: RecruitCandidate = { id: RECOVERY_RECRUIT_ID, name: "Сосед", role: "assault", backgroundId: "yard_guard", traitId: "steady_hands", drawbackId: "heavy_boots", combat: 22, scouting: 23, cost: 0 };
+const recoveryCandidate: RecruitCandidate = { id: RECOVERY_RECRUIT_ID, name: "Сосед", role: "assault", backgroundId: "yard_guard", traitId: "steady_hands", drawbackId: "heavy_boots", combat: 22, scouting: 23, cost: 0, appearance: 0 };
 export function getRecruitmentBoard(state: GameState): readonly RecruitCandidate[] {
-	return state.scavs.length === 0 && state.recruitment.board.length === 0 ? [{ ...recoveryCandidate }] : state.recruitment.board;
+	return state.scavs.length === 0 && state.recruitment.board.length === 0 ? [{ ...recoveryCandidate, appearance: chooseRecruitCandidateAppearance("assault", `recovery:scav-${state.nextId}`) }] : state.recruitment.board;
 }
 export function isRecruitTraitForRole(id: string, role: RecruitRole) { return roleTraits[role].includes(id); }
 export function isRecruitDrawbackForRole(id: string, role: RecruitRole) { return roleDrawbacks[role].includes(id); }
