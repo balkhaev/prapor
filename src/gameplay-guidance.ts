@@ -2,7 +2,7 @@ import { CONTRACTS, MAPS, MAP_BY_ID, type Contract, type RaidMap, type Supplies 
 import {
 	GEAR_MODELS, GEAR_MODEL_BY_ID, MODULE_MODELS, RESOURCE_RECIPES, ROOM_DEFINITIONS, getContractLockReason, getContractProgress, getGearCraftReason,
 	getMarketReason, getModuleCapacity, getModuleProductionQuote, getRaidGroup, getRaidGroupKey, getRaidQuote, getResourceProductionQuote,
-	getRoomProductionState, getWeaponStats, getWorkerAssignmentReason, xpForLevel, FIELD_KITS, getFieldKitStock,
+	getRoomProductionState, getWeaponStats, getWorkerAssignmentReason, xpForLevel, FIELD_KITS, getFieldKitStock, isScavMedicallyReady, getScavHealingQuote,
 	type GameState, type Raid, type RoomInstance, type Scav,
 } from "./game/engine";
 import { getCommandSummary } from "./command-summary";
@@ -80,17 +80,25 @@ function paidBlocker(state: GameState): NextStep | null {
 	});
 	return command ? step("invest", { kind: "room", roomId: command.roomId, tab: command.tab ?? "production", label: command.cta ?? "Проверить оплаченный заказ", detail: `${command.title}. ${command.detail} Оплаченная партия сохраняется.` }) : null;
 }
+function medicalRecoveryStep(state: GameState, scav: Scav): NextStep {
+	if (scav.medicalTreatment) {
+		const remaining = Math.max(0, Math.ceil((scav.medicalTreatment.endsAt - state.lastUpdated) / 1000));
+		return step("prepare", { kind: "scav", scavId: scav.id, label: "Дождаться лечения", detail: `${scav.name}: курс уже оплачен, осталось ${remaining} сек. После завершения восстановятся все зоны, переломы и последствия хирургии. До этого боец отдыхает от работы и рейдов.` });
+	}
+	const quote = getScavHealingQuote(state, scav);
+	return step("prepare", { kind: "scav", scavId: scav.id,
+		label: quote.reason ? "Проверить восстановление" : "Восстановить бойца",
+		detail: quote.reason ? `${scav.name}: для выхода нужны здоровье от 25%, остановленные кровотечения и восстановленная подвижность. Бесплатное восстановление идёт в убежище; полный курс стоит ${quote.medicine} медикаментов и длится ${quote.duration} сек.`
+			: `${scav.name}: для выхода нужно восстановить здоровье и подвижность. Полный курс стоит ${quote.medicine} медикаментов и длится ${quote.duration} сек.; можно подождать бесплатного восстановления в убежище.`,
+	});
+}
 function recoveryStep(state: GameState): NextStep | null {
 	if (!state.scavs.length) return step("prepare", { kind: "recruits", label: "Восстановить отряд", detail: "Прими бесплатного бойца у связных. После найма проверь его оружие и подготовь новый выход." });
 	const home = state.scavs.filter((scav) => scav.status !== "raiding").sort(fighterOrder);
-	if (!home.length || home.some((scav) => scav.health >= 25)) return null;
-	const scav = home[0]!;
-	const medicine = Math.ceil((100 - scav.health) / (25 + state.base.medbay * 5));
-	return step("prepare", { kind: "scav", scavId: scav.id,
-		label: state.supplies.medicine >= medicine ? "Восстановить бойца" : "Проверить восстановление",
-		detail: state.supplies.medicine >= medicine ? `${scav.name}: выход доступен со здоровьем от 25%. Полное лечение стоит ${medicine} медикаментов; можно подождать бесплатного восстановления.`
-			: `${scav.name}: нужно дождаться минимальных 25% здоровья. Бесплатное восстановление идёт в убежище; для полного лечения нужно ${medicine} медикаментов.`,
-	});
+	if (!home.length || home.some(scav => isScavMedicallyReady(scav))) return null;
+	const scav = home.find(person => !person.medicalTreatment && !getScavHealingQuote(state, person).reason)
+		?? home.find(person => person.medicalTreatment) ?? home[0]!;
+	return medicalRecoveryStep(state, scav);
 }
 function raidOptions(state: GameState, maps: readonly RaidMap[]): RaidOption[] {
 	return maps.flatMap((map) => state.scavs.filter((scav) => scav.status !== "raiding").map((scav) => ({ map, scav, quote: getRaidQuote(state, scav, map) })))
@@ -114,18 +122,18 @@ function resourceStep(state: GameState, supply: keyof Supplies, reason: string):
 }
 function blockedRaidStep(state: GameState, map: RaidMap): NextStep {
 	const options = raidOptions(state, [map]);
-	const option = options.find(({ scav }) => scav.health >= 25 && !scav.assignment) ?? options[0];
+	const option = options.find(({ scav }) => isScavMedicallyReady(scav) && !scav.assignment) ?? options[0];
 	if (!option) return recoveryStep(state) ?? step("prepare", { kind: "recruits", label: "Открыть отряд", detail: "Нужен доступный боец для следующего выхода." });
 	const { scav, quote } = option;
+	if (!isScavMedicallyReady(scav)) return medicalRecoveryStep(state, scav);
 	if (scav.assignment) return step("prepare", { kind: "room", roomId: scav.assignment, scavId: scav.id, tab: "staff", label: "Освободить бойца для рейда", detail: `${scav.name} работает в убежище. Освободи одного бойца, сохранив работников у оплаченных заказов.` });
-	if (scav.health < 25) return recoveryStep(state)!;
 	const gun = state.weapons.find((weapon) => weapon.id === scav.weaponInstanceId);
 	if (!gun) return step("prepare", { kind: "scav", scavId: scav.id, label: "Выдать бойцу оружие", detail: `${scav.name}: ${quote.reason ?? "нужно свободное исправное оружие"} Выбери пушку в его комплекте; последнюю готовую сборку сохрани для выходов.` });
 	if (!getWeaponStats(gun).ready) return step("prepare", { kind: "arsenal", scavId: scav.id, label: "Подготовить исправное оружие", detail: `${scav.name}: ${quote.reason ?? "пушка не готова"} Проверь ремонт и обязательные детали либо выдай другую готовую пушку.` });
 	if (state.money < quote.money) return step("prepare", { kind: "arsenal", label: "Проверить резерв на выход", detail: `${quote.reason} Продай лишние трофеи, сохранив готовую пушку. При малом запасе рубли постепенно восстанавливаются до резервного лимита.` });
 	if (state.supplies.ammo < quote.ammo) return resourceStep(state, "ammo", quote.reason!);
 	if (state.supplies.intel < quote.intel) return resourceStep(state, "intel", quote.reason!);
-	if (state.supplies.medicine < quote.medicine) return step("prepare", { kind: "scav", scavId: scav.id, label: "Проверить личную аптечку", detail: `${quote.reason} Пополни медикаменты или сними аптечку с комплекта; без неё выход возможен, но полевой перевязки не будет.` });
+	if (state.supplies.medicine < quote.medicine) return step("prepare", { kind: "scav", scavId: scav.id, label: "Проверить медсумку", detail: `${quote.reason} Пополни медикаменты или выбери выход без медсумки; тогда полевого лечения расходниками не будет.` });
 	if (quote.fieldKit && getFieldKitStock(state)[quote.fieldKit] === 0) {
 		const kit = FIELD_KITS[quote.fieldKit], recipe = RESOURCE_RECIPES.find(item => item.id === kit.recipeId)!;
 		const room = [...state.shelter.rooms].sort(roomOrder).find(item => item.type === recipe.roomType && item.status === "ready");
@@ -167,7 +175,7 @@ function productionStep(state: GameState): NextStep {
 	const production = getRoomProductionState(state, room);
 	if (room.status !== "ready") return step("invest", { kind: "room", roomId: room.id, tab: "upgrade", label: "Проверить готовность помещения", detail: `${ROOM_DEFINITIONS[room.type].label} ещё строится или улучшается. После завершения станут доступны работники и заказ.` });
 	if (production.job) return step("invest", { kind: "room", roomId: room.id, tab: "production", label: "Проверить первую партию", detail: `${ROOM_DEFINITIONS[room.type].label}: оплаченный заказ уже в очереди. ${production.reason ?? "Работники готовят партию."} Этап засчитывается после доставки на склад.` });
-	if (!production.rate) return step("invest", { kind: "room", roomId: room.id, tab: "staff", label: "Назначить одного работника", detail: `${ROOM_DEFINITIONS[room.type].label}: назначь здорового бойца с показателем от 25%, затем выбери одну партию. Остальных можно оставить для рейдов.` });
+	if (!production.rate) return step("invest", { kind: "room", roomId: room.id, tab: "staff", label: "Назначить одного работника", detail: `${ROOM_DEFINITIONS[room.type].label}: назначь бойца со здоровьем от 25%, без кровотечений и с восстановленной подвижностью, затем выбери одну партию. Остальных можно оставить для рейдов.` });
 	const recipe = RESOURCE_RECIPES.find((candidate) => candidate.id === room.recipeId) ?? RESOURCE_RECIPES.find((candidate) => candidate.roomType === room.type);
 	if (!recipe) return step("invest", { kind: "room", roomId: room.id, tab: "production", label: "Выбрать заказ", detail: "Выбери один доступный модуль: материалы списываются при постановке заказа, прогресс засчитывается после доставки." });
 	const quote = getResourceProductionQuote(state, room.id, recipe.id);

@@ -88,7 +88,7 @@ describe("physical armor, helmets and backpacks", () => {
 		expect(parseSave(locked)).toEqual(state);
 	});
 
-	test("checkpoint wear and wounds include the helmet, while repair and recycling consume real inventory", () => {
+	test("helmets wear at checkpoints and protect only their covered zone, while repair and recycling consume real inventory", () => {
 		const armored = supplied(), scav = armored.scavs[0]!;
 		const helmet = craft(armored, "visor_helmet");
 		expect(equipGear(armored, scav.id, "helmet", helmet.id).ok).toBe(true);
@@ -97,10 +97,13 @@ describe("physical armor, helmets and backpacks", () => {
 		unarmored.scavs[0]!.loadout.helmetItemId = null;
 		controlRaid.expedition!.loadout.helmetModelId = null;
 		controlRaid.expedition!.loadout.helmetCondition = 0;
+		controlRaid.expedition!.medical!.start.helmetProtection = 0;
 		raid.chance = controlRaid.chance = 1;
 		advance(armored, raid.endsAt); advance(unarmored, controlRaid.endsAt);
 		expect(helmet.durability).toBeLessThan(100);
-		expect(scav.health).toBeGreaterThan(unarmored.scavs[0]!.health);
+		expect(raid.expedition!.medical!.start.helmetProtection).toBeGreaterThan(0);
+		expect(scav.body!.parts.head.hp).toBe(35);
+		expect(scav.health).toBe(unarmored.scavs[0]!.health);
 		expect(raid.expedition!.loadout.helmetCondition).toBe(100);
 		expect(parseSave(saveGame(armored))).not.toBeNull();
 		expect(extractRaid(armored, raid.id, armored.lastUpdated).ok).toBe(true);

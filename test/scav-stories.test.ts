@@ -50,6 +50,7 @@ function paidModules(state: GameState, scav: Scav, count: number) {
 
 function successfulRaid(state: GameState, scav: Scav, depth = 1) {
 	scav.health = 100;
+	delete scav.body; delete scav.medicalTreatment;
 	scav.status = "ready";
 	const gun = state.weapons.find((weapon) => weapon.id === scav.weaponInstanceId)!;
 	gun.durability = 100;

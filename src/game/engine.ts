@@ -26,7 +26,7 @@ import { createScavStory, getScavStoryEffects, noteScavProduction, noteScavRaid,
 export * from "./scav-stories";
 import { createSquadSocialState, ensureSquadPairs, removeSquadMember, getRoomSocialEffects, getRaidSocialSupport, creditSquadWork, getSocialProductionWorkers, noteSquadProduction, discardSquadWork, noteSquadDispatch, noteSquadRaid, parseSquadSocialState, validateSquadSocialState, rebaseSquadSocialClock, resolveSocialEvent as resolveSquadSocialEvent, getSquadSocialEvents, type SquadSocialState } from "./squad-bonds";
 export * from "./squad-bonds";
-import { getSquadRaidQuote, getRaidGroup, createSquadRaidSnapshot, planSquadRaidActions, squadInjuryMultiplier, parseSquadRaidSnapshot, validateSquadRaids, type SquadRaidSnapshot, type SquadRaidReport } from "./squad-raids";
+import { getSquadRaidQuote, getRaidGroup, getSquadRawOutcomes, createSquadRaidSnapshot, planSquadRaidActions, squadInjuryMultiplier, parseSquadRaidSnapshot, validateSquadRaids, type SquadRaidSnapshot, type SquadRaidReport } from "./squad-raids";
 export * from "./squad-raids";
 import { createAchievementState, parseAchievementState, validateAchievementState, rebaseAchievementClock, noteAchievementBuild, noteAchievementTransfer, noteAchievementInstalled, noteAchievementDispatch, noteAchievementCheckpoint, noteAchievementContinue, noteAchievementExtract, noteAchievementRaidFinished, noteAchievementLoot, noteAchievementSupply, prepareAchievementPayment, noteAchievementPaid, prepareAchievementCraft, noteAchievementCrafted, prepareAchievementRecycle, noteAchievementRecycled, creditAchievementWork, noteAchievementUpgrade, noteAchievementUpgradeDone, noteAchievementAssignment, noteAchievementSocialDecision, noteAchievementJobDone, noteAchievementCancelled, pruneAchievementPeople, pruneAchievementInventory, type AchievementState } from "./achievements";
 export * from "./achievements";
@@ -39,14 +39,48 @@ import { RAID_OBJECTIVES, RAID_PREPARATIONS, getRaidStrategy, getRaidStrategyEff
 export * from "./raid-strategy";
 import { FIELD_KITS, FIELD_KIT_CAPACITY, getProductionReserve, getFieldKitStock, ensureShelterLogistics, getFieldKitEffects, type FieldKit, type FieldKitSelection } from "./shelter-logistics";
 export * from "./shelter-logistics";
+import { BODY_PARTS, BODY_PART_MAX_HP, canDeploy, createHealth, getRecoveryWaitMs, healthPercent, injuryEffects, isAlive, isStable, parseHealth, parseMedicalInventory, recoverAtBase, type HealthState } from './health';
+export * from './health';
+import { RAID_MEDICAL_KIT, raidMedicalInventory, resolveMedicalEncounter, type RaidMedicalState, type RaidMedicalStart } from './raid-health';
+export * from './raid-health';
 import { getLootModel, getLootTraderPrice, parseLootItem, rollRaidLoot, type LootItem } from "./loot";
 export * from "./loot";
 export * from "./trade";
 
 export const SAVE_KEY = "prapor.save.v1";
-export const SAVE_VERSION = 17;
+export const SAVE_VERSION = 18;
 export const MAX_OFFLINE_MS = 8 * 60 * 60 * 1000;
 export const MAX_ROOM_LEVEL = 5;
+
+export function getScavBody(scav: Scav): HealthState { return scav.body ?? createHealth(scav.health); }
+export function isScavMedicallyReady(scav: Scav, minHealth = 25): boolean {
+	return !scav.medicalTreatment && (scav.body ? canDeploy(scav.body, minHealth) : scav.health >= minHealth);
+}
+function syncScavHealth(scav: Scav) {
+	if (scav.body) scav.health = healthPercent(scav.body);
+	if (scav.status !== 'raiding') scav.status = isScavMedicallyReady(scav) ? 'ready' : 'wounded';
+}
+export function getScavHealingQuote(state: GameState, scav: Scav) {
+	const body = getScavBody(scav);
+	const injuryCount = BODY_PARTS.filter(part => body.parts[part].fracture || body.parts[part].hp <= 0 || body.parts[part].maxHp < BODY_PART_MAX_HP[part]).length;
+	const medicine = Math.max(injuryCount ? 1 : 0, Math.ceil((100 - scav.health) / (25 + state.base.medbay * 5)));
+	const passiveMs = getRecoveryWaitMs(body, 100, state.base.medbay);
+	const duration = Math.max(.001, Math.min(Math.ceil((30 + injuryCount * 10) * Math.max(1, medicine) / (1 + state.base.medbay * .2)), Math.ceil(passiveMs / 2) / 1000));
+	const reason = scav.status === 'raiding' ? 'Боец сейчас в рейде.' : scav.medicalTreatment ? 'Курс лечения уже начат.'
+		: scav.health >= 100 && injuryCount === 0 && isStable(body) ? 'Боец уже здоров.' : passiveMs <= 1 ? 'Боец восстановится бесплатно при следующем обновлении.' : state.supplies.medicine < medicine ? `Нужно ${medicine} медикаментов. Медблок восстанавливает бесплатно со временем.` : null;
+	return { medicine, duration, reason };
+}
+function freezeRaidMedicine(state: GameState, scav: Scav, raid: Raid): RaidMedicalStart {
+	const expedition = raid.expedition!;
+	const weapon = state.weapons.find(item => item.id === raid.weaponInstanceId)!;
+	const armor = ownValue(GEAR_MODEL_BY_ID, expedition.loadout.armorModelId);
+	const helmet = expedition.loadout.helmetModelId ? ownValue(GEAR_MODEL_BY_ID, expedition.loadout.helmetModelId) : undefined;
+	const ammo = expedition.ammunition ? getAmmoEffect(weapon, expedition.loadout.ammoType, raid.mapId, expedition.branch, expedition.stage, raid.tactic) : null;
+	return { body: structuredClone(getScavBody(scav)), inventory: structuredClone(expedition.medical?.inventory ?? raidMedicalInventory(expedition.loadout.medkit)),
+		injuryMultiplier: TACTICS[raid.tactic].injuryMultiplier * (1 - raid.armorLevel * .1) * (expedition.perks.includes('fieldMedic') ? .5 : 1) * (ammo?.injuryMultiplier ?? 1) * getFieldKitEffects(raid.fieldKit).injuryMultiplier,
+		armorProtection: Math.min(.8, (armor?.protection ?? 0) * expedition.loadout.armorCondition / 100 * 3),
+		helmetProtection: Math.min(.8, (helmet?.protection ?? 0) * (expedition.loadout.helmetCondition ?? 0) / 100 * 3) };
+}
 
 export interface WeaponInstance {
 	id: string;
@@ -65,6 +99,9 @@ export interface Scav {
 	level: number;
 	xp: number;
 	health: number;
+	/** Anatomical state is introduced on the first new medical sortie; old paid sorties keep their rules. */
+	body?: HealthState;
+	medicalTreatment?: { startedAt: number; endsAt: number; medicine: number };
 	combat: number;
 	scouting: number;
 	weaponInstanceId: string | null;
@@ -96,6 +133,8 @@ export interface Expedition {
 	ammunition?: { modelId: string; firstBonus: number; wearMultiplier: number; ammoMultiplier: number };
 	/** A recon stage is credited only if the sortie later extracts successfully. */
 	reconCompleted?: boolean;
+	/** Absent on already paid sorties from earlier versions. */
+	medical?: RaidMedicalState;
 	/** Paid sorties retain the loot catalogue that existed when they departed. */
 	lootCatalogVersion?: number;
 }
@@ -153,6 +192,7 @@ export interface RaidReport {
 	sectorOutcome?: SectorIntel;
 	reconCompleted?: boolean;
 	fieldKit?: FieldKit;
+	medical?: { body: HealthState; inventory: import('./health').MedicalInventory };
 	lootItems?: LootItem[];
 	lootAutoSold?: { item: LootItem; money: number }[];
 }
@@ -239,11 +279,20 @@ function rebaseClock(state: GameState, now: number) {
 		raid.startedAt = Math.max(0, raid.startedAt - shift);
 		raid.endsAt = raid.expedition?.status === "choice" ? Math.max(0, raid.endsAt - shift) : raid.endsAt - shift;
 		if (raid.expedition) for (const event of raid.expedition.trail) event.at = Math.max(0, event.at - shift);
+		if (raid.expedition?.medical) raid.expedition.medical.start.body.painUntil = Math.max(0, raid.expedition.medical.start.body.painUntil - shift);
+		if (raid.squad) for (const member of raid.squad.members) {
+			if (member.medicalAt !== undefined) member.medicalAt = Math.max(0, member.medicalAt - shift);
+			if (member.medical) member.medical.body.painUntil = Math.max(0, member.medical.body.painUntil - shift);
+		}
 	});
 	for (const person of [...state.scavs, ...state.memorials]) {
 		person.story.joinedAt = Math.max(0, person.story.joinedAt - shift);
 		for (const memory of person.story.memories) memory.at = Math.max(0, memory.at - shift);
 		if (person.story.pending) person.story.pending.at = Math.max(0, person.story.pending.at - shift);
+	}
+	for (const person of state.scavs) {
+		if (person.body) person.body.painUntil = Math.max(0, person.body.painUntil - shift);
+		if (person.medicalTreatment) { person.medicalTreatment.startedAt = Math.max(0, person.medicalTreatment.startedAt - shift); person.medicalTreatment.endsAt = Math.max(0, person.medicalTreatment.endsAt - shift); }
 	}
 	for (const memorial of state.memorials) memorial.at = Math.max(0, memorial.at - shift);
 	rebaseSquadSocialClock(state, shift);
@@ -251,6 +300,11 @@ function rebaseClock(state: GameState, now: number) {
 	for (const report of state.history) {
 		report.at = Math.max(0, report.at - shift);
 		for (const event of report.events) event.at = Math.max(0, event.at - shift);
+		if (report.medical) report.medical.body.painUntil = Math.max(0, report.medical.body.painUntil - shift);
+		if (report.squad) for (const member of report.squad.members) {
+			if (member.medicalAt !== undefined) member.medicalAt = Math.max(0, member.medicalAt - shift);
+			if (member.medical) member.medical.body.painUntil = Math.max(0, member.medical.body.painUntil - shift);
+		}
 	}
 	state.createdAt = Math.min(state.createdAt, now);
 	state.lastUpdated = now;
@@ -619,7 +673,7 @@ function roomWorkRate(state: GameState, room: RoomInstance): number {
 	const social = getRoomSocialEffects(state, room.id);
 	const work = room.workerIds.reduce((sum, workerId) => {
 		const scav = state.scavs.find((item) => item.id === workerId);
-		return sum + (scav && scav.status !== "raiding" && scav.health >= 25 ? (700 + getWorkerAffinity(scav, room.type) * 10) * getScavProfileEffects(scav).work * getScavStoryEffects(scav).work * (social.workers.find((worker) => worker.scavId === workerId)?.multiplier ?? 1) : 0);
+		return sum + (scav && scav.status !== "raiding" && isScavMedicallyReady(scav) ? (700 + getWorkerAffinity(scav, room.type) * 10) * getScavProfileEffects(scav).work * getScavStoryEffects(scav).work * (social.workers.find((worker) => worker.scavId === workerId)?.multiplier ?? 1) : 0);
 	}, 0);
 	return Math.floor(work * (9 + room.level) / 10);
 }
@@ -745,7 +799,7 @@ export function getWorkerAssignmentReason(state: GameState, scavId: string, room
 	if (scav.status === "raiding") return "Боец сейчас в рейде.";
 	if (room) {
 		if (room.status !== "ready") return "Помещение ещё не готово.";
-		if (scav.health < 25) return "Бойцу нужно восстановиться до 25% здоровья.";
+		if (!isScavMedicallyReady(scav)) return "Бойцу нужно восстановить здоровье и подвижность; дождись лечения.";
 		if (!ROOM_DEFINITIONS[room.type].production) return "В этом помещении рабочие не требуются.";
 		if (!room.workerIds.includes(scavId) && room.workerIds.length >= getRoomWorkerCapacity(room)) return "Все рабочие места заняты.";
 	}
@@ -939,7 +993,7 @@ function nextShelterEvent(state: GameState, cursor: number, end: number): number
 		if (room.status === "ready" && (room.repeat || room.pending || room.queue.length > 0)) {
 			for (const workerId of room.workerIds) {
 				const scav = state.scavs.find((item) => item.id === workerId);
-				if (scav && scav.health < 25) next = Math.min(next, cursor + Math.max(1, Math.ceil((25_000_000 - Math.round(scav.health * 1_000_000)) / (40 + state.base.medbay * 25))));
+				if (scav && !isScavMedicallyReady(scav)) next = Math.min(next, cursor + Math.max(1, medicalRecoveryWait(state, scav)));
 			}
 			if ((room.repeat || room.pending) && room.queue.length === 0 && roomWorkRate(state, room) > 0) next = Math.min(next,
 				cursor + 10_000 - state.clock.income, cursor + 30_000 - state.clock.ammo, cursor + 60_000 - state.clock.scrap, cursor + 180_000 - state.clock.intel);
@@ -1119,7 +1173,7 @@ export function getRaidDuration(
 		20,
 		Math.round(
 			map.duration * TACTICS[scav.tactic].durationMultiplier * getLoadoutStats(state, scav).speedMultiplier * ergoSpeed *
-				(1 - personality.speedBonus - (state.base.radio - 1) * 0.035) * getScavProfileEffects(scav).duration
+				(1 - personality.speedBonus - (state.base.radio - 1) * 0.035) * getScavProfileEffects(scav).duration / (scav.body ? injuryEffects(scav.body, state.lastUpdated).movement : 1)
 		)
 	);
 }
@@ -1131,7 +1185,7 @@ export function getRaidChance(
 	const weapon = state.weapons.find(
 		(item) => item.id === scav.weaponInstanceId
 	);
-	if (!weapon || !getWeaponStats(weapon).ready || scav.health < 25) return 0;
+	if (!weapon || !getWeaponStats(weapon).ready || !isScavMedicallyReady(scav)) return 0;
 	const personality = getPersonality(scav);
 	const weaponStats = getWeaponStats(weapon);
 	const reliability = weaponStats.reliability / 100;
@@ -1151,6 +1205,7 @@ export function getRaidChance(
 			getAmmoEffect(weapon, scav.loadout.ammoType, map.id, "scavenge", 1, scav.tactic).bonus + (state.blueprints.includes(`route:${map.id}`) ? 0.02 : 0) -
 			map.danger * 0.7 -
 			(1 - scav.health / 100) * 0.16 -
+			(scav.body ? (1 - injuryEffects(scav.body, state.lastUpdated).aim) * .12 : 0) -
 			(1 - reliability) * 0.1,
 		0.22,
 		0.97
@@ -1236,7 +1291,7 @@ export function getRaidQuote(state: GameState, scav: Scav, map: RaidMap) {
 	if (scav.status === "raiding") reason = "Боец уже в рейде.";
 	else if (scav.assignment) reason = "Боец работает в убежище. Сначала освободи его от работы.";
 	else if (state.level < map.level) reason = `Сектор откроется на ${map.level} уровне.`;
-	else if (scav.health < 25) reason = "Бойцу нужно восстановиться до 25%.";
+	else if (!isScavMedicallyReady(scav)) reason = scav.medicalTreatment ? "Боец проходит курс лечения." : "Бойцу нужно восстановить здоровье и подвижность.";
 	else if (!weapon) reason = "Сначала выдай дикому оружие.";
 	else if (weapon.durability < 10) reason = "Оружию нужен ремонт.";
 	else if (!getWeaponStats(weapon).ready) reason = getWeaponBuildIssues(weapon)[0] ?? "Пушка не готова к выходу.";
@@ -1254,6 +1309,7 @@ export function getRaidQuote(state: GameState, scav: Scav, map: RaidMap) {
 
 function raidBlockReason(state: GameState, scav: Scav, map: RaidMap, minHealth = 25): string | null {
 	if (scav.health < minHealth) return `Восстановление до ${minHealth}% здоровья.`;
+	if (!isScavMedicallyReady(scav, minHealth)) return scav.medicalTreatment ? 'Курс лечения ещё не завершён.' : 'Нужно остановить кровь и восстановить подвижность.';
 	return getRaidQuote(state, scav, map).reason;
 }
 
@@ -1363,6 +1419,8 @@ function startRaid(state: GameState, scav: Scav, map: RaidMap, now: number, isAu
 				ammoType: scav.loadout.ammoType, medkit: scav.loadout.medkit } },
 	};
 	const beforeAmmo = state.supplies.ammo;
+	scav.body ??= createHealth(scav.health);
+	raid.expedition!.medical = { version: 1, inventory: raidMedicalInventory(scav.loadout.medkit), start: freezeRaidMedicine(state, scav, raid) };
 	state.money -= quote.money;
 	state.supplies.ammo -= quote.ammo;
 	state.supplies.intel -= quote.intel;
@@ -1703,22 +1761,18 @@ export function recycleWeapon(state: GameState, weaponInstanceId: string): Actio
 	return ok(`Разобрано: +${amount} деталей.`);
 }
 
-export function healScav(state: GameState, scavId: string): ActionResult {
+export function healScav(state: GameState, scavId: string, now = state.lastUpdated): ActionResult {
+	if (!isTime(now)) return fail('Некорректное время.');
+	rebaseClock(state, now); simulateAdvance(state, now, new Set([scavId]));
 	const scav = state.scavs.find((item) => item.id === scavId);
 	if (!scav) return fail("Дикий не найден.");
-	if (scav.status === "raiding") return fail("Боец сейчас в рейде.");
-	if (scav.health >= 100) return fail("Боец уже здоров.");
-	const medicine = Math.ceil(
-		(100 - scav.health) / (25 + state.base.medbay * 5)
-	);
-	if (state.supplies.medicine < medicine)
-		return fail(
-			`Нужно ${medicine} медикаментов. Медблок лечит бесплатно со временем.`
-		);
-	state.supplies.medicine -= medicine;
-	scav.health = 100;
-	scav.status = "ready";
-	return ok(`${scav.name} полностью восстановился.`);
+	const quote = getScavHealingQuote(state, scav);
+	if (quote.reason) return fail(quote.reason);
+	state.supplies.medicine -= quote.medicine;
+	scav.body ??= createHealth(scav.health);
+	scav.medicalTreatment = { startedAt: now, endsAt: now + Math.max(1, Math.round(quote.duration * 1000)), medicine: quote.medicine };
+	scav.status = 'wounded'; syncScavHealth(scav);
+	return ok(`${scav.name}: курс лечения ${quote.duration} сек., оплачено ${quote.medicine} медикаментов.`);
 }
 
 export function claimContract(
@@ -1778,7 +1832,7 @@ function getIndividualExpeditionChoices(state: GameState, raid: Raid, selectedPe
 		let reason: string | null = null;
 		if (expedition.status !== "choice") reason = "Дождись контрольной точки.";
 		else if (!scav || !weapon || !getWeaponStats(weapon).ready) reason = "Оружию нужен ремонт: пора эвакуироваться.";
-		else if (scav.health < 25) reason = "Боец слишком тяжело ранен: пора эвакуироваться.";
+		else if (!isScavMedicallyReady(scav)) reason = "Ранения мешают продолжению: пора эвакуироваться.";
 		else if (state.money < money) reason = `Нужно ${money} ₽ на следующий этап.`;
 		else if (state.supplies.ammo < ammo) reason = `Нужно ${ammo} патронов.`;
 		else if (state.supplies.intel < intel) reason = `Нужно ${intel} разведданных.`;
@@ -1816,6 +1870,7 @@ function continueAtCheckpoint(state: GameState, raid: Raid, branch: ExpeditionBr
 	expedition.perks.push(perk); expedition.offers = [];
 	renewRaidOutcomeSeed(state, raid);
 	expedition.stage++; expedition.status = "travel"; expedition.branch = branch;
+	if (expedition.medical) expedition.medical.start = freezeRaidMedicine(state, state.scavs.find(person => person.id === raid.scavId)!, raid);
 	raid.chance = quote.chance; raid.startedAt = now; raid.endsAt = now + quote.duration * 1000;
 	return ok(`${raid.scavName}: этап ${expedition.stage}, ${quote.label.toLowerCase()}. Груз остаётся под риском.`);
 }
@@ -1834,7 +1889,12 @@ export function continueExpedition(state: GameState, raidId: string, branch: Exp
 		for (const member of group) { const result = continueAtCheckpoint(state, member, branch, perk, now); if (!result.ok) throw new Error("Prevalidated squad continuation failed"); member.endsAt = now + quote.duration * 1000; }
 		const squad = structuredClone(raid.squad);
 		squad.stage = raid.expedition!.stage; squad.branch = branch; squad.actions = [];
-		for (const member of squad.members) { const peer = group.find((other) => other.id === member.raidId)!; member.chance = peer.chance; member.health = state.scavs.find((person) => person.id === member.scavId)!.health; if (peer.outcomeSeed !== undefined) member.outcomeSeed = peer.outcomeSeed; }
+		for (const member of squad.members) {
+			const peer = group.find((other) => other.id === member.raidId)!;
+			member.chance = peer.chance; member.health = state.scavs.find((person) => person.id === member.scavId)!.health;
+			if (peer.outcomeSeed !== undefined) member.outcomeSeed = peer.outcomeSeed;
+			if (peer.expedition!.medical) { member.medical = structuredClone(peer.expedition!.medical!.start); member.medicalAt = peer.endsAt; }
+		}
 		for (const member of group) member.squad = structuredClone(squad);
 		squad.actions = planSquadRaidActions(group[0]!);
 		for (const member of group) member.squad = structuredClone(squad);
@@ -1939,13 +1999,28 @@ function reachCheckpoint(state: GameState, raid: Raid, now: number, party?: { in
 	if (weapon.modules.receiver) weapon.modules.receiver.durability = weapon.durability;
 	if (!expedition.legacyLoot) for (const [slot, part] of Object.entries(weapon.modules)) if (slot !== "receiver") part.durability = Math.max(0, part.durability - (expedition.perks.includes("gunsmith") ? 1 : 2 + expedition.stage) * getFieldKitEffects(raid.fieldKit).wearMultiplier);
 	wearEquippedGear(state, scav, expedition.stage, !success);
+	const medicalResult = expedition.medical ? resolveMedicalEncounter({ ...expedition.medical.start, injuryMultiplier: expedition.medical.start.injuryMultiplier * (party?.injuryMultiplier ?? 1) }, raid.outcomeSeed ?? raid.seed, expedition.stage, map.danger, success, raid.endsAt, Boolean(party?.rescuedBy)) : null;
+	if (medicalResult) {
+		scav.body = medicalResult.body; syncScavHealth(scav); expedition.medical!.inventory = medicalResult.inventory;
+		expedition.trail.push({ at: now, label: `Ранения · этап ${expedition.stage}`, text: medicalResult.events.join(' ').slice(0, 400) || 'Повреждений нет.', kind: medicalResult.dead || !medicalResult.stable ? 'danger' : 'neutral' });
+	}
 	if (!success) {
 		expedition.trail.push({ at: now, label: `Засада · этап ${expedition.stage}`, text: (`Маршрут «${EXPEDITION_BRANCHES[expedition.branch].label}» сорван. Невынесенный груз потерян.${discoveriesText ? ` По рации передано: ${discoveriesText}.` : ""}${streetText}`).slice(0, 400), kind: "danger" });
-		scav.health = Math.max(0, scav.health - Math.ceil((32 + random() * 35 + expedition.stage * 4) * injury));
+		const legacyDamage = Math.ceil((32 + random() * 35 + expedition.stage * 4) * injury);
+		if (!medicalResult) { scav.health = Math.max(0, scav.health - legacyDamage); delete scav.body; }
 		state.raids = state.raids.filter((item) => item.id !== raid.id);
 		return finishExpedition(state, raid, false, now, party?.rescuedBy ?? null);
 	}
-	scav.health = Math.max(25, scav.health - Math.ceil((3 + random() * (8 + map.danger * 10) + expedition.stage * 2) * injury));
+	if (party?.rescuedBy && medicalResult) {
+		state.raids = state.raids.filter(item => item.id !== raid.id);
+		return finishExpedition(state, raid, false, now, party.rescuedBy);
+	}
+	const legacyDamage = Math.ceil((3 + random() * (8 + map.danger * 10) + expedition.stage * 2) * injury);
+	if (!medicalResult) { scav.health = Math.max(25, scav.health - legacyDamage); delete scav.body; }
+	if (medicalResult?.dead) {
+		state.raids = state.raids.filter(item => item.id !== raid.id);
+		return finishExpedition(state, raid, false, now);
+	}
 	if (raid.strategy && expedition.branch === "recon") expedition.reconCompleted = true;
 	const branch = EXPEDITION_BRANCHES[expedition.branch];
 	const lootMultiplier = Math.max(0.3, (0.5 + expedition.stage * 0.25) * (1 + raid.lootBonus + branch.lootBonus)
@@ -1998,6 +2073,11 @@ function reachCheckpoint(state: GameState, raid: Raid, now: number, party?: { in
 	expedition.offers = [];
 	while (expedition.stage < 3 && expedition.offers.length < 2 && candidates.length) expedition.offers.push(candidates.splice(Math.floor(random() * candidates.length), 1)[0]!);
 	if (!raid.isAuto) return null;
+	if (!isScavMedicallyReady(scav)) {
+		expedition.trail.push({ at: now, label: 'Медицинский приказ', text: 'Ранения или нехватка средств не позволяют продолжать. Боец эвакуируется с уже найденным грузом.', kind: 'danger' });
+		state.raids = state.raids.filter(item => item.id !== raid.id);
+		return finishExpedition(state, raid, true, now);
+	}
 	if (expedition.stage < expedition.autoDepth) {
 		const branch: ExpeditionBranch = raid.tactic === "cautious" ? "recon" : raid.tactic === "bold" ? "combat" : "scavenge";
 		const result = continueAtCheckpoint(state, raid, branch, expedition.offers[0]!, now);
@@ -2030,6 +2110,7 @@ function completeStrategySortie(state: GameState, reports: RaidReport[]) {
 }
 function reachSquadCheckpoint(state: GameState, raid: Raid, now: number): RaidReport[] {
 	const squad = raid.squad!, group = getRaidGroup(state, raid), reports: RaidReport[] = [];
+	const medicalOutcomes = getSquadRawOutcomes(squad, raid.mapId);
 	for (const member of group) {
 		const report = reachCheckpoint(state, member, now, { injuryMultiplier: squadInjuryMultiplier(squad, member.scavId), rescuedBy: squad.actions.find((action) => action.kind === "rescue" && action.targetId === member.scavId)?.actorId ?? null });
 		if (report) reports.push(report);
@@ -2041,6 +2122,19 @@ function reachSquadCheckpoint(state: GameState, raid: Raid, now: number): RaidRe
 			const last = member.expedition!.trail.at(-1)!;
 			last.text = `${last.text} Один из бойцов попал в засаду. Остальные прекращают продвижение и возвращаются вместе с отрядом.`.slice(0, 400);
 			reports.push(finishExpedition(state, member, true, now));
+		}
+		for (const action of squad.actions.filter(item => item.kind === 'rescue')) {
+			const helper = reports.find(item => group.find(member => member.scavId === action.actorId)?.id === item.raidId);
+			const victim = medicalOutcomes.find(item => item.member.scavId === action.targetId)?.medical;
+			if (helper?.medical && victim) {
+				helper.medical.inventory.medkit = Math.max(0, helper.medical.inventory.medkit - 40);
+				for (const part of BODY_PARTS) {
+					const bleed = victim.body.parts[part].bleeding;
+					if (bleed !== 'none') helper.medical.inventory[bleed === 'heavy' ? 'tourniquet' : 'bandage']--;
+				}
+				const helperRaid = group.find(member => member.scavId === action.actorId)!;
+				if (helperRaid.expedition?.medical) helperRaid.expedition.medical.inventory = structuredClone(helper.medical.inventory);
+			}
 		}
 		attachSquadReports(state, squad, reports);
 	} else {
@@ -2062,6 +2156,7 @@ function finishExpedition(state: GameState, raid: Raid, success: boolean, now: n
 		discoveries: [...expedition.discoveries], lostCargo: success ? null : structuredClone(expedition.cargo), moduleIds: [],
 		...(raid.strategy ? { strategy: { ...raid.strategy } } : {}), ...(expedition.reconCompleted ? { reconCompleted: true } : {}), ...(raid.fieldKit ? { fieldKit: raid.fieldKit } : {}),
 		...(raid.lootVersion === 1 ? { lootItems: [], lootAutoSold: [] } : {}) };
+	if (expedition.medical) report.medical = { body: structuredClone(getScavBody(scav)), inventory: structuredClone(expedition.medical.inventory) };
 	state.stats.raidsCompleted++; scav.raids++;
 	if (raid.isAuto) { state.stats.autoRaidsCompleted++; scav.autoRaid.runs++; }
 	const oldLevel = scav.level;
@@ -2106,8 +2201,9 @@ function finishExpedition(state: GameState, raid: Raid, success: boolean, now: n
 		if (discarded > 0) report.description += " Часть припасов оставлена: склад полон.";
 	} else {
 		report.lostWeapon = random() < 0.2 + map.danger * 0.22 + (expedition.stage - 1) * 0.08;
-		report.lostScav = random() < (map.danger * 0.08 + (expedition.stage - 1) * 0.018) * TACTICS[raid.tactic].fatalityMultiplier;
-		if (rescuedBy) { report.lostScav = false; report.lostWeapon = false; scav.health = clamp(scav.health, 5, 24); }
+		const legacyFatal = random() < (map.danger * 0.08 + (expedition.stage - 1) * 0.018) * TACTICS[raid.tactic].fatalityMultiplier;
+		report.lostScav = expedition.medical ? !isAlive(getScavBody(scav)) : legacyFatal;
+		if (rescuedBy && !report.lostScav) { report.lostWeapon = false; if (!expedition.medical) scav.health = clamp(scav.health, 5, 24); }
 		if (report.lostWeapon || report.lostScav) {
 			report.lostWeapon = true; state.weapons = state.weapons.filter((item) => item.id !== raid.weaponInstanceId); scav.weaponInstanceId = null;
 		}
@@ -2123,7 +2219,8 @@ function finishExpedition(state: GameState, raid: Raid, success: boolean, now: n
 		scav.level = Math.min(15, 1 + Math.floor(Math.sqrt(scav.xp / 60)));
 		scav.combat = Math.min(100, scav.combat + (scav.level - oldLevel) * 4);
 		scav.scouting = Math.min(100, scav.scouting + (scav.level - oldLevel) * 3);
-		scav.status = scav.health >= 25 ? "ready" : "wounded";
+		if (scav.body) for (const part of BODY_PARTS) scav.body.parts[part].bleeding = 'none';
+		scav.status = isScavMedicallyReady(scav) ? 'ready' : 'wounded'; syncScavHealth(scav);
 	}
 	if (state.weapons.length === 0 && state.scavs.length > 0) {
 		const survivor = state.scavs.find((item) => item.status !== "raiding");
@@ -2144,6 +2241,8 @@ function finishRaid(state: GameState, raid: Raid): RaidReport {
 	const map = ownValue(MAP_BY_ID, raid.mapId);
 	if (!map) throw new Error("Неизвестный сектор");
 	const scav = state.scavs.find((item) => item.id === raid.scavId)!;
+	// Already-paid one-stage sorties retain their original aggregate rules.
+	delete scav.body;
 	const weapon = state.weapons.find(
 		(item) => item.id === raid.weaponInstanceId
 	)!;
@@ -2327,10 +2426,27 @@ function progressBase(state: GameState, elapsedMs: number) {
 	const recovery = elapsedMs * (40 + state.base.medbay * 25);
 	state.scavs.forEach((scav) => {
 		if (scav.status !== "raiding") {
-			scav.health = Math.min(100_000_000, Math.round(scav.health * 1_000_000) + recovery) / 1_000_000;
-			scav.status = scav.health >= 25 ? "ready" : "wounded";
+			if (scav.medicalTreatment) return;
+			if (scav.body) { recoverAtBase(scav.body, elapsedMs, state.base.medbay); syncScavHealth(scav); }
+			else { scav.health = Math.min(100_000_000, Math.round(scav.health * 1_000_000) + recovery) / 1_000_000; scav.status = scav.health >= 25 ? 'ready' : 'wounded'; }
 		}
 	});
+}
+
+function finishMedicalCourses(state: GameState, now: number) {
+	for (const scav of state.scavs) if (scav.medicalTreatment && scav.medicalTreatment.endsAt <= now) {
+		scav.body = createHealth(100); delete scav.medicalTreatment; syncScavHealth(scav);
+	}
+}
+function medicalRecoveryWait(state: GameState, scav: Scav, minHealth = 25): number {
+	if (scav.medicalTreatment) return Math.max(1, scav.medicalTreatment.endsAt - state.lastUpdated);
+	if (!scav.body) return Math.max(1, Math.ceil((minHealth * 1_000_000 - Math.round(scav.health * 1_000_000)) / (40 + state.base.medbay * 25)));
+	if (isScavMedicallyReady(scav, minHealth)) return 0;
+	let lo = 1, hi = MAX_OFFLINE_MS;
+	const readyAfter = (ms: number) => { const body = structuredClone(scav.body!); recoverAtBase(body, ms, state.base.medbay); return canDeploy(body, minHealth); };
+	if (!readyAfter(hi)) return hi;
+	while (lo < hi) { const mid = Math.floor((lo + hi) / 2); if (readyAfter(mid)) hi = mid; else lo = mid + 1; }
+	return lo;
 }
 
 /** Advances in event order, so one long offline tick equals many short ticks. */
@@ -2356,6 +2472,7 @@ function simulateAdvance(state: GameState, now: number, stoppedAtBoundary: Reado
 	const end = state.lastUpdated + summary.elapsedMs;
 	let cursor = state.lastUpdated;
 	while (true) {
+		finishMedicalCourses(state, cursor);
 		settleShelter(state, cursor, cursor === end ? stoppedProductionAtBoundary : new Set());
 		// Production and recovery for this timestamp precede settlements; all
 		// simultaneous settlements precede resource competition for new exits.
@@ -2380,14 +2497,15 @@ function simulateAdvance(state: GameState, now: number, stoppedAtBoundary: Reado
 		settleShelter(state, cursor, cursor === end ? stoppedProductionAtBoundary : new Set());
 		if (cursor >= end) break;
 		let next = nextShelterEvent(state, cursor, end);
+		for (const scav of state.scavs) if (scav.medicalTreatment) next = Math.min(next, scav.medicalTreatment.endsAt);
 		for (const raid of state.raids) if (raid.expedition?.status !== "choice") next = Math.min(next, raid.endsAt);
 		for (const scav of state.scavs) {
 			if (!scav.autoRaid.enabled || scav.status === "raiding" || scav.assignment) continue;
 			const map = ownValue(MAP_BY_ID, scav.autoRaid.mapId);
 			const weapon = state.weapons.find((item) => item.id === scav.weaponInstanceId);
 			if (!map || state.level < map.level || !weapon || weapon.durability < 10) continue;
-			if (scav.health < scav.autoRaid.minHealth) {
-				const wait = Math.ceil((scav.autoRaid.minHealth * 1_000_000 - Math.round(scav.health * 1_000_000)) / (40 + state.base.medbay * 25));
+			if (!isScavMedicallyReady(scav, scav.autoRaid.minHealth)) {
+				const wait = medicalRecoveryWait(state, scav, scav.autoRaid.minHealth);
 				next = Math.min(next, cursor + Math.max(1, wait));
 			} else if (state.money < getRaidQuote(state, scav, map).money && state.money < getRecoveryAllowance(state))
 				next = Math.min(next, cursor + 10_000 - state.clock.income);
@@ -2406,7 +2524,15 @@ function simulateAdvance(state: GameState, now: number, stoppedAtBoundary: Reado
 	if (discarded > 0) state.raids.forEach((raid) => {
 		raid.startedAt += discarded;
 		raid.endsAt += discarded;
+		const person = state.scavs.find(scav => scav.id === raid.scavId);
+		if (person?.body?.painUntil) person.body.painUntil += discarded;
+		if (raid.expedition?.medical?.start.body.painUntil) raid.expedition.medical.start.body.painUntil += discarded;
+		if (raid.squad) for (const member of raid.squad.members) {
+			if (member.medicalAt !== undefined) member.medicalAt += discarded;
+			if (member.medical?.body.painUntil) member.medical.body.painUntil += discarded;
+		}
 	});
+	if (discarded > 0) for (const scav of state.scavs) if (scav.medicalTreatment) { scav.medicalTreatment.startedAt += discarded; scav.medicalTreatment.endsAt += discarded; }
 	state.lastUpdated = now;
 	summary.money = state.money - beforeMoney;
 	return summary;
@@ -2569,10 +2695,26 @@ function parseEvents(value: unknown, max: number): RaidReport["events"] {
 		return { at: number(event.at), label: string(event.label, 50), text: string(event.text, 400), kind: event.kind as RaidReport["events"][number]["kind"] };
 	});
 }
+function parseMedicalCourse(value: unknown): NonNullable<Scav['medicalTreatment']> {
+	const source = record(value); fields(source, ['startedAt', 'endsAt', 'medicine']);
+	const startedAt = number(source.startedAt), endsAt = number(source.endsAt);
+	if (endsAt <= startedAt || endsAt - startedAt > 600_000) throw new Error('medical-duration');
+	return { startedAt, endsAt, medicine: number(source.medicine, 20, 0, true) };
+}
+function parseRaidMedicalStart(value: unknown): RaidMedicalStart {
+	const source = record(value); fields(source, ['body', 'inventory', 'injuryMultiplier', 'armorProtection', 'helmetProtection']);
+	const body = parseHealth(source.body);
+	if (!canDeploy(body)) throw new Error('medical-start');
+	return { body, inventory: parseMedicalInventory(source.inventory), injuryMultiplier: number(source.injuryMultiplier, 3, 0), armorProtection: number(source.armorProtection, .8), helmetProtection: number(source.helmetProtection, .8) };
+}
+function parseReportMedicine(value: unknown): NonNullable<RaidReport['medical']> {
+	const source = record(value); fields(source, ['body', 'inventory']);
+	return { body: parseHealth(source.body), inventory: parseMedicalInventory(source.inventory) };
+}
 function parseExpedition(value: unknown, version: number): Expedition | null {
 	if (value === null) return null;
 	const source = record(value);
-	fields(source, ["stage", "status", "branch", "cargo", "perks", "offers", "discoveries", "loadout", "autoDepth", "baseChance", "baseDuration", "capacity", "ammoMultiplier", "trail", ...(version >= 4 ? ["legacyLoot", "gunCombatBonus"] : []), ...(version >= 11 ? ["weaponMechanics"] : []), ...(version >= 12 ? ["reconCompleted"] : []), ...(version >= 13 ? ["ammunition"] : []), ...(version >= ARSENAL_SAVE_VERSION ? ["lootCatalogVersion"] : [])]);
+	fields(source, ["stage", "status", "branch", "cargo", "perks", "offers", "discoveries", "loadout", "autoDepth", "baseChance", "baseDuration", "capacity", "ammoMultiplier", "trail", ...(version >= 4 ? ["legacyLoot", "gunCombatBonus"] : []), ...(version >= 11 ? ["weaponMechanics"] : []), ...(version >= 12 ? ["reconCompleted"] : []), ...(version >= 13 ? ["ammunition"] : []), ...(version >= ARSENAL_SAVE_VERSION ? ["lootCatalogVersion"] : []), ...(version >= 18 ? ['medical'] : [])]);
 	const loadout = record(source.loadout);
 	fields(loadout, ["armorModelId", "armorCondition", "helmetModelId", "helmetCondition", "packModelId", "packCondition", "ammoType", "medkit"]);
 	if (source.status !== "travel" && source.status !== "choice") throw new Error("checkpoint-status");
@@ -2592,7 +2734,13 @@ function parseExpedition(value: unknown, version: number): Expedition | null {
 		discoveries: array(source.discoveries, Object.keys(BLUEPRINTS).length, (value) => known(value, BLUEPRINTS)),
 		loadout: { armorModelId, armorCondition: number(loadout.armorCondition, 100), helmetModelId, helmetCondition, packModelId, packCondition: number(loadout.packCondition, 100), ammoType: parseAmmoType(loadout.ammoType, version), medkit: bool(loadout.medkit) },
 		autoDepth: number(source.autoDepth, 3, 1, true), baseChance: number(source.baseChance, 1), baseDuration: number(source.baseDuration, 600, 20),
-		capacity: number(source.capacity, version >= 6 ? 50 : 42, version >= 6 ? 8 : 10), ammoMultiplier: number(source.ammoMultiplier, 4, 0.2), trail: parseEvents(source.trail, 9) };
+		capacity: number(source.capacity, version >= 6 ? 50 : 42, version >= 6 ? 8 : 10), ammoMultiplier: number(source.ammoMultiplier, 4, 0.2), trail: parseEvents(source.trail, version >= 18 ? 24 : 9) };
+	if (version >= 18 && Object.hasOwn(source, 'medical')) {
+		const medical = record(source.medical); fields(medical, ['version', 'inventory', 'start']);
+		if (medical.version !== 1 || expedition.legacyLoot) throw new Error('medical-version');
+		expedition.medical = { version: 1, inventory: parseMedicalInventory(medical.inventory), start: parseRaidMedicalStart(medical.start) };
+		for (const type of Object.keys(RAID_MEDICAL_KIT) as (keyof typeof RAID_MEDICAL_KIT)[]) if (expedition.medical.inventory[type] > expedition.medical.start.inventory[type] + 1e-6 || expedition.medical.start.inventory[type] > (expedition.loadout.medkit ? RAID_MEDICAL_KIT[type] : 0)) throw new Error('medical-stock');
+	}
 	if (version >= 11 && Object.hasOwn(source, "weaponMechanics")) {
 		const snapshot = record(source.weaponMechanics);
 		fields(snapshot, ["power", "reliability", "firstBonus", "wearMultiplier"]);
@@ -2824,7 +2972,7 @@ function validateStorySources(state: GameState, scav: Pick<Scav, "name" | "story
 }
 function parseScav(value: unknown, version: number): Scav {
 	const source = record(value);
-	fields(source, ["id", "name", "personality", "appearance", "level", "xp", "health", "combat", "scouting", "weaponInstanceId", "status", "raids", ...(version >= 2 ? ["tactic", "gear", "autoRaid"] : []), ...(version >= 3 ? ["loadout"] : []), ...(version >= 5 ? ["assignment"] : []), ...(version >= 6 ? ["profile"] : []), ...(version >= 7 ? ["story"] : []), ...(version >= 12 ? ["raidPlan"] : []), ...(version >= 14 ? ["fieldKit"] : [])]);
+	fields(source, ["id", "name", "personality", "appearance", "level", "xp", "health", "combat", "scouting", "weaponInstanceId", "status", "raids", ...(version >= 2 ? ["tactic", "gear", "autoRaid"] : []), ...(version >= 3 ? ["loadout"] : []), ...(version >= 5 ? ["assignment"] : []), ...(version >= 6 ? ["profile"] : []), ...(version >= 7 ? ["story"] : []), ...(version >= 12 ? ["raidPlan"] : []), ...(version >= 14 ? ["fieldKit"] : []), ...(version >= 18 ? ['body', 'medicalTreatment'] : [])]);
 	if (!["ready", "raiding", "wounded"].includes(source.status as string))
 		throw new Error("status");
 	let gear: Scav["gear"] = { armor: 0, backpack: 0 };
@@ -2850,6 +2998,8 @@ function parseScav(value: unknown, version: number): Scav {
 		level: number(source.level, 15, 1, true),
 		xp: number(source.xp),
 		health: number(source.health, 100),
+		...(version >= 18 && Object.hasOwn(source, 'body') ? { body: parseHealth(source.body) } : {}),
+		...(version >= 18 && Object.hasOwn(source, 'medicalTreatment') ? { medicalTreatment: parseMedicalCourse(source.medicalTreatment) } : {}),
 		combat: number(source.combat, 100),
 		scouting: number(source.scouting, 100),
 		weaponInstanceId:
@@ -2904,7 +3054,7 @@ function parseRaid(value: unknown, version: number): Raid {
 }
 function parseReport(value: unknown, version: number): RaidReport {
 	const source = record(value);
-	fields(source, ["id", "raidId", "scavName", "scavAppearance", "mapId", "at", "success", "lostScav", "lostWeapon", "money", "supplies", "weaponId", "weaponAutoSold", "description", ...(version >= 2 ? ["isAuto", "tactic", "events"] : []), ...(version >= 3 ? ["depth", "discoveries", "lostCargo"] : []), ...(version >= 4 ? ["moduleIds"] : []), ...(version >= 10 ? ["squad"] : []), ...(version >= 12 ? ["strategy", "sectorOutcome", "reconCompleted"] : []), ...(version >= 14 ? ["fieldKit"] : []), ...(version >= 16 ? ["lootItems", "lootAutoSold"] : [])]);
+	fields(source, ["id", "raidId", "scavName", "scavAppearance", "mapId", "at", "success", "lostScav", "lostWeapon", "money", "supplies", "weaponId", "weaponAutoSold", "description", ...(version >= 2 ? ["isAuto", "tactic", "events"] : []), ...(version >= 3 ? ["depth", "discoveries", "lostCargo"] : []), ...(version >= 4 ? ["moduleIds"] : []), ...(version >= 10 ? ["squad"] : []), ...(version >= 12 ? ["strategy", "sectorOutcome", "reconCompleted"] : []), ...(version >= 14 ? ["fieldKit"] : []), ...(version >= 16 ? ["lootItems", "lootAutoSold"] : []), ...(version >= 18 ? ['medical'] : [])]);
 	if (version >= 14 && Object.hasOwn(source, "fieldKit") && !Object.hasOwn(source, "strategy")) throw new Error("field-kit-report");
 	return {
 		id: string(source.id),
@@ -2928,12 +3078,13 @@ function parseReport(value: unknown, version: number): RaidReport {
 		moduleIds: version >= 4 ? array(source.moduleIds, 12, (value) => versionedModuleId(value, version)) : [],
 		isAuto: version === 1 ? false : bool(source.isAuto),
 		tactic: version === 1 ? "balanced" : known(source.tactic, TACTICS) as RaidTactic,
-		events: version === 1 ? [] : parseEvents(source.events, version >= 3 ? 10 : 4),
+		events: version === 1 ? [] : parseEvents(source.events, version >= 18 ? 25 : version >= 3 ? 10 : 4),
 		...(version >= 10 && Object.hasOwn(source, "squad") ? { squad: parseSquadRaidSnapshot(source.squad, true, version) as SquadRaidReport } : {}),
 		...(version >= 12 && Object.hasOwn(source, "strategy") ? { strategy: parseRaidStrategy(source.strategy) } : {}),
 		...(version >= 12 && Object.hasOwn(source, "sectorOutcome") ? { sectorOutcome: parseSectorIntel(source.sectorOutcome) } : {}),
 		...(version >= 12 && Object.hasOwn(source, "reconCompleted") ? { reconCompleted: bool(source.reconCompleted) } : {}),
 		...(version >= 14 && Object.hasOwn(source, "fieldKit") ? { fieldKit: parseFieldKit(source.fieldKit) } : {}),
+		...(version >= 18 && Object.hasOwn(source, 'medical') ? { medical: parseReportMedicine(source.medical) } : {}),
 		...(version >= 16 && Object.hasOwn(source, "lootItems") ? { lootItems: array(source.lootItems, 6, parseLootItem) } : {}),
 		...(version >= 16 && Object.hasOwn(source, "lootAutoSold") ? { lootAutoSold: array(source.lootAutoSold, 6, value => {
 			const sale = record(value); fields(sale, ["item", "money"]); const item = parseLootItem(sale.item), money = number(sale.money, 10000, 1, true);
@@ -3109,9 +3260,11 @@ export function parseSave(raw: string, options: { publicSnapshot?: boolean } = {
 			const raids = state.raids.filter((raid) => raid.scavId === scav.id);
 			if ((scav.status === "raiding" ? 1 : 0) !== raids.length)
 				throw new Error("raid-status");
-			if (scav.status === "wounded" && scav.health >= 25)
+			if (scav.body && (!isAlive(scav.body) || Math.abs(scav.health - healthPercent(scav.body)) > 1e-6)) throw new Error('medical-health');
+			if (scav.medicalTreatment && (!scav.body || scav.status === 'raiding' || scav.medicalTreatment.startedAt > state.lastUpdated || scav.medicalTreatment.endsAt <= state.lastUpdated)) throw new Error('medical-course');
+			if (scav.status === "wounded" && isScavMedicallyReady(scav))
 				throw new Error("health-status");
-			if (scav.status === "ready" && scav.health < 25)
+			if (scav.status === "ready" && !isScavMedicallyReady(scav))
 				throw new Error("health-status");
 			const workplaces = state.shelter.rooms.filter((room) => room.workerIds.includes(scav.id));
 			if (scav.assignment === null ? workplaces.length !== 0 : workplaces.length !== 1 || workplaces[0]!.id !== scav.assignment || scav.status === "raiding") throw new Error("worker-owner");
@@ -3156,6 +3309,12 @@ export function parseSave(raw: string, options: { publicSnapshot?: boolean } = {
 				throw new Error("raid-time");
 			if (raid.expedition) {
 				const scav = state.scavs.find((item) => item.id === raid.scavId)!;
+				if (raid.expedition.medical && (!scav.body || raid.expedition.status === 'travel' && (JSON.stringify(scav.body) !== JSON.stringify(raid.expedition.medical.start.body) || JSON.stringify(raid.expedition.medical.inventory) !== JSON.stringify(raid.expedition.medical.start.inventory)))) throw new Error('medical-sortie');
+				if (raid.expedition.medical) {
+					const actual = raid.expedition.medical.start, expected = freezeRaidMedicine(state, scav, raid);
+					if (Math.abs(actual.armorProtection - expected.armorProtection) > 1e-6 || Math.abs(actual.helmetProtection - expected.helmetProtection) > 1e-6
+						|| raid.expedition.status === 'travel' && Math.abs(actual.injuryMultiplier - expected.injuryMultiplier) > 1e-6) throw new Error('medical-profile');
+				}
 				const armor = state.gearItems.find((item) => item.id === scav.loadout.armorItemId);
 				const helmet = state.gearItems.find((item) => item.id === scav.loadout.helmetItemId);
 				const pack = state.gearItems.find((item) => item.id === scav.loadout.backpackItemId);
@@ -3198,6 +3357,7 @@ export function parseSave(raw: string, options: { publicSnapshot?: boolean } = {
 		for (const report of state.history) {
 			if (!report.id.startsWith("report-") || !/^raid-[1-9]\d*$/.test(report.raidId) || Number(report.raidId.slice(5)) >= state.nextId) throw new Error("report-id");
 			if ((report.lostScav && !report.lostWeapon) || (report.success && (report.lostScav || report.lostWeapon))) throw new Error("report-outcome");
+			if (report.medical && report.lostScav === isAlive(report.medical.body)) throw new Error('medical-report');
 			const receipt = [...(report.lootItems ?? []), ...(report.lootAutoSold ?? []).map(sale => sale.item), ...(report.lostCargo?.lootItems ?? [])];
 			unique(receipt.map(item => item.id));
 			if (receipt.length > 6 || (Object.hasOwn(report, "lootItems") || Object.hasOwn(report, "lootAutoSold") || receipt.length > 0) && !report.strategy

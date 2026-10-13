@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	SAVE_VERSION, advance, continueExpedition, createGame, dispatchRaid, dispatchSquadRaid, extractRaid, getExpeditionChoices,
 	getLoadoutStats, getRaidQuote, getWeaponRole, getWeaponStats, installModule, loadGameWithSummary,
-	parseSave, saveGame, setLoadoutOption, setRaidTactic, type GameState, type Raid,
+	isScavMedicallyReady, parseSave, saveGame, setLoadoutOption, setRaidTactic, type GameState, type Raid,
 } from "../src/game/engine";
 import { AMMO_MODELS, AMMO_TYPES, getAmmoEffect, getAmmoModel, type AmmoType } from "../src/game/ammunition";
 import { MAP_BY_ID } from "../src/game/data";
@@ -53,11 +53,12 @@ function restore(state: GameState): GameState {
 function checkpoint(weaponId: string, type: AmmoType, legacyCatalog = false): { state: GameState; raid: Raid } {
 	for (let offset = 0; offset < 128; offset++) {
 		const state = funded(weaponId, type, NOW + offset);
+		if (!legacyCatalog) expect(setLoadoutOption(state, state.scavs[0]!.id, "medkit", true).ok).toBe(true);
 		expect(dispatchRaid(state, state.scavs[0]!.id, "courtyard", state.lastUpdated).ok).toBe(true);
 		if (legacyCatalog) withoutLoot(withoutArsenalLoot(state));
 		const raid = state.raids[0]!;
 		advance(state, raid.endsAt);
-		if (state.raids[0]?.expedition?.status === "choice") return { state, raid };
+		if (state.raids[0]?.expedition?.status === "choice" && (legacyCatalog || isScavMedicallyReady(state.scavs[0]!))) return { state, raid };
 	}
 	throw new Error(`No genuine ${weaponId}/${type} checkpoint`);
 }

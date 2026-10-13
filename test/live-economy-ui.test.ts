@@ -3,6 +3,7 @@ import { createLiveMode } from '../src/live-ui';
 import { liveDropDetails, liveDropLabel, liveEconomyChanged, liveLootCargo, liveLootTotals } from '../src/live-loot-ui';
 import { LOOT_MODELS } from '../src/game/loot';
 import type { EconomyLoot, LiveSnapshot } from '../src/game/live';
+import { createHealth, createMedicalInventory } from '../src/game/health';
 
 const GAME='cba21a6d-2936-4590-9433-dfa2b58c8dc8', NEXT='4ad58c2f-7616-4600-8134-83b7a210814d';
 const loot=(modelId='gold-ring',suffix=1):EconomyLoot=>({id:`532cfa7a-5ca1-4742-a07c-ffefdc785d${String(suffix).padStart(2,'0')}`,modelId,foundAt:1000});
@@ -15,7 +16,7 @@ function fixture(game=GAME):LiveSnapshot {
   return {
     server:{id:'perimeter-1',name:'Периметр 01',online:1,capacity:32,startedAt:1000,maps},now:2000,selfId:'player-1',
     world:{...maps[0]!,obstacles:[],extracts:[{x:2,y:2}],zones:[{x:0,y:0,width:8,height:8,name:'Тайники',terrain:'yard',danger:1}]},
-    self:{id:'player-1',ammo:30,medkits:1,cargo:0,stash:0,kills:0,respawnAt:0,patrol:false,targetId:null,travelReadyAt:0,gameId:game,lootItems:[],pendingDelivery:[],economyMessage:''},
+    self:{id:'player-1',ammo:30,medkits:1,cargo:0,stash:0,kills:0,respawnAt:0,patrol:false,targetId:null,travelReadyAt:0,gameId:game,lootItems:[],pendingDelivery:[],economyMessage:'', body:createHealth(), medicine:createMedicalInventory({medkit:40,bandage:2,tourniquet:1,splint:1,painkiller:1,surgery:1}), treatment:null,leaveAt:0},
     entities:[{id:'player-1',name:'Игрок',kind:'player',appearance:0,x:2,y:2,health:100,action:'idle',safeUntil:0}],drops:[],events:[],
   };
 }
@@ -83,18 +84,28 @@ describe('live loot and headquarters presentation',()=>{
     expect(liveEconomyChanged(before,next)).toBe(true);
     expect(liveEconomyChanged(next,next,'resupply')).toBe(true);
   });
+  test('refilling a consumed aid refreshes headquarters even when the medkit HP and ammunition stay full',async()=>{
+    const state=fixture();state.self.ammo=60;state.self.medkits=2;state.self.medicine.medkit=80;state.self.medicine.splint=0;
+    const h=harness(async url=>url.endsWith('/status')?response(state.server):response(state));
+    h.mode.show();await h.pump();h.dock.click('join');await h.pump();
+    expect(h.dock.innerHTML).toContain('Заберёшь: патроны +0, лекарства +1');
+    expect(h.dock.innerHTML).not.toContain('Комплект пополнен');
+    expect(h.dock.innerHTML).not.toContain('data-live-button="resupply" disabled');
+    state.self.medicine.splint=1;h.firePoll();await h.pump();
+    expect(h.economicChanges).toBe(2);expect(h.dock.innerHTML).toContain('Комплект пополнен');
+  });
   test('connects the live market button, named inventory and refill using the captured shelter identity',async()=>{
     const state=fixture();state.self.lootItems=[loot()];
-    const h=harness(async url=>url.endsWith('/status')?response(state.server):response(state));
+    const h=harness(async url=>url.endsWith('/status')?response(state.server):url.endsWith('/leave')?response({ok:true}):response(state));
     h.mode.show();await h.pump();h.dock.click('join');await h.pump();
     expect(h.dock.innerHTML).toContain('Золотое кольцо');expect(h.dock.innerHTML).toContain('Склад и барахолка');
     expect(h.dock.innerHTML).toContain('Заберёшь: патроны +30, лекарства +1');
-    h.dock.click('market');expect(h.marketOpens).toBe(1);
     h.dock.click('resupply');await h.pump();
     const action=h.calls.find(call=>call.url.endsWith('/action'))!;
     expect(JSON.parse(action.init.body as string)).toEqual({type:'resupply'});
     expect(action.init.headers).toMatchObject({'x-prapor-game':GAME,'x-prapor-live':'player-1'});
     expect(h.economicChanges).toBe(2);
+    h.dock.click('market');await h.pump();expect(h.marketOpens).toBe(1);
   });
   test('refreshes headquarters after extraction and after the pending parcel arrives on a fresh read',async()=>{
     let state=fixture();state.self.lootItems=[loot()];
@@ -133,7 +144,7 @@ describe('live loot and headquarters presentation',()=>{
     const h=harness(async url=>url.endsWith('/status')?response(state.server):response(state));
     h.mode.show();await h.pump();h.dock.click('join');await h.pump();
     h.dock.click('resupply');await h.pump();expect(h.economicChanges).toBe(2);
-    state.self.ammo=60;state.self.medkits=2;h.firePoll();await h.pump();
+    state.self.ammo=60;state.self.medkits=2;state.self.medicine.medkit=80;h.firePoll();await h.pump();
     expect(h.economicChanges).toBe(3);expect(h.dock.innerHTML).toContain('Комплект пополнен');
   });
   test('a late join for another account is cleaned up before joining the current identity',async()=>{
