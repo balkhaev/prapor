@@ -1,6 +1,8 @@
 /** Private, in-process bridge. HTTP clients never submit parcels, owner keys or rewards. */
 export interface LiveEconomyIdentity { key: string; gameId: string; name: string }
-export interface EconomyLoot { id: string; modelId: string; foundAt: number }
+export type EconomyLoot =
+  | { id: string; modelId: string; foundAt: number; kind?: 'loot' }
+  | { id: string; modelId: string; foundAt: number; kind: 'gear' | 'module'; durability: number };
 export interface LiveDelivery {
   id: string; owner: string; gameId: string; createdAt: number; money: number; items: EconomyLoot[];
 }

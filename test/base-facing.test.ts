@@ -145,12 +145,12 @@ describe("four-direction building facing", () => {
 	});
 
 	test("version 22 positions and paid construction migrate unchanged; facing is strictly version 23", () => {
-		const state = funded(); expect(SAVE_VERSION).toBe(23);
+		const state = funded();
 		expect(placeRoom(state, "room-workshop", 89.375, 301.625, NOW).ok).toBe(true);
 		expect(constructRoom(state, "ammo", 270.125, 290.75, NOW).ok).toBe(true);
 		const old = JSON.parse(saveGame(state)); old.schemaVersion = 22;
 		const migrated = parseSave(JSON.stringify(old)); expect(migrated).not.toBeNull();
-		expect(migrated).toEqual({ ...state, schemaVersion: 23 });
+		expect(migrated).toEqual({ ...state, schemaVersion: SAVE_VERSION });
 		expect(getRoomFacing(migrated!.shelter.rooms[0]!)).toBe(0);
 		for (const facing of [-1, 4, .5, null, "1", { value: 1 }]) {
 			const malformed = JSON.parse(saveGame(state)); malformed.shelter.rooms[0].facing = facing;
@@ -158,6 +158,8 @@ describe("four-direction building facing", () => {
 		}
 		old.shelter.rooms[0].facing = 0; expect(parseSave(JSON.stringify(old))).toBeNull();
 		expect(faceRoom(state, "room-workshop", 3, NOW).ok).toBe(true); expect(restored(state)).toEqual(state);
+		const facingSave = JSON.parse(saveGame(state)); facingSave.schemaVersion = 23;
+		expect(parseSave(JSON.stringify(facingSave))).toEqual(state);
 		const forged = JSON.parse(saveGame(state)); forged.shelter.rooms[0].position = { x: 80, y: 420 }; forged.shelter.rooms[0].column = 0; forged.shelter.rooms[0].row = 2;
 		expect(parseSave(JSON.stringify(forged))).toBeNull();
 	});

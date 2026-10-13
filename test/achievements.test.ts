@@ -62,12 +62,13 @@ function factoryGun(state: GameState, weaponId: string): WeaponInstance {
 	return gun;
 }
 
-function firstCheckpoint(state: GameState, seed?: number): Raid {
+function firstCheckpoint(state: GameState, seed?: number, catalogVersion?: number): Raid {
 	expect(dispatchRaid(state, state.scavs[0]!.id, "courtyard", state.lastUpdated).ok).toBe(true);
 	const raid = state.raids[0]!;
 	// As in the existing settlement tests, isolate decisions from survival RNG.
 	// Cargo, costs, offers, wear and achievement events are all engine outputs.
 	if (seed !== undefined) raid.seed = seed;
+	if (catalogVersion !== undefined) raid.expedition!.lootCatalogVersion = catalogVersion;
 	raid.chance = 1;
 	advance(state, raid.endsAt);
 	expect(raid.expedition!.status).toBe("choice");
@@ -413,7 +414,9 @@ describe("achievement decisions use real sortie and inventory events", () => {
 
 	test("an old looted gun wrapper does not give provenance to an entirely fresh crafted build", () => {
 		const state = campaign(), oldGunIds = new Set(state.weapons.map((gun) => gun.id));
-		const raid = firstCheckpoint(state, 5);
+		// Reproduce the paid catalogue of this old whole-gun receipt. New gear can
+		// legitimately displace the same gun from a small pack in current sorties.
+		const raid = firstCheckpoint(state, 5, 22);
 		expect(raid.expedition!.cargo.weaponIds).toEqual(["tt"]);
 		expect(extractRaid(state, raid.id, state.lastUpdated).ok).toBe(true);
 		const gun = state.weapons.find((item) => !oldGunIds.has(item.id))!;

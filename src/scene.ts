@@ -12,7 +12,7 @@ import { getShelterTerritoryCell, getShelterCorridorSegments, getShelterOpenGrou
 import { advanceScavAnimation, createScavAnimation, type ScavAnimationState } from "./shelter-animation";
 import { SCAV_DIRECTIONS, SCAV_ORIGIN, SCAV_REFERENCE_HEIGHT, scavAppearance, scavAttachment, scavAvailableAppearance, scavDirection, scavFrame, scavPreloadAppearances, scavTexture, scavTorsoAnchor, scavHeadAnchor, type ScavDirection, type ScavPose } from "./scav-isometric";
 import { advanceShelterStationClock, getShelterProductionPresentation, type ProductionPresentation } from "./shelter-production";
-import { projectShelterPoint, unprojectShelterPoint, projectShelterBounds, shelterBuildingHitPolygon, shelterRectPolygon, shelterRoomPolygon, shelterRoomPosition, shelterRoomRect } from "./shelter-isometric";
+import { projectShelterPoint, unprojectShelterPoint, projectShelterBounds, shelterBuildingDepth, shelterBuildingHitPolygon, shelterRectPolygon, shelterRoomPolygon, shelterRoomPosition, shelterRoomRect } from "./shelter-isometric";
 import { paintIsometricRoom, paintIsometricProduction } from "./shelter-isometric-art";
 import { RaidStreetRenderer } from "./raid-scene";
 import { getShelterLandscape, paintShelterLandscape, paintShelterDecoration } from "./shelter-landscape";
@@ -654,7 +654,7 @@ export function createWorld(
 			const shelter = snapshot().shelter ?? { rooms: [] };
 			const visual = projectShelterPoint(point);
 			// Cabins are upright above their footprint; their roofs are draggable too.
-			return [...shelter.rooms].sort((a, b) => projectShelterPoint(getRoomPosition(b)).y - projectShelterPoint(getRoomPosition(a)).y)
+			return [...shelter.rooms].sort((a, b) => shelterBuildingDepth(roomRect(b)) - shelterBuildingDepth(roomRect(a)))
 				.find((room) => Phaser.Geom.Polygon.Contains(new Phaser.Geom.Polygon(shelterBuildingHitPolygon(roomRect(room))), visual.x, visual.y)) ?? null;
 		}
 
@@ -957,7 +957,7 @@ export function createWorld(
 			}, { ...options, passive: false });
 			window.addEventListener("keydown", (event) => {
 				if (event.key === "Escape" && (this.drag || this.gesture || this.buildingGesture || this.panGesture)) { event.preventDefault(); this.cancelScavDrag(); this.cancelBuildingDrag(); this.cancelCameraGesture(); }
-				if (!event.defaultPrevented && !event.repeat && event.key.toLowerCase() === "r" && this.buildingAllowed() && !(event.target instanceof Element && event.target.closest("input,textarea,select,[contenteditable=true]"))) {
+				if (!event.defaultPrevented && !event.repeat && !event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === "r" && this.buildingAllowed() && !(event.target instanceof Element && event.target.closest("input,textarea,select,[contenteditable=true]"))) {
 					const drag = this.buildingGesture;
 					if (drag?.active) {
 						event.preventDefault(); drag.facing = ((drag.facing + 1) % 4) as 0 | 1 | 2 | 3;
@@ -1155,7 +1155,7 @@ export function createWorld(
 			cell.label.setPosition(at.x, at.y - 43); cell.status.setPosition(front.x, front.y - 4);
 			cell.productLabel.setPosition(at.x, at.y - 63); cell.feedback.setPosition(front.x, front.y - 23);
 			cell.turnHandle.setPosition(at.x + 74, at.y - 43);
-			cell.lamp.setPosition(at.x, at.y + 5); cell.root.setDepth(cell.room ? at.y - 20 : -999_999_999);
+			cell.lamp.setPosition(at.x, at.y + 5); cell.root.setDepth(cell.room ? shelterBuildingDepth(rect) : -999_999_999);
 			if (cell.room) {
 				const hit = shelterBuildingHitPolygon(rect);
 				const x = Math.min(...hit.map((point) => point.x)), y = Math.min(...hit.map((point) => point.y));
@@ -1420,7 +1420,10 @@ export function createWorld(
 				const production = room ? this.viewState?.roomProduction?.[room.id] : undefined;
 				const presentation = room ? this.cells.get(roomCellKey(room.id))?.production ?? null : null;
 				slot.working = Boolean(slot.status !== "raiding" && slot.health >= 25 && !slot.route.length && this.drag?.scavId !== id && presentation?.active);
-				if (slot.working) { slot.facing = 1; slot.direction = "ne"; }
+				if (slot.working && room) {
+					slot.direction = (["ne", "se", "sw", "nw"] as const)[getRoomFacing(room)];
+					slot.facing = slot.direction.endsWith("e") ? 1 : -1;
+				}
 				const animation = advanceScavAnimation(slot.animation, { distance: walkedDistance, elapsedMs: step * 1000, walking: slot.walking || walkedDistance > 0, working: slot.working, facing: slot.facing, role: slot.role, workDone: (room?.queue[0]?.workDone ?? 0) / 1_000_000, workRate: production?.rate ?? 0, jobId: presentation?.jobId ?? null, stage: presentation?.stage, stageProgress: presentation?.stageProgress, reducedMotion, paused: !slot.actor.visible || this.drag?.scavId === id });
 				slot.animation = animation.state;
 				const pose = animation.pose;

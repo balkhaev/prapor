@@ -37,8 +37,8 @@ describe("named physical raid loot", () => {
 		const premature = structuredClone(old); premature.schemaVersion = 14; expect(parseSave(saveGame(premature))).toBeNull();
 		const contaminated = withoutMedical(structuredClone(state)); contaminated.schemaVersion = 15; expect(parseSave(saveGame(contaminated))).toBeNull();
 	});
-	test("all 32 finds have distinct identities, weights and prices; useful trophies offer salvage while marked junk sells", () => {
-		expect(LOOT_MODELS).toHaveLength(32); expect(new Set(LOOT_MODELS.map(item => item.id)).size).toBe(32);
+	test("all 50 finds have distinct identities, weights and prices; useful trophies offer salvage while marked junk sells", () => {
+		expect(LOOT_MODELS).toHaveLength(50); expect(new Set(LOOT_MODELS.map(item => item.id)).size).toBe(50);
 		expect(new Set(LOOT_MODELS.map(item => item.category)).size).toBe(7);
 		for (const model of LOOT_MODELS) {
 			expect(model.weight).toBeGreaterThan(0); expect(model.guidePrice).toBeGreaterThanOrEqual(model.autoSell ? 2 : 25); expect(model.guidePrice).toBeLessThanOrEqual(1050);
@@ -57,7 +57,7 @@ describe("named physical raid loot", () => {
 		expect(getRaidLootPool("__proto__", "scavenge", 1)).toEqual([]);
 		const found = new Set<string>();
 		for (const map of MAPS) for (let seed = 1; seed <= 500; seed++) for (const model of rollRaidLoot(map.id, "scavenge", 3, random(seed * 7919))) found.add(model.id);
-		expect(found.size).toBe(32);
+		expect(found.size).toBe(50);
 	});
 	test("new loot changes no combat, cash, parts or perk rolls and only begins on newly dispatched sorties", () => {
 		for (let seed = 1; seed <= 30; seed++) {

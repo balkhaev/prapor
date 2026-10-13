@@ -7,7 +7,7 @@ export type { AmmoType } from "./ammunition";
 
 export type ExpeditionBranch = "scavenge" | "combat" | "recon";
 export type RunPerk = "careful" | "haggler" | "pathfinder" | "fieldMedic" | "gunsmith";
-export interface Cargo { money: number; supplies: Supplies; weaponIds: string[]; modules: ModuleInstance[]; lootItems?: LootItem[] }
+export interface Cargo { money: number; supplies: Supplies; weaponIds: string[]; modules: ModuleInstance[]; lootItems?: LootItem[]; gearItems?: GearItem[] }
 export interface GearItem { id: string; modelId: string; durability: number }
 export interface Loadout {
 	armorItemId: string | null; backpackItemId: string | null;

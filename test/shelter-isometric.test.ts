@@ -5,7 +5,7 @@ import {
 } from "../src/shelter-camera";
 import {
 	projectShelterBounds, projectShelterPoint, SHELTER_ROOM_HEIGHT, SHELTER_ROOM_WIDTH,
-	SHELTER_BUILDING_MAX_VISUAL_HEIGHT, shelterBuildingHitPolygon, shelterRectPolygon, shelterRoomPolygon, shelterRoomPosition, unprojectShelterPoint,
+	SHELTER_BUILDING_MAX_VISUAL_HEIGHT, shelterBuildingDepth, shelterBuildingHitPolygon, shelterRectPolygon, shelterRoomPolygon, shelterRoomPosition, unprojectShelterPoint,
 } from "../src/shelter-isometric";
 import { getShelterLayoutCell, getShelterWalkingRoute } from "../src/shelter-layout";
 import { clientToShelterPoint } from "../src/shelter-motion";
@@ -19,6 +19,12 @@ function expectPoint(actual: { x: number; y: number }, expected: { x: number; y:
 }
 
 describe("isometric shelter presentation", () => {
+	test("long building roofs select the visible foreground structure even when origin ordering differs", () => {
+		const large = { x: 50, y: 280, width: 556, height: 232 }, compact = { x: 250, y: 148, width: 172, height: 100 };
+		expect(projectShelterPoint(large).y).toBeLessThan(projectShelterPoint(compact).y);
+		expect(shelterBuildingDepth(large)).toBeGreaterThan(shelterBuildingDepth(compact));
+		expect([large, compact].sort((a, b) => shelterBuildingDepth(b) - shelterBuildingDepth(a))[0]).toBe(large);
+	});
 	test("building hit hull includes actual roof ridges, eaves and chimney caps at free and rotated origins", () => {
 		const inside = (polygon: { x: number; y: number }[], point: { x: number; y: number }) => polygon.every((a, index) => {
 			const b = polygon[(index + 1) % polygon.length]!;
