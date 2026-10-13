@@ -69,6 +69,22 @@ describe("surface base landscaping", () => {
 		}
 	});
 
+	test("wet hollows and everyday furniture stay clear of walked routes in a freely planned yard", () => {
+		const rooms = buildings.map((building) => ({ ...building, position: shelterRoomPosition(building.column, building.row), facing: 0 as const }));
+		const plan = getShelterLandscape(sites, rooms);
+		expect(plan.decorations.some((decoration) => decoration.kind === "puddle" && decoration.owned)).toBe(true);
+		expect(plan.decorations.some((decoration) => decoration.kind === "woodpile" && decoration.owned)).toBe(true);
+		expect(plan.decorations.some((decoration) => decoration.kind === "fern" && !decoration.owned)).toBe(true);
+		for (const decoration of plan.decorations.filter((item) => item.kind !== "gate")) for (const { from, to } of plan.paths) {
+			const dx = to.x - from.x, dy = to.y - from.y, length = dx * dx + dy * dy;
+			const t = length ? Math.max(0, Math.min(1, ((decoration.point.x - from.x) * dx + (decoration.point.y - from.y) * dy) / length)) : 0;
+			expect(Math.hypot(decoration.point.x - from.x - dx * t, decoration.point.y - from.y - dy * t)).toBeGreaterThanOrEqual(decoration.radius + 12);
+		}
+		for (const [kind, limit] of [["camp", 1], ["bench", 2], ["barrels", 3], ["woodpile", 1], ["puddle", 3]] as const) {
+			expect(plan.decorations.filter((decoration) => decoration.owned && decoration.kind === kind).length).toBeLessThanOrEqual(limit);
+		}
+	});
+
 	test("moving and rotating large buildings clears furniture and keeps paths at actual south doors", () => {
 		const before = getShelterLandscape(sites, buildings);
 		for (const large of [{ column: 0, row: 1, width: 3, height: 2 }, { column: 1, row: 0, width: 2, height: 3 }]) {

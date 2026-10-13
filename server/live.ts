@@ -450,7 +450,10 @@ export function createLiveService(options: LiveOptions): LiveService {
     }
     for (const anchor of map.containers) if (![...drops.values()].some(drop => drop.containerId === anchor.id) && (lootCooldowns.get(lootKey(map.id, anchor, anchor.id)) ?? 0) <= now()) addDrop(map.id, anchor, 10 + Math.floor(random() * 21), "supply");
   }
-  const status = (): LiveStatus => ({ id: LIVE_SERVER_ID, name: LIVE_SERVER_NAME, online: [...players.values()].filter(player => player.online).length, capacity: LIVE_CAPACITY, startedAt,
+  const routeSummaries = (maps.get(DEFAULT_MAP)!.routes ?? []).map(route => ({ id: route.id, name: route.name, description: route.description,
+    districtId: route.districtId, purpose: route.purpose, stops: route.poiIds.map(id => maps.get(DEFAULT_MAP)!.pois.find(poi => poi.id === id)!.name) }));
+  const status = (includeRoutes = true): LiveStatus => ({ id: LIVE_SERVER_ID, name: LIVE_SERVER_NAME, online: [...players.values()].filter(player => player.online).length, capacity: LIVE_CAPACITY, startedAt,
+    ...(includeRoutes ? { routes: routeSummaries } : {}),
     maps: LIVE_MAPS.map(map => ({ id: map.id, name: map.name, description: map.description, theme: map.theme, width: map.width, height: map.height,
       online: [...players.values()].filter(player => player.online && player.mapId === map.id).length, npcs: [...scavs.values()].filter(scav => scav.mapId === map.id && scav.health > 0).length })),
     districts: maps.get(DEFAULT_MAP)!.districts.map(district => ({ ...district,
@@ -463,7 +466,7 @@ export function createLiveService(options: LiveOptions): LiveService {
     const chunkX = Math.floor(player.x / world.chunkSize), chunkY = Math.floor(player.y / world.chunkSize), visibleChunks: LivePoint[] = [];
     for (let y = chunkY - 1; y <= chunkY + 1; y++) for (let x = chunkX - 1; x <= chunkX + 1; x++) if (x >= 0 && y >= 0 && x * world.chunkSize < world.width && y * world.chunkSize < world.height) visibleChunks.push({ x, y });
     return {
-      server: status(), now: now(), ...(request?.headers.get("x-prapor-world-version") === world.version ? {} : { world }), worldVersion: world.version, visibleChunks, selfId: player.id,
+      server: status(false), now: now(), ...(request?.headers.get("x-prapor-world-version") === world.version ? {} : { world }), worldVersion: world.version, visibleChunks, selfId: player.id,
       self: { id: player.id, ammo: player.ammo, medkits: Math.ceil(player.medicine.medkit / 40), cargo: player.cargo, stash: player.stash, kills: player.kills, respawnAt: player.respawnAt, patrol: player.patrol, targetId: player.targetId, travelReadyAt: player.travelReadyAt,
         body: player.body, medicine: player.medicine, treatment: player.treatment, leaveAt: player.leaveAt, districtId: player.districtId, purpose: player.purpose, searching: player.searching ? { ...player.searching } : null,
         ...(options.economy ? { gameId: player.gameId, lootItems: structuredClone(player.lootItems ?? []),

@@ -150,6 +150,24 @@ function cabinWindow(a: RoomPainter, x: number, y: number, side: "rear" | "left"
 	a.line(pane(-1, 29), pane(width + 1, 29), 0xe4d6b4, 1.3);
 }
 
+function chimneyLocal(room: RoomInstance): Point | null {
+	const { width, height } = getRoomLocalSize(room);
+	if (width >= 200) return null;
+	const facing = room.facing ?? 0, length = facing % 2 ? height : width;
+	const vertex = (along: number, across: number): Point => facing === 0 ? { x: along, y: across } : facing === 1 ? { x: across, y: height - along } : facing === 2 ? { x: width - along, y: height - across } : { x: width - across, y: along };
+	const base = vertex(length - 28, 0), end = vertex(length - 16, 10);
+	return { x: Math.min(base.x, end.x), y: Math.min(base.y, end.y) };
+}
+/** Smoke starts at the same open chimney cap that is drawn on the turned roof. */
+export function getShelterChimney(room: RoomInstance): { point: Point; height: number } | null {
+	const local = chimneyLocal(room);
+	return local ? { point: getRoomLocalPoint(room, local.x + 6, local.y + 5), height: 48.1 } : null;
+}
+export function getShelterPorchLamp(room: RoomInstance): { point: Point; height: number } {
+	const { width, height } = getRoomLocalSize(room);
+	return { point: getRoomLocalPoint(room, width / 2 + 25, height), height: 12 };
+}
+
 function roof(a: RoomPainter, finish: BuildingFinish): void {
 	// The removed roof always faces the camera. Rotating the cabin reveals its
 	// other interior walls instead of placing an opaque roof in front of work.
@@ -173,9 +191,9 @@ function roof(a: RoomPainter, finish: BuildingFinish): void {
 	a.face([vertex(-4, -5, 32), vertex(-4, 4, 40), vertex(-4, depth, 31)], finish.wall[2]);
 	a.line(vertex(length + 2, depth, 31), vertex(length + 2, depth, 3), 0x6c7d6d, 1.5);
 	a.line(vertex(length + 2, depth, 3), vertex(length - 2, depth + 5, 1), 0x6c7d6d, 1.3);
-	if (a.width < 200) {
-		const base = vertex(length - 28, 0, 0), end = vertex(length - 16, 10, 0);
-		const x = Math.min(base[0], end[0]), y = Math.min(base[1], end[1]);
+	const chimney = chimneyLocal(a.room);
+	if (chimney) {
+		const { x, y } = chimney;
 		a.box(x + 2, y + 2, 8, 6, 11, STONE, 35);
 		a.box(x, y, 12, 10, 2, STEEL, 46);
 		a.plane(x + 3, y + 3, 6, 4, 48.1, C.ink);

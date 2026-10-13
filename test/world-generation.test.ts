@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { generateLiveWorld, worldChunks } from '../src/game/world-generation';
+import { generateLiveWorld, LIVE_WORLD_SEED, worldChunks } from '../src/game/world-generation';
 import type { LiveMapDefinition } from '../src/game/live-maps';
 import { hasLiveLineOfSight, isLiveWalkable } from '../src/game/live-maps';
 import { createLiveNavigation } from '../server/live-navigation';
@@ -44,9 +44,26 @@ function inspect(world: LiveMapDefinition): void {
   }
   for (const district of world.districts) {
     const pois = world.pois.filter(poi => poi.districtId === district.id);
-    expect(pois.length).toBeGreaterThanOrEqual(4);
+    expect(pois).toHaveLength(8);
     expect(pois.some(poi => poi.danger === 3)).toBe(true);
-    expect(world.containers.filter(container => pois.some(poi => poi.id === container.poiId)).length).toBeGreaterThanOrEqual(8);
+    expect(world.containers.filter(container => pois.some(poi => poi.id === container.poiId))).toHaveLength(32);
+    // Count actual walking steps to the first find, including doors and detours.
+    for (const spawn of district.spawns) {
+      const distances = new Int32Array(blocked.length).fill(-1), frontier = [spawn.y * world.width + spawn.x]; distances[frontier[0]!] = 0;
+      const targets = new Set(world.containers.filter(anchor => pois.some(poi => poi.id === anchor.poiId)).map(anchor => anchor.y * world.width + anchor.x));
+      let nearest = Infinity;
+      for (let index = 0; index < frontier.length; index++) {
+        const key = frontier[index]!, distance = distances[key]!; if (targets.has(key)) { nearest = distance; break; }
+        if (distance >= 45) continue;
+        const x = key % world.width, y = Math.floor(key / world.width);
+        for (const point of [{ x: x + 1, y }, { x: x - 1, y }, { x, y: y + 1 }, { x, y: y - 1 }]) {
+          if (point.x < 0 || point.y < 0 || point.x >= world.width || point.y >= world.height) continue;
+          const next = point.y * world.width + point.x;
+          if (!blocked[next] && distances[next] === -1) { distances[next] = distance + 1; frontier.push(next); }
+        }
+      }
+      expect(nearest).toBeLessThanOrEqual(45);
+    }
   }
   // A globally connected map can still hide a room's loot behind a sealed doorway.
   // Flood each POI separately from its authored entrances to check the actual interior.
@@ -82,12 +99,52 @@ function inspect(world: LiveMapDefinition): void {
     expect(path.points.every(point => point.x >= 0 && point.y >= 0 && point.x < world.width && point.y < world.height)).toBe(true);
     if (path.kind === 'road' || path.kind === 'trail') expect(path.points.every(point => visited[Math.round(point.y) * world.width + Math.round(point.x)] === 1)).toBe(true);
   }
+  // Confirm named crossings really approach collision water, rather than being cosmetic labels.
+  const bridges = world.paths!.filter(path => /bridge|мост/i.test(`${path.id} ${path.name}`) && !/approach|подход/i.test(`${path.id} ${path.name}`));
+  expect(bridges.length).toBeGreaterThanOrEqual(3);
+  const crossings: LivePoint[] = [];
+  for (const bridge of bridges) {
+    const cells: LivePoint[] = [];
+    for (let index = 1; index < bridge.points.length; index++) {
+      const first = bridge.points[index - 1]!, second = bridge.points[index]!, steps = Math.ceil(Math.hypot(second.x - first.x, second.y - first.y) * 2);
+      for (let step = 0; step <= steps; step++) {
+        const x = Math.round(first.x + (second.x - first.x) * step / Math.max(1, steps)), y = Math.round(first.y + (second.y - first.y) * step / Math.max(1, steps));
+        expect(visited[y * world.width + x]).toBe(1);
+        let bank = false;
+        for (let dy = -8; !bank && dy <= 8; dy++) for (let dx = -8; !bank && dx <= 8; dx++) if (x + dx >= 0 && y + dy >= 0 && x + dx < world.width && y + dy < world.height && water[(y + dy) * world.width + x + dx]) bank = true;
+        if (bank) cells.push({ x, y });
+      }
+    }
+    expect(cells.length).toBeGreaterThan(0); crossings.push(cells[Math.floor(cells.length / 2)]!);
+  }
+  expect(crossings.filter((crossing, index) => !crossings.slice(0, index).some(other => Math.hypot(crossing.x - other.x, crossing.y - other.y) < 8)).length).toBeGreaterThanOrEqual(3);
+  // A transport graph with only a tree has no alternate route between important places.
+  const parent = new Map<string, string>(), root = (id: string): string => { const value = parent.get(id); if (!value) { parent.set(id, id); return id; } if (value === id) return id; const result = root(value); parent.set(id, result); return result; };
+  let loops = 0;
+  for (const path of world.paths!.filter(path => path.kind === 'road' || path.kind === 'trail')) {
+    const first = path.points[0]!, last = path.points.at(-1)!, a = root(`${first.x},${first.y}`), b = root(`${last.x},${last.y}`);
+    if (a === b) loops++; else parent.set(a, b);
+  }
+  expect(loops).toBeGreaterThan(0);
   // Streaming partitions index intersecting content; they do not dictate its placement.
-  const chunks = worldChunks(world); expect(chunks).toHaveLength(16);
+  const chunks = worldChunks(world); expect(chunks).toHaveLength(36);
   for (const chunk of chunks) {
     const bounds = { x: chunk.x * world.chunkSize, y: chunk.y * world.chunkSize, width: chunk.width, height: chunk.height };
     expect(chunk.poiIds.slice().sort()).toEqual(world.pois.filter(poi => intersects(poi, bounds)).map(poi => poi.id).sort());
     expect(chunk.containerIds.slice().sort()).toEqual(world.containers.filter(anchor => anchor.x >= bounds.x && anchor.x < bounds.x + bounds.width && anchor.y >= bounds.y && anchor.y < bounds.y + bounds.height).map(anchor => anchor.id).sort());
+  }
+  expect(world.routes).toHaveLength(16);
+  expect(new Set(world.routes!.map(route => route.id)).size).toBe(16);
+  expect(new Set(world.routes!.map(route => `${route.districtId}:${route.purpose}`)).size).toBe(16);
+  for (const district of world.districts) expect(new Set(world.routes!.filter(route => route.districtId === district.id).map(route => route.purpose))).toEqual(new Set(['pvp', 'pve', 'loot', 'quests']));
+  for (const route of world.routes!) {
+    expect(route.name.length > 0 && route.description.length > 0).toBe(true);
+    expect(route.poiIds.length >= 2 && route.poiIds.length <= 5).toBe(true);
+    expect(new Set(route.poiIds).size).toBe(route.poiIds.length);
+    const places = route.poiIds.map(id => world.pois.find(poi => poi.id === id)!);
+    expect(places.every(poi => poi && poi.districtId === route.districtId)).toBe(true);
+    if (route.purpose === 'pvp') expect(places.some(poi => poi.danger === 3)).toBe(true);
+    if (route.purpose === 'loot') expect(places.some(poi => poi.danger === 1)).toBe(true);
   }
 }
 
@@ -97,14 +154,14 @@ describe('deterministic world generation', () => {
     expect(second).toEqual(first); expect(second).not.toBe(first);
     const other = generateLiveWorld('another-seed');
     expect(other.version).not.toBe(first.version); expect(other.obstacles).not.toEqual(first.obstacles);
-    expect(first).toMatchObject({ id: 'perimeter', width: 128, height: 128, chunkSize: 32 });
+    expect(first).toMatchObject({ id: 'perimeter', width: 192, height: 192, chunkSize: 32 });
     expect(first.generatorVersion).toBeGreaterThan(0);
   });
   test('POI footprints and placement are independent of streaming chunk origins', () => {
     for (const seed of ['organic-layout', 'another-layout', 'district-roads']) {
       const world = generateLiveWorld(seed);
-      expect(world.generatorVersion).toBe(2);
-      expect(world.pois).toHaveLength(16); expect(world.containers).toHaveLength(64); expect(world.npcSpawns).toHaveLength(48);
+      expect(world.generatorVersion).toBe(3);
+      expect(world.pois).toHaveLength(32); expect(world.containers).toHaveLength(128); expect(world.npcSpawns).toHaveLength(96);
       expect(new Set(world.pois.map(poi => `${poi.width}x${poi.height}`)).size).toBeGreaterThanOrEqual(4);
       expect(new Set(world.pois.map(poi => poi.x % world.chunkSize)).size).toBeGreaterThanOrEqual(5);
       expect(new Set(world.pois.map(poi => poi.y % world.chunkSize)).size).toBeGreaterThanOrEqual(5);
@@ -112,12 +169,30 @@ describe('deterministic world generation', () => {
     }
   });
   test('one hundred seeds keep every interior, route, loot anchor and extraction connected and bounded', () => {
-    for (let seed = 0; seed < 100; seed++) inspect(generateLiveWorld(`seed-${seed}`));
-  }, 30_000);
+    for (let seed = 0; seed < 100; seed++) {
+      try { inspect(generateLiveWorld(`seed-${seed}`)); }
+      catch (cause) { throw new Error(`Generated world seed-${seed} failed validation`, { cause }); }
+    }
+  }, 60_000);
+  test('the verified V2 default containers keep their original logical identities when the surrounding world expands', () => {
+    // Public identities recorded from the shipped 128×128 layout, independent of V3 placement.
+    const legacy = [
+      ['poi-0-0', ['duffel', 'toolbox', 'crate', 'medbag']], ['poi-1-0', ['jacket', 'duffel', 'toolbox', 'cabinet']],
+      ['poi-2-0', ['jacket', 'duffel', 'toolbox', 'cabinet']], ['poi-3-0', ['jacket', 'duffel', 'toolbox', 'cabinet']],
+      ['poi-0-1', ['jacket', 'duffel', 'toolbox', 'crate']], ['poi-1-1', ['jacket', 'duffel', 'toolbox', 'crate']],
+      ['poi-2-1', ['duffel', 'toolbox', 'crate', 'medbag']], ['poi-3-1', ['jacket', 'duffel', 'toolbox', 'cabinet']],
+      ['poi-0-2', ['jacket', 'duffel', 'toolbox', 'crate']], ['poi-1-2', ['jacket', 'duffel', 'toolbox', 'crate']],
+      ['poi-2-2', ['jacket', 'duffel', 'toolbox', 'cabinet']], ['poi-3-2', ['jacket', 'duffel', 'toolbox', 'crate']],
+      ['poi-0-3', ['jacket', 'duffel', 'toolbox', 'crate']], ['poi-1-3', ['jacket', 'duffel', 'toolbox', 'crate']],
+      ['poi-2-3', ['duffel', 'toolbox', 'crate', 'medbag']], ['poi-3-3', ['jacket', 'duffel', 'medbag', 'crate']],
+    ] as const;
+    const world = generateLiveWorld(LIVE_WORLD_SEED);
+    for (const [poiId, kinds] of legacy) kinds.forEach((kind, slot) => expect(world.containers.find(anchor => anchor.id === `${poiId}-${kind}-${slot}`)).toMatchObject({ poiId, kind }));
+  });
   test('cached collision and visibility agree with map geometry, and navigation avoids occupied route cells', () => {
     const world = generateLiveWorld('navigation-regression'), navigation = createLiveNavigation(world);
     for (let index = 0; index < 400; index++) {
-      const a = { x: index * 53 % 128, y: index * 71 % 128 }, b = { x: (index * 31 + 17) % 128, y: (index * 23 + 49) % 128 };
+      const a = { x: index * 53 % world.width, y: index * 71 % world.height }, b = { x: (index * 31 + 17) % world.width, y: (index * 23 + 49) % world.height };
       expect(navigation.walkable(a)).toBe(isLiveWalkable(world, a)); expect(navigation.hasLineOfSight(a, b)).toBe(hasLiveLineOfSight(world, a, b));
     }
     const open = createLiveNavigation({ ...world, width: 10, height: 10, obstacles: [] });

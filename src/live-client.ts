@@ -84,6 +84,14 @@ function readDistrict(value: unknown, bounds: Pick<LiveWorld, 'width' | 'height'
   return { id: value.id, name: value.name, description: value.description, theme: value.theme as LiveDistrict['theme'], x: value.x, y: value.y, width: value.width, height: value.height, spawns };
 }
 
+function readRouteBase(value: unknown) {
+  if (!record(value) || !text(value.id, 64) || !text(value.name, 80) || !text(value.description, 240) || !districtId(value.districtId) || !purpose(value.purpose)) return invalid();
+  return { id: value.id, name: value.name, description: value.description, districtId: value.districtId, purpose: value.purpose };
+}
+function uniqueRoutes(routes: Array<{ id: string; districtId: LiveDistrictId; purpose: LivePurpose }>): void {
+  if (new Set(routes.map(route => route.id)).size !== routes.length || new Set(routes.map(route => `${route.districtId}:${route.purpose}`)).size !== routes.length) return invalid();
+}
+
 export function readLiveStatus(value: unknown): LiveStatus {
   if (!record(value) || !text(value.id) || !text(value.name, 80) || !integer(value.online, 0, 256) || !integer(value.capacity, 1, 256) || value.online > value.capacity || !number(value.startedAt) || !Array.isArray(value.maps) || value.maps.length !== 1 || !Array.isArray(value.districts) || value.districts.length !== 4) return invalid();
   const capacity = value.capacity;
@@ -98,7 +106,16 @@ export function readLiveStatus(value: unknown): LiveStatus {
     return { ...parsed, online: district.online, npcs: district.npcs };
   });
   if (new Set(districts.map(district => district.id)).size !== 4 || districts.reduce((total, district) => total + district.online, 0) !== value.online) return invalid();
-  return { id: value.id, name: value.name, online: value.online, capacity: value.capacity, startedAt: value.startedAt, maps, districts };
+  const routes: LiveStatus['routes'] = value.routes === undefined ? undefined : (() => {
+    if (!Array.isArray(value.routes) || value.routes.length > 16) return invalid();
+    const parsed = value.routes.map(route => {
+      const base = readRouteBase(route);
+      if (!record(route) || !keys(route, ['id', 'name', 'description', 'districtId', 'purpose', 'stops']) || !Array.isArray(route.stops) || route.stops.length < 2 || route.stops.length > 5 || !route.stops.every(stop => text(stop, 120)) || new Set(route.stops).size !== route.stops.length) return invalid();
+      return { ...base, stops: [...route.stops] as string[] };
+    });
+    uniqueRoutes(parsed); return parsed;
+  })();
+  return { id: value.id, name: value.name, online: value.online, capacity: value.capacity, startedAt: value.startedAt, maps, districts, ...(routes ? { routes } : {}) };
 }
 
 /** Only immutable, versioned geometry may be reused between server responses. */
@@ -110,7 +127,7 @@ export function readLiveWorld(source: unknown): LiveWorld {
     return [...source.terrainRows] as string[];
   })();
   const paths: LiveWorld['paths'] = source.paths === undefined ? undefined : (() => {
-    if (!Array.isArray(source.paths) || source.paths.length > 128) return invalid();
+    if (!Array.isArray(source.paths) || source.paths.length > 256) return invalid();
     const parsed = source.paths.map(path => {
       if (!record(path) || !text(path.id) || !text(path.name, 80) || !['road', 'trail', 'rail', 'river'].includes(path.kind as string) || !number(path.width, .1, Math.max(bounds.width, bounds.height)) || !Array.isArray(path.points) || path.points.length < 2 || path.points.length > 256) return invalid();
       return { id: path.id, name: path.name, kind: path.kind as NonNullable<LiveWorld['paths']>[number]['kind'], width: path.width, points: path.points.map(location => point(location, bounds) ? { x: location.x, y: location.y } : invalid()) };
@@ -126,12 +143,21 @@ export function readLiveWorld(source: unknown): LiveWorld {
     return { x: poi.x, y: poi.y, width: poi.width, height: poi.height, id: poi.id, templateId: poi.templateId, name: poi.name, districtId: poi.districtId, danger: poi.danger as 1 | 2 | 3, tags: [...poi.tags] as string[], entrances };
   });
   if (new Set(pois.map(poi => poi.id)).size !== pois.length) return invalid();
+  const routes: LiveWorld['routes'] = source.routes === undefined ? undefined : (() => {
+    if (!Array.isArray(source.routes) || source.routes.length > 16) return invalid();
+    const parsed = source.routes.map(route => {
+      const base = readRouteBase(route);
+      if (!record(route) || !keys(route, ['id', 'name', 'description', 'districtId', 'purpose', 'poiIds']) || !Array.isArray(route.poiIds) || route.poiIds.length < 2 || route.poiIds.length > 5 || !route.poiIds.every(id => text(id) && pois.some(poi => poi.id === id && poi.districtId === base.districtId)) || new Set(route.poiIds).size !== route.poiIds.length) return invalid();
+      return { ...base, poiIds: [...route.poiIds] as string[] };
+    });
+    uniqueRoutes(parsed); return parsed;
+  })();
   const containers: LiveWorld['containers'] = source.containers.map(container => {
     if (!point(container, bounds) || !integer(container.x) || !integer(container.y) || !text(container.id) || !text(container.poiId) || !pois.some(poi => poi.id === container.poiId) || !containerKind(container.kind) || !['mixed', 'tools', 'medical', 'intel', 'valuables', 'provisions'].includes(container.lootTable as string) || !integer(container.searchMs, 1, 60_000)) return invalid();
     return { x: container.x, y: container.y, id: container.id, poiId: container.poiId, kind: container.kind, lootTable: container.lootTable as LiveWorld['containers'][number]['lootTable'], searchMs: container.searchMs };
   });
   if (new Set(containers.map(container => container.id)).size !== containers.length) return invalid();
-  return { ...bounds, id: source.id, name: source.name, description: source.description, theme: source.theme as LiveWorld['theme'], version: source.version, seed: source.seed, generatorVersion: source.generatorVersion, chunkSize: source.chunkSize, districts, pois, containers, ...(terrainRows ? { terrainRows } : {}), ...(paths ? { paths } : {}), obstacles: source.obstacles.map(obstacle => {
+  return { ...bounds, id: source.id, name: source.name, description: source.description, theme: source.theme as LiveWorld['theme'], version: source.version, seed: source.seed, generatorVersion: source.generatorVersion, chunkSize: source.chunkSize, districts, pois, containers, ...(terrainRows ? { terrainRows } : {}), ...(paths ? { paths } : {}), ...(routes ? { routes } : {}), obstacles: source.obstacles.map(obstacle => {
     if (!rectangle(obstacle, bounds) || !(obstacle.kind === undefined || ['building', 'wall', 'container', 'barricade', 'tree', 'water'].includes(obstacle.kind as string)) || !(obstacle.label === undefined || text(obstacle.label, 80))) return invalid();
     return { x: obstacle.x, y: obstacle.y, width: obstacle.width, height: obstacle.height, ...(obstacle.kind ? { kind: obstacle.kind as LiveWorld['obstacles'][number]['kind'] } : {}), ...(obstacle.label ? { label: obstacle.label as string } : {}) };
   }), extracts: source.extracts.map(extract => point(extract, bounds) && integer(extract.x) && integer(extract.y) ? { x: extract.x, y: extract.y } : invalid()), zones: source.zones.map(zone => {
