@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { createLiveService, type LiveService } from "../server/live";
 import { createHealth, createMedicalInventory, healthPercent, isAlive, type HealthState } from "../src/game/health";
 import type { LiveSnapshot } from "../src/game/live";
+import { getLiveMap } from "../src/game/live-maps";
 
 const ORIGIN = "https://game.delopusk.ru";
 interface Session { cookie: string; id: string }
@@ -49,9 +50,9 @@ function setBody(session: Session, body: HealthState, medicine = createMedicalIn
 beforeEach(async () => {
   folder = await mkdtemp(join(tmpdir(), "prapor-health-")); dbPath = join(folder, "live.sqlite"); time = 1_800_000_000_000;
   service = createLiveService(options());
-  editStorage(db => db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify({ version: 2, startedAt: time, events: [],
-    scavs: [{ id: "scav-0", mapId: "customs", kind: "scav", name: "Косой", appearance: 0, faction: "scavs", role: "guard", home: { x: 31, y: 23 }, route: [{ x: 31, y: 23 }], routeIndex: 0, spawnIndex: 0, x: 31, y: 23, health: 100, action: "idle", safeUntil: 0, respawnAt: 0, nextMove: time + 1_000_000, nextAttack: time + 1_000_000 }],
-    drops: Array.from({ length: 10 }, (_, index) => ({ id: `drop-${index}`, mapId: "customs", x: 30, y: 20, amount: 10, expiresAt: time + 1_000_000 })),
+  editStorage(db => db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify({ version: 3, geometryVersion: getLiveMap("perimeter").version, startedAt: time, events: [],
+    scavs: [{ id: "scav-0", mapId: "perimeter", kind: "scav", name: "Косой", appearance: 0, faction: "scavs", role: "guard", home: { x: 127, y: 0 }, route: [{ x: 127, y: 0 }], routeIndex: 0, spawnIndex: 0, x: 127, y: 0, health: 100, body: createHealth(), healthAt: time, action: "idle", safeUntil: 0, respawnAt: 0, nextMove: time + 1_000_000, nextAttack: time + 1_000_000 }],
+    drops: Array.from({ length: 10 }, (_, index) => ({ id: `drop-${index}`, mapId: "perimeter", x: 125, y: 0, amount: 10, source: "body", expiresAt: time + 1_000_000 })),
   })));
 });
 afterEach(async () => { service.close(); await rm(folder, { recursive: true, force: true }); });

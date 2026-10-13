@@ -1,22 +1,20 @@
 import { describe, expect, test } from 'bun:test';
 import { LiveApiError, liveRequest, readLiveSnapshot, readLiveStatus, shouldRejoinLivePresence } from '../src/live-client';
 import type { LiveSnapshot } from '../src/game/live';
+import { getLiveMap } from '../src/game/live-maps';
 import { createHealth, createMedicalInventory } from '../src/game/health';
 
-const fixture = (): LiveSnapshot => ({
-  server: { id: 'perimeter-1', name: 'Периметр 01', online: 1, capacity: 32, startedAt: 1000, maps: [
-    { id: 'customs', name: 'Таможня', description: 'Промышленный район', theme: 'industrial', width: 32, height: 24, online: 1, npcs: 12 },
-    { id: 'sawmill', name: 'Лесопилка', description: 'Лес и пилорама', theme: 'forest', width: 48, height: 36, online: 0, npcs: 14 },
-    { id: 'depot', name: 'Депо', description: 'Железнодорожный район', theme: 'urban', width: 48, height: 36, online: 0, npcs: 16 },
-  ] }, now: 2000,
-  world: { id: 'customs', name: 'Таможня', description: 'Промышленный район', theme: 'industrial', width: 32, height: 24,
-    obstacles: [{ x: 5, y: 5, width: 2, height: 3, kind: 'building', label: 'Склад' }], extracts: [{ x: 2, y: 2 }],
-    zones: [{ x: 0, y: 0, width: 32, height: 24, name: 'Двор', terrain: 'yard', danger: 1 }],
-  }, selfId: 'player-1',
-  self: { id: 'player-1', ammo: 30, medkits: 3, cargo: 0, stash: 12, kills: 0, respawnAt: 0, patrol: false, targetId: null, travelReadyAt: 0, body: createHealth(), medicine: createMedicalInventory(), treatment: null, leaveAt: 0 },
+const fixture = (): LiveSnapshot => {
+  const { npcSpawns, lootSpawns: _loot, ...world } = structuredClone(getLiveMap('perimeter'));
+  return {
+  server: { id: 'perimeter-1', name: 'Периметр 01', online: 1, capacity: 32, startedAt: 1000,
+    maps: [{ id: world.id, name: world.name, description: world.description, theme: world.theme, width: world.width, height: world.height, online: 1, npcs: npcSpawns.length }],
+    districts: world.districts.map((district, index) => ({ ...district, online: index === 0 ? 1 : 0, npcs: npcSpawns.filter(spawn => spawn.point.x >= district.x && spawn.point.x < district.x + district.width && spawn.point.y >= district.y && spawn.point.y < district.y + district.height).length })),
+  }, now: 2000, world, worldVersion: world.version, visibleChunks: [{ x: 0, y: 0 }], selfId: 'player-1',
+  self: { id: 'player-1', ammo: 30, medkits: 3, cargo: 0, stash: 12, kills: 0, respawnAt: 0, patrol: false, targetId: null, travelReadyAt: 0, districtId: 'customs', purpose: 'loot', searching: null, body: createHealth(), medicine: createMedicalInventory(), treatment: null, leaveAt: 0 },
   entities: [{ id: 'player-1', kind: 'player', name: 'Гость 01', appearance: 31, x: 2, y: 2, health: 100, action: 'idle', safeUntil: 7000 }, { id: 'scav-1', kind: 'scav', name: 'Косой', appearance: 0, x: 4, y: 6, health: 75, action: 'moving', safeUntil: 0, faction: 'raiders', role: 'guard' }],
   drops: [{ id: 'drop-1', x: 3, y: 2, amount: 25 }], events: [{ id: 'event-1', at: 2000, kind: 'join', text: 'Гость 01 вошёл', actorId: 'player-1' }],
-});
+}; };
 
 describe('live wire parser', () => {
   test('preserves server time, identity, kit and NPC distinction without advancing them', () => {
@@ -32,9 +30,9 @@ describe('live wire parser', () => {
     expect(() => readLiveSnapshot(duplicated)).toThrow(LiveApiError);
   });
   test('rejects off-map positions, unbounded world and invalid kit', () => {
-    const offMap = fixture(); offMap.entities[0]!.x = 32;
+    const offMap = fixture(); offMap.entities[0]!.x = 128;
     expect(() => readLiveSnapshot(offMap)).toThrow(LiveApiError);
-    const world = fixture(); world.world.obstacles[0]!.width = 40;
+    const world = fixture(); world.world.obstacles[0]!.width = 128;
     expect(() => readLiveSnapshot(world)).toThrow(LiveApiError);
     const kit = fixture(); kit.self.ammo = -1;
     expect(() => readLiveSnapshot(kit)).toThrow(LiveApiError);
@@ -50,7 +48,7 @@ describe('live wire parser', () => {
     expect(() => readLiveSnapshot(unknown)).toThrow(LiveApiError);
     const duplicate = fixture(); duplicate.server.maps.push({ ...duplicate.server.maps[0]! });
     expect(() => readLiveStatus(duplicate.server)).toThrow(LiveApiError);
-    const zone = fixture(); zone.world.zones[0]!.x = 2;
+    const zone = fixture(); zone.world.zones[0]!.width = 129;
     expect(() => readLiveSnapshot(zone)).toThrow(LiveApiError);
     const role = fixture(); Object.assign(role.entities[1]!, { role: 'admin' });
     expect(() => readLiveSnapshot(role)).toThrow(LiveApiError);
@@ -65,10 +63,33 @@ describe('live wire parser', () => {
     expect(() => readLiveSnapshot(target)).toThrow(LiveApiError);
     const travel = fixture(); travel.self.travelReadyAt = -1;
     expect(() => readLiveSnapshot(travel)).toThrow(LiveApiError);
-    for (const edit of [{ from: { x: -1, y: 2 } }, { to: { x: 32, y: 2 } }, { damage: -5 }, { damage: 200 }]) {
+    for (const edit of [{ from: { x: -1, y: 2 } }, { to: { x: 128, y: 2 } }, { damage: -5 }, { damage: 200 }]) {
       const shot = fixture(); shot.events = [{ ...source.events[1]!, ...edit }];
       expect(() => readLiveSnapshot(shot)).toThrow(LiveApiError);
     }
+  });
+  test('accepts geometry omitted from versioned updates only with an exactly matching cached world', () => {
+    const full = fixture(), { world: _world, ...update } = full;
+    expect(readLiveSnapshot(update, full.world)).toEqual(full);
+    expect(() => readLiveSnapshot(update)).toThrow(LiveApiError);
+    expect(() => readLiveSnapshot(update, { ...full.world, version: 'stale' })).toThrow(LiveApiError);
+    expect(() => readLiveSnapshot({ ...full, worldVersion: 'different' })).toThrow(LiveApiError);
+  });
+  test('validates districts, purpose, visibility chunks and server search deadlines', () => {
+    const full = fixture(); full.self.searching = { id: 'drop-1', readyAt: 5000 };
+    expect(readLiveSnapshot(full)).toEqual(full);
+    for (const self of [{ ...full.self, purpose: 'immune' }, { ...full.self, districtId: 'client-region' }, { ...full.self, searching: { id: 'drop-1', readyAt: -1 } }]) expect(() => readLiveSnapshot({ ...full, self })).toThrow(LiveApiError);
+    expect(() => readLiveSnapshot({ ...full, visibleChunks: [{ x: 4, y: 0 }] })).toThrow(LiveApiError);
+    const duplicate = fixture(); duplicate.server.districts[1]!.id = 'customs'; expect(() => readLiveStatus(duplicate.server)).toThrow(LiveApiError);
+  });
+  test('keeps unopened container contents concealed and rejects unsupported container kinds', () => {
+    const full = fixture(), anchor = full.world.containers[0]!;
+    full.drops = [{ id: 'drop-1', x: anchor.x, y: anchor.y, amount: 0, containerId: anchor.id, containerKind: anchor.kind, searched: false }];
+    expect(readLiveSnapshot(full)).toEqual(full);
+    const malformed = { ...full, drops: [{ ...full.drops[0], containerKind: 'admin-wallet' }] };
+    expect(() => readLiveSnapshot(malformed)).toThrow(LiveApiError);
+    const leaked = { ...full, drops: [{ ...full.drops[0], items: [{ id: '532cfa7a-5ca1-4742-a07c-ffefdc785d01', modelId: 'coffee', foundAt: 1000 }] }] };
+    expect(() => readLiveSnapshot(leaked)).toThrow(LiveApiError);
   });
   test('vetted server error codes provide useful localized feedback', () => {
     expect(new LiveApiError(409, 'target_out_of_range').message).toContain('укрытием');

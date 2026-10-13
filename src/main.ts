@@ -3003,7 +3003,7 @@ function setView(view: "base" | "map" | "raid" | "live") {
 		render(); updateCameraControls(); updateSaveBanner();
 		return;
 	}
-	if (liveMode?.isActive()) liveMode.hide();
+	if (liveMode?.isActive() && !liveMode.hide()) return;
 	worldViewport.hidden = false;
 	document.querySelector('.world-card')?.classList.remove('live-view');
 	document.querySelector('.command-main')?.classList.remove('live-watching');

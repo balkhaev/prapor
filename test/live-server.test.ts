@@ -7,8 +7,8 @@ import { createLiveService, readLiveOptions, type LiveService } from "../server/
 import { createHealth, createMedicalInventory } from "../src/game/health";
 import { createAccountService, type AccountService } from "../server/accounts";
 import { createHandler } from "../server/handler";
-import type { LiveCommand, LiveMapId, LiveSnapshot, LiveStatus } from "../src/game/live";
-import { getLiveMap } from "../src/game/live-maps";
+import type { LiveCommand, LiveDistrictId, LivePurpose, LiveSnapshot, LiveStatus } from "../src/game/live";
+import { getLiveMap, hasLiveLineOfSight, isLiveWalkable } from "../src/game/live-maps";
 
 const ORIGIN = "https://game.delopusk.ru";
 let directory: string, dbPath: string, service: LiveService, accounts: AccountService | undefined;
@@ -27,8 +27,8 @@ async function call(path: string, method = "GET", body?: unknown, session?: Sess
   if (!result) throw new Error("Missing API response");
   return result;
 }
-async function enter(session?: Session, ip?: string, mapId?: LiveMapId): Promise<{ session: Session; state: LiveSnapshot }> {
-  const reply = await call("join", "POST", mapId ? { mapId } : {}, session, undefined, ip);
+async function enter(session?: Session, ip?: string, districtId?: LiveDistrictId, purpose: LivePurpose = "pvp"): Promise<{ session: Session; state: LiveSnapshot }> {
+  const reply = await call("join", "POST", districtId ? { districtId, purpose } : {}, session, undefined, ip);
   expect(reply.status).toBe(200);
   const state = await reply.json() as LiveSnapshot;
   return { session: session ?? { cookie: reply.headers.get("set-cookie")!.split(";")[0]!, id: state.selfId }, state };
@@ -55,27 +55,36 @@ function editStorage(edit: (db: Database) => void): void {
   edit(db); db.close();
   service = createLiveService(options());
 }
-function placePlayers(placements: Array<{ session: Session; x: number; y: number; health?: number; cargo?: number; ammo?: number; medkits?: number; stash?: number; mapId?: LiveMapId }>): void {
+function placePlayers(placements: Array<{ session: Session; x: number; y: number; health?: number; cargo?: number; ammo?: number; medkits?: number; stash?: number; respawnAt?: number; districtId?: LiveDistrictId }>): void {
   editStorage(db => {
     for (const placement of placements) {
       const row = db.query<{ identity: string; state: string }, []>("SELECT identity,state FROM live_players").all().find(row => (JSON.parse(row.state) as { id: string }).id === placement.session.id)!;
       const player = JSON.parse(row.state) as Record<string, unknown>;
       const { session: _session, ...fields } = placement;
       Object.assign(player, fields, { safeUntil: 0 });
-      if (placement.health !== undefined) player.body = createHealth(placement.health);
+      if (placement.health !== undefined) { const body = createHealth(placement.health); if (placement.health <= 0) body.parts.head.hp = 0; player.body = body; }
       if (placement.medkits !== undefined) player.medicine = createMedicalInventory({ ...(player.medicine as ReturnType<typeof createMedicalInventory>), medkit: placement.medkits * 40 });
       db.query("UPDATE live_players SET state=? WHERE identity=?").run(JSON.stringify(player), row.identity);
     }
   });
+}
+function blockedPair(corner = false): [{ x: number; y: number }, { x: number; y: number }] {
+  const world = getLiveMap("perimeter");
+  for (const wall of world.obstacles) {
+    const a = corner ? { x: wall.x - 1, y: wall.y } : { x: wall.x, y: wall.y - 1 };
+    const b = corner ? { x: wall.x, y: wall.y - 1 } : { x: wall.x, y: wall.y + wall.height };
+    if (isLiveWalkable(world, a) && isLiveWalkable(world, b) && Math.hypot(a.x - b.x, a.y - b.y) <= 7 && !hasLiveLineOfSight(world, a, b)) return [a, b];
+  }
+  throw new Error("No fixture cover pair");
 }
 beforeEach(async () => {
   directory = await mkdtemp(join(tmpdir(), "prapor-live-")); dbPath = join(directory, "live.sqlite");
   time = 1_800_000_000_000; accounts = undefined;
   service = createLiveService(options());
   // Deterministic fixtures keep unrelated NPC combat out of movement/PvP assertions.
-  editStorage(db => db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify({ version: 2, startedAt: time, events: [],
-    scavs: [{ id: "scav-0", mapId: "customs", kind: "scav", name: "Косой", appearance: 0, faction: "scavs", role: "patrol", home: { x: 31, y: 23 }, route: [{ x: 31, y: 23 }], routeIndex: 0, x: 31, y: 23, health: 100, action: "idle", safeUntil: 0, respawnAt: 0, nextMove: time + 1_000_000, nextAttack: time + 1_000_000 }],
-    drops: Array.from({ length: 10 }, (_, index) => ({ id: `drop-${index}`, mapId: "customs", x: index === 0 ? 0 : 30, y: index === 0 ? 0 : 20, amount: 35, expiresAt: time + 1_000_000 })),
+  editStorage(db => db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify({ version: 3, geometryVersion: getLiveMap("perimeter").version, startedAt: time, events: [],
+    scavs: [{ id: "scav-0", mapId: "perimeter", kind: "scav", name: "Косой", appearance: 0, faction: "scavs", role: "patrol", home: { x: 127, y: 0 }, route: [{ x: 127, y: 0 }], routeIndex: 0, x: 127, y: 0, health: 100, action: "idle", safeUntil: 0, respawnAt: 0, nextMove: time + 1_000_000, nextAttack: time + 1_000_000 }],
+    drops: Array.from({ length: 10 }, (_, index) => ({ id: `drop-${index}`, mapId: "perimeter", x: index === 0 ? 0 : 125, y: 0, amount: 35, source: "body", expiresAt: time + 1_000_000 })),
   })));
 });
 afterEach(async () => { service.close(); accounts?.close(); await rm(directory, { recursive: true, force: true }); });
@@ -104,7 +113,7 @@ describe("shared endless live server", () => {
     const guest = await enter();
     const before = await state(guest.session);
     for (const body of [
-      { type: "move", x: 7, y: 4 }, { type: "move", x: 99, y: 0 }, { type: "move", x: 0.5, y: 1 },
+      { type: "move", x: getLiveMap("perimeter").obstacles[0]!.x, y: getLiveMap("perimeter").obstacles[0]!.y }, { type: "move", x: 128, y: 0 }, { type: "move", x: 0.5, y: 1 },
       { type: "move", x: 3, y: 3, health: 999 }, { type: "heal", cargo: 500 }, { type: "loot", id: "drop-0", amount: 999 },
       { type: { toString: null } }, { type: ["heal"] }, {}, { type: "patrol", enabled: "true" },
     ]) expect((await call("action", "POST", body, guest.session)).status).toBe(400);
@@ -116,7 +125,8 @@ describe("shared endless live server", () => {
   test("PvP uses line of sight, distance, spawn protection and cooldown, then transfers dropped cargo once", async () => {
     const first = await enter(), second = await enter();
     expect((await call("action", "POST", { type: "attack", targetId: second.session.id }, first.session)).status).toBe(409);
-    placePlayers([{ session: first.session, x: 6, y: 5 }, { session: second.session, x: 11, y: 5, cargo: 70 }]);
+    const [blockedFirst, blockedSecond] = blockedPair();
+    placePlayers([{ session: first.session, ...blockedFirst }, { session: second.session, ...blockedSecond, cargo: 70 }]);
     await enter(first.session); await enter(second.session);
     const blocked = await call("action", "POST", { type: "attack", targetId: second.session.id }, first.session);
     expect(blocked.status).toBe(409); expect(await blocked.json()).toEqual({ code: "target_out_of_range" });
@@ -130,13 +140,10 @@ describe("shared endless live server", () => {
     const hurt = await state(second.session);
     expect(hurt.self.body.parts.chest.hp).toBe(53);
     expect(hurt.entities.find(entity => entity.id === second.session.id)!.health).toBeCloseTo(408 / 440 * 100);
-    await act(second.session, { type: "treat", medicine: "tourniquet", part: "chest" });
-    await advance(4000, [first.session, second.session]);
+    await act(second.session, { type: "treat", medicine: "tourniquet", part: "chest" }); await advance(4000, [first.session, second.session]);
     await act(second.session, { type: "heal" });
-    expect((await state(second.session)).self.treatment?.type).toBe("medkit");
-    expect((await state(second.session)).self.medicine.medkit).toBe(120);
-    await advance(5000, [first.session, second.session]);
-    expect((await state(second.session)).self.medicine.medkit).toBeLessThan(120);
+    expect((await state(second.session)).self.treatment?.type).toBe("medkit"); expect((await state(second.session)).self.medicine.medkit).toBe(120);
+    await advance(5000, [first.session, second.session]); expect((await state(second.session)).self.medicine.medkit).toBeLessThan(120);
     for (let hit = 0; hit < 6 && (await state(second.session)).self.respawnAt === 0; hit++) { await advance(1000, [first.session, second.session]); await act(first.session, { type: "attack", targetId: second.session.id }); }
     const dead = await state(second.session);
     expect(dead.entities.find(entity => entity.id === second.session.id)!.action).toBe("downed");
@@ -155,11 +162,14 @@ describe("shared endless live server", () => {
 
   test("loot and extraction are shared, range checked, and persist across reconnect and process restart", async () => {
     const first = await enter(), second = await enter();
+    placePlayers([{ session: first.session, x: 0, y: 0 }, { session: second.session, x: 1, y: 0 }]);
+    await enter(first.session); await enter(second.session);
     expect((await call("action", "POST", { type: "loot", id: "drop-1" }, first.session)).status).toBe(409);
     expect((await act(first.session, { type: "loot", id: "drop-0" })).self.cargo).toBe(35);
     expect((await state(second.session)).drops.some(drop => drop.id === "drop-0")).toBe(false);
     expect((await call("action", "POST", { type: "extract" }, first.session)).status).toBe(409);
-    await act(first.session, { type: "move", x: 2, y: 2 }); await advance(3500, [first.session, second.session]);
+    const exit = first.state.world.extracts[0]!;
+    await act(first.session, { type: "move", ...exit }); await advance(7000, [first.session, second.session]);
     const banked = await act(first.session, { type: "extract" });
     expect(banked.self.stash).toBe(35); expect(banked.self.cargo).toBe(0);
     expect((await call("leave", "POST", {}, first.session)).status).toBe(200);
@@ -171,12 +181,13 @@ describe("shared endless live server", () => {
     const restored = (await enter(first.session)).state;
     expect(restored.self.stash).toBe(35); expect(restored.selfId).toBe(first.session.id);
     const body = restored.entities.find(entity => entity.id === first.session.id)!;
-    expect({ x: body.x, y: body.y }).toEqual({ x: 2, y: 2 });
+    expect({ x: body.x, y: body.y }).toEqual(exit);
     expect(restored.server.startedAt).toBe(banked.server.startedAt);
   });
 
   test("heartbeat disconnects cancel patrol without losing the body or its inventory", async () => {
     const first = await enter();
+    placePlayers([{ session: first.session, x: 0, y: 0 }]); await enter(first.session);
     await act(first.session, { type: "loot", id: "drop-0" });
     await act(first.session, { type: "patrol", enabled: true });
     await advance(15_000);
@@ -188,6 +199,7 @@ describe("shared endless live server", () => {
 
   test("NPCs attack online players and respawn indefinitely; patrol never automatically shoots another player", async () => {
     const first = await enter(), second = await enter();
+    placePlayers([{ session: first.session, x: 0, y: 0 }, { session: second.session, x: 1, y: 0 }]);
     editStorage(db => {
       const row = db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!;
       const world = JSON.parse(row.state) as { scavs: Array<Record<string, unknown>> };
@@ -198,17 +210,17 @@ describe("shared endless live server", () => {
     await advance(6500, [first.session, second.session]);
     const underFire = await state(first.session);
     expect(underFire.entities.filter(entity => entity.kind === "player").some(entity => entity.health < 100)).toBe(true);
-    await act(first.session, { type: "attack", targetId: "scav-0" });
-    await act(first.session, { type: "patrol", enabled: true }); await advance(250, [first.session, second.session]);
+    await act(first.session, { type: "attack", targetId: "scav-0" }); await act(first.session, { type: "patrol", enabled: true }); await advance(250, [first.session, second.session]);
     expect((await state(first.session)).self.kills).toBe(1);
     const before = (await state(second.session)).self.body.parts.chest.hp;
     await advance(2000, [first.session, second.session]);
-    const after = await state(second.session);
-    expect(after.self.body.parts.chest.hp).toBeCloseTo(before - .5);
+    const after = await state(second.session); expect(after.self.body.parts.chest.hp).toBeCloseTo(before - .5);
     expect(after.events.some(event => event.actorId === first.session.id && event.targetId === second.session.id)).toBe(false);
     await act(first.session, { type: "cancelTreatment" });
     await act(first.session, { type: "patrol", enabled: false }); await advance(8500, [first.session, second.session]);
-    expect((await state(first.session)).entities.find(entity => entity.id === "scav-0")!.health).toBe(100);
+    const db = new Database(dbPath, { readonly: true });
+    try { const stored = JSON.parse(db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!.state) as { scavs: Array<{ id: string; health: number }> }; expect(stored.scavs.find(entity => entity.id === "scav-0")!.health).toBe(100); }
+    finally { db.close(); }
   });
 
   test("capacity counts online identities, rejoining uses the same body, and leave immediately releases a slot", async () => {
@@ -221,54 +233,12 @@ describe("shared endless live server", () => {
     expect((await enter(undefined, "198.51.100.1")).state.server.online).toBe(32);
   });
 
-  test("each authored map is one shared arena and guessed foreign targets and loot cannot cross its boundary", async () => {
-    const first = await enter(undefined, undefined, "customs"), second = await enter(undefined, undefined, "customs"), elsewhere = await enter(undefined, undefined, "depot");
-    const shared = await state(first.session), foreign = await state(elsewhere.session);
-    expect(shared.world.id).toBe("customs"); expect(foreign.world.id).toBe("depot");
-    expect(shared.entities.filter(entity => entity.kind === "player").map(entity => entity.id).sort()).toEqual([first.session.id, second.session.id].sort());
-    expect(foreign.entities.filter(entity => entity.kind === "player").map(entity => entity.id)).toEqual([elsewhere.session.id]);
-    expect(shared.server.online).toBe(3);
-    expect(shared.server.maps.map(map => map.id).sort()).toEqual(["customs", "depot", "sawmill"]);
-    expect(shared.server.maps.find(map => map.id === "customs")!.online).toBe(2);
-    expect(shared.server.maps.find(map => map.id === "depot")!.online).toBe(1);
-    const localIds = new Set(shared.entities.filter(entity => entity.kind === "scav").map(entity => entity.id));
-    expect(foreign.entities.some(entity => localIds.has(entity.id))).toBe(false);
-    for (const command of [{ type: "attack", targetId: elsewhere.session.id }, { type: "engage", targetId: elsewhere.session.id }, { type: "loot", id: foreign.drops[0]!.id }]) {
-      expect((await call("action", "POST", command, first.session)).status).toBe(409);
-    }
-    for (const command of [{ type: "travel", mapId: "client-map" }, { type: "travel", mapId: "depot", x: 2, y: 2 }, { type: "travel", mapId: "depot", stash: 999 }, { type: "move", x: 1, y: 0, mapId: "depot" }, { type: "engage", targetId: second.session.id, damage: 999 }]) {
-      expect((await call("action", "POST", command, first.session)).status).toBe(400);
-    }
-    const rejoined = await enter(first.session, undefined, "depot");
-    expect(rejoined.state.world.id).toBe("customs"); expect(rejoined.state.selfId).toBe(first.session.id);
-    expect(service.healthy()).toBe(true);
-  });
 
-  test("travel requires an exit, banks cargo once, retains the kit and restores the destination after restart", async () => {
-    const guest = await enter();
-    placePlayers([{ session: guest.session, x: 0, y: 0, health: 71, cargo: 70, ammo: 11, medkits: 1, stash: 12 }]);
-    await enter(guest.session);
-    const remote = await call("action", "POST", { type: "travel", mapId: "sawmill" }, guest.session);
-    expect(remote.status).toBe(409); expect(await remote.json()).toEqual({ code: "extract_out_of_range" });
-    const exit = (await state(guest.session)).world.extracts[0]!;
-    placePlayers([{ session: guest.session, ...exit }]); await enter(guest.session);
-    const travelled = await act(guest.session, { type: "travel", mapId: "sawmill" });
-    expect(travelled.world.id).toBe("sawmill"); expect(travelled.selfId).toBe(guest.session.id);
-    expect(travelled.self).toMatchObject({ ammo: 11, medkits: 1, cargo: 0, stash: 82, targetId: null, patrol: false, travelReadyAt: time + 30_000 });
-    expect(travelled.entities.find(entity => entity.id === guest.session.id)!.health).toBeCloseTo(71);
-    expect(travelled.events.some(event => event.kind === "travel" && event.actorId === guest.session.id)).toBe(true);
-    const destinationExit = travelled.world.extracts[0]!;
-    placePlayers([{ session: guest.session, ...destinationExit }]); await enter(guest.session);
-    const repeated = await call("action", "POST", { type: "travel", mapId: "customs" }, guest.session);
-    expect(repeated.status).toBe(409); expect(await repeated.json()).toEqual({ code: "travel_cooldown" });
-    service.close(); service = createLiveService(options());
-    const restored = (await enter(guest.session)).state;
-    expect(restored.world.id).toBe("sawmill"); expect(restored.self.stash).toBe(82); expect(restored.self.ammo).toBe(11); expect(restored.self.travelReadyAt).toBe(time + 30_000);
-  });
 
   test("server controlled sustained fire consumes one round per hit, stops on movement or death and cannot fire through a corner", async () => {
     const first = await enter(), second = await enter();
-    placePlayers([{ session: first.session, x: 6, y: 4 }, { session: second.session, x: 7, y: 3 }]);
+    const [cornerFirst, cornerSecond] = blockedPair(true);
+    placePlayers([{ session: first.session, ...cornerFirst }, { session: second.session, ...cornerSecond }]);
     await enter(first.session); await enter(second.session);
     expect((await call("action", "POST", { type: "attack", targetId: second.session.id }, first.session)).status).toBe(409);
     placePlayers([{ session: first.session, x: 0, y: 0 }, { session: second.session, x: 1, y: 0 }]);
@@ -278,10 +248,9 @@ describe("shared endless live server", () => {
     await advance(1000, [first.session, second.session]);
     const moving = await act(first.session, { type: "move", x: 0, y: 1 });
     expect(moving.self.targetId).toBeNull();
-    const afterMove = await state(second.session), chestAfterMove = afterMove.self.body.parts.chest.hp, ammoAfterMove = moving.self.ammo;
+    const chestAfterMove = (await state(second.session)).self.body.parts.chest.hp, ammoAfterMove = moving.self.ammo;
     await advance(2000, [first.session, second.session]);
-    expect((await state(second.session)).self.body.parts.chest.hp).toBeCloseTo(chestAfterMove - .5);
-    expect((await state(first.session)).self.ammo).toBe(ammoAfterMove);
+    expect((await state(second.session)).self.body.parts.chest.hp).toBeCloseTo(chestAfterMove - .5); expect((await state(first.session)).self.ammo).toBe(ammoAfterMove);
     await act(first.session, { type: "engage", targetId: second.session.id });
     await advance(4000, [first.session, second.session]);
     const killed = await state(first.session);
@@ -293,33 +262,6 @@ describe("shared endless live server", () => {
     expect((await state(first.session)).self.ammo).toBe(57);
   });
 
-  test("a sustained attack cannot remain active after leaving or after its target moves to another shared map", async () => {
-    const first = await enter(), second = await enter();
-    placePlayers([{ session: first.session, x: 0, y: 0 }, { session: second.session, x: 1, y: 0 }]);
-    await enter(first.session); await enter(second.session);
-    await act(first.session, { type: "engage", targetId: second.session.id });
-    const damaged = (await state(second.session)).self.body.parts.chest.hp;
-    await call("leave", "POST", {}, first.session);
-    await advance(2000, [second.session]);
-    expect((await state(second.session)).self.body.parts.chest.hp).toBeCloseTo(damaged - .5);
-    expect((await state(first.session)).self.ammo).toBe(59);
-    expect((await enter(first.session)).state.self.targetId).toBeNull();
-    await advance(8000, [first.session, second.session]);
-    const exit = (await state(second.session)).world.extracts[0]!;
-    placePlayers([{ session: first.session, x: 11, y: 5 }, { session: second.session, ...exit }]);
-    await enter(first.session); await enter(second.session);
-    const locked = await act(first.session, { type: "engage", targetId: second.session.id });
-    expect(locked.self.targetId).toBe(second.session.id);
-    const beforeTravel = locked.self.ammo;
-    const beforeTravelBody = (await state(second.session)).self.body;
-    await act(second.session, { type: "travel", mapId: "depot" });
-    expect((await state(first.session)).entities.some(entity => entity.id === second.session.id)).toBe(false);
-    expect((await call("action", "POST", { type: "engage", targetId: second.session.id }, first.session)).status).toBe(409);
-    await advance(250, [first.session, second.session]);
-    expect((await state(first.session)).self).toMatchObject({ targetId: null, ammo: beforeTravel });
-    // The following server tick still advances the pre-existing haemorrhage.
-    expect((await state(second.session)).self.body.parts.chest.hp).toBeCloseTo(beforeTravelBody.parts.chest.hp - .0625);
-  });
 
   test("leaving during combat keeps a visible vulnerable body for eight seconds, and rejoining cancels the departure", async () => {
     const first = await enter(), second = await enter();
@@ -332,13 +274,11 @@ describe("shared endless live server", () => {
     expect((await state(first.session)).server.online).toBe(2);
     await advance(1000, [first.session]);
     const waiting = await state(first.session);
-    expect(waiting.entities.find(entity => entity.id === second.session.id)).toMatchObject({ x: 1, y: 0 });
-    expect(waiting.self.body.parts.chest.hp).toBeCloseTo(52.75);
+    expect(waiting.entities.find(entity => entity.id === second.session.id)).toMatchObject({ x: 1, y: 0 }); expect(waiting.self.body.parts.chest.hp).toBeCloseTo(52.75);
     const rejoined = (await enter(second.session)).state;
     expect(rejoined.selfId).toBe(second.session.id);
     expect(rejoined.self).toMatchObject({ cargo: 70, ammo: 59, targetId: null, patrol: false });
-    expect(rejoined.entities.find(entity => entity.id === second.session.id)).toMatchObject({ x: 1, y: 0 });
-    expect(rejoined.self.body.parts.chest.hp).toBeCloseTo(52.75); expect(rejoined.self.leaveAt).toBe(0);
+    expect(rejoined.entities.find(entity => entity.id === second.session.id)).toMatchObject({ x: 1, y: 0 }); expect(rejoined.self.body.parts.chest.hp).toBeCloseTo(52.75); expect(rejoined.self.leaveAt).toBe(0);
     expect((await call("state", "GET", undefined, second.session)).status).toBe(200);
     await call("leave", "POST", {}, second.session);
     await advance(7750, [first.session]);
@@ -374,27 +314,14 @@ describe("shared endless live server", () => {
     expect(service.healthy()).toBe(true);
   });
 
-  test("a player under fire cannot escape through a map transfer and combat locks are computed from server time", async () => {
-    const first = await enter(), second = await enter();
-    const exit = first.state.world.extracts[0]!;
-    const next = [{ x: exit.x + 1, y: exit.y }, { x: exit.x - 1, y: exit.y }, { x: exit.x, y: exit.y + 1 }].find(point => point.x >= 0 && point.y >= 0 && !first.state.world.obstacles.some(wall => point.x >= wall.x && point.x < wall.x + wall.width && point.y >= wall.y && point.y < wall.y + wall.height))!;
-    placePlayers([{ session: first.session, ...exit }, { session: second.session, ...next }]);
-    await enter(first.session); await enter(second.session);
-    await act(second.session, { type: "attack", targetId: first.session.id });
-    const escape = await call("action", "POST", { type: "travel", mapId: "depot" }, first.session);
-    expect(escape.status).toBe(409); expect(await escape.json()).toEqual({ code: "in_combat" });
-    expect((await call("action", "POST", { type: "travel", mapId: "depot", now: time + 8000 }, first.session)).status).toBe(400);
-    await advance(8000, [first.session, second.session]);
-    expect((await act(first.session, { type: "travel", mapId: "depot" })).world.id).toBe("depot");
-  });
 
   test("rival NPC groups fight each other inside their shared map without a player issuing an attack", async () => {
     const guest = await enter();
     editStorage(db => {
       const row = db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!;
       const world = JSON.parse(row.state) as { scavs: Array<Record<string, unknown>> };
-      const template = world.scavs.find(scav => scav.mapId === "customs")!;
-      world.scavs = world.scavs.filter(scav => scav.mapId !== "customs");
+      const template = world.scavs[0]!;
+      world.scavs = [];
       for (const [index, faction] of ["scavs", "raiders"].entries()) {
         const point = { x: 10 + index, y: 0 };
         world.scavs.push({ ...template, id: `rival-${index}`, ...point, home: point, route: [point], faction, role: "guard", health: 100, respawnAt: 0, nextAttack: 0, nextMove: time + 1_000_000 });
@@ -409,105 +336,154 @@ describe("shared endless live server", () => {
     expect(battle.self.kills).toBe(0); expect(battle.self.ammo).toBe(60); expect(service.healthy()).toBe(true);
   });
 
-  test("authored patrols leave occupied squad waypoints while guards retain their local garrisons", async () => {
-    editStorage(db => {
-      const row = db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!;
-      const world = JSON.parse(row.state) as Record<string, unknown>;
-      delete world.version;
-      db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify(world));
-    });
-    const guest = await enter(), initial = guest.state.entities.filter(entity => entity.kind === "scav");
-    await advance(2000, [guest.session]);
-    const later = (await state(guest.session)).entities;
-    const patrols = initial.filter(entity => entity.role === "patrol");
-    expect(patrols.length).toBeGreaterThanOrEqual(4);
-    expect(patrols.every(original => later.some(entity => entity.id === original.id && (entity.x !== original.x || entity.y !== original.y)))).toBe(true);
-    for (const guard of initial.filter(entity => entity.role === "guard")) {
-      expect(later.find(entity => entity.id === guard.id)).toMatchObject({ x: guard.x, y: guard.y });
+
+
+
+
+  test("districts are spawn choices inside one shared world and explicit purpose changes cannot teleport or alter the kit", async () => {
+    const first = await enter(undefined, undefined, "customs", "quests"), second = await enter(undefined, undefined, "customs", "loot"), far = await enter(undefined, undefined, "depot", "pve");
+    const shared = await state(first.session), remote = await state(far.session);
+    expect(shared.world).toEqual(remote.world); expect(shared.world.id).toBe("perimeter"); expect(shared.server.maps).toHaveLength(1);
+    expect(shared.server.online).toBe(3); expect(shared.server.districts.find(district => district.id === "customs")!.online).toBe(2);
+    expect(shared.entities.some(entity => entity.id === second.session.id)).toBe(true); expect(shared.entities.some(entity => entity.id === far.session.id)).toBe(false);
+    const body = shared.entities.find(entity => entity.id === first.session.id)!;
+    const rejoined = (await enter(first.session, undefined, "village", "pvp")).state;
+    expect(rejoined.self).toMatchObject({ districtId: "customs", purpose: "pvp", ammo: shared.self.ammo, medkits: shared.self.medkits, cargo: shared.self.cargo, stash: shared.self.stash });
+    expect(rejoined.entities.find(entity => entity.id === first.session.id)).toMatchObject({ x: body.x, y: body.y });
+    expect((await enter(first.session)).state.self.purpose).toBe("pvp");
+    for (const payload of [{ districtId: "client-region", purpose: "pvp" }, { districtId: "customs", purpose: "immune" }, { districtId: "customs", purpose: "loot", x: 100, y: 100 }, { seed: "chosen-by-browser" }]) expect((await call("join", "POST", payload, first.session)).status).toBe(400);
+  });
+
+  test("choosing loot or quests does not grant PvP immunity and walking crosses district boundaries without another instance", async () => {
+    const first = await enter(undefined, undefined, "customs", "loot"), second = await enter(undefined, undefined, "customs", "quests");
+    placePlayers([{ session: first.session, x: 0, y: 0 }, { session: second.session, x: 1, y: 0 }]); await enter(first.session); await enter(second.session);
+    await act(first.session, { type: "attack", targetId: second.session.id });
+    expect((await state(second.session)).self.body.parts.chest.hp).toBe(53);
+    placePlayers([{ session: first.session, x: 63, y: 0 }]); await enter(first.session); await enter(second.session);
+    await act(first.session, { type: "move", x: 65, y: 0 }); await advance(1250, [first.session, second.session]);
+    const crossed = await state(first.session);
+    expect(crossed.world.id).toBe("perimeter"); expect(crossed.self.purpose).toBe("loot"); expect(crossed.self.districtId).toBe("sawmill");
+    expect(crossed.entities.find(entity => entity.id === first.session.id)).toMatchObject({ x: 65, y: 0 });
+    expect((await call("action", "POST", { type: "travel", mapId: "depot" }, first.session)).status).toBe(400);
+  });
+
+  test("respawn applies district and purpose choices only after server death recovery and preserves the verified stash", async () => {
+    const guest = await enter(undefined, undefined, "customs", "loot");
+    expect((await call("action", "POST", { type: "respawn", districtId: "village", purpose: "quests" }, guest.session)).status).toBe(409);
+    placePlayers([{ session: guest.session, x: 0, y: 0, health: 0, cargo: 0, stash: 120, respawnAt: time + 10_000 }]); await enter(guest.session);
+    for (const fake of [{ type: "respawn", districtId: "unknown" }, { type: "respawn", purpose: "immune" }, { type: "respawn", districtId: "village", x: 100, y: 100 }, { type: "respawn", respawnAt: time }]) expect((await call("action", "POST", fake, guest.session)).status).toBe(400);
+    expect((await call("action", "POST", { type: "respawn", districtId: "village", purpose: "quests" }, guest.session)).status).toBe(409);
+    await advance(10_000, [guest.session]);
+    const returned = await act(guest.session, { type: "respawn", districtId: "village", purpose: "quests" });
+    expect(returned.selfId).toBe(guest.session.id); expect(returned.world.id).toBe("perimeter");
+    expect(returned.self).toMatchObject({ districtId: "village", purpose: "quests", ammo: 60, medkits: 3, cargo: 0, stash: 120, respawnAt: 0 });
+    const body = returned.entities.find(entity => entity.id === guest.session.id)!, district = returned.world.districts.find(district => district.id === "village")!;
+    expect(body.health).toBe(100); expect(body.x >= district.x && body.y >= district.y).toBe(true);
+    expect(district.spawns.some(anchor => Math.hypot(anchor.x - body.x, anchor.y - body.y) <= 4)).toBe(true);
+  });
+
+  test("visibility omits distant and occluded bodies and exact combat events while versioned state reuses static geometry", async () => {
+    const first = await enter(), second = await enter(), third = await enter();
+    const [hiddenFirst, hiddenSecond] = blockedPair();
+    placePlayers([{ session: first.session, ...hiddenFirst }, { session: second.session, ...hiddenSecond }, { session: third.session, x: 125, y: 0 }]);
+    await enter(first.session); await enter(second.session); await enter(third.session);
+    const hidden = await state(first.session);
+    expect(hidden.entities.some(entity => entity.id === second.session.id || entity.id === third.session.id)).toBe(false);
+    for (const targetId of [second.session.id, third.session.id, "guessed-invisible-id"]) {
+      const denied = await call("action", "POST", { type: "engage", targetId }, first.session);
+      expect(denied.status).toBe(409); expect(await denied.json()).toEqual({ code: "target_unavailable" });
     }
+    expect((await state(first.session)).self).toMatchObject({ targetId: null, ammo: hidden.self.ammo });
+    const cached = await call("state", "GET", undefined, first.session, { "x-prapor-world-version": hidden.worldVersion });
+    const delta = await cached.json() as Record<string, unknown>;
+    expect(delta.world).toBeUndefined(); expect(delta.worldVersion).toBe(hidden.worldVersion); expect(delta.visibleChunks).toBeDefined();
+    const wrong = await call("state", "GET", undefined, first.session, { "x-prapor-world-version": "forged" }); expect((await wrong.json() as LiveSnapshot).world).toBeDefined();
+    placePlayers([{ session: first.session, x: 0, y: 0 }, { session: second.session, x: 120, y: 0 }, { session: third.session, x: 121, y: 0 }]);
+    await enter(first.session); await enter(second.session); await enter(third.session);
+    await act(second.session, { type: "attack", targetId: third.session.id });
+    const outside = await state(first.session);
+    expect(outside.events.some(event => event.actorId === second.session.id && event.targetId === third.session.id)).toBe(false);
+    expect((await call("action", "POST", { type: "attack", targetId: third.session.id }, first.session)).status).toBe(409);
+  });
+
+  test("a cached route replans around a newly occupied tile instead of overlapping another living body", async () => {
+    const first = await enter(), second = await enter();
+    placePlayers([{ session: first.session, x: 0, y: 0 }, { session: second.session, x: 3, y: 2 }]); await enter(first.session); await enter(second.session);
+    await act(first.session, { type: "move", x: 5, y: 0 }); await advance(250, [first.session, second.session]);
+    await act(second.session, { type: "move", x: 3, y: 0 });
+    await advance(1000, [first.session, second.session]);
+    const middle = await state(first.session), bodies = middle.entities.filter(entity => entity.kind === "player");
+    expect(new Set(bodies.map(entity => `${entity.x}:${entity.y}`)).size).toBe(bodies.length);
+    await advance(4000, [first.session, second.session]);
+    const final = await state(first.session); expect(final.entities.find(entity => entity.id === first.session.id)).toMatchObject({ x: 5, y: 0 });
     expect(service.healthy()).toBe(true);
   });
 
-  test("authored contested routes create real rival NPC battles on every map without player attacks", async () => {
-    editStorage(db => {
-      const row = db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!;
-      const world = JSON.parse(row.state) as Record<string, unknown>;
-      delete world.version;
-      db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify(world));
-    });
-    const guests = await Promise.all((["customs", "sawmill", "depot"] as const).map(mapId => enter(undefined, undefined, mapId)));
-    const npcFactions = new Map(guests.map(guest => [guest.state.world.id, new Map(guest.state.entities.filter(entity => entity.kind === "scav").map(entity => [entity.id, entity.faction]))]));
-    const fightingMaps = new Set<LiveMapId>();
-    for (let elapsed = 0; elapsed < 60_000 && fightingMaps.size < 3; elapsed += 5000) {
-      await advance(5000, guests.map(guest => guest.session));
-      for (const guest of guests) {
-        const local = await state(guest.session), factions = npcFactions.get(local.world.id)!;
-        if (local.events.some(event => event.kind === "combat" && (event.damage ?? 0) > 0 && event.actorId && event.targetId && factions.has(event.actorId) && factions.has(event.targetId) && factions.get(event.actorId) !== factions.get(event.targetId))) fightingMaps.add(local.world.id);
-        expect(local.self.ammo).toBe(60); expect(local.self.kills).toBe(0);
-      }
-    }
-    expect([...fightingMaps].sort()).toEqual(["customs", "depot", "sawmill"]);
-    expect(service.healthy()).toBe(true);
-  });
-
-  test("depleted supply points wait for server replenishment across restart while other maps retain their own loot", async () => {
-    const guest = await enter(), elsewhere = await enter(undefined, undefined, "depot");
-    const point = getLiveMap("customs").lootSpawns[0]!;
-    editStorage(db => {
-      const row = db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!;
-      const world = JSON.parse(row.state) as { drops: Array<Record<string, unknown>>; lootCooldowns: Array<[string, number]> };
-      world.drops = world.drops.filter(drop => drop.mapId !== "customs");
-      world.drops.push(...getLiveMap("customs").lootSpawns.map((location, index) => ({ id: `supply-${index}`, mapId: "customs", ...location, amount: 35, source: "supply", expiresAt: time + 120_000 })));
-      world.lootCooldowns = [];
-      db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify(world));
-    });
-    placePlayers([{ session: guest.session, ...point }]); await enter(guest.session); await enter(elsewhere.session);
-    const foreignLoot = (await state(elsewhere.session)).drops.map(drop => drop.id).sort();
-    const looted = await act(guest.session, { type: "loot", id: "supply-0" });
-    expect(looted.self.cargo).toBe(35);
-    expect(looted.drops.some(drop => drop.x === point.x && drop.y === point.y)).toBe(false);
-    expect((await call("action", "POST", { type: "loot", id: "supply-0" }, guest.session)).status).toBe(409);
-    await advance(1000, [guest.session, elsewhere.session]);
-    expect((await state(guest.session)).drops.some(drop => drop.x === point.x && drop.y === point.y)).toBe(false);
-    service.close(); service = createLiveService(options());
-    await enter(guest.session); await enter(elsewhere.session);
-    await advance(28_750, [guest.session, elsewhere.session]);
-    expect((await state(guest.session)).drops.some(drop => drop.x === point.x && drop.y === point.y)).toBe(false);
-    expect((await state(elsewhere.session)).drops.map(drop => drop.id).sort()).toEqual(foreignLoot);
-    await advance(250, [guest.session, elsewhere.session]);
-    const refreshed = (await state(guest.session)).drops.find(drop => drop.x === point.x && drop.y === point.y)!;
-    expect(refreshed).toBeDefined(); expect(refreshed.id).not.toBe("supply-0");
-    expect((await act(guest.session, { type: "loot", id: refreshed.id })).self.cargo).toBe(35 + refreshed.amount);
-    expect(service.healthy()).toBe(true);
-  });
-
-  test("legacy server bodies migrate to the default map while preserving their verified inventory and identity", async () => {
+  test("old district coordinates migrate into the shared world without losing verified inventory or death drops", async () => {
     const guest = await enter();
     placePlayers([{ session: guest.session, x: 0, y: 0, ammo: 17, medkits: 1, cargo: 65, stash: 120 }]);
     editStorage(db => {
-      const rows = db.query<{ identity: string; state: string }, []>("SELECT identity,state FROM live_players").all();
-      for (const row of rows) {
-        const player = JSON.parse(row.state) as Record<string, unknown>;
-        for (const key of ["mapId", "targetId", "travelReadyAt", "lastCombatAt", "body", "medicine", "treatment", "leaveAt", "healthAt", "dangerUntil", "graceUntil", "aim"]) delete player[key];
-        db.query("UPDATE live_players SET state=? WHERE identity=?").run(JSON.stringify(player), row.identity);
-      }
-      const row = db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!;
-      const world = JSON.parse(row.state) as Record<string, unknown> & { scavs: Array<Record<string, unknown>>; drops: Array<Record<string, unknown>> };
-      delete world.version;
-      world.scavs = world.scavs.filter(scav => scav.mapId === "customs");
-      world.drops = world.drops.filter(drop => drop.mapId === "customs");
-      for (const entity of world.scavs) for (const key of ["mapId", "home", "route", "routeIndex", "faction", "role"]) delete entity[key];
-      for (const drop of world.drops) delete drop.mapId;
-      db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify(world));
+      const row = db.query<{ identity: string; state: string }, []>("SELECT identity,state FROM live_players").get()!, player = JSON.parse(row.state) as Record<string, unknown>;
+      player.mapId = "depot"; delete player.districtId; delete player.purpose; delete player.searching; delete player.searchedDropIds;
+      db.query("UPDATE live_players SET state=? WHERE identity=?").run(JSON.stringify(player), row.identity);
+      db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify({ version: 2, startedAt: time, scavs: [], events: [], drops: [{ id: "legacy-body", mapId: "depot", x: 1, y: 0, amount: 73, source: "body", expiresAt: time + 120_000 }] }));
     });
-    const migrated = (await enter(guest.session)).state;
-    expect(migrated.world.id).toBe("customs"); expect(migrated.selfId).toBe(guest.session.id);
-    expect(migrated.self).toMatchObject({ ammo: 17, medkits: 1, cargo: 65, stash: 120, targetId: null, travelReadyAt: 0 });
-    expect(migrated.server.maps.every(map => map.npcs > 0)).toBe(true);
-    expect(migrated.server.maps.find(map => map.id === "customs")!.npcs).toBeGreaterThanOrEqual(getLiveMap("customs").npcSpawns.length);
-    expect(new Set(migrated.entities.filter(entity => entity.kind === "scav").map(entity => entity.faction))).toEqual(new Set(["scavs", "raiders"]));
-    expect(new Set(migrated.entities.filter(entity => entity.kind === "scav").map(entity => entity.role))).toEqual(new Set(["guard", "patrol", "marksman"]));
-    expect(service.healthy()).toBe(true);
+    const restored = (await enter(guest.session)).state;
+    expect(restored.selfId).toBe(guest.session.id); expect(restored.self).toMatchObject({ ammo: 17, medkits: 1, cargo: 65, stash: 120, districtId: "depot" });
+    expect(restored.entities.find(entity => entity.id === guest.session.id)).toMatchObject({ x: 0, y: 64 });
+    expect(restored.drops.find(drop => drop.id === "legacy-body")).toMatchObject({ x: 1, y: 64, amount: 73 });
+    expect(restored.server.maps[0]!.npcs).toBe(getLiveMap("perimeter").npcSpawns.length); expect(service.healthy()).toBe(true);
+  });
+
+  test("container search uses a server deadline, survives confirmed discovery across restart and permits only one shared pickup", async () => {
+    const first = await enter(), second = await enter(), world = getLiveMap("perimeter"), anchor = world.containers[0]!;
+    const near = [{ x: anchor.x + 1, y: anchor.y }, { x: anchor.x - 1, y: anchor.y }, { x: anchor.x, y: anchor.y + 1 }].find(point => isLiveWalkable(world, point) && hasLiveLineOfSight(world, anchor, point))!;
+    editStorage(db => {
+      const row = db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!, stored = JSON.parse(row.state) as { drops: Array<Record<string, unknown>> };
+      stored.drops = stored.drops.filter(drop => drop.containerId !== anchor.id);
+      stored.drops.push({ id: "searchable", mapId: "perimeter", x: anchor.x, y: anchor.y, source: "supply", amount: 35, containerId: anchor.id, containerKind: anchor.kind, expiresAt: time + 120_000 });
+      db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify(stored));
+    });
+    placePlayers([{ session: first.session, x: anchor.x, y: anchor.y }, { session: second.session, ...near }]); await enter(first.session); await enter(second.session);
+    expect((await state(first.session)).drops.find(drop => drop.id === "searchable")).toMatchObject({ amount: 0, searched: false, containerId: anchor.id, containerKind: anchor.kind });
+    expect((await call("action", "POST", { type: "loot", id: "searchable" }, first.session)).status).toBe(409);
+    for (const fake of [{ type: "search", id: "searchable", readyAt: time }, { type: "search", id: "searchable", amount: 999 }, { type: "loot", id: "searchable", searched: true }]) expect((await call("action", "POST", fake, first.session)).status).toBe(400);
+    const scheduled = await act(first.session, { type: "search", id: "searchable" }); await act(second.session, { type: "search", id: "searchable" });
+    expect(scheduled.self.searching).toEqual({ id: "searchable", readyAt: time + anchor.searchMs });
+    await advance(anchor.searchMs - 250, [first.session, second.session]); expect((await state(first.session)).drops.find(drop => drop.id === "searchable")!.amount).toBe(0);
+    expect((await call("action", "POST", { type: "loot", id: "searchable" }, first.session)).status).toBe(409);
+    await advance(250, [first.session, second.session]);
+    expect((await state(first.session)).self.searching).toBeNull(); expect((await state(first.session)).drops.find(drop => drop.id === "searchable")!.amount).toBe(35);
+    service.close(); service = createLiveService(options()); await enter(first.session); await enter(second.session);
+    const raced = await Promise.all([call("action", "POST", { type: "loot", id: "searchable" }, first.session), call("action", "POST", { type: "loot", id: "searchable" }, second.session)]);
+    expect(raced.map(reply => reply.status).sort()).toEqual([200, 409]);
+    expect((await state(first.session)).self.cargo + (await state(second.session)).self.cargo).toBe(35);
+    expect((await state(first.session)).drops.some(drop => drop.containerId === anchor.id)).toBe(false);
+    service.close(); service = createLiveService(options()); await enter(first.session); await enter(second.session);
+    await advance(29_750, [first.session, second.session]); expect((await state(first.session)).drops.some(drop => drop.containerId === anchor.id)).toBe(false);
+    await advance(250, [first.session, second.session]);
+    const replenished = (await state(first.session)).drops.find(drop => drop.containerId === anchor.id)!;
+    expect(replenished).toBeDefined(); expect(replenished.id).not.toBe("searchable"); expect(replenished).toMatchObject({ searched: false, amount: 0 });
+  });
+
+  test("search progress cancels on movement, incoming damage and leaving, so a browser cannot finish an interrupted search", async () => {
+    const first = await enter(), second = await enter(), world = getLiveMap("perimeter"), anchor = world.containers[0]!;
+    const near = [{ x: anchor.x + 1, y: anchor.y }, { x: anchor.x - 1, y: anchor.y }, { x: anchor.x, y: anchor.y + 1 }].find(point => isLiveWalkable(world, point) && hasLiveLineOfSight(world, anchor, point))!;
+    editStorage(db => {
+      const row = db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!, stored = JSON.parse(row.state) as { drops: Array<Record<string, unknown>> };
+      stored.drops = stored.drops.filter(drop => drop.containerId !== anchor.id);
+      stored.drops.push({ id: "interrupted", mapId: "perimeter", x: anchor.x, y: anchor.y, source: "supply", amount: 35, containerId: anchor.id, containerKind: anchor.kind, expiresAt: time + 120_000 });
+      db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify(stored));
+    });
+    placePlayers([{ session: first.session, x: anchor.x, y: anchor.y }, { session: second.session, ...near }]); await enter(first.session); await enter(second.session);
+    await act(first.session, { type: "search", id: "interrupted" }); expect((await act(first.session, { type: "move", x: anchor.x, y: anchor.y })).self.searching).toBeNull();
+    await advance(anchor.searchMs, [first.session, second.session]); expect((await state(first.session)).drops.find(drop => drop.id === "interrupted")!.amount).toBe(0);
+    await act(first.session, { type: "search", id: "interrupted" }); await act(second.session, { type: "attack", targetId: first.session.id });
+    expect((await state(first.session)).self.searching).toBeNull();
+    await advance(anchor.searchMs, [first.session, second.session]); expect((await state(first.session)).drops.find(drop => drop.id === "interrupted")!.amount).toBe(0);
+    await act(first.session, { type: "search", id: "interrupted" }); await call("leave", "POST", {}, first.session);
+    const restored = (await enter(first.session)).state; expect(restored.self.searching).toBeNull();
+    await advance(anchor.searchMs, [first.session, second.session]); expect((await call("action", "POST", { type: "loot", id: "interrupted" }, first.session)).status).toBe(409);
   });
 });
 

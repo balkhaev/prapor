@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { createLiveMode } from '../src/live-ui';
 import { createHealth, createMedicalInventory } from '../src/game/health';
 import type { LiveSnapshot } from '../src/game/live';
+import { getLiveMap } from '../src/game/live-maps';
 
 class ElementStub {
   hidden = false; innerHTML = ''; className = ''; tabIndex = 0; disabled = false;
@@ -48,13 +49,12 @@ beforeEach(() => {
   replace('ResizeObserver', class { observe() {} disconnect() {} });
   replace('Image', class { src = ''; onload: unknown; onerror: unknown });
   replace('requestAnimationFrame', () => 1); replace('cancelAnimationFrame', () => {});
-  server = { server: { id: 'perimeter-1', name: 'Периметр 01', online: 1, capacity: 32, startedAt: time, maps: [
-      { id: 'customs', name: 'Таможня', description: 'Терминал', theme: 'industrial', width: 48, height: 36, online: 1, npcs: 12 },
-      { id: 'sawmill', name: 'Лесопилка', description: 'Лес', theme: 'forest', width: 52, height: 40, online: 0, npcs: 12 },
-      { id: 'depot', name: 'Депо', description: 'Вагоны', theme: 'urban', width: 44, height: 36, online: 0, npcs: 12 },
-    ] }, now: time,
-    world: { id: 'customs', name: 'Таможня', description: 'Терминал', theme: 'industrial', width: 48, height: 36, obstacles: [], extracts: [{ x: 2, y: 2 }], zones: [] }, selfId: 'player-1',
-    self: { id: 'player-1', ammo: 60, medkits: 3, cargo: 0, stash: 0, kills: 0, respawnAt: 0, patrol: false, targetId: null, travelReadyAt: 0, body: createHealth(), medicine: createMedicalInventory(), treatment: null, leaveAt: 0, gameId: 'cba21a6d-2936-4590-9433-dfa2b58c8dc8', lootItems: [], pendingDelivery: [], economyMessage: '' },
+  const { npcSpawns: _npcs, lootSpawns: _loot, ...geometry } = structuredClone(getLiveMap('perimeter'));
+  server = { server: { id: 'perimeter-1', name: 'Периметр 01', online: 1, capacity: 32, startedAt: time,
+      maps: [{ id: geometry.id, name: geometry.name, description: geometry.description, theme: geometry.theme, width: geometry.width, height: geometry.height, online: 1, npcs: 0 }],
+      districts: geometry.districts.map((district, index) => ({ ...district, online: index === 0 ? 1 : 0, npcs: 0 })),
+    }, now: time, world: geometry, worldVersion: geometry.version, visibleChunks: [{ x: 0, y: 0 }], selfId: 'player-1',
+    self: { id: 'player-1', ammo: 60, medkits: 3, cargo: 0, stash: 0, kills: 0, respawnAt: 0, patrol: false, targetId: null, travelReadyAt: 0, body: createHealth(), medicine: createMedicalInventory(), treatment: null, leaveAt: 0, districtId: 'customs', purpose: 'loot', searching: null, gameId: 'cba21a6d-2936-4590-9433-dfa2b58c8dc8', lootItems: [], pendingDelivery: [], economyMessage: '' },
     entities: [{ id: 'player-1', name: 'Боец', kind: 'player', appearance: 0, x: 0, y: 0, health: 100, safeUntil: 0, action: 'idle' }], drops: [], events: [] };
   replace('fetch', async (url: string, options?: RequestInit) => {
     if (url.startsWith('/art/')) return Response.json({ frames: {} });
@@ -74,7 +74,9 @@ beforeEach(() => {
     }
     throw new Error(`Unexpected request ${url}`);
   });
-  mode = createLiveMode({ world: world as unknown as HTMLElement, dock: dock as unknown as HTMLElement, onExit: () => { exited++; }, onAccount() {}, onMarket: () => { marketOpened++; }, getAccountId: () => null, getGameId: () => server.self.gameId ?? null });
+  mode = createLiveMode({ world: world as unknown as HTMLElement, dock: dock as unknown as HTMLElement, onExit: () => { exited++; }, onAccount() {}, onMarket: () => { marketOpened++; }, getAccountId: () => null, getGameId: () => server.self.gameId ?? null,
+    sceneFactory: () => ({ show() {}, hide() {}, clear() {}, setSelected() {}, update() {}, destroy() {} }),
+  });
 });
 afterEach(() => {
   mode?.destroy(); mode = undefined; clockSpy.mockRestore();
