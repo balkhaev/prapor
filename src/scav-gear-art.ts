@@ -26,8 +26,9 @@ export function scavGearHeight(modelId: string, direction: ScavDirection): numbe
 
 /** Inventory cards crop the same native equipment art used on the character. */
 export function scavGearIllustration(modelId: string, label: string): string {
-	const crop = SCAV_GEAR_CROPS[modelId];
+	const crop = Object.hasOwn(SCAV_GEAR_CROPS, modelId) ? SCAV_GEAR_CROPS[modelId] : undefined;
 	if (!crop) return "";
 	const title = label.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
-	return `<svg class="gear-illustration" viewBox="${crop.x} ${crop.y} ${crop.w} ${crop.h}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="${title}"><title>${title}</title><image href="${crop.image}" width="${crop.sheetWidth}" height="${crop.sheetHeight}"/></svg>`;
+	const clip = `gear-crop-${modelId}`;
+	return `<svg class="gear-illustration" viewBox="${crop.x} ${crop.y} ${crop.w} ${crop.h}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="${title}"><title>${title}</title><defs><clipPath id="${clip}"><rect x="${crop.x}" y="${crop.y}" width="${crop.w}" height="${crop.h}"/></clipPath></defs><image clip-path="url(#${clip})" href="${crop.image}" width="${crop.sheetWidth}" height="${crop.sheetHeight}"/></svg>`;
 }
