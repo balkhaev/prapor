@@ -40,7 +40,7 @@ import { FIELD_KITS, FIELD_KIT_CAPACITY, getProductionReserve, getFieldKitStock,
 export * from "./shelter-logistics";
 
 export const SAVE_KEY = "prapor.save.v1";
-export const SAVE_VERSION = 14;
+export const SAVE_VERSION = 15;
 export const MAX_OFFLINE_MS = 8 * 60 * 60 * 1000;
 export const MAX_ROOM_LEVEL = 5;
 
@@ -2457,7 +2457,7 @@ function parseGear(value: unknown): GearItem {
 	return { id: string(source.id), modelId: known(source.modelId, GEAR_MODEL_BY_ID), durability: number(source.durability, 100) };
 }
 function parseAmmoType(value: unknown, version: number): AmmoType {
-	if (!isAmmoType(value) || (version < 13 && value !== "standard" && value !== "piercing")) throw new Error("ammo-type");
+	if (!isAmmoType(value) || (version < 15 && !["standard", "piercing", "expanding", "precision"].includes(value)) || (version < 13 && value !== "standard" && value !== "piercing")) throw new Error("ammo-type");
 	return value;
 }
 function parseLoadout(value: unknown, version: number): Loadout {
@@ -2850,7 +2850,7 @@ export function parseSave(raw: string, options: { publicSnapshot?: boolean } = {
 	try {
 		if (typeof raw !== "string" || raw.length > 1_000_000) return null;
 		const source = record(JSON.parse(raw));
-		if (source.schemaVersion !== 1 && source.schemaVersion !== 2 && source.schemaVersion !== 3 && source.schemaVersion !== 4 && source.schemaVersion !== 5 && source.schemaVersion !== 6 && source.schemaVersion !== 7 && source.schemaVersion !== 8 && source.schemaVersion !== 9 && source.schemaVersion !== 10 && source.schemaVersion !== 11 && source.schemaVersion !== 12 && source.schemaVersion !== 13 && source.schemaVersion !== SAVE_VERSION) return null;
+		if (source.schemaVersion !== 1 && source.schemaVersion !== 2 && source.schemaVersion !== 3 && source.schemaVersion !== 4 && source.schemaVersion !== 5 && source.schemaVersion !== 6 && source.schemaVersion !== 7 && source.schemaVersion !== 8 && source.schemaVersion !== 9 && source.schemaVersion !== 10 && source.schemaVersion !== 11 && source.schemaVersion !== 12 && source.schemaVersion !== 13 && source.schemaVersion !== 14 && source.schemaVersion !== SAVE_VERSION) return null;
 		const version = source.schemaVersion;
 		fields(source, ["schemaVersion", "createdAt", "lastUpdated", "money", "supplies", "xp", "level", "base", "scavs", "weapons", "raids", "history", "claimedContracts", "discoveredWeapons", "stats", "clock", "rng", "nextId", ...(version >= 3 ? ["gearItems", "blueprints"] : []), ...(version >= 4 ? ["modules"] : []), ...(version >= 5 ? ["shelter"] : []), ...(version >= 6 ? ["recruitment"] : []), ...(version >= 7 ? ["memorials"] : []), ...(version >= 8 ? ["social"] : []), ...(version >= 9 ? ["achievements"] : []), ...(version >= 12 ? ["sectorIntel"] : [])]);
 		const base = record(source.base);

@@ -63,7 +63,7 @@ function expectedNextChance(state: GameState, raid: Raid, branch: "scavenge" | "
 }
 
 describe("caliber ammunition changes real paid raids", () => {
-	test("all four choices pay the shown supply cost and freeze the actual cartridge instead of a universal AP bonus", () => {
+	test("all supported choices pay the shown supply cost and freeze the actual cartridge instead of a universal AP bonus", () => {
 		for (const ammoType of AMMO_TYPES) {
 			const state = funded(), scav = state.scavs[0]!, weapon = state.weapons[0]!, map = MAP_BY_ID.courtyard!;
 			expect(setLoadoutOption(state, scav.id, "ammoType", ammoType).ok).toBe(true);

@@ -61,6 +61,32 @@
 .ammunition-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
 .ammunition-kicker{display:block;color:#bcb58f;font-size:10px;line-height:1.6}
 .ammunition-head h3{margin:4px 0;font-size:15px;line-height:1.6;color:#e6dec3}
+.ammunition-selected{display:grid;grid-template-columns:145px minmax(0,1fr);align-items:center;gap:20px}
+.ammunition-selected-copy{min-width:0}
+.ammunition-pack-art{display:block;flex-shrink:0;width:100%;aspect-ratio:1;background-repeat:no-repeat;background-size:400% 200%;border-radius:5px}
+.ammunition-pack-size{margin:8px 0;font-size:10px;line-height:1.7;color:#aeb39c}
+.ammunition-pack-size strong{color:#ddd5b8}
+.ammunition-selection-head{display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:7px;margin:16px 0 10px;border-top:1px solid #7d735d55;padding-top:12px}
+.ammunition-selection-head h4{margin:0;color:#dad5bd;font-size:12px}
+.ammunition-selection-head>span{color:#aeb49c;font-size:10px}
+.ammunition-cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}
+.ammunition-card{display:flex;flex-direction:column;min-width:0;padding:10px 9px;text-align:left;color:#c8cbb6;background:#282e26;border:1px solid #5d6552;border-radius:5px;cursor:pointer;font:11px Manrope,sans-serif;line-height:1.6}
+.ammunition-card:hover{background:#31382c;border-color:#969077}
+.ammunition-card:focus-visible{outline:2px solid #e7c381;outline-offset:3px}
+.ammunition-card.selected{background:#393d2f;border-color:#ab9c75;box-shadow:inset 0 0 0 1px #ab9c7540}
+.ammunition-card .ammunition-pack-art{width:108px;max-width:100%;margin:0 auto 9px}
+.ammunition-card-title{display:flex;align-items:baseline;gap:7px;margin:0 0 4px}
+.ammunition-card-title>b{color:#d6c79d;font:10px "IBM Plex Mono",monospace;white-space:nowrap}
+.ammunition-card-title>strong{font-size:11px;font-weight:650;color:#e0ddcb;line-height:1.55}
+.ammunition-card-caliber{font-size:10px;color:#a8b09a}
+.ammunition-card-metrics{margin:7px 0 5px;font:10px "IBM Plex Mono",monospace;color:#bbc5a5;line-height:1.7}
+.ammunition-card-metrics b{font-weight:500;color:#e0dec5}
+.ammunition-card-niche{display:block;color:#bdc5ae;font-size:10px;line-height:1.55}
+.ammunition-card-cost{display:block;margin:6px 0 10px;color:#9eab91;font-size:9px;line-height:1.6}
+.ammunition-card-choice{display:block;margin-top:auto;border-top:1px solid #64715366;padding-top:7px;color:#c1caa9;font-size:10px}
+.ammunition-card.selected .ammunition-card-choice{color:#e0cfa0}
+.ammunition-route-details{border-top:1px solid #7d735d55;margin-top:12px;padding-top:10px}
+.ammunition-route-details>summary{font-size:11px;color:#bfc8ac;line-height:1.7;cursor:pointer}
 .ammunition-description,.ammunition-enemy{margin:9px 0;font-size:11px;line-height:1.8;color:#c4c5ad}
 .ammunition-caliber{white-space:nowrap;color:#d6c39b;font:12px "IBM Plex Mono",monospace;line-height:1.8}
 .ammunition-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;margin:12px 0}
@@ -77,7 +103,8 @@
 .ammunition-table td{padding:9px 7px;border-bottom:1px solid #7d735d33;color:#d9dcc8}
 .ammunition-table tr.selected{background:#9d8c5421}.ammunition-table td:first-child{min-width:150px}
 .ammunition-table td small{display:block;color:#aeb89b;font-size:10px}
-.ammo-snapshot{margin:12px 0;padding:10px 12px;border-left:2px solid #998557;background:#302f263b;font-size:11px;line-height:1.8;color:#c9cbb5}
+.ammo-snapshot{display:flex;align-items:center;gap:12px;margin:12px 0;padding:10px 12px;border-left:2px solid #998557;background:#302f263b;font-size:11px;line-height:1.8;color:#c9cbb5}
+.ammo-snapshot .ammunition-pack-art{width:58px}.ammo-snapshot>div{min-width:0}
 .ammo-snapshot strong{display:block;color:#e0d7b9}.ammo-snapshot small{display:block;color:#aab498;font-size:10px}
 .ammunition-branch-threat{display:block;margin-top:9px;color:#c7c9b4;font-size:11px;line-height:1.8}
 .squad-ammunition-threat{display:block;margin-top:10px;border-top:1px solid #81785966;padding-top:8px;color:#c9ccb5;font-size:11px;line-height:1.8}
@@ -87,10 +114,16 @@
 .squad-mission-roster .ammo-snapshot strong{font-size:11px;color:#c6b994}
 .squad-mission-roster>div>.squad-member-copy{display:flex;flex-direction:column;min-width:0;gap:4px;flex:1}
 .inspector .ammunition-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
+.inspector .ammunition-selected{grid-template-columns:86px minmax(0,1fr);gap:12px;align-items:start}
+.inspector .ammunition-head{display:block}.inspector .ammunition-head h3{font-size:13px}
+.inspector .ammunition-caliber{font-size:10px}.inspector .ammunition-selected .ammunition-pack-art{margin-top:8px}
+.inspector .ammunition-cards{display:flex;overflow-x:auto;gap:9px;padding:2px 2px 9px;scrollbar-width:thin;scrollbar-color:#897d5e #252c23;scroll-snap-type:x proximity}
+.inspector .ammunition-card{flex:0 0 162px;scroll-snap-align:start}
 .inspector .ammunition-panel .weapon-route-grid{grid-template-columns:1fr}
 .inspector .ammunition-panel .weapon-route-effect{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 8px}
 .inspector .ammunition-panel .weapon-route-effect>small{grid-column:1/-1}
-@media(max-width:640px){.ammunition-panel{padding:14px 12px}.ammunition-head{flex-wrap:wrap}.ammunition-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.ammunition-description,.ammunition-enemy,.ammunition-note{font-size:12px}.ammunition-table,.ammunition-comparison summary{font-size:12px}.ammunition-table td small,.ammo-snapshot small{font-size:11px}.ammunition-head h3{font-size:16px}}
+@media(max-width:900px){.ammunition-cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:640px){.ammunition-panel{padding:14px 12px}.ammunition-selected{grid-template-columns:88px minmax(0,1fr);gap:12px;align-items:start}.ammunition-head{display:block}.ammunition-selected .ammunition-pack-art{margin-top:7px}.ammunition-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.ammunition-description,.ammunition-enemy,.ammunition-note{font-size:12px}.ammunition-table,.ammunition-comparison summary{font-size:12px}.ammunition-table td small,.ammo-snapshot small{font-size:11px}.ammunition-head h3{font-size:14px}.ammunition-caliber{font-size:11px}.ammunition-pack-size,.ammunition-card-title>strong,.ammunition-card-metrics,.ammunition-card-niche,.ammunition-card-choice{font-size:11px}.ammunition-card{padding:11px 9px}.ammunition-card-caliber,.ammunition-card-cost{font-size:10px}}
 @media(max-width:640px){.weapon-mechanics{padding:14px 12px}.weapon-mechanics-head{flex-wrap:wrap}.weapon-wear{text-align:left}.weapon-route-grid{grid-template-columns:1fr}.weapon-route-effect{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 8px}.weapon-route-effect>strong{font-size:15px}.weapon-route-effect>small{grid-column:1/-1;font-size:11px}.weapon-mechanics-context,.weapon-mechanics-features{font-size:12px}.weapon-mechanics-note{font-size:11px}.module-traits-condition{font-size:11px}}
 @media(max-width:1000px){.module-filters{grid-template-columns:repeat(3,minmax(0,1fr))}.module-search{grid-column:1/-1}}
 @media(max-width:640px){.module-filters{grid-template-columns:repeat(2,minmax(0,1fr))}.module-catalog-tools{align-items:flex-start}.module-catalog-tools>span{font-size:11px}.module-catalog-tools .text-button{font-size:11px}.module-catalog-pagination{gap:9px}.module-catalog-pagination .button{min-width:100px}.bench-build-mounts{font-size:11px}.bench-slots{grid-template-columns:repeat(2,minmax(0,1fr))}.workbench-stage{min-height:165px;padding:14px 3px}.bench-current .module-art,.bench-candidate-preview .module-art{max-height:140px}.module-card-art{aspect-ratio:2.6/1}}

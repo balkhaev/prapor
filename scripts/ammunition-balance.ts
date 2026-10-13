@@ -22,7 +22,7 @@ for (const mapId of ["courtyard", "bunker"] as const) for (const depth of [1, 3]
 		state.money = 50_000;
 		state.supplies = { ammo: 1_000, medicine: 100, scrap: 1_000, intel: 100 };
 		const gun = state.weapons[0]!, scav = state.scavs[0]!;
-		// The late-game sector needs an experienced scav; identical across the four
+		// The late-game sector needs an experienced scav; identical across the eight
 		// ammunition choices, so deep sorties remain observable rather than all fatal.
 		if (mapId === "bunker") { scav.level = 9; scav.combat = 90; scav.scouting = 90; }
 		gun.durability = 100;
@@ -71,8 +71,12 @@ for (const mapId of ["courtyard", "bunker"] as const) for (const depth of [1, 3]
 		repairScrapPerRetained: round(repairScrap / Math.max(1, repairs)) });
 }
 
-console.log(JSON.stringify({ samplesPerType: samples, totalSorties: samples * 16,
+console.log(JSON.stringify({ samplesPerType: samples, totalSorties: samples * 4 * AMMO_TYPES.length,
 	fixture: { weapon: "factory-sks", tactic: "balanced", health: 100, weaponCondition: 100, armour: "none", matchedSeeds: true,
 		courtyardScav: "starter", bunkerScav: { level: 9, combat: 90, scouting: 90 }, perks: "prefer careful, fieldMedic, gunsmith when offered" },
 	precisionNiche: AMMO_TYPES.map((type) => { const effect = getAmmoEffect({ weaponId: "sks" }, type, "reserve", "recon", 1, "cautious"); return { type, bonusPct: round(effect.bonus * 100), effectiveDamage: round(effect.effectiveDamage) }; }),
+	quietNiche: ["sks", "asval"].map((weaponId) => ({ weapon: weaponId, suppression: weaponId === "asval" ? "integral" : "none", choices: AMMO_TYPES.map((type) => {
+		const effect = getAmmoEffect({ weaponId }, type, "courtyard", "recon", 1, "cautious");
+		return { type, bonusPct: round(effect.bonus * 100), effectiveDamage: round(effect.effectiveDamage) };
+	}) })),
 	rows }, null, 2));

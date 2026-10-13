@@ -1,16 +1,19 @@
 import type { WeaponInstance } from "./engine";
-import { RECEIVER_INFO } from "./modules";
+import { getResolvedModuleMounts, MODULE_BY_ID, RECEIVER_INFO, type ModuleInstance, type ModuleModel } from "./modules";
 import type { RaidTactic } from "./operations";
 import type { ExpeditionBranch } from "./systems";
 import { WEAPON_ENVIRONMENTS } from "./weapon-mechanics";
 
-export type AmmoType = "standard" | "piercing" | "expanding" | "precision";
-export const AMMO_TYPES: readonly AmmoType[] = ["standard", "piercing", "expanding", "precision"];
+export type AmmoType = "standard" | "piercing" | "expanding" | "precision" | "subsonic" | "tracer" | "highpressure" | "surplus";
+export const AMMO_TYPES: readonly AmmoType[] = ["standard", "piercing", "expanding", "precision", "subsonic", "tracer", "highpressure", "surplus"];
 export const AMMO_TYPE_LABELS: Record<AmmoType, string> = {
 	standard: "Штатные", piercing: "Бронебойные", expanding: "Экспансивные", precision: "Повышенной точности",
+	subsonic: "Дозвуковые", tracer: "Трассирующие", highpressure: "Усиленные", surplus: "Складские",
 };
 export interface AmmoModel {
 	id: string; caliber: string; type: AmmoType; label: string; description: string;
+	/** Package artwork and quantity identify a product, not a separate inventory. */
+	packCode: string; packRounds: number;
 	/** Fictional game indices. Damage is a round's impact, not weapon firepower. */
 	damage: number; penetration: number;
 	/** Armour disruption during an exchange; helps subsequent hits after a stopped round. */
@@ -54,13 +57,33 @@ const AMMO_SPECS: Record<AmmoType, { damage: number; armorDamage: number; ammoMu
 		description: "Высокий урон по незащищённым целям ценой слабого пробития. Против тяжёлой брони преимущество теряется." },
 	precision: { damage: .95, armorDamage: .35, ammoMultiplier: 1.2, wearMultiplier: 1.03,
 		description: "Стабильный заряд для прицельной стрельбы: немного лучше пробитие, ниже урон. Точность помогает на открытых маршрутах, особенно при осторожной тактике." },
+	subsonic: { damage: .82, armorDamage: .25, ammoMultiplier: 1.25, wearMultiplier: .96,
+		description: "Ниже урон и пробитие. С исправным глушителем помогает скрытности на тайниках и разведке; без него бонуса нет. У ВАЛ и ВСС используется встроенный глушитель. Износ немного ниже." },
+	tracer: { damage: .97, armorDamage: .3, ammoMultiplier: 1.25, wearMultiplier: 1.04,
+		description: "Видимый след помогает корректировать огонь на боевом маршруте, но выдаёт позицию на разведке. Немного меньше урона; пробитие штатное. Дороже обычных патронов." },
+	highpressure: { damage: 1.12, armorDamage: .4, ammoMultiplier: 1.4, wearMultiplier: 1.22,
+		description: "Усиленный заряд повышает урон и немного пробитие. Против тяжёлых плит уступает бронебойному сердечнику. Большой расход припаса и повышенный износ оружия." },
+	surplus: { damage: .88, armorDamage: .25, ammoMultiplier: .75, wearMultiplier: 1.18,
+		description: "Недорогая партия долгого хранения. Экономит общий припас, но слабее по урону и пробитию. Повышенный износ делает частое обслуживание частью экономии." },
+};
+const PACK_CODES: Record<AmmoType, string> = {
+	standard: "FMJ", piercing: "AP", expanding: "HP", precision: "MATCH", subsonic: "SUB", tracer: "TR", highpressure: "+P", surplus: "STOCK",
+};
+const penetrationFor = (type: AmmoType, base: { penetration: number; piercingGain: number }): number => {
+	if (type === "piercing") return base.penetration + base.piercingGain;
+	if (type === "expanding") return Math.max(0, base.penetration - 12);
+	if (type === "precision") return base.penetration + 5;
+	if (type === "subsonic") return Math.max(0, base.penetration - 6);
+	if (type === "highpressure") return base.penetration + 8;
+	if (type === "surplus") return Math.max(0, base.penetration - 3);
+	return base.penetration;
 };
 
 export const AMMO_MODELS: AmmoModel[] = Object.entries(CALIBER_BALLISTICS).flatMap(([caliber, base]) => AMMO_TYPES.map((type) => {
 	const spec = AMMO_SPECS[type], shotgun = caliber === "12g" || caliber === "20g";
 	const name = shotgun
-		? { standard: "Картечь", piercing: "Бронебойный дротик", expanding: "Дробь", precision: "Пуля" }[type]
-		: { standard: "Оболочечный", piercing: "Бронебойный", expanding: "Экспансивный", precision: "Матчевый" }[type];
+		? { standard: "Картечь", piercing: "Бронебойный дротик", expanding: "Дробь", precision: "Пуля", subsonic: "Низкоскоростная картечь", tracer: "Трассирующая пуля", highpressure: "Картечь «Магнум»", surplus: "Картечь долгого хранения" }[type]
+		: { standard: "Оболочечный", piercing: "Бронебойный", expanding: "Экспансивный", precision: "Матчевый", subsonic: "Дозвуковой", tracer: "Трассирующий", highpressure: "Усиленный", surplus: "Складской" }[type];
 	const description = shotgun && type === "expanding"
 		? "Плотная дробовая осыпь сильнее действует на незащищённые цели. Броня резко снижает её пользу. Расход припаса немного выше штатного."
 		: shotgun && type === "precision"
@@ -68,8 +91,9 @@ export const AMMO_MODELS: AmmoModel[] = Object.entries(CALIBER_BALLISTICS).flatM
 			: spec.description;
 	return {
 		id: `ammo-${caliber}-${type}`, caliber, type, label: `${name} · ${base.label}`, description,
+		packCode: PACK_CODES[type], packRounds: shotgun ? 10 : ["9x18", "9x19", "7.62x25"].includes(caliber) ? 50 : 20,
 		damage: Math.round(base.damage * spec.damage * 10) / 10,
-		penetration: type === "piercing" ? base.penetration + base.piercingGain : type === "expanding" ? Math.max(0, base.penetration - 12) : type === "precision" ? base.penetration + 5 : base.penetration,
+		penetration: penetrationFor(type, base),
 		armorDamage: spec.armorDamage, ammoMultiplier: spec.ammoMultiplier, wearMultiplier: spec.wearMultiplier,
 	};
 }));
@@ -106,7 +130,32 @@ export function getEnemyArmorProfile(mapId: string, branch: ExpeditionBranch, st
 	return { armorClass, armoredShare, label: `Броня ${armorClass} класса · ${Math.round(armoredShare * 100)}% целей` };
 }
 
-export function getAmmoEffect(weapon: Pick<WeaponInstance, "weaponId">, type: AmmoType, mapId: string, branch: ExpeditionBranch, stage: number, tactic: RaidTactic): AmmoEffect {
+type AmmoWeapon = Pick<WeaponInstance, "weaponId"> & Partial<Pick<WeaponInstance, "modules">>;
+const working = (part: ModuleInstance | undefined): number => part && Number.isFinite(part.durability) && part.durability >= 10 ? clamp(part.durability / 100, 0, 1) : 0;
+const compatiblePart = (model: ModuleModel | undefined, weaponId: string): boolean => {
+	const info = RECEIVER_INFO[weaponId]!;
+	return Boolean(model && (model.calibers.includes("*") || model.calibers.includes(info.caliber)) && (model.platforms.includes("*") || model.platforms.includes(info.platform)));
+};
+/** Only a real, compatible installed suppressor gives the low-speed load a quiet niche. */
+function suppressorStrength(weapon: AmmoWeapon): number {
+	if (weapon.weaponId === "asval" || weapon.weaponId === "vss") {
+		// A calibre-only preview still knows these two platforms have integral suppression.
+		if (!weapon.modules) return 1;
+		const part = weapon.modules.barrel;
+		const model = part && Object.hasOwn(MODULE_BY_ID, part.modelId) ? MODULE_BY_ID[part.modelId] : undefined;
+		return model?.slot === "barrel" && compatiblePart(model, weapon.weaponId) ? working(part) : 0;
+	}
+	const part = weapon.modules?.muzzle;
+	const model = part && Object.hasOwn(MODULE_BY_ID, part.modelId) ? MODULE_BY_ID[part.modelId] : undefined;
+	if (model?.slot !== "muzzle" || !model.appearance.includes("suppressor") || !compatiblePart(model, weapon.weaponId)) return 0;
+	const barrel = weapon.modules?.barrel;
+	const barrelModel = barrel && Object.hasOwn(MODULE_BY_ID, barrel.modelId) ? MODULE_BY_ID[barrel.modelId] : undefined;
+	if (barrelModel?.slot !== "barrel" || !compatiblePart(barrelModel, weapon.weaponId) || !working(barrel)) return 0;
+	if (model.requiresMount && !getResolvedModuleMounts(weapon.modules!, "muzzle").includes(model.requiresMount)) return 0;
+	return working(part);
+}
+
+export function getAmmoEffect(weapon: AmmoWeapon, type: AmmoType, mapId: string, branch: ExpeditionBranch, stage: number, tactic: RaidTactic): AmmoEffect {
 	const model = getAmmoModel(weapon, type), enemy = getEnemyArmorProfile(mapId, branch, stage);
 	if (!["cautious", "balanced", "bold"].includes(tactic)) throw new Error("Неизвестная тактика стрельбы");
 	const penetrationChance = clamp(.5 + (model.penetration - enemy.armorClass * 10) / 40, .03, .97);
@@ -118,6 +167,9 @@ export function getAmmoEffect(weapon: Pick<WeaponInstance, "weaponId">, type: Am
 	const contactWeight = branch === "combat" ? 1 : branch === "scavenge" ? .65 : .45;
 	const distance = WEAPON_ENVIRONMENTS[mapId]!.distance;
 	const precisionBonus = type === "precision" ? (distance === "far" ? .015 : distance === "mixed" ? .008 : 0) * (tactic === "cautious" ? 1 : tactic === "balanced" ? .8 : .4) : 0;
-	const bonus = clamp((effectiveDamage / referenceDamage - 1) * .15 * contactWeight + precisionBonus, -.1, .1);
+	const quietBonus = type === "subsonic" && branch !== "combat"
+		? suppressorStrength(weapon) * (branch === "recon" ? .03 : .018) * (tactic === "cautious" ? 1 : tactic === "balanced" ? .8 : .35) : 0;
+	const tracerBonus = type === "tracer" ? branch === "combat" ? .012 : branch === "recon" ? -.015 : 0 : 0;
+	const bonus = clamp((effectiveDamage / referenceDamage - 1) * .15 * contactWeight + precisionBonus + quietBonus + tracerBonus, -.1, .1);
 	return { model, enemy, penetrationChance, effectiveDamage, bonus, injuryMultiplier: clamp(1 - bonus * 2, .8, 1.2) };
 }
