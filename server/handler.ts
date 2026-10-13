@@ -1,4 +1,5 @@
 import { extname, resolve, sep } from "node:path";
+import type { AccountService } from "./accounts";
 
 const SECURITY_HEADERS: Record<string, string> = {
   "X-Content-Type-Options": "nosniff",
@@ -30,9 +31,13 @@ function reply(body: BodyInit | null, status: number, headers?: Record<string, s
 }
 
 /** A standalone production handler. Only built files are public; no DevHub imports or env. */
-export function createHandler(directory: string): (request: Request) => Promise<Response> {
+export function createHandler(directory: string, accounts?: AccountService): (request: Request, clientAddress?: string) => Promise<Response> {
   const root = resolve(directory);
-  return async (request) => {
+  return async (request, clientAddress) => {
+    if (accounts) {
+      const api = await accounts.fetch(request, clientAddress);
+      if (api) return api;
+    }
     const head = request.method === "HEAD";
     if (request.method !== "GET" && !head) {
       return reply("Method not allowed", 405, { Allow: "GET, HEAD" });
@@ -47,7 +52,8 @@ export function createHandler(directory: string): (request: Request) => Promise<
       return reply(head ? null : "Bad request", 400);
     }
     if (pathname === "/health") {
-      return reply(head ? null : '{"ok":true}', 200, {
+      const healthy = !accounts || accounts.healthy();
+      return reply(head ? null : JSON.stringify({ ok: healthy }), healthy ? 200 : 503, {
         "Content-Type": "application/json",
         "Cache-Control": "no-store",
       });

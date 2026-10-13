@@ -107,6 +107,11 @@ function encode(state: GameState, session: unknown, metadata: { revision: number
 }
 
 /** Imports current envelopes and original v1–v5 files through the engine's strict parser. */
+export function isValidGameSave(raw: string): boolean {
+	return parseDocument(raw).document !== null;
+}
+
+/** Imports current envelopes and original v1–v5 files through the engine's strict parser. */
 export function parseGameSave(raw: string | null, now = Date.now()): ParsedGameSave | null {
 	const parsed = parseDocument(raw).document;
 	if (!parsed) return null;

@@ -1,0 +1,59 @@
+.account-root{display:flex;align-items:center;flex:0 0 auto}
+.account-launcher{display:inline-flex;align-items:center;gap:7px;min-height:38px;max-width:195px;border:1px solid #667654;border-radius:7px;padding:7px 10px;background:#293526;color:#eee4c8;font:600 11px Manrope,system-ui,sans-serif;cursor:pointer}
+.account-launcher:hover{border-color:#baa875;background:#39432d}
+.account-launcher-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.account-launcher>svg{flex-shrink:0;color:#c4d4a8}
+.account-launcher>i{width:6px;height:6px;border-radius:50%;background:#8b947d;flex-shrink:0}
+.account-launcher.account-signed-in>i{background:#bed299}
+.account-launcher[data-tone=warning]>i{background:#f0c783}
+.account-dialog{color:#eeeede;width:min(540px,calc(100vw - 28px));max-height:calc(100dvh - 32px);max-width:none;margin:auto;padding:0;border:1px solid #87916b;border-radius:13px;background:linear-gradient(140deg,#293526,#1a251c);box-shadow:0 24px 90px #0009;overflow:auto;scrollbar-width:thin;scrollbar-color:#8c976b #1c291c;font-family:Manrope,system-ui,sans-serif}
+.account-dialog::backdrop{background:#0a130dde;backdrop-filter:blur(4px)}
+.account-dialog-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding:23px 25px 19px;border-bottom:1px solid #526148;background:#303b29}
+.account-eyebrow{font:10px "IBM Plex Mono",monospace;letter-spacing:1.1px;text-transform:uppercase;color:#bfcb9f}
+.account-dialog-head h2{font-size:25px;line-height:1.3;color:#f0dfb6;margin:7px 0 0;letter-spacing:-.5px;overflow-wrap:anywhere}
+.account-close{display:grid;place-items:center;width:35px;height:35px;border:1px solid #657354;border-radius:6px;background:#202b1f;color:#d9ddc4;font:24px system-ui,sans-serif;cursor:pointer;flex-shrink:0}
+.account-close:disabled{opacity:.4;cursor:default}
+.account-dialog-body{padding:21px 25px 24px}
+.account-intro{font-size:13px;line-height:1.8;color:#c0cdb0;margin:0 0 20px}
+.account-tabs{display:grid;grid-template-columns:1fr 1fr;gap:5px;border:1px solid #4f6042;background:#182518;border-radius:7px;padding:4px;margin-bottom:20px}
+.account-tabs button{min-height:40px;border:1px solid transparent;border-radius:4px;background:transparent;color:#bcca9f;font:600 12px Manrope,system-ui,sans-serif;cursor:pointer}
+.account-tabs button[aria-pressed=true]{border-color:#b7a56d;background:#444731;color:#f0dbab}
+.account-form{display:grid;gap:12px}
+.account-field{display:flex;flex-direction:column;gap:7px;color:#e0e6c9;font-size:12px;font-weight:650}
+.account-field input{width:100%;min-height:45px;padding:11px 12px;border:1px solid #73815b;border-radius:6px;background:#152218;color:#f1eed7;font:14px Manrope,system-ui,sans-serif;box-sizing:border-box}
+.account-field input::placeholder{color:#90a183;font-size:12px}
+.account-password-field{position:relative;display:flex}
+.account-password-field input{padding-right:91px}
+.account-password-toggle{position:absolute;right:5px;top:5px;bottom:5px;width:81px;border:1px solid #556748;border-radius:4px;background:#2c3b27;color:#d6dcb8;font:11px Manrope,system-ui,sans-serif;cursor:pointer}
+.account-field-hint{font-size:10px;color:#aebf98;line-height:1.7;margin:-5px 0 2px}
+.account-footnote{font-size:11px;line-height:1.8;color:#b4c29d;margin:7px 0 15px}
+.account-button{display:flex;align-items:center;justify-content:center;width:100%;min-height:43px;border:1px solid #7b8d5b;border-radius:6px;background:#32462b;color:#e1e9c6;padding:10px 13px;font:650 12px Manrope,system-ui,sans-serif;line-height:1.55;cursor:pointer}
+.account-button:hover{background:#435836;border-color:#bcc894}
+.account-button.account-primary{background:#c9aa71;border-color:#ddc18b;color:#1f281c}
+.account-button.account-primary:hover{background:#e2c389}
+.account-button:disabled,.account-tabs button:disabled,.account-text-button:disabled,.account-password-toggle:disabled{opacity:.5;cursor:wait}
+.account-text-button{border:0;background:transparent;padding:7px 0;color:#d2cfac;font:11px Manrope,system-ui,sans-serif;line-height:1.5;text-decoration:underline;text-underline-offset:3px;cursor:pointer}
+.account-text-button:hover{color:#f0d493}
+.account-form-footer{display:flex;justify-content:space-between;align-items:center;gap:14px;margin-top:14px}
+.account-error{border:1px solid #a16f52;border-left:3px solid #f0a594;border-radius:5px;background:#3c3025;color:#f0c2a8;padding:11px 13px;font-size:12px;line-height:1.75;margin:8px 0}
+.account-notice{border-left:3px solid #bdd299;background:#31422a;color:#d9e7be;padding:10px 13px;font-size:12px;line-height:1.75;margin:0 0 17px}
+.account-summary{border:1px solid #697c50;border-radius:8px;background:#24361f;padding:16px;margin:0 0 19px}
+.account-sync-status{font-size:13px;line-height:1.8;color:#d6e7bd;margin:8px 0 0}
+.account-sync-status[data-tone=warning]{color:#efcc8c}
+.account-actions{display:grid;gap:9px;margin-top:16px}
+.account-logout{color:#e7bfa7;margin-top:1px}
+.account-code-card{border:1px solid #bda369;border-radius:8px;background:#172319;padding:16px;margin-bottom:18px}
+.account-secret{display:block;width:100%;resize:none;border:1px dashed #839064;border-radius:5px;background:#24311f;color:#f3d698;font:16px "IBM Plex Mono",monospace;line-height:1.6;letter-spacing:.5px;padding:12px;margin:10px 0 12px;box-sizing:border-box;overflow-wrap:anywhere}
+.account-code-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px}
+.account-code-card .account-field-hint{margin:0}
+.account-acknowledgment{display:flex;align-items:flex-start;gap:10px;margin:14px 0 19px;color:#d7e1bd;font-size:12px;line-height:1.75;cursor:pointer}
+.account-acknowledgment input{flex:0 0 auto;width:17px;height:17px;accent-color:#d3b57b;margin:3px 0 0}
+.account-progress-grid{display:grid;gap:11px;margin:15px 0}
+.account-progress-card{border:1px solid #718154;border-radius:8px;background:#273923;padding:16px}
+.account-progress-card.account-selected{border-color:#d8b679;background:#3e442c;box-shadow:inset 3px 0 #d8b679}
+.account-progress-card h3{font-size:16px;color:#e4e5c6;margin:9px 0 7px}
+.account-progress-card p{font-size:12px;color:#c0d0a8;line-height:1.7;margin:0 0 6px}
+.account-progress-card small{display:block;font-size:10px;color:#aebb96;line-height:1.6;margin-bottom:13px}
+.account-dialog button:focus-visible,.account-dialog input:focus-visible,.account-dialog textarea:focus-visible,.account-launcher:focus-visible{outline:2px solid #e7c782;outline-offset:3px}
+.account-dialog [hidden]{display:none}
+@media(max-width:640px){.account-launcher{max-width:140px;min-height:36px;padding:6px 8px;font-size:10px}.account-dialog{width:calc(100vw - 20px);max-height:calc(100dvh - 20px)}.account-dialog-head{padding:19px 18px 16px}.account-dialog-body{padding:18px}.account-dialog-head h2{font-size:23px}.account-intro{font-size:12px}.account-form-footer{gap:9px;flex-wrap:wrap}.account-secret{font-size:14px}.account-button{min-height:45px}.account-text-button{min-height:35px}}
