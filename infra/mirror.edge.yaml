@@ -1,0 +1,27 @@
+# Managed by prapor infra/deploy.ps1.
+http:
+  routers:
+    prapor-game-mirror-https:
+      rule: Host(`game.balkhaev.com`)
+      entryPoints: [https]
+      priority: 60000
+      service: prapor-game-mirror
+      tls:
+        certResolver: letsencrypt
+    prapor-game-mirror-http:
+      rule: Host(`game.balkhaev.com`)
+      entryPoints: [http]
+      priority: 60000
+      service: prapor-game-mirror
+      middlewares: [prapor-game-mirror-https]
+  middlewares:
+    prapor-game-mirror-https:
+      redirectScheme:
+        scheme: https
+        permanent: true
+  services:
+    prapor-game-mirror:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: http://prapor-game-mirror:8080

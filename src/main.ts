@@ -156,6 +156,9 @@ import { createGameFeedbackCursor, observeGameFeedback, type GameResourceGains }
 import { recruitmentPanel, scavRecruitmentPanel } from "./recruitment-ui";
 import { scavStoryPanel, scavMemorialPanel } from "./scav-story-ui";
 import { getScavPersonalEvent } from "./game/scav-stories";
+import { accountApi, AccountApiError, accountErrorMessage, type AccountUser } from "./account-client";
+import { mountAccountUI } from "./account-ui";
+import { createCloudSaveSync, type CloudBaseline, type CloudSyncStatus } from "./account-sync";
 
 type Page = "home" | "raids" | "arsenal" | "base" | "contracts" | "journal" | "recruits";
 const e = (value: unknown) =>
@@ -207,7 +210,19 @@ let saveConflict = false;
 let saveConflictReason: string | null = null;
 let releaseSaveLease: (() => void) | null = null;
 let saveUiTimer: ReturnType<typeof setTimeout> | null = null;
-const saveStore = createGameSaveStore({ getItem: key => localStorage.getItem(key), setItem: (key, value) => localStorage.setItem(key, value) }, { writerId: crypto.randomUUID(), isExclusiveHeld: () => ownsSaveLease });
+let accountDialogOpen = false;
+let accountChanging = false;
+let accountStartupChecked = false;
+let accountGeneration = 0;
+let signedInUser: AccountUser | null = null;
+let playerAccount: AccountUser | null = null;
+let cloudSync: ReturnType<typeof createCloudSaveSync> | null = null;
+const accountKey = (user: AccountUser, key: string) => `prapor.account.${encodeURIComponent(user.id)}.${key}`;
+function createPlayerSaveStore(user: AccountUser | null) {
+	const keyFor = (key: string) => user ? accountKey(user, key) : key;
+	return createGameSaveStore({ getItem: key => localStorage.getItem(keyFor(key)), setItem: (key, value) => localStorage.setItem(keyFor(key), value) }, { writerId: crypto.randomUUID(), isExclusiveHeld: () => ownsSaveLease });
+}
+let saveStore = createPlayerSaveStore(null);
 const openedSave = saveStore.open();
 let raw = openedSave.protectedRaw ?? openedSave.raw;
 let protectedSave = openedSave.protectedRaw !== null;
@@ -291,11 +306,11 @@ function scheduleSessionSave() {
 }
 function holdWorldInput() { worldInputBlockedUntil = Date.now() + 350; }
 function canWorldDrag() {
-	return ownsSaveLease && !saveConflict && !protectedSave && worldView === "base" && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal") && !(window.innerWidth <= 850 && contextMode !== "overview");
+	return !accountDialogOpen && !accountChanging && ownsSaveLease && !saveConflict && !protectedSave && worldView === "base" && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal") && !(window.innerWidth <= 850 && contextMode !== "overview");
 }
-function canWorldCamera() { return ownsSaveLease && !saveConflict && !protectedSave && (canWorldDrag() || (worldView === "raid" && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal"))) && !workerPlacement && !crewPointer; }
+function canWorldCamera() { return !accountDialogOpen && !accountChanging && ownsSaveLease && !saveConflict && !protectedSave && (canWorldDrag() || (worldView === "raid" && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal"))) && !workerPlacement && !crewPointer; }
 function canWorldInteract() {
-	return ownsSaveLease && !saveConflict && !protectedSave && !workerPlacement && !crewPointer?.started && Date.now() >= worldInputBlockedUntil && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal") && !(window.innerWidth <= 850 && contextMode !== "overview");
+	return !accountDialogOpen && !accountChanging && ownsSaveLease && !saveConflict && !protectedSave && !workerPlacement && !crewPointer?.started && Date.now() >= worldInputBlockedUntil && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal") && !(window.innerWidth <= 850 && contextMode !== "overview");
 }
 function captureInterfacePointer(event: PointerEvent) {
 	const target = event.target instanceof Element ? event.target : null;
@@ -461,6 +476,7 @@ function requestSaveOwnership() {
 		try {
 			updateSaveBanner(); setOverlayState();
 			persist();
+			if (!accountStartupChecked) { accountStartupChecked = true; void initializeAccount(); }
 			await new Promise<void>(resolve => { releaseSaveLease = resolve; });
 		} finally {
 			ownsSaveLease = false; releaseSaveLease = null;
@@ -469,9 +485,119 @@ function requestSaveOwnership() {
 }
 function flushAndReleaseSave() {
 	persist();
+	void cloudSync?.flush();
 	releaseSaveLease?.();
 	ownsSaveLease = false;
 }
+
+function readCloudBaseline(user: AccountUser): CloudBaseline | null {
+	try {
+		const value: unknown = JSON.parse(localStorage.getItem(accountKey(user, 'cloud')) ?? 'null');
+		if (!value || typeof value !== 'object' || !('serverRevision' in value) || !('localRevision' in value)
+			|| !Number.isSafeInteger(value.serverRevision) || !Number.isSafeInteger(value.localRevision)
+			|| Number(value.serverRevision) < 0 || Number(value.localRevision) < 0) return null;
+		return { serverRevision: Number(value.serverRevision), localRevision: Number(value.localRevision) };
+	} catch { return null; }
+}
+
+function activatePlayerSave(user: AccountUser | null, store: ReturnType<typeof createPlayerSaveStore>, loaded: {
+	state: GameState; session: unknown; summary: AdvanceSummary | null; protectedRaw?: string | null;
+}) {
+	const session = readGameSession(loaded.session, loaded.state);
+	if (!loaded.protectedRaw) {
+		const result = store.saveSync(loaded.state, session);
+		if (!result.ok) throw new Error('local-save-unavailable');
+	}
+	cancelWorkerPlacement(); closeModal(); closeInspector();
+	playerAccount = user; saveStore = store; state = loaded.state;
+	protectedSave = Boolean(loaded.protectedRaw); raw = loaded.protectedRaw ?? null;
+	selectedPerks.clear(); chosenWorkers.clear(); roomRepeatPreferences.clear();
+	toolOrigin = null; commandOrigin = null;
+	offlineSummary = loaded.summary && (loaded.summary.elapsedMs >= 60_000 || loaded.summary.completedCount) ? loaded.summary : null;
+	applySession(session); presentationFallback = session.presentation;
+	feedbackCursor = createGameFeedbackCursor(state, session.view === 'raid' ? session.raidId : null);
+	render(); setView(worldView); world?.selectRaid(selectedRaidId); world?.restorePresentationState(session.presentation);
+	updateSaveBanner(); setOverlayState();
+}
+
+async function connectAccount(user: AccountUser, source: 'login' | 'register' | 'session') {
+	if (!ownsSaveLease || saveConflict) throw new Error('writer-lock-required');
+	if (accountChanging) throw new Error('account-operation-pending');
+	accountGeneration++;
+	accountChanging = true; signedInUser = user; accountUI.setUser(user); setOverlayState();
+	try {
+		if (cloudSync?.isConnected()) await cloudSync.flush();
+		cloudSync?.disconnect();
+		persist();
+		const sameAccount = playerAccount?.id === user.id;
+		const localCandidate = { state, session: captureSession(), summary: offlineSummary };
+		const localSavedAt = saveStore.getMetadata().savedAt;
+		const store = sameAccount ? saveStore : createPlayerSaveStore(user);
+		const cached = sameAccount ? null : store.open();
+		const baseline = readCloudBaseline(user);
+		const localRevision = cached?.revision ?? saveStore.getMetadata().revision;
+		const hasCache = sameAccount || cached?.state !== null && cached?.state !== undefined;
+		let candidate = cached?.state ? { state: cached.state, session: cached.session, summary: cached.summary }
+			: playerAccount && !sameAccount ? { state: createGame(), session: null, summary: null } : localCandidate;
+		if (source === 'session' && !sameAccount && cached?.state) {
+			activatePlayerSave(user, store, { ...candidate, protectedRaw: cached.protectedRaw });
+		}
+		if (cached?.protectedRaw || sameAccount && protectedSave) {
+			if (!sameAccount && source !== 'session') activatePlayerSave(user, store, { state: cached!.state ?? createGame(), session: cached!.session, summary: cached!.summary, protectedRaw: cached!.protectedRaw });
+			accountUI.setStatus('Локальная запись защищена. Экспортируй её или импортируй исправную через настройки игры.', 'warning');
+			return;
+		}
+		const remote = await accountApi.getSave(user.id);
+		let choice: 'server' | 'local' | 'cancel' = 'local';
+		if (remote.save !== null) {
+			const knownLocal = source === 'session' && hasCache && baseline?.serverRevision === remote.revision;
+			const cleanRemote = source === 'session' && (!hasCache || baseline?.localRevision === localRevision);
+			if (knownLocal) choice = 'local';
+			else if (cleanRemote) choice = 'server';
+			else choice = await accountUI.chooseProgress({ serverSavedAt: remote.savedAt, localSavedAt: cached?.savedAt ?? localSavedAt,
+				message: 'У аккаунта и этого устройства есть свои записи. Выбери убежище для продолжения. Слияния двух игр нет.',
+				serverSummary: 'Убежище, сохранённое в аккаунте', localSummary: hasCache ? 'Локальная запись этого аккаунта' : playerAccount && !sameAccount ? 'Новое убежище' : 'Текущее гостевое убежище' });
+		}
+		if (choice === 'cancel') { accountUI.setStatus('Убежище не подключено. Нажми «Подключить убежище», когда будешь готов.', 'warning'); return; }
+		if (choice === 'server') {
+			const parsed = parseGameSave(remote.save);
+			if (!parsed) throw new AccountApiError(0, 'invalid_response');
+			candidate = { state: parsed.state, session: parsed.session, summary: parsed.summary };
+		} else if (source === 'session' && !hasCache) {
+			candidate = { state: createGame(), session: null, summary: null };
+		}
+		if (protectedSave && playerAccount?.id !== user.id && choice === 'local') throw new Error('protected-local-save');
+		activatePlayerSave(user, store, candidate);
+		cloudSync!.connect(remote.revision);
+		await cloudSync!.flush();
+	} finally { accountChanging = false; setOverlayState(); }
+}
+
+async function initializeAccount() {
+	const epoch = accountGeneration;
+	accountChanging = true; setOverlayState();
+	accountUI.setStatus('Проверяем связь с аккаунтом…');
+	try {
+		const { user } = await accountApi.session();
+		if (epoch !== accountGeneration) return;
+		accountChanging = false;
+		if (user) await connectAccount(user, 'session');
+		else accountUI.setStatus('Гостевая игра: прогресс хранится в этом браузере.');
+	} catch (error) { if (epoch === accountGeneration || accountGeneration === epoch + 1) accountUI.setStatus(accountErrorMessage(error), 'warning'); }
+	finally { accountChanging = false; setOverlayState(); }
+}
+
+function showCloudStatus(status: CloudSyncStatus, savedAt?: number | string) {
+	const text = status === 'saving' ? 'Сохраняем убежище в аккаунте…'
+		: status === 'saved' ? `В аккаунте · ${new Date(savedAt ?? Date.now()).toLocaleTimeString('ru-RU')}`
+		: status === 'conflict' ? 'На другом устройстве появилась новая запись. Нажми «Синхронизировать» и выбери убежище.'
+		: status === 'expired' ? 'Сессия завершилась. Локальная запись сохранена. Войди снова, чтобы подключить аккаунт.'
+		: status === 'offline' ? 'Нет связи: прогресс сохранён на этом устройстве. Синхронизация повторится при подключении.'
+		: 'Аккаунт подключён. Сохраняем каждые 15 секунд.';
+	accountUI.setStatus(text, status === 'saved' ? 'success' : ['conflict','expired','offline'].includes(status) ? 'warning' : 'neutral');
+	if (status === 'expired') { signedInUser = null; accountUI.setUser(null); }
+}
+
 function toast(message: string, ok = true) {
 	const node = document.querySelector<HTMLDivElement>("#toast")!;
 	clearTimeout(toastTimer);
@@ -1134,7 +1260,7 @@ function renderInspector() {
 	setOverlayState();
 }
 function setOverlayState() {
-	const modalOpen = Boolean(document.querySelector("#modal-root .modal"));
+	const modalOpen = accountDialogOpen || accountChanging || Boolean(document.querySelector("#modal-root .modal"));
 	const drawerOpen = Boolean(selectedScav);
 	const toolsOpen = page !== "home";
 	const mobileContext = window.innerWidth <= 850 && contextMode !== "overview";
@@ -2515,7 +2641,7 @@ function updateGameFeedback(quiet = false) {
 	}
 }
 const simulationTimer = setInterval(() => {
-	if (document.hidden || !ownsSaveLease || protectedSave || storedProgressChanged()) return;
+	if (document.hidden || accountChanging || !ownsSaveLease || protectedSave || storedProgressChanged()) return;
 	const beforeLevel = state.level,
 		beforeStatus = rosterStatus(),
 		beforeShelter = shelterStatus(),
@@ -2539,7 +2665,7 @@ const simulationTimer = setInterval(() => {
 }, 1000);
 document.addEventListener("visibilitychange", () => {
 	if (document.hidden) { cancelWorkerPlacement(false, true); world?.cancelCameraGesture(); persist(); }
-	else if (ownsSaveLease && !protectedSave && !storedProgressChanged()) {
+	else if (!accountChanging && ownsSaveLease && !protectedSave && !storedProgressChanged()) {
 		const summary = advance(state);
 		updateGameFeedback(true);
 		if (summary.elapsedMs >= 60_000 || summary.completedCount) offlineSummary = summary;
@@ -2550,7 +2676,10 @@ document.addEventListener("visibilitychange", () => {
 window.addEventListener("pagehide", flushAndReleaseSave);
 window.addEventListener("beforeunload", persist);
 window.addEventListener('pageshow', event => { if (event.persisted) requestSaveOwnership(); });
-window.addEventListener('storage', event => { if (event.key === null || event.key === SAVE_KEY || event.key === PREVIOUS_SAVE_KEY) storedProgressChanged(); });
+window.addEventListener('storage', event => {
+	const keyFor = (key: string) => playerAccount ? accountKey(playerAccount, key) : key;
+	if (event.key === null || event.key === keyFor(SAVE_KEY) || event.key === keyFor(PREVIOUS_SAVE_KEY)) storedProgressChanged();
+});
 for (const type of ['click','change','input','toggle','pointerup']) document.addEventListener(type, scheduleSessionSave);
 let contextIsMobile = window.innerWidth <= 850;
 const responsiveContext = () => {
@@ -2563,6 +2692,7 @@ const responsiveContext = () => {
 };
 window.addEventListener("resize", responsiveContext);
 import.meta.hot?.dispose(() => {
+	clearInterval(cloudTimer); cloudSync?.disconnect(); accountUI.destroy(); accountRoot.remove();
 	cancelWorkerPlacement();
 	gameSound.destroy();
 	document.removeEventListener("pointerdown", resumeSoundOnGesture, true);
@@ -2599,4 +2729,44 @@ setView(worldView);
 world?.selectRaid(selectedRaidId);
 world?.restorePresentationState(initialSession.presentation);
 updateSaveBanner();
+const accountRoot = document.createElement('div');
+accountRoot.id = 'account-root'; document.body.append(accountRoot);
+const accountUI = mountAccountUI({
+	root: accountRoot,
+	onAuthenticated: connectAccount,
+	onDialogChange: open => { accountDialogOpen = open; setOverlayState(); },
+	onBeforeLogout: async () => {
+		if (accountChanging || !ownsSaveLease || saveConflict) { accountUI.setStatus('Дождись подключения записи или обнови игру перед выходом.', 'warning'); return false; }
+		if (protectedSave) return true;
+		if (!persist()) { accountUI.setStatus('Не удалось подтвердить локальную запись. Экспортируй прогресс в настройках перед выходом.', 'warning'); return false; }
+		if (cloudSync?.isConnected()) await cloudSync.flush();
+		return true;
+	},
+	onLogout: () => {
+		accountGeneration++;
+		cloudSync?.disconnect(); signedInUser = null;
+		const guestStore = createPlayerSaveStore(null), guest = guestStore.open();
+		activatePlayerSave(null, guestStore, { state: guest.state ?? createGame(), session: guest.session, summary: guest.summary, protectedRaw: guest.protectedRaw });
+		accountUI.setStatus('Ты вышел. Убежище аккаунта сохранено отдельно; открыта гостевая игра.');
+	},
+	onReconnect: async () => { if (signedInUser) await connectAccount(signedInUser, playerAccount?.id === signedInUser.id ? 'session' : 'login'); },
+	onSync: async () => { if (signedInUser) await connectAccount(signedInUser, playerAccount?.id === signedInUser.id ? 'session' : 'login'); },
+});
+document.querySelector('.settings')!.before(accountRoot.querySelector('.account-launcher')!);
+cloudSync = createCloudSaveSync({
+	readLocal: () => playerAccount && !protectedSave && !saveConflict && ownsSaveLease ? { save: saveStore.exportCurrent(state, captureSession()), revision: saveStore.getMetadata().revision } : null,
+	upload: async (revision, save) => {
+		if (!playerAccount) throw new AccountApiError(401, 'account_changed');
+		const result = await accountApi.putSave(playerAccount.id, revision, save);
+		if (result.savedAt === null) throw new AccountApiError(0, 'invalid_response');
+		return { revision: result.revision, savedAt: result.savedAt };
+	},
+	writeBaseline: baseline => {
+		if (!playerAccount) return;
+		try { localStorage.setItem(accountKey(playerAccount, 'cloud'), JSON.stringify(baseline)); } catch { /* Missing baseline prompts a choice on the next connection. */ }
+	},
+	onStatus: showCloudStatus,
+});
+const cloudTimer = setInterval(() => { if (!document.hidden && !accountChanging && cloudSync?.isConnected()) void cloudSync.flush(); }, 15_000);
+window.addEventListener('online', () => { if (!accountChanging && cloudSync?.isConnected()) void cloudSync.flush(); });
 requestSaveOwnership();
