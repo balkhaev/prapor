@@ -885,7 +885,7 @@ export function createWorld(
 					cell.lamp.setAlpha(construction ? .1 : cell.working ? .18 : .06);
 				}
 			}
-			this.baseCaption.setText(`УБЕЖИЩЕ · УРОВЕНЬ ${state.level}`);
+			this.baseCaption.setText("УЛИЦА · ВЫХОД В РЕЙД");
 			this.shelterCaption.setText(`${rooms.length} КОМНАТ · ${workingRooms} ПРОИЗВОДЯТ · ${rooms.filter((room) => room.status !== "ready").length} СТРОЯТСЯ`);
 			this.syncPeople(state);
 			this.baseLayer.sort("depth");
