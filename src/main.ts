@@ -5,6 +5,7 @@ import "./achievements.css";
 import "./gameplay.css";
 import "./raid-strategy.css";
 import "./shelter-logistics.css";
+import "./flea.css";
 import {
 	ATTACHMENT_LABELS,
 	CATEGORY_LABELS,
@@ -149,8 +150,11 @@ import { mountAccountUI } from "./account-ui";
 
 import { readAccountEmailLink, isAccountEmailFragment, type AccountEmailLink } from "./account-link";
 import { createLiveMode } from "./live-ui";
+import { fleaPage, fleaPricePreview, readFleaOrder, readFleaInteger, raidLootReceipt, raidLootOverflow, type FleaView, type FleaTab, type TradeKindFilter } from './flea-ui';
+import { getTradeInventory, getTradeQuote, LOOT_MODEL_BY_ID } from './game/engine';
+import { MARKET_MAX_ACTIVE } from './game/flea';
 
-type Page = "home" | "raids" | "arsenal" | "base" | "contracts" | "journal" | "recruits" | "squad" | "achievements";
+type Page = "home" | "raids" | "arsenal" | "base" | "contracts" | "journal" | "recruits" | "squad" | "achievements" | "flea";
 const e = (value: unknown) =>
 	String(value).replace(
 		/[&<>"']/g,
@@ -176,6 +180,7 @@ const paths: Record<string, string> = {
 	recruits: "M8 8a4 4 0 1 0 8 0 4 4 0 1 0-8 0M4 21v-3a6 6 0 0 1 12 0v3M19 9v6M16 12h6",
 	squad: "M8 9a3 3 0 1 0 0-6 3 3 0 1 0 0 6m9 2a3 3 0 1 0 0-6 3 3 0 1 0 0 6M2 20v-2a6 6 0 0 1 12 0v2m2-6a5 5 0 0 1 6 5v2M9 11l4 2",
 	achievements: "M5 3h14v11l-7 7-7-7ZM8 9l3 3 5-6M8 3v3M16 3v3",
+	flea: "M3 7h18v4H3ZM5 11v10h14V11M9 21v-6h6v6M5 7l2-4h10l2 4",
 	money: "M3 6h18v13H3ZM7 6V4h12v2M15 10h6v5h-6ZM17 12.5h1",
 	ammo: "M7 21V7l2-4 2 4v14ZM15 21V7l2-4 2 4v14M7 17h4M15 17h4",
 	medicine: "M4 5h16v15H4ZM9 10h6M12 7v6",
@@ -273,6 +278,8 @@ let moduleCraftForWeapon = true;
 const selectedPerks = new Map<string, RunPerk>();
 let contractFilter: "open" | "done" | "all" = "open";
 let achievementFilter: AchievementFilter = "all";
+const fleaView: FleaView = {tab:'inventory',search:'',kind:'all',draft:null,market:null,loading:false,error:'',busy:false};
+let fleaReadGeneration=0;
 let achievementNoticeTimer: ReturnType<typeof setTimeout> | null = null;
 let achievementNoticeSchedule: ReturnType<typeof setTimeout> | null = null;
 const freshAchievements = new Set<string>();
@@ -313,9 +320,10 @@ function applySession(session: GameSession) {
 	moduleRarityFilter = session.filters.moduleRarity as typeof moduleRarityFilter; roomModuleSearch = session.filters.roomModuleSearch; roomModuleSlot = session.filters.roomModuleSlot;
 	moduleCraftForWeapon = session.filters.craftForWeapon; contractFilter = session.filters.contracts;
 	achievementFilter = readAchievementFilter(session.filters.achievements);
+	fleaView.tab=session.flea.tab; fleaView.search=session.flea.search; fleaView.kind=session.flea.kind;
 }
 function captureSession(): GameSession {
-	return readGameSession({version:1,page,view:worldView,mapId:selectedMap,weaponId:selectedWeapon,scavId:selectedScav,roomId:selectedRoomId,raidId:selectedRaidId,squadDraft,context:contextMode,site:selectedShelterSite,roomTab:roomContextTab,armoryTab:arsenalTab,moduleSlot:selectedModuleSlot,benchModuleId:selectedBenchModule,workshopId:productionWorkshopId,perks:[...selectedPerks].flatMap(([raidId,perk])=>{const raid=state.raids.find(item=>item.id===raidId);return raid?.expedition?[{raidId,perk,stage:raid.expedition.stage,seed:raid.seed}]:[]}),journal:[...document.querySelectorAll<HTMLDetailsElement>('details[data-report][open]')].map(item=>item.dataset.report),filters:{weaponSearch,category,collection,moduleSearch,benchSearch:benchPartSearch,moduleSlot:moduleSlotFilter,moduleRarity:moduleRarityFilter,roomModuleSearch,roomModuleSlot,craftForWeapon:moduleCraftForWeapon,contracts:contractFilter,achievements:achievementFilter},presentation:world?.getPresentationState() ?? presentationFallback},state);
+	return readGameSession({version:1,page,view:worldView,mapId:selectedMap,weaponId:selectedWeapon,scavId:selectedScav,roomId:selectedRoomId,raidId:selectedRaidId,squadDraft,context:contextMode,site:selectedShelterSite,roomTab:roomContextTab,armoryTab:arsenalTab,moduleSlot:selectedModuleSlot,benchModuleId:selectedBenchModule,workshopId:productionWorkshopId,perks:[...selectedPerks].flatMap(([raidId,perk])=>{const raid=state.raids.find(item=>item.id===raidId);return raid?.expedition?[{raidId,perk,stage:raid.expedition.stage,seed:raid.seed}]:[]}),flea:{tab:fleaView.tab,search:fleaView.search,kind:fleaView.kind},journal:[...document.querySelectorAll<HTMLDetailsElement>('details[data-report][open]')].map(item=>item.dataset.report),filters:{weaponSearch,category,collection,moduleSearch,benchSearch:benchPartSearch,moduleSlot:moduleSlotFilter,moduleRarity:moduleRarityFilter,roomModuleSearch,roomModuleSlot,craftForWeapon:moduleCraftForWeapon,contracts:contractFilter,achievements:achievementFilter},presentation:world?.getPresentationState() ?? presentationFallback},state);
 }
 function scheduleSessionSave() {
 	if (!serverReady || saveConflict || protectedSave) return;
@@ -346,6 +354,7 @@ const names: Record<Page, string> = {
 	recruits: "Найм",
 	squad: "Отряд",
 	achievements: "Достижения",
+	flea: "Барахолка",
 };
 app.innerHTML = `<div id="save-banner" class="save-banner" role="status" hidden></div><div class="shell command-shell"><header class="topbar command-hud"><div class="command-brand"><span class="brand-mark">П</span><div><strong>ПРАПОР</strong><small>УБЕЖИЩЕ 07</small></div></div><div class="level"><span class="eyebrow">Репутация</span><strong id="level-label"></strong><div class="xp-track"><i id="xp-fill"></i></div></div><div class="resources">${[["money", "Рубли"], ["ammo", "Патроны"], ["medicine", "Медикаменты"], ["scrap", "Материалы"], ["intel", "Разведданные"]].map(([key, label]) => `<div class="resource" title="${label}">${icon(key!,18)}<div><label>${label}</label><strong id="res-${key}"></strong></div><i class="resource-cap" id="cap-${key}"></i></div>`).join("")}</div><button class="settings" data-action="settings" aria-label="Сохранение и помощь">${icon("settings",18)}</button></header><main class="main command-main"><div class="command-toolbar"><div class="command-heading"><h1>Свои люди. Своё убежище.</h1><span><i class="status-dot"></i><span id="passive-note">База на связи</span></span></div><nav class="nav command-tools" aria-label="Инструменты штаба">${(Object.keys(names) as Page[]).map((id) => `<button data-page="${id}" aria-label="${names[id]}" title="${names[id]}">${icon(id,17)}<span>${names[id]}</span>${id === "raids" ? '<b class="badge" id="raid-badge">0</b>' : id === "squad" ? '<b class="badge" id="squad-badge" hidden>0</b>' : ""}</button>`).join("")}</nav></div><div class="command-stage-layout"><section id="hero" class="hero-grid"><section class="world-card"><div class="world-head"><div class="view-switch" aria-label="Вид сцены"><button class="active" data-view="base" aria-label="Убежище" title="Убежище" aria-pressed="true">${icon("home",14)} Убежище</button><button data-view="map" aria-label="Сектора" title="Сектора" aria-pressed="false">${icon("raids",14)} Сектора</button><button data-view="raid" aria-label="Живой рейд" title="Живой рейд" aria-pressed="false" disabled>${icon("people",14)} Рейд</button></div><button class="text-button room-index-button" data-page="base">${icon("base",14)} Комнаты</button><span class="world-coordinate mono">БАЗА 07 · СЕВЕР</span></div><div id="world" aria-label="Графический штаб: комнаты, рабочие и стройка"></div><div class="world-bottom"><span><i class="status-dot"></i><span id="scene-hint">Нажми на комнату или бойца</span></span><span id="world-raid-note">ОТРЯД НА БАЗЕ</span></div><div class="room-shortcuts" hidden></div></section></section><aside id="command-dock" class="command-dock" aria-label="Сводка и управление выбранным объектом"></aside></div><section id="command-crew" class="command-crew" aria-label="Отряд и рабочие"></section><section id="command-routes" class="command-routes" aria-label="Рейды и сектора"></section><div id="offline-summary"></div><footer class="footer-line command-footer"><span id="save-status">ПРОГРЕСС НА ЭТОМ УСТРОЙСТВЕ</span><span>ПРАПОР · 0.15.0</span></footer></main></div><div id="tool-root" class="tool-backdrop" hidden><section class="tool-window" role="dialog" aria-modal="true" aria-labelledby="tool-title"><header class="tool-head"><div id="page-head" class="page-head"></div><button class="icon-button" data-action="close-tools" aria-label="Закрыть инструмент и вернуться в штаб">×</button></header><div class="tool-scroll"><div id="expedition-alerts"></div><div id="panel"></div></div></section></div><div id="context-shade" class="context-shade" hidden></div><div id="toast" role="status" aria-live="polite" hidden></div><div id="inspector-root"></div><div id="modal-root"></div>`;
 const panel = document.querySelector<HTMLDivElement>("#panel")!;
@@ -513,7 +522,39 @@ async function gameAction(command: GameCommand): Promise<ActionResult> {
     }
     finally {
         gameCommandPending = false;
+        fleaView.market = null;
+        if(page==='flea')void refreshFleaMarket();
     }
+}
+async function refreshFleaMarket() {
+    if (!authoritative || !serverReady || fleaView.loading) return;
+    const generation=fleaReadGeneration, identity=serverSnapshot?.identity.id;
+    fleaView.loading=true; fleaView.error='';
+    if(page==='flea')render();
+    try {
+        const market=await authoritative.market();
+        if(generation!==fleaReadGeneration||market.identity.id!==identity)return;
+        fleaView.market=market;
+    } catch(error) {
+        if(generation!==fleaReadGeneration)return;
+        fleaView.market=null;
+        fleaView.error=error instanceof Error?error.message:'Нет связи с барахолкой.';
+    } finally {
+        if(generation===fleaReadGeneration){fleaView.loading=false;if(page==='flea')render();}
+    }
+}
+function updateFleaDraftPreview() {
+    if(!fleaView.draft)return;
+    const preview=panel.querySelector<HTMLElement>('[data-flea-preview]');
+    if(preview)preview.innerHTML=fleaPricePreview(state,fleaView);
+    const order=readFleaOrder(state,fleaView.draft), active=fleaView.market?.mine.filter(offer=>offer.status==='active').length??0;
+    const reason=!order?'Количество — целое от 1 до 10 000, цена — от 1 до 1 000 000 ₽.':active>=MARKET_MAX_ACTIVE?`Одновременно можно разместить ${MARKET_MAX_ACTIVE} лотов.`:order.reason;
+    const submit=panel.querySelector<HTMLButtonElement>('[data-action="flea-list"]');
+    if(submit)submit.disabled=gameCommandPending||fleaView.loading||!fleaView.market||Boolean(reason);
+    const note=panel.querySelector<HTMLElement>('[data-flea-order-reason]');
+    if(note)note.textContent=reason??(!fleaView.market?'Сначала обнови барахолку.':'Лот разместится после нажатия.');
+    const guide=panel.querySelector<HTMLElement>('.flea-guide strong'), quantity=readFleaInteger(fleaView.draft.quantity,10_000)??1;
+    if(guide)guide.textContent=`${n(getTradeQuote(state,{...fleaView.draft.ref,quantity}).guidePrice)} ₽`;
 }
 async function refreshServerProgress(): Promise<boolean> {
     try {
@@ -529,6 +570,7 @@ async function loadServerProgress() {
         return;
     productionReserveDraft = null;
     roomStockTargetDrafts.clear();
+    fleaReadGeneration++; fleaView.market=null; fleaView.draft=null; fleaView.loading=false; fleaView.error='';
     const presentation = storedSession();
     serverReady = false;
     serverSnapshot = null;
@@ -547,6 +589,7 @@ async function loadServerProgress() {
         world?.restorePresentationState(session.presentation);
         persist();
         connectionMessage = 'Прогресс подтверждён сервером.';
+        if(page==='flea')void refreshFleaMarket();
     }
     catch (error) {
         connectionMessage = error instanceof Error ? error.message : 'Игровой сервер недоступен. Повтори подключение.';
@@ -949,6 +992,7 @@ function act(result: ActionResult, cue: GameSoundCue = "confirm") {
 			if (context) { context.tabIndex = -1; context.focus({ preventScroll: true }); }
 			else if (page === "arsenal" && arsenalTab === "bench") document.querySelector<HTMLButtonElement>(`[data-bench-slot="${selectedModuleSlot}"]`)?.focus({ preventScroll: true });
 			else if (page === "arsenal") document.querySelector<HTMLButtonElement>(`[data-arsenal-tab="${arsenalTab}"]`)?.focus({ preventScroll: true });
+			else if (page === "flea") panel.querySelector<HTMLButtonElement>(`[data-flea-tab="${fleaView.tab}"]`)?.focus({preventScroll:true});
 			else if (origin?.dataset.action === "cancel-production") document.querySelector<HTMLButtonElement>(`${scope} [data-room-context-tab="production"]`)?.focus({ preventScroll: true });
 			else if (origin?.dataset.action === "social-choice") {
 				const next = document.querySelector<HTMLButtonElement>('#tool-root [data-action="social-choice"]:not(:disabled)') ?? document.querySelector<HTMLButtonElement>('#tool-root [data-action="close-tools"]');
@@ -1011,7 +1055,7 @@ function expeditionCard(raid: Raid, compact = false) {
 	const weapons = run.cargo.weaponIds.map((id) => WEAPON_BY_ID[id]).filter((item) => Boolean(item)).map((def) => `<span>${icon("arsenal", 14)} ${e(def!.name)}</span>`).join("");
 	const cargoMetrics = `<div class="loadout-stats"><span>Груз: ${getCargoWeight(run.cargo).toFixed(1)} / ${capacity.toFixed(1)} ед.</span><span>Ценность: ≈ ${n(getCargoValue(run.cargo))} ₽</span></div>`;
 	const warehouseWarning = `<div data-cargo-warehouse="${raid.id}">${cargoWarehouseNotice(raid)}</div>`;
-	return `<article class="decision-card" data-expedition="${raid.id}"><div class="decision-head"><div class="scav-avatar">${scavPortrait(scav.personality, scav.name, scav.appearance)}</div><div><span class="eyebrow">${e(MAP_BY_ID[raid.mapId]!.name)} · точка ${run.stage} / 3</span><h3>${e(scav.name)} ждёт приказа</h3><p>${run.stage >= 3 ? "Маршрут пройден. Забери добычу на базу." : "Добыча ещё в рюкзаке. Можно уйти или рискнуть дальше."}</p></div>${!compact ? `<button class="button ghost small" data-scav="${scav.id}">Личное дело</button>` : ""}</div><div class="decision-content"><div class="expedition-stage" aria-label="Пройдено этапов: ${run.stage} из 3">${[1, 2, 3].map((stage) => `<span class="${stage < run.stage ? "done" : stage === run.stage ? "current" : ""}">${stage < run.stage ? "✓ " : ""}${stage}. ${stage === 1 ? "Вход" : stage === 2 ? "Глубина" : "Цель"}</span>`).join("")}</div><div class="cargo-summary"><div><span>В рюкзаке</span><strong>${n(run.cargo.money)} ₽</strong><small>Наличными · припасы ниже</small></div><div><span>Защищено от потери</span><strong>Открытия</strong><small>Остаются даже при провале</small></div><div><span>Здоровье бойца</span><strong>${Math.floor(scav.health)} / 100</strong><small>Броня на входе: ${Math.round(run.loadout.armorCondition)}%</small></div></div>${cargoMetrics}${ammunitionSnapshot(run.ammunition?.modelId, true)}<p class="field-hint">Ценность — оценка наличных и находок, а не выплата рублями. Деньги не занимают место. При перегрузе боец оставляет лишние припасы; склад на базе тоже ограничен.</p><div class="cargo-items">${supplies}${weapons || (!supplies ? "<span>Рюкзак пока пуст</span>" : "")}</div>${moduleCargo(run.cargo.modules)}${warehouseWarning}${run.discoveries.length ? `<p class="field-hint">Записаны находки: ${run.discoveries.map((id) => e(BLUEPRINTS[id]?.label ?? "Разведанный маршрут")).join(" · ")}. Останутся у базы.</p>` : ""}${run.perks.length ? `<p class="field-hint">Опыт этой экспедиции: ${run.perks.map((perk) => e(RUN_PERKS[perk].label)).join(" · ")}</p>` : ""}${choices.length ? `<p class="risk-note">Следующий этап опаснее. При провале добыча в рюкзаке может быть потеряна; постоянные открытия сохранятся.</p>${run.offers.length ? `<div class="run-perk-pick"><h3>Находка маршрута</h3><p>Выбери один бонус. Он работает до конца этой экспедиции.</p><div class="decision-branches">${run.offers.map((perk) => `<button class="branch-choice ${perk === selectedPerk ? "active" : ""}" data-action="run-perk" data-id="${raid.id}" data-perk="${perk}" data-focus-key="perk-${perk}" aria-pressed="${perk === selectedPerk}"><strong>${e(RUN_PERKS[perk].label)}</strong><p>${e(RUN_PERKS[perk].description)}</p><small>${perk === selectedPerk ? "✓ Выбрано" : "Выбрать бонус"}</small></button>`).join("")}</div></div>` : ""}<h3>Куда дальше?</h3><div class="decision-branches">${choices.map((choice) => `<button class="branch-choice" data-action="continue-expedition" data-id="${raid.id}" data-branch="${choice.branch}" data-focus-key="branch-${choice.branch}" ${choice.reason || (run.offers.length && !hasPerk) ? "disabled" : ""}><strong>${e(choice.label)}</strong><p>${e(choice.description)}</p><small>${Math.round(choice.chance * 100)}% успеха · ${seconds(choice.duration)} · ${n(choice.money)} ₽ + ${choice.ammo} патр.${choice.intel ? ` + ${choice.intel} разв.` : ""}</small>${choice.ammunition ? ammunitionThreat(choice.ammunition) : ""}<span class="quote-note">${e(choice.reason ?? (run.offers.length && !hasPerk ? "Сначала выбери бонус маршрута" : `Этап ${run.stage + 1} · добыча под риском`))}</span></button>`).join("")}</div>` : ""}<div class="extract-row"><p>Эвакуация вернёт бойца и доставит добычу в пределах склада. ${run.stage < 3 ? "База готовит следующий выход." : "Экспедиция завершится."}</p><button class="button" data-action="extract" data-id="${raid.id}" data-focus-key="extract">${icon("check", 17)} Эвакуировать с добычей</button></div></div></article>`;
+	return `<article class="decision-card" data-expedition="${raid.id}"><div class="decision-head"><div class="scav-avatar">${scavPortrait(scav.personality, scav.name, scav.appearance)}</div><div><span class="eyebrow">${e(MAP_BY_ID[raid.mapId]!.name)} · точка ${run.stage} / 3</span><h3>${e(scav.name)} ждёт приказа</h3><p>${run.stage >= 3 ? "Маршрут пройден. Забери добычу на базу." : "Добыча ещё в рюкзаке. Можно уйти или рискнуть дальше."}</p></div>${!compact ? `<button class="button ghost small" data-scav="${scav.id}">Личное дело</button>` : ""}</div><div class="decision-content"><div class="expedition-stage" aria-label="Пройдено этапов: ${run.stage} из 3">${[1, 2, 3].map((stage) => `<span class="${stage < run.stage ? "done" : stage === run.stage ? "current" : ""}">${stage < run.stage ? "✓ " : ""}${stage}. ${stage === 1 ? "Вход" : stage === 2 ? "Глубина" : "Цель"}</span>`).join("")}</div><div class="cargo-summary"><div><span>В рюкзаке</span><strong>${n(run.cargo.money)} ₽</strong><small>Наличными · припасы ниже</small></div><div><span>Защищено от потери</span><strong>Открытия</strong><small>Остаются даже при провале</small></div><div><span>Здоровье бойца</span><strong>${Math.floor(scav.health)} / 100</strong><small>Броня на входе: ${Math.round(run.loadout.armorCondition)}%</small></div></div>${cargoMetrics}${ammunitionSnapshot(run.ammunition?.modelId, true)}<p class="field-hint">Ценность — оценка наличных и находок, а не выплата рублями. Деньги не занимают место. При перегрузе боец оставляет лишние припасы; склад на базе тоже ограничен.</p><div class="cargo-items">${supplies}${weapons || (!supplies ? "<span>Рюкзак пока пуст</span>" : "")}</div>${moduleCargo(run.cargo.modules)}${raidLootReceipt(run.cargo.lootItems)}${warehouseWarning}${run.discoveries.length ? `<p class="field-hint">Записаны находки: ${run.discoveries.map((id) => e(BLUEPRINTS[id]?.label ?? "Разведанный маршрут")).join(" · ")}. Останутся у базы.</p>` : ""}${run.perks.length ? `<p class="field-hint">Опыт этой экспедиции: ${run.perks.map((perk) => e(RUN_PERKS[perk].label)).join(" · ")}</p>` : ""}${choices.length ? `<p class="risk-note">Следующий этап опаснее. При провале добыча в рюкзаке может быть потеряна; постоянные открытия сохранятся.</p>${run.offers.length ? `<div class="run-perk-pick"><h3>Находка маршрута</h3><p>Выбери один бонус. Он работает до конца этой экспедиции.</p><div class="decision-branches">${run.offers.map((perk) => `<button class="branch-choice ${perk === selectedPerk ? "active" : ""}" data-action="run-perk" data-id="${raid.id}" data-perk="${perk}" data-focus-key="perk-${perk}" aria-pressed="${perk === selectedPerk}"><strong>${e(RUN_PERKS[perk].label)}</strong><p>${e(RUN_PERKS[perk].description)}</p><small>${perk === selectedPerk ? "✓ Выбрано" : "Выбрать бонус"}</small></button>`).join("")}</div></div>` : ""}<h3>Куда дальше?</h3><div class="decision-branches">${choices.map((choice) => `<button class="branch-choice" data-action="continue-expedition" data-id="${raid.id}" data-branch="${choice.branch}" data-focus-key="branch-${choice.branch}" ${choice.reason || (run.offers.length && !hasPerk) ? "disabled" : ""}><strong>${e(choice.label)}</strong><p>${e(choice.description)}</p><small>${Math.round(choice.chance * 100)}% успеха · ${seconds(choice.duration)} · ${n(choice.money)} ₽ + ${choice.ammo} патр.${choice.intel ? ` + ${choice.intel} разв.` : ""}</small>${choice.ammunition ? ammunitionThreat(choice.ammunition) : ""}<span class="quote-note">${e(choice.reason ?? (run.offers.length && !hasPerk ? "Сначала выбери бонус маршрута" : `Этап ${run.stage + 1} · добыча под риском`))}</span></button>`).join("")}</div>` : ""}<div class="extract-row"><p>Эвакуация вернёт бойца и доставит добычу в пределах склада. ${run.stage < 3 ? "База готовит следующий выход." : "Экспедиция завершится."}</p><button class="button" data-action="extract" data-id="${raid.id}" data-focus-key="extract">${icon("check", 17)} Эвакуировать с добычей</button></div></div></article>`;
 }
 function hud() {
 	updateAchievementBadge();
@@ -1725,7 +1769,7 @@ function contractCard(contract: Contract) {
 	return `<article data-contract="${e(contract.id)}" class="contract ${lockReason && !claimed ? "contract-locked" : ""}"><div class="contract-mark">${icon(claimed ? "check" : lockReason ? "lock" : "contracts", 21)}</div><div class="contract-copy"><h3>${e(contract.name)}</h3><p>${e(contract.description)}</p><div class="progress"><i style="width:${Math.min(100, (progress / contract.target) * 100)}%"></i></div><small>${n(Math.min(contract.target, progress))} / ${n(contract.target)}</small>${lockReason && !claimed ? `<div class="contract-lock">${icon("lock", 11)} ${e(lockReason)}</div>` : ""}<div class="reward-supplies">${supplies}</div></div><div class="contract-reward"><span>+${n(contract.reward.money)} ₽</span><span class="muted">+${contract.reward.xp} опыта</span><button class="button secondary small" data-action="claim" data-id="${contract.id}" ${!ready || claimed ? "disabled" : ""}>${claimed ? "Выполнено" : lockReason ? "Закрыт" : ready ? "Забрать" : "В работе"}</button></div></article>`;
 }
 function journalCard(report: RaidReport) {
-	return `<details class="journal-entry" data-report="${report.id}"><summary><time>${new Date(report.at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</time><div class="journal-copy"><strong>${e(report.scavName)} · ${e(MAP_BY_ID[report.mapId]!.name)}</strong><p>${e(report.description)}</p><div class="journal-meta"><span>${report.isAuto ? "АВТОВЫХОД" : "ЭКСПЕДИЦИЯ"} · этапов ${report.depth} · ${e(TACTICS[report.tactic].label)}</span><span>${report.money ? `+${n(report.money)} ₽ · ` : ""}Детали +${report.supplies.scrap} · патроны +${report.supplies.ammo}</span></div></div><b class="tag report-result ${report.success ? "success" : "failure"}">${report.success ? "ВЕРНУЛСЯ" : report.lostScav ? "ПОТЕРЯН" : "ПРОВАЛ"}</b><span class="journal-expand">${icon("arrow", 14)}</span></summary><div class="journal-detail">${report.moduleIds.length ? `<div class="module-loot-strip">${report.moduleIds.map((id) => { const model = MODULE_BY_ID[id]; return model ? `<span class="cargo-module" style="--rarity:${RARITY_COLORS[model.rarity]}">${moduleArt(model)}<span><strong>${e(model.label)}</strong><small>Доставлено на базу</small></span></span>` : ""; }).join("")}</div>` : ""}${report.discoveries.length ? `<div class="report-memory">${icon("intel", 18)} Сохранены открытия: ${report.discoveries.map((id) => e(BLUEPRINTS[id]?.label ?? id)).join(" · ")}</div>` : ""}${report.lostCargo ? `<p class="risk-note">Потеряна добыча из рюкзака: ≈ ${n(getCargoValue(report.lostCargo))} ₽. Постоянные открытия остались у базы.</p>` : ""}${report.weaponId ? `<div class="report-trophy" style="--rarity:${RARITY_COLORS[WEAPON_BY_ID[report.weaponId]!.rarity]}">${icon("arsenal", 21)}<div><strong>${e(WEAPON_BY_ID[report.weaponId]!.name)}</strong><span>${report.weaponAutoSold ? "Продано: арсенал заполнен" : "Найдено и отправлено в арсенал"}</span></div></div>` : ""}<ol class="route-timeline">${report.events.map((event, i) => `<li class="event-${event.kind}"><div class="timeline-marker">${String(i + 1).padStart(2, "0")}</div><div><div class="timeline-label"><strong>${e(event.label)}</strong><time>${new Date(event.at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time></div><p>${e(event.text)}</p></div></li>`).join("")}</ol><div class="report-bottom"><span>Разведданные +${report.supplies.intel} · медикаменты +${report.supplies.medicine}</span><span>${report.lostScav ? "Боец потерян" : report.lostWeapon ? "Оружие потеряно" : "Отчёт закрыт"}</span></div></div></details>`;
+	return `<details class="journal-entry" data-report="${report.id}"><summary><time>${new Date(report.at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</time><div class="journal-copy"><strong>${e(report.scavName)} · ${e(MAP_BY_ID[report.mapId]!.name)}</strong><p>${e(report.description)}</p><div class="journal-meta"><span>${report.isAuto ? "АВТОВЫХОД" : "ЭКСПЕДИЦИЯ"} · этапов ${report.depth} · ${e(TACTICS[report.tactic].label)}</span><span>${report.money ? `+${n(report.money)} ₽ · ` : ""}Детали +${report.supplies.scrap} · патроны +${report.supplies.ammo}</span></div></div><b class="tag report-result ${report.success ? "success" : "failure"}">${report.success ? "ВЕРНУЛСЯ" : report.lostScav ? "ПОТЕРЯН" : "ПРОВАЛ"}</b><span class="journal-expand">${icon("arrow", 14)}</span></summary><div class="journal-detail">${raidLootReceipt(report.success?report.lootItems:report.lostCargo?.lootItems,report.success?"delivered":"lost")}${raidLootOverflow(report.lootAutoSold)}${report.moduleIds.length ? `<div class="module-loot-strip">${report.moduleIds.map((id) => { const model = MODULE_BY_ID[id]; return model ? `<span class="cargo-module" style="--rarity:${RARITY_COLORS[model.rarity]}">${moduleArt(model)}<span><strong>${e(model.label)}</strong><small>Доставлено на базу</small></span></span>` : ""; }).join("")}</div>` : ""}${report.discoveries.length ? `<div class="report-memory">${icon("intel", 18)} Сохранены открытия: ${report.discoveries.map((id) => e(BLUEPRINTS[id]?.label ?? id)).join(" · ")}</div>` : ""}${report.lostCargo ? `<p class="risk-note">Потеряна добыча из рюкзака: ≈ ${n(getCargoValue(report.lostCargo))} ₽. Постоянные открытия остались у базы.</p>` : ""}${report.weaponId ? `<div class="report-trophy" style="--rarity:${RARITY_COLORS[WEAPON_BY_ID[report.weaponId]!.rarity]}">${icon("arsenal", 21)}<div><strong>${e(WEAPON_BY_ID[report.weaponId]!.name)}</strong><span>${report.weaponAutoSold ? "Продано: арсенал заполнен" : "Найдено и отправлено в арсенал"}</span></div></div>` : ""}<ol class="route-timeline">${report.events.map((event, i) => `<li class="event-${event.kind}"><div class="timeline-marker">${String(i + 1).padStart(2, "0")}</div><div><div class="timeline-label"><strong>${e(event.label)}</strong><time>${new Date(event.at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time></div><p>${e(event.text)}</p></div></li>`).join("")}</ol><div class="report-bottom"><span>Разведданные +${report.supplies.intel} · медикаменты +${report.supplies.medicine}</span><span>${report.lostScav ? "Боец потерян" : report.lostWeapon ? "Оружие потеряно" : "Отчёт закрыт"}</span></div></div></details>`;
 }
 function renderOfflineSummary() {
 	const node = document.querySelector<HTMLElement>("#offline-summary")!;
@@ -1752,6 +1796,7 @@ function render() {
 	deferredRender = false;
 	const tabsScroll = panel.querySelector<HTMLElement>(".armory-tabs")?.scrollLeft ?? 0;
 	const panelFocus = document.activeElement instanceof HTMLElement && panel.contains(document.activeElement) ? document.activeElement.dataset.focusKey : undefined;
+	const inputSelection=document.activeElement instanceof HTMLInputElement&&panel.contains(document.activeElement)?[document.activeElement.selectionStart,document.activeElement.selectionEnd] as const:null;
 	const expandedReports = [...resumedJournal, ...Array.from(panel.querySelectorAll<HTMLDetailsElement>("details[data-report][open]")).map((node) => node.dataset.report)];
 	const expandedSocial = Array.from(panel.querySelectorAll<HTMLDetailsElement>('details[data-social-detail-key][open]')).map(node => node.dataset.socialDetailKey);
 	const expandedAchievements = Array.from(panel.querySelectorAll<HTMLDetailsElement>('details[data-achievement-detail][open]')).map(node => node.dataset.achievementDetail);
@@ -1772,6 +1817,7 @@ function render() {
 		recruits: "Выбери характер отряда. Связи переживают потери, таланты растут вместе с бойцами.",
 		squad: "Дружба, споры и общие истории. Смотри, кто стал своим и кому нужна поддержка.",
 		achievements: "Нашивки за решения, которые сработали. Каждая хранит свою историю.",
+		flea: "Находки, их польза и твоя цена. Общая торговля между игроками.",
 	};
 	document.querySelector("#page-head")!.innerHTML =
 		`<div><div class="eyebrow"><span class="page-number">0${Object.keys(names).indexOf(page) + 1} /</span> ${page === "home" ? "УБЕЖИЩЕ ПРАПОРА" : names[page]}</div><h2 id="tool-title">${names[page]}</h2><p>${captions[page]}</p></div><span class="tag">${icon("time", 13)} <span id="income-status"></span></span>`;
@@ -1824,6 +1870,7 @@ function render() {
 		panel.innerHTML = `${squadRaidComposer(state, squadDraft, selectedMap)}${raidRepresentatives(state.raids).filter(raid=>raid.squad&&raid.expedition?.status!=="choice").map(raid=>squadRaidOngoing(state,raid)).join("")}${operationsBar()}<div class="section-head"><h2>Выбери сектор</h2><button class="text-button" data-action="toggle-map" aria-expanded="${showTacticalMap}">${icon("raids", 16)} ${showTacticalMap ? "Скрыть карту" : "Тактическая карта"}</button></div><div class="maps">${MAPS.map((m, i) => `<button class="map-card ${m.id === selectedMap ? "selected" : ""} ${state.level < m.level ? "locked" : ""}" data-map="${m.id}" aria-pressed="${m.id === selectedMap}" ${state.level < m.level ? "disabled" : ""}><span class="map-graphic" style="--map-color:${m.accent}">${icon("raids", 70)}</span><span class="map-index">СЕКТОР 0${i + 1}${state.level < m.level ? ` · ${icon("lock", 10)} УР. ${m.level}` : ""}</span><h3>${e(m.name)}</h3><p>${e(m.subtitle)}</p><div class="map-meta"><span>${seconds(m.duration)} · ${m.ammoCost} патр.${m.intelCost ? ` · ${m.intelCost} разв.` : ""}</span><span>${m.reward[0]}–${m.reward[1]} ₽</span></div></button>`).join("")}</div><div class="selected-sector"><div><span class="eyebrow">Выбранный сектор</span><h3>${e(map.name)}</h3><p>${e(map.description)}</p></div><span class="sector-reward"><strong>${map.reward[0]}–${map.reward[1]} ₽</strong><small>Добыча первого этапа</small></span></div>${sectorIntelPanel(state, selectedMap)}<div class="section-head"><h2>Снаряжение отряда</h2><button class="button secondary small" data-action="recruit">${icon("people", 15)} Выбрать кандидата →</button></div><div class="card-grid scav-grid">${state.scavs.map(scavCard).join("") || '<div class="empty">Отряд потерян. Найми нового дикого бесплатно и начни снова.</div>'}</div><p class="muted roster-capacity">Отряд: ${state.scavs.length} / ${getScavCapacity(state)} · Улучшай радиорубку, чтобы нанимать больше диких. Медблок восстанавливает здоровье со временем.</p>`;
 	}
 	if (page === "arsenal") renderArsenal();
+	if (page === "flea") {fleaView.busy=gameCommandPending;panel.innerHTML=fleaPage(state,fleaView);}
 	if (page === "recruits") panel.innerHTML = recruitmentPanel(state);
 	if (page === "squad") panel.innerHTML = squadRelationsPanel(state);
 	if (page === "achievements") panel.innerHTML = achievementsPanel(state, achievementFilter, new Set([...freshAchievements, ...getUnseenAchievementIds(state)]));
@@ -1849,6 +1896,7 @@ function render() {
 	hud();
 	const tabs = panel.querySelector<HTMLElement>(".armory-tabs"); if (tabs) tabs.scrollLeft = tabsScroll;
 	if (panelFocus && !selectedScav && !document.querySelector("#modal-root .modal")) panel.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(panelFocus)}"]`)?.focus({ preventScroll: true });
+	if(inputSelection&&document.activeElement instanceof HTMLInputElement&&inputSelection[0]!==null&&inputSelection[1]!==null)document.activeElement.setSelectionRange(inputSelection[0],inputSelection[1]);
 }
 function renderArsenal() {
 	if (arsenalTab === "bench") { renderWorkbench(); return; }
@@ -1886,7 +1934,7 @@ function renderArsenal() {
 	}`;
 }
 function arsenalTabs() {
-	return `<div class="section-tabs armory-tabs" role="group" aria-label="Раздел арсенала">${([["weapons", "arsenal", "Оружие"], ["bench", "scrap", "Верстак"], ["modules", "settings", "Модули"], ["equipment", "armor", "Комплекты"], ["market", "money", "Снабжение"]] as const).map(([id, symbol, label]) => `<button data-arsenal-tab="${id}" aria-pressed="${arsenalTab === id}" class="${arsenalTab === id ? "active" : ""}">${icon(symbol, 17)} ${label}</button>`).join("")}</div>`;
+	return `<div class="section-tabs armory-tabs" role="group" aria-label="Раздел арсенала">${([["weapons", "arsenal", "Оружие"], ["bench", "scrap", "Верстак"], ["modules", "settings", "Модули"], ["equipment", "armor", "Комплекты"], ["market", "money", "Снабжение"]] as const).map(([id, symbol, label]) => `<button data-arsenal-tab="${id}" aria-pressed="${arsenalTab === id}" class="${arsenalTab === id ? "active" : ""}">${icon(symbol, 17)} ${label}</button>`).join("")}<button data-page="flea">${icon("flea",17)} Барахолка</button></div>`;
 }
 function weaponReadiness(weapon: WeaponInstance) {
 	const stats = getWeaponStats(weapon);
@@ -2163,10 +2211,12 @@ document.addEventListener("click", async (event) => {
 		toolOrigin = target;
 		page = target.dataset.page as Page;
 		render();
+		if(page==='flea')void refreshFleaMarket();
 		if (page === 'achievements') { dismissAchievementNotice(); acknowledgeAchievementScreen(); }
 		if (page !== "home") document.querySelector<HTMLButtonElement>('[data-action="close-tools"]')?.focus();
 		return;
 	}
+	if(target.dataset.fleaTab){fleaView.tab=target.dataset.fleaTab as FleaTab;render();return;}
 	if (target.dataset.view) {
 		setView(target.dataset.view as "base" | "map" | "raid" | "live");
 		return;
@@ -2207,6 +2257,44 @@ document.addEventListener("click", async (event) => {
 	}
 	const id = target.dataset.id ?? "";
 	switch (target.dataset.action) {
+		case 'flea-refresh':void refreshFleaMarket();break;
+		case 'flea-close-draft':fleaView.draft=null;render();panel.querySelector<HTMLButtonElement>('[data-flea-tab="inventory"]')?.focus({preventScroll:true});break;
+		case 'flea-select':{
+			const row=getTradeInventory(state).find(item=>item.ref.id===id&&item.ref.kind===target.dataset.kind);
+			if(!row||row.reason)break;
+			fleaView.draft={ref:{...row.ref,quantity:1},quantity:'1',price:String(row.guidePrice)};fleaView.tab='inventory';render();
+			panel.querySelector<HTMLInputElement>('[data-flea-price]')?.focus({preventScroll:true});
+			panel.querySelector('.flea-editor')?.scrollIntoView({block:'nearest',behavior:scrollBehavior()});
+			if(!fleaView.market)void refreshFleaMarket();
+			break;
+		}
+		case 'flea-use-guide':{
+			if(!fleaView.draft)break;
+			const quantity=readFleaInteger(fleaView.draft.quantity,10_000);
+			if(quantity===null){toast('Укажи целое количество.',false);break;}
+			fleaView.draft.price=String(getTradeQuote(state,{...fleaView.draft.ref,quantity}).guidePrice);render();break;
+		}
+		case 'flea-list':{
+			if(!fleaView.draft)break;
+			const order=readFleaOrder(state,fleaView.draft);
+			if(!order||order.reason){toast(order?.reason??'Укажи целые количество и цену.',false);break;}
+			const result=await gameAction({type:'listMarketItem',args:[order.ref,order.price]});
+			if(result.ok){fleaView.draft=null;fleaView.tab='mine';}
+			act(result);break;
+		}
+		case 'flea-buy':act(await gameAction({type:'buyMarketListing',args:[id]}));break;
+		case 'flea-cancel':act(await gameAction({type:'cancelMarketListing',args:[id]}));break;
+		case 'flea-claim':act(await gameAction({type:'claimMarketSale',args:[id]}));break;
+		case 'flea-sell-loot':
+		case 'flea-recycle-loot':{
+			const item=state.lootItems?.find(item=>item.id===id),model=item?LOOT_MODEL_BY_ID[item.modelId]:null,row=getTradeInventory(state).find(item=>item.ref.kind==='loot'&&item.ref.id===id);
+			if(!model||!row)break;
+			const sale=target.dataset.action==='flea-sell-loot',salvage=Object.entries(model.salvage).filter(([,value])=>value>0).map(([key,value])=>`${n(value)} ${({ammo:'патронов',medicine:'медикаментов',scrap:'деталей',intel:'разведданных'} as Record<string,string>)[key]}`).join(' · ');
+			document.querySelector('#modal-root')!.innerHTML=`<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="loot-disposal-title"><h2 id="loot-disposal-title">${sale?'Продать торговцу':'Разобрать'} ${e(row.label)}?</h2><p>${sale?`Торговец сразу выплатит ${n(row.traderPrice??0)} ₽. На барахолке ориентир ${n(row.guidePrice)} ₽; покупатель может предложить другую ценность.`:`Предмет будет израсходован. Убежище получит: ${e(salvage)}. Для ресурсов должно хватать места на складе.`}</p><div class="detail-actions"><button class="button danger" data-action="flea-confirm-disposal" data-id="${e(id)}" data-kind="${sale?'sale':'recycle'}">${sale?'Продать':'Разобрать'}</button><button class="button ghost" data-action="close-modal">Оставить</button></div></section></div>`;focusModal();break;
+		}
+		case 'flea-confirm-disposal':{
+			closeModal();act(await gameAction(target.dataset.kind==='sale'?{type:'sellLootItem',args:[id]}:{type:'recycleLootItem',args:[id]}));break;
+		}
 		case 'dismiss-achievement-notice': dismissAchievementNotice(true); break;
 		case "close-tools": closeTools(); break;
 		case "close-context": closeCommandContext(); break;
@@ -2603,6 +2691,7 @@ document.addEventListener("change", async (event) => {
 	const target = event.target as HTMLInputElement | HTMLSelectElement;
 	storedProgressChanged();
 	if (!serverReady || saveConflict || protectedSave) return;
+	if(target.hasAttribute('data-flea-kind')){fleaView.kind=target.value as TradeKindFilter;render();return;}
 	if (target.dataset.fieldKit) {
 		const focusKey = target.dataset.focusKey;
 		act(await gameAction({ type: "setFieldKit", args: [target.dataset.fieldKit, target.value as FieldKitSelection] }));
@@ -2690,6 +2779,12 @@ document.addEventListener("change", async (event) => {
 });
 document.addEventListener("input", (event) => {
 	const input = event.target as HTMLInputElement;
+	if(input.hasAttribute('data-flea-price')||input.hasAttribute('data-flea-quantity')){
+		if(fleaView.draft){if(input.hasAttribute('data-flea-price'))fleaView.draft.price=input.value;else fleaView.draft.quantity=input.value;updateFleaDraftPreview();}return;
+	}
+	if(input.hasAttribute('data-flea-search')){
+		fleaView.search=input.value;const caret=input.selectionStart;render();const replacement=panel.querySelector<HTMLInputElement>('[data-flea-search]');replacement?.focus({preventScroll:true});if(caret!==null)replacement?.setSelectionRange(caret,caret);return;
+	}
 	if (input.dataset.productionReserve) {
 		const reserve = getProductionReserve(state);
 		productionReserveDraft ??= { money: String(reserve.money), ...Object.fromEntries(Object.entries(reserve.supplies).map(([key, value]) => [key, String(value)])) } as ReserveDraft;
@@ -2721,6 +2816,10 @@ document.addEventListener("input", (event) => {
 });
 document.addEventListener("keydown", (event) => {
 	if ((!serverReady || saveConflict || protectedSave) && !document.querySelector('#modal-root .modal')) return;
+	if(event.target instanceof HTMLElement&&event.target.dataset.fleaTab&&['ArrowLeft','ArrowRight','Home','End'].includes(event.key)){
+		const tabs:FleaTab[]=['inventory','market','mine','catalog'],current=tabs.indexOf(fleaView.tab),next=event.key==='Home'?0:event.key==='End'?tabs.length-1:(current+(event.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;
+		event.preventDefault();fleaView.tab=tabs[next]!;render();panel.querySelector<HTMLButtonElement>(`[data-flea-tab="${fleaView.tab}"]`)?.focus({preventScroll:true});scheduleSessionSave();return;
+	}
 	if ((workerPlacement || crewPointer) && event.key === "Escape") { event.preventDefault(); cancelWorkerPlacement(true, true); return; }
 	if (workerPlacement?.mode === "keyboard" && event.key === "Tab") {
 		const controls = Array.from(document.querySelectorAll<HTMLButtonElement>("#worker-room-targets button, #worker-placement button")).filter((node) => node.getClientRects().length > 0);
@@ -2876,7 +2975,7 @@ const readyContracts = () =>
 const rosterStatus = () => `${state.scavs.map((scav) => `${scav.id}:${scav.status}:${scav.autoRaid.enabled}:${scav.assignment}:${scav.story.pending?.eventId}:${scav.story.bond}:${scav.story.stress}`).join(";")}|${state.raids.map((raid) => `${raid.id}:${raid.expedition?.stage}:${raid.expedition?.status}`).join(";")}|${getSocialPresentationKey(state)}`;
 const shelterStatus = () => `${state.shelter.sites.map((p) => `${p.column}:${p.row}`).join(";")}|${state.shelter.expansions.map((p) => `${p.column}:${p.row}:${Math.floor(p.workDone / p.workRequired * 100)}`).join(";")}|` + state.shelter.rooms.map((room) => `${room.id}:${room.status}:${room.level}:${room.queue.map((job) => job.id).join(",")}:${room.workerIds.join(",")}:${room.recipeId}:${room.repeat}:${room.pending}:${room.cycles}`).join(";");
 const achievementPresentationKey = () => getAchievementViews(state).map(view => `${view.id}:${view.unlocked}:${view.active}:${view.steps.map(step => Number(step.done)).join('')}`).join('|');
-const inventoryPresentationKey = () => JSON.stringify({ weapons:state.weapons, modules:state.modules, gear:state.gearItems, scavs:state.scavs.map(({health, ...scav})=>({...scav, healthy:health>=25})), recruitment:state.recruitment });
+const inventoryPresentationKey = () => JSON.stringify({ weapons:state.weapons, modules:state.modules, gear:state.gearItems, scavs:state.scavs.map(({health, ...scav})=>({...scav, healthy:health>=25})), recruitment:state.recruitment,loot:state.lootItems,kits:getFieldKitStock(state) });
 function interacting() {
 	return Boolean(workerPlacement || crewPointer) || (document.activeElement?.tagName === "SELECT" && !document.activeElement.hasAttribute("data-live-raid-select")) || document.activeElement?.tagName === "INPUT" || Boolean(document.querySelector("#modal-root .modal"));
 }
@@ -2992,6 +3091,7 @@ liveMode = createLiveMode({
 document.querySelector('.settings')!.before(accountRoot.querySelector('.account-launcher')!);
 authoritative=createAuthoritativeClient({getAccountId:()=>signedInUser?.id??null,onSnapshot:applyServerSnapshot,onStatus:status=>{
   connectionMessage=status.message;
+  if(status.phase==='offline'||status.phase==='changed'){fleaView.market=null;fleaView.error=status.message;if(page==='flea')render();}
   if(status.phase==='changed') {serverReady=false; if(!accountChanging) queueMicrotask(()=>void initializeAccount());}
   updateSaveBanner();setOverlayState();
 }});

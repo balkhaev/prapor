@@ -13,6 +13,7 @@
     "balance:armory": "bun scripts/armory-balance.ts",
     "balance:strategy": "bun scripts/strategy-balance.ts",
     "balance:shelter": "bun scripts/shelter-balance.ts",
+    "balance:loot": "bun scripts/loot-balance.ts",
     "build": "vite build",
     "start": "bun server.ts"
   },
