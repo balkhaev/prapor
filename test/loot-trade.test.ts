@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { withoutMedical } from "./legacy-health-fixture";
 import { withoutLoot } from "./legacy-loot-fixture";
+import { withoutArsenalLoot } from "./legacy-strategy-fixture";
 import {
 	advance, continueExpedition, createGame, creditMarketMoney, dispatchRaid, extractRaid, getCargoValue, getCargoWeight, getLootCapacity,
 	getLootTraderPrice, getSupplyCapacity, getTradeAssetRow, getTradeInventory, getTradeQuote, LOOT_MODELS, parseSave, parseTradeAsset, receiveTradeAsset,
@@ -27,7 +28,7 @@ describe("named physical raid loot", () => {
 	test("v15 ammunition saves migrate without adding loot rules to their already paid sortie", () => {
 		const state = createGame(NOW); state.scavs[0]!.loadout.ammoType = "tracer";
 		expect(dispatchRaid(state, state.scavs[0]!.id, "courtyard", NOW).ok).toBe(true);
-		const old = withoutMedical(withoutLoot(structuredClone(state))); old.schemaVersion = 15;
+		const old = withoutMedical(withoutLoot(withoutArsenalLoot(structuredClone(state)))); old.schemaVersion = 15;
 		const migrated = parseSave(saveGame(old))!; expect(migrated).not.toBeNull(); expect(migrated.schemaVersion).toBe(SAVE_VERSION);
 		expect(migrated.raids[0]!.lootVersion).toBeUndefined(); expect(migrated.raids[0]!.expedition!.ammunition).toEqual(old.raids[0]!.expedition!.ammunition);
 		expect(migrated.scavs[0]!.loadout.ammoType).toBe("tracer"); migrated.raids[0]!.chance = 1;

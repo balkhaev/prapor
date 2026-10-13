@@ -12,7 +12,7 @@ import { TACTICS } from "../src/game/operations";
 import { EXPEDITION_BRANCHES, type AmmoType, type RunPerk } from "../src/game/systems";
 import { getWeaponRouteEffect } from "../src/game/weapon-mechanics";
 import { useWeaponPlatformFixture } from "./weapon-fixtures";
-import { withoutRaidStrategy } from "./legacy-strategy-fixture";
+import { withoutArsenalLoot, withoutRaidStrategy } from "./legacy-strategy-fixture";
 import { withoutLoot } from "./legacy-loot-fixture";
 
 const NOW = 1_792_000_000_000;
@@ -40,13 +40,14 @@ function tickIrregularly(state: GameState, until: number) {
 	for (let index = 0; state.lastUpdated < until; index++) advance(state, Math.min(until, state.lastUpdated + intervals[index % intervals.length]!));
 }
 /** Finds earned checkpoints using actual dispatch and settlement, without forcing outcomes. */
-function checkpoint(ammoType: AmmoType, count = 1) {
+function checkpoint(ammoType: AmmoType, count = 1, legacyCatalog = false) {
 	for (let offset = 0; offset < 512; offset++) {
 		const state = funded(NOW + offset), ids = state.scavs.slice(0, count).map((scav) => scav.id);
 		for (const [index, id] of ids.entries()) expect(setLoadoutOption(state, id, "ammoType", count === 1 ? ammoType : AMMO_TYPES[index]!).ok).toBe(true);
 		const result = count === 1 ? dispatchRaid(state, ids[0]!, "courtyard", state.lastUpdated)
 			: dispatchSquadRaid(state, ids, "courtyard", state.lastUpdated);
 		expect(result.ok).toBe(true);
+		if (legacyCatalog) withoutLoot(withoutArsenalLoot(state));
 		advance(state, Math.max(...state.raids.map((raid) => raid.endsAt)));
 		if (state.raids.length === count && state.raids.every((raid) => raid.expedition?.status === "choice")) return { state, raid: state.raids[0]! };
 	}
@@ -180,7 +181,7 @@ describe("caliber ammunition changes real paid raids", () => {
 	});
 
 	test("v11 active AP raids retain paid chances, seed, frozen mechanics and classic branch cost through migration", () => {
-		const { state } = checkpoint("piercing"), raw = JSON.parse(saveGame(state));
+		const { state } = checkpoint("piercing", 1, true), raw = JSON.parse(saveGame(state));
 		raw.schemaVersion = 11;
 		for (const raid of raw.raids) {
 			// Historical AP applied a flat +5.5 points at departure. Preserve its paid result.
@@ -222,6 +223,7 @@ describe("caliber ammunition changes real paid raids", () => {
 			expect(setLoadoutOption(state, scav.id, "ammoType", "piercing").ok).toBe(true);
 			expect(setRaidPlan(state, scav.id, "intel", "scouted").ok).toBe(true);
 			expect(dispatchRaid(state, scav.id, "courtyard", state.lastUpdated).ok).toBe(true);
+			withoutArsenalLoot(state);
 			const raid = state.raids[0]!;
 			advance(state, raid.endsAt);
 			if (state.raids[0]?.expedition?.status !== "choice") continue;
@@ -287,9 +289,11 @@ describe("caliber ammunition changes real paid raids", () => {
 			expect(parseSave(JSON.stringify(forged))).toBeNull();
 		}
 		const injectedV12 = structuredClone(raw); injectedV12.schemaVersion = 12;
+		withoutArsenalLoot(injectedV12);
 		expect(parseSave(JSON.stringify(injectedV12))).toBeNull();
 		for (const type of ["expanding", "precision"]) {
 			const unsupportedV12 = structuredClone(raw); unsupportedV12.schemaVersion = 12;
+			withoutArsenalLoot(unsupportedV12);
 			delete unsupportedV12.raids[0].expedition.ammunition;
 			unsupportedV12.scavs[0].loadout.ammoType = type;
 			expect(parseSave(JSON.stringify(unsupportedV12))).toBeNull();

@@ -22,6 +22,11 @@ export const WEAPON_MECHANICAL_PROFILES: Record<string, NativeProfile> = {
 	akm: profile("Универсал с тяжёлой отдачей", .005, .03), vss: profile("Скрытный дальний дозор", -.012, .045, .04),
 	rpk: profile("Поддержка с устойчивой позиции", -.018, .035, 0, .014), svd: profile("Дальний точный огонь", -.028, .055),
 	asval: profile("Скрытное сближение", .015, .028, .045), pkp: profile("Тяжёлое удержание рубежа", -.04, .035, 0, .035),
+	m4a1: profile("Лёгкий универсальный карабин", .018, .023), hk416: profile("Устойчивый средний рубеж", .006, .034),
+	p90: profile("Короткий бой с верхней подачей", .064, -.028), mp7: profile("Манёвренное ближнее прикрытие", .059, -.023),
+	ump45: profile("Тяжёлое ближнее прикрытие", .046, -.038), m1911: profile("Одиночный ближний выстрел", .03, -.042),
+	mcx: profile("Короткий карабин для сближения", .022, .018), scarh: profile("Тяжёлый открытый рубеж", -.006, .047),
+	trg42: profile("Дальний болтовой дозор", -.075, .08),
 };
 export interface WeaponEnvironment { label: string; distance: "close" | "mixed" | "far"; darkness: number }
 export const WEAPON_ENVIRONMENTS: Record<string, WeaponEnvironment> = {

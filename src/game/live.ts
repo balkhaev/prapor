@@ -1,8 +1,18 @@
 /** Shared wire contract. The server owns every live position, clock and reward. */
 import type { BodyPart, HealthState, MedicalInventory, TreatmentType } from './health';
+export type { EconomyLoot } from "../../server/live-economy";
+import type { EconomyLoot } from "../../server/live-economy";
+/** One headquarters medicine funds one bundle: 40 HP and one use of each field aid. */
+export const LIVE_MEDICAL_CAPACITY = { medkit: 80, bandage: 2, tourniquet: 1, splint: 1, painkiller: 1, surgery: 1 } as const;
+export function liveMedicalSupplyNeeded(medicine: MedicalInventory): number {
+  return Math.min(2, Math.max(0, Math.ceil((LIVE_MEDICAL_CAPACITY.medkit - medicine.medkit) / 40), ...(['bandage', 'tourniquet', 'splint', 'painkiller', 'surgery'] as const).map(type => LIVE_MEDICAL_CAPACITY[type] - medicine[type])));
+}
 export const LIVE_SERVER_ID = "perimeter-1";
 export const LIVE_SERVER_NAME = "Периметр 01";
 export const LIVE_CAPACITY = 32;
+export const LIVE_LOOT_WEIGHT = 12;
+export const LIVE_LOOT_CAPACITY = 32;
+export const LIVE_PENDING_CAPACITY = 32;
 export type LivePoint = { x: number; y: number };
 export type LiveMapId = "customs" | "sawmill" | "depot";
 export type LiveTerrain = "road" | "concrete" | "forest" | "water" | "yard";
@@ -62,8 +72,13 @@ export interface LivePlayer {
   leaveAt: number;
   targetId: string | null;
   travelReadyAt: number;
+  /** Only the current player's private inventory is included in a snapshot. */
+  gameId?: string;
+  lootItems?: EconomyLoot[];
+  pendingDelivery?: { items: EconomyLoot[]; money: number; message: string }[];
+  economyMessage?: string;
 }
-export interface LiveDrop extends LivePoint { id: string; amount: number }
+export interface LiveDrop extends LivePoint { id: string; amount: number; items?: EconomyLoot[] }
 export interface LiveEvent {
   id: string;
   at: number;
@@ -104,4 +119,5 @@ export type LiveCommand =
   | { type: "cancelTreatment" }
   | { type: "extract" }
   | { type: "respawn" }
+  | { type: "resupply" }
   | { type: "patrol"; enabled: boolean };

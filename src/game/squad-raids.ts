@@ -2,6 +2,7 @@ import { MAP_BY_ID, WEAPON_BY_ID } from "./data";
 import { TACTICS, type RaidTactic } from "./operations";
 import { GEAR_MODEL_BY_ID, EXPEDITION_BRANCHES, type ExpeditionBranch } from "./systems";
 import { MODULE_BY_ID, MODULE_SLOTS, type ModuleSlot } from "./modules";
+import { moduleAvailableInSave, weaponAvailableInSave } from "./catalog-releases";
 import { RECRUIT_TRAITS } from "./recruitment";
 import { defaultScavAppearance, isScavAppearance } from "./scav-appearances";
 import { getRaidQuote, getFieldKitStock, FIELD_KITS, type FieldKit, type GameState, type Raid, type RaidReport, type Expedition } from "./engine";
@@ -182,12 +183,13 @@ const arr = <T>(value: unknown, max: number, parser: (entry: unknown) => T): T[]
 const known = <T>(value: unknown, values: Record<string, T>) => { const key = str(value); if (!Object.hasOwn(values, key)) throw new Error("squad-known"); return key; };
 function parseMember(value: unknown, version: number): SquadRaidMember {
 	const has = (key: string) => value !== null && typeof value === "object" && Object.hasOwn(value, key);
-	const source = obj(value, ["raidId", "scavId", "scavName", "appearance", "weaponInstanceId", "weaponId", "weaponModules", "role", "seed", ...(has("outcomeSeed") ? ["outcomeSeed"] : []), "combat", "scouting", "health", "traitId", "tactic", "medkit", "baseChance", "chance", "baseDuration", "loadout", ...(version >= 17 && has("medical") ? ["medical", "medicalAt"] : [])]);
+	const source = obj(value, ["raidId", "scavId", "scavName", "appearance", "weaponInstanceId", "weaponId", "weaponModules", "role", "seed", ...(has("outcomeSeed") ? ["outcomeSeed"] : []), "combat", "scouting", "health", "traitId", "tactic", "medkit", "baseChance", "chance", "baseDuration", "loadout", ...(version >= 18 && has("medical") ? ["medical", "medicalAt"] : [])]);
 	if (!isScavAppearance(source.appearance) || !["point", "cover", "medic"].includes(source.role as string)) throw new Error("squad-appearance-role");
 	const modules = source.weaponModules;
 	if (!modules || typeof modules !== "object" || Array.isArray(modules) || Object.keys(modules).some((slot) => !MODULE_SLOTS.includes(slot as ModuleSlot))) throw new Error("squad-modules");
 	const weaponModules: SquadRaidMember["weaponModules"] = {};
-	for (const [slot, model] of Object.entries(modules)) { const modelId = known(model, MODULE_BY_ID); if (MODULE_BY_ID[modelId]!.slot !== slot) throw new Error("squad-module-slot"); weaponModules[slot as ModuleSlot] = modelId; }
+	for (const [slot, model] of Object.entries(modules)) { const modelId = known(model, MODULE_BY_ID); if (!moduleAvailableInSave(modelId, version) || MODULE_BY_ID[modelId]!.slot !== slot) throw new Error("squad-module-slot"); weaponModules[slot as ModuleSlot] = modelId; }
+	if (!weaponAvailableInSave(known(source.weaponId, WEAPON_BY_ID), version)) throw new Error("squad-future-weapon");
 	const kit = obj(source.loadout, ["armorModelId", "armorCondition", "helmetModelId", "helmetCondition", "packModelId", "packCondition", "ammoType", "medkit"]);
 	const model = (value: unknown, slot: "armor" | "helmet" | "backpack", empty: string | null) => { if (value === empty) return empty; const id = known(value, GEAR_MODEL_BY_ID); if (GEAR_MODEL_BY_ID[id]!.slot !== slot) throw new Error("squad-gear-slot"); return id; };
 	if (!isAmmoType(kit.ammoType) || (version < 15 && !["standard", "piercing", "expanding", "precision"].includes(kit.ammoType)) || (version < 13 && kit.ammoType !== "standard" && kit.ammoType !== "piercing")) throw new Error("squad-ammo");
@@ -202,7 +204,7 @@ function parseMember(value: unknown, version: number): SquadRaidMember {
 		seed: num(source.seed, 1, 4294967295, true), ...(Object.hasOwn(source, "outcomeSeed") ? { outcomeSeed: num(source.outcomeSeed, 1, 4294967295, true) } : {}), combat: num(source.combat, 0, 100), scouting: num(source.scouting, 0, 100), health: num(source.health, 0, 100), traitId: source.traitId === null ? null : known(source.traitId, RECRUIT_TRAITS), tactic: known(source.tactic, TACTICS) as RaidTactic, medkit: bool(source.medkit), baseChance: num(source.baseChance, .15, .97), chance: num(source.chance, .15, .97), baseDuration: num(source.baseDuration, 20, 600), loadout,
 		...(medical ? { medical, medicalAt: num(source.medicalAt, 0, Number.MAX_SAFE_INTEGER, true) } : {}) };
 }
-export function parseSquadRaidSnapshot(value: unknown, report = false, version = 17): SquadRaidSnapshot | SquadRaidReport {
+export function parseSquadRaidSnapshot(value: unknown, report = false, version = 18): SquadRaidSnapshot | SquadRaidReport {
 	const source = obj(value, ["leaderRaidId", "routeSeed", "stage", "branch", "members", "bonds", "actions", "usedMedkits", ...(report ? ["outcomes"] : [])]);
 	const snapshot: SquadRaidSnapshot = { leaderRaidId: str(source.leaderRaidId), routeSeed: num(source.routeSeed, 1, 4294967295, true), stage: num(source.stage, 1, 3, true), branch: known(source.branch, EXPEDITION_BRANCHES) as ExpeditionBranch,
 		members: arr(source.members, 3, (entry) => parseMember(entry, version)), bonds: arr(source.bonds, 3, (entry) => { const bond = obj(entry, ["scavIds", "score"]); const ids = arr(bond.scavIds, 2, (id) => str(id)); if (ids.length !== 2 || ids[0]! >= ids[1]!) throw new Error("squad-bond-ids"); return { scavIds: ids as [string, string], score: num(bond.score, -60, 60, true) }; }),

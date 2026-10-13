@@ -88,13 +88,13 @@ describe('medical decisions in idle sorties and the shelter', () => {
 		expect(copy(state)).toEqual(state);
 	});
 
-	test('a v16 paid sortie retains loot, aggregate rules and a living zero-HP survivor through the upgrade', () => {
+	test('a v17 paid sortie retains its catalogue, loot, aggregate rules and a living zero-HP survivor through the upgrade', () => {
 		const state = funded(), woundedScav = state.scavs[1]!;
 		woundedScav.health = 0; woundedScav.status = 'wounded';
 		dispatchRaid(state, state.scavs[0]!.id, 'courtyard', NOW);
-		const historical = structuredClone(state); historical.schemaVersion = 16;
+		const historical = structuredClone(state); historical.schemaVersion = 17;
 		for (const scav of historical.scavs) delete scav.body;
-		for (const raid of historical.raids) delete raid.expedition!.medical;
+		for (const raid of historical.raids) { delete raid.expedition!.medical; raid.expedition!.lootCatalogVersion = 17; }
 		const restored = parseSave(JSON.stringify(historical))!; expect(restored).not.toBeNull();
 		expect(restored.scavs[1]!.health).toBe(0); expect(restored.raids[0]!.expedition!.medical).toBeUndefined();
 		const reference = structuredClone(historical); reference.schemaVersion = SAVE_VERSION;
@@ -114,5 +114,28 @@ describe('medical decisions in idle sorties and the shelter', () => {
 		const base = funded(), scav = wounded(base); healScav(base, scav.id, NOW);
 		const invalid = structuredClone(base); invalid.scavs[0]!.medicalTreatment!.endsAt = NOW;
 		expect(parseSave(saveGame(invalid))).toBeNull();
+	});
+
+	test('a frozen medical profile cannot grant immunity or armour the paid fighter does not own', () => {
+		const state = funded();
+		expect(dispatchRaid(state, state.scavs[0]!.id, 'courtyard', NOW).ok).toBe(true);
+		expect(parseSave(saveGame(state))).toEqual(state);
+		const profile = state.raids[0]!.expedition!.medical!.start;
+		expect(profile.armorProtection).toBe(0); expect(profile.helmetProtection).toBe(0);
+		expect(profile.injuryMultiplier).toBeGreaterThan(0);
+		for (const field of ['armorProtection', 'helmetProtection', 'injuryMultiplier'] as const) {
+			const forged = structuredClone(state);
+			forged.raids[0]!.expedition!.medical!.start[field] = field === 'injuryMultiplier' ? 0 : .8;
+			expect(parseSave(saveGame(forged))).toBeNull();
+		}
+		const raid = state.raids[0]!; raid.chance = 1;
+		advance(state, raid.endsAt);
+		expect(raid.expedition!.status).toBe('choice');
+		expect(parseSave(saveGame(state))).toEqual(state);
+		for (const field of ['armorProtection', 'helmetProtection'] as const) {
+			const forged = structuredClone(state);
+			forged.raids[0]!.expedition!.medical!.start[field] = .8;
+			expect(parseSave(saveGame(forged))).toBeNull();
+		}
 	});
 });

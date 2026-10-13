@@ -22,7 +22,7 @@ class ElementStub {
   closest() { return this; }
   focus() {} remove() {}
 }
-let time: number, world: ElementStub, dock: ElementStub, exited: number, joins: number, leaves: number, failedReads: number;
+let time: number, world: ElementStub, dock: ElementStub, exited: number, marketOpened: number, joins: number, leaves: number, failedReads: number;
 let server: LiveSnapshot, mode: ReturnType<typeof createLiveMode> | undefined;
 let nextTimer: number, timers: Map<number, { delay: number; run: () => void }>, replacements: Map<string, PropertyDescriptor | undefined>;
 let clockSpy: ReturnType<typeof spyOn<typeof Date, 'now'>>;
@@ -40,7 +40,7 @@ async function poll() {
   expect(pending).toBeDefined(); timers.delete(pending![0]); pending![1].run(); await settle();
 }
 beforeEach(() => {
-  time = 1_800_000_000_000; exited = 0; joins = 0; leaves = 0; failedReads = 0;
+  time = 1_800_000_000_000; exited = 0; marketOpened = 0; joins = 0; leaves = 0; failedReads = 0;
   nextTimer = 0; timers = new Map(); replacements = new Map(); world = new ElementStub(); dock = new ElementStub();
   clockSpy = spyOn(Date, 'now').mockImplementation(() => time);
   replace('window', { devicePixelRatio: 1, setTimeout: (run: () => void, delay: number) => { timers.set(++nextTimer, { delay, run }); return nextTimer; }, clearTimeout: (id: number) => timers.delete(id) });
@@ -54,7 +54,7 @@ beforeEach(() => {
       { id: 'depot', name: 'Депо', description: 'Вагоны', theme: 'urban', width: 44, height: 36, online: 0, npcs: 12 },
     ] }, now: time,
     world: { id: 'customs', name: 'Таможня', description: 'Терминал', theme: 'industrial', width: 48, height: 36, obstacles: [], extracts: [{ x: 2, y: 2 }], zones: [] }, selfId: 'player-1',
-    self: { id: 'player-1', ammo: 60, medkits: 3, cargo: 0, stash: 0, kills: 0, respawnAt: 0, patrol: false, targetId: null, travelReadyAt: 0, body: createHealth(), medicine: createMedicalInventory(), treatment: null, leaveAt: 0 },
+    self: { id: 'player-1', ammo: 60, medkits: 3, cargo: 0, stash: 0, kills: 0, respawnAt: 0, patrol: false, targetId: null, travelReadyAt: 0, body: createHealth(), medicine: createMedicalInventory(), treatment: null, leaveAt: 0, gameId: 'cba21a6d-2936-4590-9433-dfa2b58c8dc8', lootItems: [], pendingDelivery: [], economyMessage: '' },
     entities: [{ id: 'player-1', name: 'Боец', kind: 'player', appearance: 0, x: 0, y: 0, health: 100, safeUntil: 0, action: 'idle' }], drops: [], events: [] };
   replace('fetch', async (url: string, options?: RequestInit) => {
     if (url.startsWith('/art/')) return Response.json({ frames: {} });
@@ -74,7 +74,7 @@ beforeEach(() => {
     }
     throw new Error(`Unexpected request ${url}`);
   });
-  mode = createLiveMode({ world: world as unknown as HTMLElement, dock: dock as unknown as HTMLElement, onExit: () => { exited++; }, onAccount() {}, getAccountId: () => null });
+  mode = createLiveMode({ world: world as unknown as HTMLElement, dock: dock as unknown as HTMLElement, onExit: () => { exited++; }, onAccount() {}, onMarket: () => { marketOpened++; }, getAccountId: () => null, getGameId: () => server.self.gameId ?? null });
 });
 afterEach(() => {
   mode?.destroy(); mode = undefined; clockSpy.mockRestore();
@@ -82,6 +82,14 @@ afterEach(() => {
 });
 
 describe('visible server-confirmed live exit', () => {
+  test('opening the headquarters market waits for confirmed departure while the body remains visible', async () => {
+    mode!.show(); await settle(); await click('join'); await click('market');
+    expect(marketOpened).toBe(0); expect(exited).toBe(0); expect(mode!.isActive()).toBe(true);
+    expect(world.hidden).toBe(false); expect(dock.innerHTML).toContain('Выход через 5 сек.');
+    time += 5000; await poll();
+    expect(marketOpened).toBe(1); expect(exited).toBe(0); expect(mode!.isActive()).toBe(false); expect(world.hidden).toBe(true);
+    expect(leaves).toBe(1);
+  });
   test('keeps the dangerous countdown visible through a failed read and exits once presence is gone', async () => {
     mode!.show(); await settle(); await click('join');
     await click('exit');

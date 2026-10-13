@@ -8,6 +8,7 @@ import {
 	type GameState, type RaidObjective,
 } from "../src/game/engine";
 import { MAP_BY_ID } from "../src/game/data";
+import { withoutArsenalLoot } from "./legacy-strategy-fixture";
 
 const NOW = 1_792_000_000_000;
 function funded(now = NOW) {
@@ -175,7 +176,7 @@ describe("supplies, preparation and sector strategy", () => {
 	});
 
 	test("v11 active raids keep their paid weapon mechanics and original settlement without retroactive sector progress", () => {
-		const original = withoutMedical(withoutLoot(start().state));
+		const original = withoutMedical(withoutLoot(withoutArsenalLoot(start().state)));
 		delete original.scavs[0]!.raidPlan;
 		delete original.raids[0]!.strategy;
 		delete original.raids[0]!.expedition!.ammunition;

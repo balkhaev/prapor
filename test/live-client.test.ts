@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { LiveApiError, readLiveSnapshot, readLiveStatus, shouldRejoinLivePresence } from '../src/live-client';
+import { LiveApiError, liveRequest, readLiveSnapshot, readLiveStatus, shouldRejoinLivePresence } from '../src/live-client';
 import type { LiveSnapshot } from '../src/game/live';
 import { createHealth, createMedicalInventory } from '../src/game/health';
 
@@ -86,5 +86,43 @@ describe('live wire parser', () => {
     expect(shouldRejoinLivePresence(new LiveApiError(401, 'account_changed'), 'account-a', 'account-a')).toBe(false);
     expect(shouldRejoinLivePresence(new LiveApiError(401, 'live_identity_changed'), null, null)).toBe(false);
     expect(shouldRejoinLivePresence(new LiveApiError(409, 'join_required'), null, null)).toBe(false);
+    expect(shouldRejoinLivePresence(missing, null, null, 'game-a', 'game-a')).toBe(true);
+    expect(shouldRejoinLivePresence(missing, null, null, 'game-a', 'game-b')).toBe(false);
+  });
+  test('preserves physical catalog loot and extracted parcels while rejecting forged, overweight or private loot data', () => {
+    const source = fixture();
+    source.self.gameId = 'cba21a6d-2936-4590-9433-dfa2b58c8dc8';
+    source.self.lootItems = [{id:'532cfa7a-5ca1-4742-a07c-ffefdc785d2e',modelId:'gold-ring',foundAt:1000}];
+    source.self.pendingDelivery = [{items:[{id:'66092524-eafc-4f2b-8d74-6906d3a00205',modelId:'circuit-board',foundAt:1000}],money:15,message:'Освободи место на складе'}];
+    source.self.economyMessage = 'Груз доставлен';
+    source.drops = [{id:'named-only',x:3,y:2,amount:0,items:[{id:'9a3db3ca-42c6-4ac2-9e6f-c275c740134b',modelId:'tool-case',foundAt:1000}]}];
+    expect(readLiveSnapshot(source)).toEqual(source);
+    const edits: ((copy: LiveSnapshot)=>void)[] = [
+      copy=>{copy.self.lootItems![0]!.modelId='admin-gold';},
+      copy=>{copy.self.lootItems![0]!.id='loot-client';},
+      copy=>{copy.self.lootItems![0]!.foundAt=1e15+1;},
+      copy=>{Object.assign(copy.self.lootItems![0]!,{guidePrice:999999});},
+      copy=>{Object.assign(copy.self,{economyOwner:'account-private'});},
+      copy=>{Object.assign(copy.drops[0]!,{owner:'player-2'});},
+      copy=>{copy.self.pendingDelivery![0]!.items[0]!.id=copy.self.lootItems![0]!.id;},
+      copy=>{copy.self.lootItems=Array.from({length:5},(_,i)=>({id:`532cfa7a-5ca1-4742-a07c-ffefdc785d2${i}`,modelId:'tool-case',foundAt:1000}));},
+      copy=>{copy.self.pendingDelivery=Array.from({length:33},()=>({items:[],money:1,message:'Ожидание'}));},
+    ];
+    for(const edit of edits){const copy=structuredClone(source);edit(copy);expect(()=>readLiveSnapshot(copy)).toThrow(LiveApiError);}
+    const rolledBack=structuredClone(source);rolledBack.self.lootItems![0]!.foundAt=rolledBack.now+1000;
+    expect(readLiveSnapshot(rolledBack).self.lootItems![0]!.foundAt).toBe(rolledBack.now+1000);
+  });
+  test('sends the captured shelter, account and live identity on reads and mutations without retrying failed commands', async () => {
+    const calls:{url:string;init:RequestInit}[]=[];
+    const transport=(async (url:string,init:RequestInit)=>{
+      calls.push({url,init});
+      return url.endsWith('/action')?new Response(JSON.stringify({error:'game_identity_changed'}),{status:401}):new Response(JSON.stringify(fixture()));
+    }) as unknown as typeof fetch;
+    const identity={accountId:'account-a',gameId:'game-a',playerId:'player-1'};
+    await liveRequest('state',identity,readLiveSnapshot,undefined,undefined,undefined,transport);
+    await expect(liveRequest('action',identity,readLiveSnapshot,{type:'resupply'},undefined,undefined,transport)).rejects.toThrow('сессия изменилась');
+    expect(calls).toHaveLength(2);
+    for(const call of calls)expect(call.init.headers).toMatchObject({'x-prapor-account':'account-a','x-prapor-game':'game-a','x-prapor-live':'player-1'});
+    expect(JSON.parse(calls[1]!.init.body as string)).toEqual({type:'resupply'});
   });
 });
