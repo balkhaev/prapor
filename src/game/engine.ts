@@ -14,7 +14,7 @@ import { GEAR_LABELS, MAX_GEAR_LEVEL, TACTICS, type GearSlot, type GearEquipment
 export { GEAR_LABELS, GEAR_EQUIPMENT_LABELS, MAX_GEAR_LEVEL, TACTICS, type GearSlot, type GearEquipmentSlot, type RaidTactic } from "./operations";
 import { BLUEPRINTS, EXPEDITION_BRANCHES, GEAR_MODEL_BY_ID, MARKET_OFFERS, RUN_PERKS, WEAPON_ROLES, type AmmoType, type Cargo, type ExpeditionBranch, type GearItem, type Loadout, type RunPerk } from "./systems";
 export * from "./systems";
-import { FACTORY_KITS, MODULE_BY_ID, MODULE_MODELS, MODULE_SLOTS, MODULE_SLOT_LABELS, modulePlatformLabel, RECEIVER_INFO, type ModuleInstance, type ModuleSlot } from "./modules";
+import { FACTORY_KITS, getResolvedModuleMounts, MODULE_BY_ID, MODULE_MODELS, MODULE_SLOTS, MODULE_SLOT_LABELS, modulePlatformLabel, RECEIVER_INFO, type ModuleInstance, type ModuleSlot } from "./modules";
 export * from "./modules";
 import { initialShelter, ROOM_DEFINITIONS, RESOURCE_RECIPE_BY_ID, getShelterSites, getShelterFrontier, isShelterSiteCoordinate, MAX_SHELTER_SITES, SHELTER_COORDINATE_LIMIT, SHELTER_EXCAVATION, type ProductionJob, type RoomInstance, type ShelterCost, type ShelterRoomType, type ShelterSite, type ShelterExpansion, type ShelterState } from "./shelter";
 export * from "./shelter";
@@ -374,7 +374,13 @@ function moduleFitReason(weapon: WeaponInstance, item: ModuleInstance): string |
 	if (model.slot === "receiver" && model.weaponId !== weapon.weaponId) return "Эта ствольная коробка относится к другой пушке. Собери её отдельно.";
 	if (!model.platforms.includes("*") && !model.platforms.includes(info.platform)) return `Нужна платформа ${model.platforms.map(modulePlatformLabel).join(" / ")}; у пушки ${modulePlatformLabel(info.platform)}.`;
 	if (!model.calibers.includes("*") && !model.calibers.includes(info.caliber)) return `Калибр ${model.calibers.join(" / ")} не подходит к ${info.caliber}.`;
-	if (model.requiresMount && !Object.values(weapon.modules).some((part) => getModuleDefinition(part).providesMounts.includes(model.requiresMount!))) return `Нет крепления ${model.requiresMount === "rail-top" ? "верхней планки" : model.requiresMount === "rail-bottom" ? "нижней планки цевья" : model.requiresMount === "dovetail" ? "бокового кронштейна" : `резьбы ${info.caliber}`}.`;
+	if (model.requiresMount && !getResolvedModuleMounts(weapon.modules, model.slot).includes(model.requiresMount)) {
+		const label = model.requiresMount === "rail-top" ? "верхней планки" : model.requiresMount === "rail-bottom" ? "нижней планки цевья"
+			: model.requiresMount === "rail-side" ? "боковой планки" : model.requiresMount === "barrel-clamp" ? "открытого ствола для хомута"
+				: model.requiresMount === "barrel-clamp-wide" ? "места для широкого хомута ствола"
+				: model.requiresMount === "dovetail" ? "ласточкиного хвоста" : `резьбы ${info.caliber}`;
+		return `Нет крепления ${label}.`;
+	}
 	return null;
 }
 export function getWeaponBuildIssues(weapon: WeaponInstance): string[] {

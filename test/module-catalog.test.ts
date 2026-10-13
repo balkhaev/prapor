@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { MODULE_BY_ID, MODULE_MODELS } from "../src/game/modules";
-import { moduleCatalogPage, moduleFitsWeaponFamily, moduleModelMatches, moduleMountLabel, type ModuleCatalogFilters } from "../src/module-catalog";
+import { MODULE_BY_ID, MODULE_MODELS, MODULE_SLOTS } from "../src/game/modules";
+import { MODULE_DISPLAY_SLOTS, moduleCatalogPage, moduleFitsWeaponFamily, moduleModelMatches, moduleMountLabel, moduleSlotHint, type ModuleCatalogFilters } from "../src/module-catalog";
 
 const filters: ModuleCatalogFilters = { slot: "all", rarity: "all", platform: "all", search: "" };
 
@@ -43,6 +43,46 @@ describe("large module catalog", () => {
 	});
 	test("mount names communicate attachment points", () => {
 		expect(moduleMountLabel("rail-top")).toBe("Верхняя планка");
+		expect(moduleMountLabel("rail-side")).toBe("Боковая планка");
+		expect(moduleMountLabel("barrel-clamp")).toBe("Хомут ствола");
+		expect(moduleMountLabel("barrel-clamp-wide")).toBe("Место для широкого хомута ствола");
 		expect(moduleMountLabel("thread:5.45x39")).toBe("Резьба 5.45x39");
+	});
+	test("accessory search combines device type and readable mounting requirements", () => {
+		const flashlights = MODULE_MODELS.filter((model) => model.slot === "flashlight");
+		const lasers = MODULE_MODELS.filter((model) => model.slot === "laser");
+		const barrelBrackets = MODULE_MODELS.filter((model) => model.slot === "mount" && model.requiresMount === "barrel-clamp");
+		expect(flashlights.length).toBeGreaterThan(0);
+		expect(lasers.length).toBeGreaterThan(0);
+		expect(barrelBrackets.length).toBeGreaterThan(0);
+		for (const model of flashlights) {
+			expect(moduleModelMatches(model, { ...filters, slot: "flashlight", search: "фонарь боковая планка" })).toBe(true);
+			expect(moduleModelMatches(model, { ...filters, slot: "laser" })).toBe(false);
+			expect(moduleFitsWeaponFamily(model, "ak74")).toBe(true);
+		}
+		for (const model of lasers) expect(moduleModelMatches(model, { ...filters, slot: "laser", search: "лазер боковая планка" })).toBe(true);
+		for (const model of barrelBrackets) expect(moduleModelMatches(model, { ...filters, slot: "mount", search: "крепление хомут ствола" })).toBe(true);
+	});
+	test("wide clamp recipes and their barrel upgrades can be found by the readable fitting requirement", () => {
+		const brackets = MODULE_MODELS.filter((model) => model.requiresMount === "barrel-clamp-wide");
+		const barrels = MODULE_MODELS.filter((model) => model.providesMounts.includes("barrel-clamp-wide"));
+		expect(brackets.length).toBeGreaterThan(0);
+		expect(barrels.length).toBeGreaterThan(0);
+		for (const model of brackets) expect(moduleModelMatches(model, { ...filters, slot: "mount", search: "широкого хомута ствола" })).toBe(true);
+		for (const model of barrels) expect(moduleModelMatches(model, { ...filters, slot: "barrel", search: "широкого хомута ствола" })).toBe(true);
+		expect(moduleModelMatches(MODULE_BY_ID["mount-barrel-ring"]!, { ...filters, search: "широкого хомута" })).toBe(false);
+	});
+	test("workbench order preserves every slot and places brackets before optics", () => {
+		expect(new Set(MODULE_DISPLAY_SLOTS).size).toBe(MODULE_SLOTS.length);
+		expect([...MODULE_DISPLAY_SLOTS].sort()).toEqual([...MODULE_SLOTS].sort());
+		expect(MODULE_DISPLAY_SLOTS.indexOf("mount")).toBeLessThan(MODULE_DISPLAY_SLOTS.indexOf("optic"));
+		expect(MODULE_DISPLAY_SLOTS.indexOf("mount")).toBeLessThan(MODULE_DISPLAY_SLOTS.indexOf("flashlight"));
+		expect(MODULE_DISPLAY_SLOTS.indexOf("mount")).toBeLessThan(MODULE_DISPLAY_SLOTS.indexOf("laser"));
+		expect(MODULE_SLOTS.slice(-3)).toEqual(["mount", "flashlight", "laser"]);
+	});
+	test("new slot hints explain physical mounting and safe removal", () => {
+		expect(moduleSlotHint("mount")).toContain("зависимые детали");
+		expect(moduleSlotHint("flashlight")).toContain("боковую планку");
+		expect(moduleSlotHint("laser")).toContain("одновременно");
 	});
 });

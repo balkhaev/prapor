@@ -1,9 +1,9 @@
 import Phaser from "phaser";
 import { PERSONALITY_BY_ID, WEAPONS } from "./game/data";
 import type { WeaponInstance } from "./game/engine";
-import { FACTORY_KITS, MODULE_BY_ID, MODULE_MODELS, MODULE_SLOTS, MODULE_SLOT_LABELS, RECEIVER_INFO, type ModuleInstance, type ModuleModel, type ModuleSlot } from "./game/modules";
+import { FACTORY_KITS, MODULE_BY_ID, MODULE_MODELS, MODULE_SLOTS, MODULE_SLOT_LABELS, RECEIVER_INFO, getResolvedModuleMounts, type ModuleInstance, type ModuleModel, type ModuleSlot } from "./game/modules";
 import { moduleArt, weaponBuildArt } from "./armory-art";
-import { moduleFitsWeaponFamily, moduleModelMatches, moduleMountLabel } from "./module-catalog";
+import { MODULE_DISPLAY_SLOTS, moduleFitsWeaponFamily, moduleModelMatches, moduleMountLabel } from "./module-catalog";
 import { GEAR_MODELS } from "./game/systems";
 import { SCAV_EQUIPMENT_ATLASES } from "./scav-gear-art";
 import { SCAV_APPEARANCES } from "./game/scav-appearances";
@@ -15,9 +15,15 @@ const gallery = document.querySelector<HTMLElement>("#gallery")!;
 const status = document.querySelector<HTMLElement>("#load-status")!;
 const select = (id: string) => document.querySelector<HTMLSelectElement>(`#${id}`)!;
 const controls = { direction: select("direction"), pose: select("pose"), armor: select("armor"), helmet: select("helmet"), pack: select("pack"), carry: select("carry"), weapon: select("weapon") };
+const buildControls = document.querySelector<HTMLFormElement>("#build-controls")!;
+for (const slot of MODULE_DISPLAY_SLOTS) {
+	const label = document.createElement("label"), input = document.createElement("select");
+	label.append(MODULE_SLOT_LABELS[slot]); input.id = slot; label.append(input); buildControls.append(label);
+}
 const moduleControls = Object.fromEntries(MODULE_SLOTS.map((slot) => [slot, select(slot)])) as Record<ModuleSlot, HTMLSelectElement>;
 const resetWeapon = document.querySelector<HTMLButtonElement>("#reset-weapon")!;
 const weaponSummary = document.querySelector<HTMLElement>("#weapon-summary")!;
+const fitStatus = document.querySelector<HTMLElement>("#fit-status")!;
 const closeup = document.querySelector<HTMLElement>("#weapon-closeup")!;
 const buildParts = document.querySelector<HTMLElement>("#build-parts")!;
 const library = document.querySelector<HTMLDetailsElement>("#module-library")!;
@@ -44,7 +50,7 @@ function factoryWeapon(weaponId: string): WeaponInstance {
 }
 
 function compatibleOptions(slot: ModuleSlot, weapon: WeaponInstance) {
-	const mounts = Object.entries(weapon.modules).filter(([installedSlot]) => installedSlot !== slot).flatMap(([, item]) => MODULE_BY_ID[item!.modelId]?.providesMounts ?? []);
+	const mounts = getResolvedModuleMounts(weapon.modules, slot);
 	return MODULE_MODELS.filter((model) => model.slot === slot && moduleFitsWeaponFamily(model, weapon.weaponId)
 		&& (!model.requiresMount || mounts.includes(model.requiresMount)));
 }
@@ -52,7 +58,7 @@ function compatibleOptions(slot: ModuleSlot, weapon: WeaponInstance) {
 function fittingReason(model: ModuleModel, weapon: WeaponInstance | null): string | null {
 	if (!weapon) return "Выбери основу оружия";
 	if (!moduleFitsWeaponFamily(model, weapon.weaponId)) return "Другая платформа или калибр";
-	const mounts = Object.entries(weapon.modules).filter(([slot]) => slot !== model.slot).flatMap(([, item]) => MODULE_BY_ID[item!.modelId]?.providesMounts ?? []);
+	const mounts = getResolvedModuleMounts(weapon.modules, model.slot);
 	return model.requiresMount && !mounts.includes(model.requiresMount) ? `Нужно крепление: ${moduleMountLabel(model.requiresMount).toLowerCase()}` : null;
 }
 
@@ -71,7 +77,7 @@ function renderLibrary(weapon: WeaponInstance | null): void {
 }
 
 document.querySelector<HTMLElement>("#library-total")!.textContent = String(MODULE_MODELS.length);
-for (const slot of MODULE_SLOTS) librarySlot.add(new Option(MODULE_SLOT_LABELS[slot], slot));
+for (const slot of MODULE_DISPLAY_SLOTS) librarySlot.add(new Option(MODULE_SLOT_LABELS[slot], slot));
 library.addEventListener("toggle", () => renderLibrary(selectedWeapon()));
 for (const input of [librarySlot, librarySearch, libraryCompatible]) input.addEventListener(input === librarySearch ? "input" : "change", () => { libraryLimit = 24; renderLibrary(selectedWeapon()); });
 libraryMore.addEventListener("click", () => { libraryLimit += 24; renderLibrary(selectedWeapon()); });
@@ -102,10 +108,22 @@ function selectedWeapon(): WeaponInstance | null {
 	if (!weaponBuilds.has(weaponId)) weaponBuilds.set(weaponId, factoryWeapon(weaponId));
 	return weaponBuilds.get(weaponId)!;
 }
-function refreshModuleControls(weapon: WeaponInstance | null): void {
-	if (weapon) for (const slot of MODULE_SLOTS) {
-		const installed = weapon.modules[slot];
-		if (installed && !compatibleOptions(slot, weapon).some((model) => model.id === installed.modelId)) delete weapon.modules[slot];
+function refreshModuleControls(weapon: WeaponInstance | null): string[] {
+	const removed: string[] = [];
+	if (weapon) {
+		// The demonstration removes dependent props when their real support is
+		// replaced. Resolve to a fixed point even when an adapter comes after a sight.
+		let changed: boolean;
+		do {
+			changed = false;
+			for (const slot of MODULE_SLOTS) {
+				const installed = weapon.modules[slot];
+				if (installed && !compatibleOptions(slot, weapon).some((model) => model.id === installed.modelId)) {
+					removed.push(MODULE_BY_ID[installed.modelId]?.label ?? MODULE_SLOT_LABELS[slot]);
+					delete weapon.modules[slot]; changed = true;
+				}
+			}
+		} while (changed);
 	}
 	for (const slot of MODULE_SLOTS) {
 		const input = moduleControls[slot];
@@ -115,18 +133,23 @@ function refreshModuleControls(weapon: WeaponInstance | null): void {
 		input.disabled = !weapon || input.options.length < 2;
 	}
 	resetWeapon.disabled = !weapon;
+	return removed;
 }
 function updateSelections(rebuildOptions = false): void {
 	const weapon = selectedWeapon();
-	if (rebuildOptions) refreshModuleControls(weapon);
+	if (rebuildOptions) {
+		const removed = refreshModuleControls(weapon);
+		fitStatus.hidden = removed.length === 0;
+		fitStatus.textContent = removed.length ? `Сняты в примерке после замены крепления: ${removed.join(" · ")}.` : "";
+	}
 	selectedLoadout = { armorModelId: controls.armor.value || null, helmetModelId: controls.helmet.value || null, packModelId: controls.pack.value || null, weapon };
 	const missing = weapon ? RECEIVER_INFO[weapon.weaponId]!.requiredSlots.filter((slot) => !weapon.modules[slot]) : [];
 	const count = weapon ? Object.keys(weapon.modules).length : 0;
-	weaponSummary.textContent = !weapon ? "Без оружия" : missing.length ? `Неполная сборка · установлено ${count} / 8 деталей` : `Текущая сборка · установлено ${count} / 8 деталей`;
+	weaponSummary.textContent = !weapon ? "Без оружия" : missing.length ? `Неполная сборка · установлено ${count} / ${MODULE_SLOTS.length} деталей` : `Текущая сборка · установлено ${count} / ${MODULE_SLOTS.length} деталей`;
 	const labels = [controls.direction, controls.pose, controls.armor, controls.helmet, controls.pack, controls.weapon].map((input) => input.selectedOptions[0]!.textContent);
 	gallery.setAttribute("aria-label", `32 диких. ${labels.join(". ")}. ${weaponSummary.textContent}.`);
 	closeup.innerHTML = weapon ? weaponBuildArt(weapon, inspectedSlot) : '<p class="library-help">Выбери основу оружия, чтобы рассмотреть сборку.</p>';
-	buildParts.innerHTML = weapon ? MODULE_SLOTS.flatMap((slot) => {
+	buildParts.innerHTML = weapon ? MODULE_DISPLAY_SLOTS.flatMap((slot) => {
 		const modelId = weapon.modules[slot]?.modelId, model = modelId ? MODULE_BY_ID[modelId] : undefined;
 		return model ? [`<li>${escape(model.label)}</li>`] : [];
 	}).join("") : "";

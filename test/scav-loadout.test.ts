@@ -184,4 +184,29 @@ describe("physical inventory drives scav equipment art", () => {
 		expect(weaponVisualSignature(copy)).not.toBe(worn);
 		expect(saveGame(state)).toBe(stateBefore);
 	});
+
+	test("a real bracket, light and laser each refresh the scav weapon texture and survive a blocked support removal", () => {
+		const state = outfitted(), weapon = state.weapons.find((item) => item.weaponId === "sks")!;
+		const scav = state.scavs.find((item) => item.weaponInstanceId === weapon.id)!;
+		for (const modelId of ["mount-barrel-ring", "flashlight-mini", "laser-micro"]) {
+			expect(craftModule(state, modelId).ok).toBe(true);
+			const part = state.modules.at(-1)!;
+			const signature = weaponVisualSignature(weapon), art = weaponActorArt(weapon).svg;
+			expect(installModule(state, weapon.id, part.id).ok).toBe(true);
+			const carried = getScavVisualLoadout(scav, state.gearItems, state.weapons).weapon!;
+			expect(carried).toBe(weapon);
+			expect(weaponVisualSignature(carried)).not.toBe(signature);
+			expect(weaponVisualSignature(carried)).toContain(modelId);
+			expect(weaponActorArt(carried).svg).not.toBe(art);
+		}
+		const assembled = weaponActorArt(weapon).svg, signature = weaponVisualSignature(weapon), before = saveGame(state);
+		for (const slot of ["mount", "flashlight", "laser"]) expect(assembled).toContain(`data-module-slot="${slot}"`);
+		expect(removeModule(state, weapon.id, "mount").ok).toBe(false);
+		expect(saveGame(state)).toBe(before);
+		expect(weaponVisualSignature(weapon)).toBe(signature);
+		expect(removeModule(state, weapon.id, "laser").ok).toBe(true);
+		expect(weaponVisualSignature(weapon)).not.toBe(signature);
+		expect(weaponActorArt(weapon).svg).not.toContain('data-module-slot="laser"');
+		expect(weaponActorArt(weapon).svg).toContain('data-module-slot="flashlight"');
+	});
 });
