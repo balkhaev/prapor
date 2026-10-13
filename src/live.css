@@ -40,9 +40,9 @@
 .live-dock-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:17px 16px 14px;border-bottom:1px solid #8f9c6244;background:#41533855;flex:none}
 .live-dock-head h2{font-size:20px;margin:5px 0 0;color:#eee3bc;letter-spacing:-.6px}
 .live-online{display:inline-flex;align-items:center;gap:6px;border:1px solid #b1c1824d;border-radius:4px;padding:6px 8px;font:10px "IBM Plex Mono",monospace;color:#d0dcaf;white-space:nowrap;background:#213e27}
-.live-online i,.live-server-label i,.live-lobby-tag i,.live-signal i,.live-tab-dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:#c5df87;box-shadow:0 0 8px #c4df8766;flex:none}
-.live-online.lost,.live-signal.lost{color:#e1b29d;border-color:#c78e7755}
-.live-online.lost i,.live-signal.lost i{background:#c88e74;box-shadow:none}
+.live-online i,.live-server-label i,.live-lobby-tag i,.live-world-signal i,.live-tab-dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:#c5df87;box-shadow:0 0 8px #c4df8766;flex:none}
+.live-online.lost,.live-world-signal.lost{color:#e1b29d;border-color:#c78e7755}
+.live-online.lost i,.live-world-signal.lost i{background:#c88e74;box-shadow:none}
 .live-dock-scroll{flex:1;min-height:0;overflow:auto;padding:13px 15px;scrollbar-width:thin;scrollbar-color:#95a174 #223528;overscroll-behavior:contain}
 .live-server-card{padding:16px;border:1px solid #84916b77;background:linear-gradient(135deg,#53634455,#314332);border-radius:7px}
 .live-server-label{display:flex;align-items:center;gap:7px;font-size:10px;color:#c5d4a0}
@@ -105,11 +105,11 @@
 .live-events article.combat{color:#d5b291}
 .live-stash-note{font-size:9px;line-height:1.8;color:#99ad8f;border-top:1px solid #96a27233;padding-top:11px;margin:14px 0 5px}
 .live-field-hud{position:absolute;left:16px;top:55px;max-width:270px;background:#152820e6;border:1px solid #8d9b6955;border-radius:5px;padding:11px 14px;box-shadow:0 3px 10px #0002}
-.live-signal{display:flex;align-items:center;gap:6px;font:8px "IBM Plex Mono",monospace;letter-spacing:.8px;color:#c0cf99}
+.live-world-signal{display:flex;align-items:center;gap:6px;font:8px "IBM Plex Mono",monospace;letter-spacing:.8px;color:#c0cf99}
 .live-field-hud>strong{display:block;font-size:13px;color:#ece0b8;margin-top:9px;max-width:230px;overflow-wrap:anywhere}
 .live-field-hud>strong>span{font:10px "IBM Plex Mono",monospace;color:#b9d79b;margin-left:7px}
 .live-field-hud p{font-size:9px;color:#aabb9e;margin:6px 0 0;line-height:1.7}
-.live-field-legend{position:absolute;right:15px;bottom:8px;display:flex;gap:11px;flex-wrap:wrap;justify-content:flex-end;padding:7px 9px;background:#152820db;border:1px solid #8d9b6933;border-radius:4px}
+.live-field-legend{position:absolute;right:15px;bottom:42px;display:flex;gap:11px;flex-wrap:wrap;justify-content:flex-end;padding:7px 9px;background:#152820db;border:1px solid #8d9b6933;border-radius:4px}
 .live-field-legend span{display:flex;align-items:center;gap:4px;font-size:8px;color:#c8d2b9}
 .live-field-legend i{width:5px;height:5px;border-radius:50%}
 .live-field-legend .own{background:#f2d49a}.live-field-legend .player{background:#8dd5e4}.live-field-legend .scav{background:#d2a082}.live-field-legend .raider{background:#e48971}.live-field-legend .extract{background:#a9d380}
@@ -148,7 +148,7 @@
  .live-world{min-height:330px}
  .live-dock-head{padding:14px}.live-dock-head h2{font-size:18px}.live-dock-scroll{padding:12px}
  .live-field-hud{top:54px;max-width:180px}.live-field-hud p{font-size:8px;max-width:155px}.live-field-hud>strong{font-size:10px;max-width:155px}
- .live-field-legend{gap:8px;right:10px;bottom:8px;padding:7px}.live-field-legend span{font-size:7px}
+ .live-field-legend{gap:8px;right:10px;bottom:84px;padding:7px}.live-field-legend span{font-size:7px}
  .live-camera{left:10px;bottom:39px}.live-camera button{min-width:29px;min-height:30px}.live-camera button:nth-child(2){padding:0 7px}
  .live-lobby-scene h2{font-size:28px;letter-spacing:-1px}.live-lobby-scene p{max-width:80%;font-size:10px}.live-lobby-model{opacity:.35}
  .live-self-name strong{font-size:15px}.live-player-kit{gap:5px}.live-player-kit>span{padding:7px;font-size:8px}.live-player-kit b{font-size:12px}
