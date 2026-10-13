@@ -853,7 +853,7 @@ export function createWorld(
 				line(cell.art, [{ x: at.x - 2, y: at.y - 8 }, { x: at.x + 11, y: at.y - 1 }], 0xb7c3a2, 3);
 			}
 			const style = ROOM_STYLE[cell.room?.type ?? "workshop"]!;
-			cell.label.setText(cell.room ? `${style.label} · ${cell.room.level || ""}` : cell.open ? "СВОБОДНАЯ ПЛОЩАДКА" : cell.expansion ? "РАСШИРЕНИЕ" : "НАРУЖНАЯ СТЕНА").setFontSize(cell.room ? 11 : 9).setColor(cell.room ? "#fff1dc" : "#afc0a4");
+			cell.label.setText(cell.room ? `${style.label} · ${cell.room.level || ""}` : cell.open ? "ПЛОЩАДКА" : cell.expansion ? "РАСШИРЕНИЕ" : "СТЕНА").setFontSize(cell.room ? 11 : 9).setColor(cell.room ? "#fff1dc" : "#afc0a4");
 			cell.status.setText(cell.room ? "" : cell.open ? "+ ПОСТРОИТЬ" : cell.expansion ? "ИДУТ РАБОТЫ" : "ПРОБИТЬ →");
 			cell.lamp.setVisible(Boolean(cell.room)).setTint(style.light);
 		}
@@ -1110,6 +1110,8 @@ export function createWorld(
 			for (const cell of this.cells.values()) {
 				const g = cell.animation;
 				g.clear();
+				const selected = cell.room ? this.viewState?.selectedRoomId === cell.room.id : this.viewState?.selectedSite?.column === cell.column && this.viewState.selectedSite.row === cell.row;
+				cell.status.setVisible(this.viewCamera.zoom >= 1.4 || cell.hovered || Boolean(selected) || Boolean(cell.expansion));
 				cell.productLabel.setVisible(Boolean(cell.production?.jobId) && (this.viewCamera.zoom >= 1.6 || cell.hovered || this.viewState?.selectedRoomId === cell.room?.id));
 				if (!cell.room) {
 					if (cell.expansion) {
