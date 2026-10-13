@@ -8,6 +8,7 @@ import {
 import { MAP_BY_ID } from "../src/game/data";
 import { EXPEDITION_BRANCHES, type ExpeditionBranch, type RunPerk } from "../src/game/systems";
 import { getWeaponMechanics, getWeaponRouteEffect } from "../src/game/weapon-mechanics";
+import { getAmmoEffect } from "../src/game/ammunition";
 
 const NOW = 1_792_000_000_000;
 const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
@@ -105,6 +106,7 @@ describe("weapon mechanics remain real through raid clocks and saves", () => {
 		const fresh = getWeaponStats(weaponAtDeparture), bonuses = getWeaponRouteEffect(weaponAtDeparture, raid.mapId, "combat", raid.tactic, fresh).bonus;
 		const withoutWear = clamp(expedition.baseChance - .09 + EXPEDITION_BRANCHES.combat.chanceBonus
 			+ bonuses - expedition.weaponMechanics!.firstBonus + (getWeaponRole(weaponAtDeparture).branches.combat ?? 0)
+			+ getAmmoEffect(weaponAtDeparture, expedition.loadout.ammoType, raid.mapId, "combat", 2, raid.tactic).bonus - expedition.ammunition!.firstBonus
 			+ (perk === "careful" ? .06 : 0) - (perk === "haggler" ? .04 : 0), .15, .97);
 		expect(combat.reason).toBeNull();
 		expect(combat.chance).toBeLessThan(withoutWear);
@@ -128,7 +130,7 @@ describe("weapon mechanics remain real through raid clocks and saves", () => {
 	test("a pre-mechanics v10 active decision retains its old branch rules and settles identically after migration", () => {
 		const { state } = checkpoint(), raw = JSON.parse(saveGame(state));
 		raw.schemaVersion = 10;
-		for (const raid of raw.raids) delete raid.expedition.weaponMechanics;
+		for (const raid of raw.raids) { delete raid.expedition.weaponMechanics; delete raid.expedition.ammunition; }
 		const legacy = parseSave(JSON.stringify(raw))!;
 		expect(legacy).not.toBeNull();
 		expect(legacy.schemaVersion).toBe(SAVE_VERSION);
@@ -151,6 +153,7 @@ describe("weapon mechanics remain real through raid clocks and saves", () => {
 	test("legacy decisions ignore new contextual bonuses and current power deltas until the next departure", () => {
 		const { state } = checkpoint(), raid = state.raids[0]!, perk = raid.expedition!.offers[0]!;
 		delete raid.expedition!.weaponMechanics;
+		delete raid.expedition!.ammunition;
 		const before = getExpeditionChoices(state, raid, perk), weapon = state.weapons.find((gun) => gun.id === raid.weaponInstanceId)!;
 		weapon.durability = weapon.modules.receiver!.durability = 10;
 		for (const slot of ["optic", "flashlight", "laser", "muzzle"] as const) if (weapon.modules[slot]) weapon.modules[slot]!.durability = 0;

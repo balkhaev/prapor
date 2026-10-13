@@ -11,6 +11,8 @@ import { SCAV_APPEARANCES } from "./game/scav-appearances";
 import { ScavEquipment } from "./scav-equipment";
 import { TACTICS, type RaidTactic } from "./game/operations";
 import { weaponMechanicsPanel, weaponStatSummary } from "./weapon-mechanics-ui";
+import { AMMO_TYPES, type AmmoType } from "./game/ammunition";
+import { ammunitionOptions, ammunitionPanel } from "./ammunition-ui";
 import type { ScavVisualLoadout } from "./scav-loadout";
 import { SCAV_ORIGIN, SCAV_POSES, SCAV_REFERENCE_HEIGHT, scavFrame, scavTexture, scavTorsoAnchor, scavHeadAnchor, type ScavDirection } from "./scav-isometric";
 
@@ -32,6 +34,8 @@ const buildParts = document.querySelector<HTMLElement>("#build-parts")!;
 const inspectionName = document.querySelector<HTMLElement>("#inspection-name")!, inspectionMeta = document.querySelector<HTMLElement>("#inspection-meta")!;
 const inspectionStats = document.querySelector<HTMLElement>("#inspection-stats")!, inspectionPart = document.querySelector<HTMLElement>("#inspection-part")!;
 const inspectionMechanics = document.querySelector<HTMLElement>("#inspection-mechanics")!;
+const inspectionAmmunition = document.querySelector<HTMLElement>("#inspection-ammunition")!, inspectionAmmo = select("inspection-ammo");
+let selectedAmmo: AmmoType = "standard";
 const inspectionMap = select("inspection-map"), inspectionTactic = select("inspection-tactic");
 for (const map of MAPS) inspectionMap.add(new Option(map.name, map.id));
 for (const [tactic, info] of Object.entries(TACTICS)) inspectionTactic.add(new Option(info.label, tactic));
@@ -88,14 +92,17 @@ function renderInspection(weapon: WeaponInstance | null): void {
 	if (!weapon) {
 		inspectionMeta.textContent = "Выбери основу оружия в примерке";
 		buildParts.replaceChildren(); inspectionStats.replaceChildren(); inspectionPart.replaceChildren(); inspectionMechanics.replaceChildren(); inspectionPart.hidden = true;
-		inspectionMap.disabled = true; inspectionTactic.disabled = true;
+		inspectionMap.disabled = true; inspectionTactic.disabled = true; inspectionAmmo.disabled = true;
+		inspectionAmmo.innerHTML = ammunitionOptions(null, selectedAmmo); inspectionAmmunition.replaceChildren();
 		return;
 	}
 	const info = RECEIVER_INFO[weapon.weaponId]!, stats = getWeaponStats(weapon);
 	inspectionMeta.textContent = `${modulePlatformLabel(info.platform)} · ${info.caliber} · ${stats.ready ? "Сборка готова" : "Сборка не завершена"}`;
 	inspectionMap.disabled = false; inspectionTactic.disabled = false;
+	inspectionAmmo.disabled = false; inspectionAmmo.innerHTML = ammunitionOptions(weapon, selectedAmmo);
 	inspectionStats.innerHTML = weaponStatSummary(weapon).map(([label, value]) => `<span>${label}<strong>${value}</strong></span>`).join("");
 	inspectionMechanics.innerHTML = weaponMechanicsPanel(weapon, inspectionMap.value, inspectionTactic.value as RaidTactic);
+	inspectionAmmunition.innerHTML = ammunitionPanel(weapon, selectedAmmo, inspectionMap.value, inspectionTactic.value as RaidTactic, { compare: true });
 	buildParts.innerHTML = MODULE_DISPLAY_SLOTS.map((slot) => {
 		const modelId = weapon.modules[slot]?.modelId, model = modelId ? MODULE_BY_ID[modelId] : undefined;
 		return `<li><button type="button" data-inspect-slot="${slot}" class="${model ? "" : "empty-part"}" aria-pressed="${slot === inspectedSlot}"><small>${MODULE_SLOT_LABELS[slot]}</small><strong>${escape(model?.label ?? (info.requiredSlots.includes(slot) ? "Нужна для сборки" : "Не установлено"))}</strong></button></li>`;
@@ -126,6 +133,10 @@ for (const button of inspectionZoomButtons) button.addEventListener("click", () 
 inspectionFit.addEventListener("click", () => { setInspectionZoom(1); closeup.scrollLeft = 0; closeup.scrollTop = 0; });
 inspectionHighlight.addEventListener("click", () => { highlightInspection = !highlightInspection; renderInspection(selectedWeapon()); });
 for (const input of [inspectionMap, inspectionTactic]) input.addEventListener("change", () => renderInspection(selectedWeapon()));
+inspectionAmmo.addEventListener("change", () => {
+	if (AMMO_TYPES.includes(inspectionAmmo.value as AmmoType)) selectedAmmo = inspectionAmmo.value as AmmoType;
+	renderInspection(selectedWeapon());
+});
 function inspectSlot(slot: string | undefined): void {
 	if (!slot || !MODULE_SLOTS.includes(slot as ModuleSlot)) return;
 	inspectedSlot = slot as ModuleSlot; highlightInspection = true;

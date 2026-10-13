@@ -395,7 +395,7 @@ describe("shelter save integrity and migration", () => {
 		original.supplies = { ammo: 500, medicine: 100, scrap: 252, intel: 84 };
 		expect(dispatchRaid(original, original.scavs[0]!.id, "courtyard", NOW).ok).toBe(true);
 		advance(original, NOW + 7001);
-		for (const raid of original.raids) if (raid.expedition) delete raid.expedition.weaponMechanics;
+		for (const raid of original.raids) if (raid.expedition) { delete raid.expedition.weaponMechanics; delete raid.expedition.ammunition; }
 		const legacy = JSON.parse(saveGame(original));
 		legacy.schemaVersion = 4;
 		delete legacy.shelter;
