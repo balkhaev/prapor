@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { LiveApiError, liveRequest, readLiveSnapshot, readLiveStatus, shouldRejoinLivePresence } from '../src/live-client';
 import type { LiveSnapshot } from '../src/game/live';
 import { getLiveMap } from '../src/game/live-maps';
+import { createHealth, createMedicalInventory } from '../src/game/health';
 
 const fixture = (): LiveSnapshot => {
   const { npcSpawns, lootSpawns: _loot, ...world } = structuredClone(getLiveMap('perimeter'));
@@ -10,7 +11,7 @@ const fixture = (): LiveSnapshot => {
     maps: [{ id: world.id, name: world.name, description: world.description, theme: world.theme, width: world.width, height: world.height, online: 1, npcs: npcSpawns.length }],
     districts: world.districts.map((district, index) => ({ ...district, online: index === 0 ? 1 : 0, npcs: npcSpawns.filter(spawn => spawn.point.x >= district.x && spawn.point.x < district.x + district.width && spawn.point.y >= district.y && spawn.point.y < district.y + district.height).length })),
   }, now: 2000, world, worldVersion: world.version, visibleChunks: [{ x: 0, y: 0 }], selfId: 'player-1',
-  self: { id: 'player-1', ammo: 30, medkits: 2, cargo: 0, stash: 12, kills: 0, respawnAt: 0, patrol: false, targetId: null, travelReadyAt: 0, districtId: 'customs', purpose: 'loot', searching: null },
+  self: { id: 'player-1', ammo: 30, medkits: 3, cargo: 0, stash: 12, kills: 0, respawnAt: 0, patrol: false, targetId: null, travelReadyAt: 0, districtId: 'customs', purpose: 'loot', searching: null, body: createHealth(), medicine: createMedicalInventory(), treatment: null, leaveAt: 0 },
   entities: [{ id: 'player-1', kind: 'player', name: 'Гость 01', appearance: 31, x: 2, y: 2, health: 100, action: 'idle', safeUntil: 7000 }, { id: 'scav-1', kind: 'scav', name: 'Косой', appearance: 0, x: 4, y: 6, health: 75, action: 'moving', safeUntil: 0, faction: 'raiders', role: 'guard' }],
   drops: [{ id: 'drop-1', x: 3, y: 2, amount: 25 }], events: [{ id: 'event-1', at: 2000, kind: 'join', text: 'Гость 01 вошёл', actorId: 'player-1' }],
 }; };

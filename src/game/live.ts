@@ -1,6 +1,12 @@
 /** Shared wire contract. The server owns every live position, clock and reward. */
+import type { BodyPart, HealthState, MedicalInventory, TreatmentType } from './health';
 export type { EconomyLoot } from "../../server/live-economy";
 import type { EconomyLoot } from "../../server/live-economy";
+/** One headquarters medicine funds one bundle: 40 HP and one use of each field aid. */
+export const LIVE_MEDICAL_CAPACITY = { medkit: 80, bandage: 2, tourniquet: 1, splint: 1, painkiller: 1, surgery: 1 } as const;
+export function liveMedicalSupplyNeeded(medicine: MedicalInventory): number {
+  return Math.min(2, Math.max(0, Math.ceil((LIVE_MEDICAL_CAPACITY.medkit - medicine.medkit) / 40), ...(['bandage', 'tourniquet', 'splint', 'painkiller', 'surgery'] as const).map(type => LIVE_MEDICAL_CAPACITY[type] - medicine[type])));
+}
 export const LIVE_SERVER_ID = "perimeter-1";
 export const LIVE_SERVER_NAME = "Периметр 01";
 export const LIVE_CAPACITY = 32;
@@ -68,9 +74,15 @@ export interface LiveEntity extends LivePoint {
   health: number;
   action: "idle" | "moving" | "combat" | "downed";
   safeUntil: number;
+  /** Visible signs only; another player's body and medicines stay private. */
+  bleeding?: boolean;
+  limping?: boolean;
+  aimUntil?: number;
+  aimTargetId?: string;
   faction?: "scavs" | "raiders";
   role?: "patrol" | "guard" | "marksman";
 }
+export interface LiveTreatment { type: TreatmentType; part: BodyPart; startedAt: number; endsAt: number }
 export interface LivePlayer {
   id: string;
   ammo: number;
@@ -80,6 +92,10 @@ export interface LivePlayer {
   kills: number;
   respawnAt: number;
   patrol: boolean;
+  body: HealthState;
+  medicine: MedicalInventory;
+  treatment: LiveTreatment | null;
+  leaveAt: number;
   targetId: string | null;
   travelReadyAt: number;
   districtId: LiveDistrictId;
@@ -130,12 +146,14 @@ export interface LiveSnapshot {
 }
 export type LiveCommand =
   | { type: "move"; x: number; y: number }
-  | { type: "attack"; targetId: string }
+  | { type: "attack"; targetId: string; aimed?: boolean }
   | { type: "engage"; targetId: string | null }
   | { type: "travel"; mapId: LiveMapId }
   | { type: "loot"; id: string }
   | { type: "search"; id: string }
   | { type: "heal" }
+  | { type: "treat"; medicine: TreatmentType; part: BodyPart }
+  | { type: "cancelTreatment" }
   | { type: "extract" }
   | { type: "respawn"; districtId?: LiveDistrictId; purpose?: LivePurpose }
   | { type: "resupply" }

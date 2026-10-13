@@ -4,9 +4,10 @@ import { CONTRACTS, MAP_BY_ID } from "../src/game/data";
 import {
 	advance, assignWorker, claimContract, craftGear, createGame, dispatchRaid,
 	dispatchSquadRaid, equipGear, getContractProgress, getRaidQuote,
-	getRoomProductionState, getSupplyCapacity, queueModuleProduction, saveGame,
+	getRoomProductionState, getSupplyCapacity, queueModuleProduction, saveGame, getScavHealingQuote,
 	setRoomRecipe, setFieldKit, xpForLevel, type GameState, type RoomInstance,
 } from "../src/game/engine";
+import { applyHit, createHealth, healthPercent } from "../src/game/health";
 
 const NOW = 1_792_000_000_000;
 function room(state: GameState, type: RoomInstance["type"]) { return state.shelter.rooms.find((item) => item.type === type)!; }
@@ -32,6 +33,33 @@ function checkpoint(squad = false) {
 }
 
 describe("gameplay loop guidance", () => {
+	test("high aggregate health with fractures directs to the actual medical course without mutating readiness", () => {
+		const state = createGame(NOW);
+		for (const scav of state.scavs) { scav.body = createHealth(); applyHit(scav.body, "leftLeg", 1, { fracture: true }); scav.health = healthPercent(scav.body); scav.status = "wounded"; }
+		const before = JSON.stringify(state), guidance = getGameplayGuidance(freeze(state));
+		expect(guidance.action).toMatchObject({ kind: "scav", label: "Восстановить бойца" });
+		const scav = state.scavs.find(person => person.id === guidance.action.scavId)!, quote = getScavHealingQuote(state, scav);
+		expect(guidance.action.detail).toContain("здоровье и подвижность");
+		expect(guidance.action.detail).toContain(`${quote.medicine} медикаментов`);
+		expect(guidance.action.detail).toContain(`${quote.duration} сек.`);
+		expect(JSON.stringify(state)).toBe(before);
+	});
+
+	test("an ongoing clinical course is already paid and its remaining time follows simulation time", () => {
+		const state = createGame(NOW);
+		for (const scav of state.scavs) { scav.medicalTreatment = { startedAt: NOW, endsAt: NOW + 45_000, medicine: 1 }; scav.status = "wounded"; }
+		state.supplies.medicine = 0;
+		let guidance = getGameplayGuidance(state);
+		expect(guidance.action).toMatchObject({ kind: "scav", label: "Дождаться лечения" });
+		expect(guidance.action.detail).toContain("курс уже оплачен, осталось 45 сек.");
+		state.lastUpdated += 10_000;
+		const before = JSON.stringify(state);
+		guidance = getGameplayGuidance(freeze(state));
+		expect(guidance.action.detail).toContain("осталось 35 сек.");
+		expect(guidance.action.detail).not.toContain("стоит");
+		expect(JSON.stringify(state)).toBe(before);
+	});
+
 	test("a missing chosen field kit connects raid readiness to its actual producing room", () => {
 		const state = createGame(NOW);
 		for (const scav of state.scavs) expect(setFieldKit(state, scav.id, "maintenance").ok).toBe(true);

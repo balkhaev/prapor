@@ -11,6 +11,7 @@ import type { GameActionSnapshot, GameCommand, GameSnapshot } from "../src/game/
 import type { LiveCommand, LivePoint, LiveSnapshot } from "../src/game/live";
 import { getLiveMap } from "../src/game/live-maps";
 import { readMarketSnapshot, type MarketSnapshot } from "../src/game/flea";
+import { createHealth, createMedicalInventory } from "../src/game/health";
 
 const ORIGIN = "http://multiplayer.test", NOW = 1_792_000_000_000;
 const fixtures: Array<{ folder: string; game: GameService; live: LiveService }> = [];
@@ -67,10 +68,11 @@ async function fixture() {
       for (const player of players) {
         const row = db.query<{ identity: string; state: string }, []>("SELECT identity,state FROM live_players").all().find(row => JSON.parse(row.state).id === player.live.selfId)!;
         const state = JSON.parse(row.state); Object.assign(state, position ?? exit, { safeUntil: 0, lastCombatAt: 0, disconnectAt: 0, ...(ammo === undefined ? {} : { ammo }), ...(medkits === undefined ? {} : { medkits }) });
+        if (medkits !== undefined) state.medicine = createMedicalInventory({ ...state.medicine, medkit: medkits * 40 });
         db.query("UPDATE live_players SET state=? WHERE identity=?").run(JSON.stringify(state), row.identity);
       }
       const row = db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!, world = JSON.parse(row.state);
-      for (const scav of world.scavs) { scav.health = 0; scav.respawnAt = NOW + 1_000_000; }
+      for (const scav of world.scavs) { scav.health = 0; scav.body = createHealth(); scav.body.parts.head.hp = 0; scav.respawnAt = NOW + 1_000_000; }
       if (items.length) world.drops.push({ id: randomUUID(), mapId: "perimeter", ...exit, amount: 0, items, source: "body", expiresAt: NOW + 1_000_000 });
       db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify(world));
     } finally { db.close(); }
@@ -166,8 +168,10 @@ describe("real multiplayer loot, shared market and headquarters supplies", () =>
     await f.gameAction(second, { type: "buyMarketListing", args: [ammoOffer.id] });
     const beforeAmmo = second.game.state.supplies.ammo, beforeMedicine = second.game.state.supplies.medicine;
     await f.editLive([second], [], 50, 1);
+    expect(second.live.self.medicine.medkit).toBe(40);
     await f.liveAction(second, { type: "resupply" });
     expect(second.live.self.ammo).toBe(60); expect(second.live.self.medkits).toBe(2);
+    expect(second.live.self.medicine.medkit).toBe(80);
     await f.gameState(second);
     expect(second.game.state.supplies.ammo).toBe(beforeAmmo - 10);
     expect(second.game.state.supplies.medicine).toBe(beforeMedicine - 1);

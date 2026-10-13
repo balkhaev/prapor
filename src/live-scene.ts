@@ -302,7 +302,7 @@ export class LiveScene {
       c.save(); c.globalAlpha = Math.max(0, 1 - age / 850);
       if (age < 280) { c.strokeStyle = event.actorId === this.snapshot?.selfId ? '#ffe3a6' : '#e9b878'; c.lineWidth = this.overview ? 1 : 2; c.beginPath(); c.moveTo(from.x, from.y); c.lineTo(to.x, to.y); c.stroke(); }
       c.fillStyle = '#f0b876'; c.beginPath(); c.arc(to.x, to.y, this.overview ? 2 : 4, 0, Math.PI * 2); c.fill();
-      if (!this.overview && event.damage) this.label(`−${event.damage}`, to.x, to.y - 15 - age / 55, '#f4c497', 12);
+      if (!this.overview && event.damage) this.label(`−${Math.round(event.damage)}`, to.x, to.y - 15 - age / 55, '#f4c497', 12);
       c.restore();
     }
   }
@@ -312,6 +312,7 @@ export class LiveScene {
     const own = entity.id === snapshot.selfId, selected = entity.id === this.selected, color = own ? '#f2d49a' : entity.kind === 'player' ? '#8dd5e4' : entity.faction === 'raiders' ? '#e48971' : '#d2a082';
     if (this.overview || this.tile < 28) {
       c.fillStyle = color; c.strokeStyle = '#15241a'; c.lineWidth = 1.5; c.beginPath(); c.arc(p.x, p.y, own || selected ? 4.5 : 2.8, 0, Math.PI * 2); c.fill(); c.stroke();
+      if (entity.aimUntil && entity.aimUntil > snapshot.now && entity.aimTargetId === snapshot.selfId) this.label('ЦЕЛИТСЯ В ТЕБЯ', p.x, p.y - 14, '#fac09b', 8);
       if (own || selected) this.label(own ? 'ТЫ' : entity.name, p.x, p.y - 10, color, 9);
       this.hitTargets.push({ entity, x: p.x, y: p.y }); return;
     }
@@ -332,6 +333,10 @@ export class LiveScene {
     this.label(entity.kind === 'player' ? own ? 'ТВОЙ БОЕЦ' : 'ИГРОК' : entity.faction === 'raiders' ? 'РЕЙДЕР · NPC' : 'ДИКИЙ · NPC', p.x, top + 13, own ? '#e8d8b6' : entity.kind === 'player' ? '#90c4ce' : '#ad9b88', 7);
     c.fillStyle = '#14271a'; c.fillRect(p.x - 17, top + 18, 34, 3); c.fillStyle = entity.health > 35 ? '#b6cc85' : '#e09d82'; c.fillRect(p.x - 17, top + 18, 34 * entity.health / 100, 3);
     if (entity.safeUntil > snapshot.now) this.label('ЗАЩИТА', p.x, p.y + 20, '#bddbb7', 8);
+    if (entity.aimUntil && entity.aimUntil > snapshot.now) {
+      c.strokeStyle = '#f2a07f'; c.lineWidth = 2; c.beginPath(); c.ellipse(p.x, p.y, 18 * zoom, 9 * zoom, 0, 0, Math.PI * 2); c.stroke();
+      this.label(entity.aimTargetId === snapshot.selfId ? 'ЦЕЛИТСЯ В ТЕБЯ' : 'ПРИЦЕЛИВАЕТСЯ', p.x, p.y + 22, '#fac09b', 8);
+    } else if (entity.bleeding || entity.limping) this.label(entity.bleeding ? 'КРОВОТЕЧЕНИЕ' : 'ХРОМАЕТ', p.x, p.y + 22, '#e4b19a', 7);
     // A firing cue is brief and tied to a confirmed combat update.
     if (entity.action === 'combat' && now - motion.at < 300) { c.fillStyle = '#f2bc72'; c.beginPath(); c.arc(p.x + 16, p.y - 30, 2 + Math.sin(now / 65) * 1.5, 0, Math.PI * 2); c.fill(); }
     this.hitTargets.push({ entity, x: p.x, y: p.y });

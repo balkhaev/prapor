@@ -6,6 +6,9 @@ import {
 	dispatchRaid, dispatchSquadRaid, equipWeapon, extractRaid, getExpeditionChoices,
 	getLossReaction, getRaidGroup, getRaidGroupKey, getRaidQuote, getRoomUpgradeQuote,
 	getSquadRaidActions, getSquadRaidQuote, getSquadSocialEvents,
+	getSquadRawOutcomes,
+	getSquadRescueCost,
+	createHealth,
 	loadGameWithSummary, modWeapon, parseSave, queueModuleProduction, resolveSocialEvent,
 	saveGame, sellWeapon, setAutoRaid, setLoadoutOption, setRaidTactic, upgradeRoom,
 	type GameState, type Raid, type RaidReport,
@@ -256,7 +259,9 @@ describe("coordinated two and three scav expeditions", () => {
 			const old = before.find((item) => item.id === raid.id)!;
 			expect(raid.expedition!.cargo).toEqual(old.expedition!.cargo);
 			expect(raid.expedition!.perks).toEqual(old.expedition!.perks);
-			expect(raid.squad).toEqual(old.squad);
+			const expectedSquad = structuredClone(old.squad);
+			for (const member of expectedSquad!.members) if (member.medicalAt !== undefined) member.medicalAt += MAX_OFFLINE_MS * 2;
+			expect(raid.squad).toEqual(expectedSquad);
 		}
 		const rollback = loadGameWithSummary(saveGame(loaded.state), NOW - 60_000)!;
 		expect(rollback.summary.elapsedMs).toBe(0);
@@ -296,8 +301,10 @@ describe("coordinated two and three scav expeditions", () => {
 		const state = funded(); expect(dispatchRaid(state, state.scavs[0]!.id, "courtyard", state.lastUpdated).ok).toBe(true);
 		const before = withoutRaidStrategy(structuredClone(state)), raw = withoutRaidStrategy(JSON.parse(saveGame(state)));
 		raw.schemaVersion = 8; delete raw.achievements;
-		for (const raid of before.raids) if (raid.expedition) { delete raid.expedition.weaponMechanics; delete raid.expedition.ammunition; }
-		for (const raid of raw.raids) if (raid.expedition) { delete raid.expedition.weaponMechanics; delete raid.expedition.ammunition; }
+		for (const raid of before.raids) if (raid.expedition) { delete raid.expedition.weaponMechanics; delete raid.expedition.ammunition; delete raid.expedition.medical; }
+		for (const raid of raw.raids) if (raid.expedition) { delete raid.expedition.weaponMechanics; delete raid.expedition.ammunition; delete raid.expedition.medical; }
+		for (const scav of before.scavs) { delete scav.body; delete scav.medicalTreatment; }
+		for (const scav of raw.scavs) { delete scav.body; delete scav.medicalTreatment; }
 		for (const raid of raw.raids) delete raid.squad; for (const report of raw.history) delete report.squad;
 		const restored = parseSave(JSON.stringify(raw))!;
 		expect(restored).not.toBeNull(); expect(restored.schemaVersion).toBe(SAVE_VERSION);
@@ -318,7 +325,8 @@ describe("coordinated two and three scav expeditions", () => {
 		expect(dispatchRaid(state, state.scavs[0]!.id, "courtyard", state.lastUpdated).ok).toBe(true);
 		advance(state, state.lastUpdated + 131);
 		withoutRaidStrategy(state);
-		for (const raid of state.raids) if (raid.expedition) { delete raid.expedition.weaponMechanics; delete raid.expedition.ammunition; }
+		for (const raid of state.raids) if (raid.expedition) { delete raid.expedition.weaponMechanics; delete raid.expedition.ammunition; delete raid.expedition.medical; }
+		for (const scav of state.scavs) { delete scav.body; delete scav.medicalTreatment; }
 		const raw = JSON.parse(saveGame(state)); raw.schemaVersion = 9;
 		for (const raid of raw.raids) delete raid.squad; for (const report of raw.history) delete report.squad;
 		const restored = parseSave(JSON.stringify(raw))!;
@@ -442,7 +450,7 @@ describe("coordinated two and three scav expeditions", () => {
 				expect(parseSave(saveGame(state))).not.toBeNull();
 				if (stage === 3) { completed = state; break; }
 				const raid = state.raids[stage - 1]!, perk = raid.expedition!.offers.includes("careful") ? "careful" : raid.expedition!.offers[0]!;
-				expect(continueExpedition(state, raid.id, "recon", perk, state.lastUpdated).ok).toBe(true);
+				if (!continueExpedition(state, raid.id, "recon", perk, state.lastUpdated).ok) break;
 				expect(parseSave(saveGame(state))).not.toBeNull();
 			}
 		}
@@ -450,7 +458,7 @@ describe("coordinated two and three scav expeditions", () => {
 		const state = completed!, raidIds = state.raids.map((raid) => raid.id), parts = state.raids.flatMap((raid) => raid.expedition!.cargo.modules);
 		for (const raid of state.raids) { expect(raid.expedition!.offers).toEqual([]); expect(getExpeditionChoices(state, raid)).toEqual([]); }
 		expect(extractRaid(state, state.raids[2]!.id, state.lastUpdated).ok).toBe(true);
-		expect(state.history.every((report) => report.depth === 3 && report.events.length <= 10)).toBe(true);
+		expect(state.history.every((report) => report.depth === 3 && report.events.length <= 25 && report.events.filter((event) => event.label.startsWith("Ранения")).length === 3)).toBe(true);
 		expect(new Set(state.history.map((report) => report.raidId))).toEqual(new Set(raidIds));
 		for (const part of parts) expect(state.modules.some((item) => item.id === part.id)).toBe(true);
 		expect(state.social.pairs.every((pair) => pair.sortiesTogether === 1)).toBe(true);
@@ -577,5 +585,69 @@ describe("coordinated two and three scav expeditions", () => {
 		const future = structuredClone(raw); future.schemaVersion = SAVE_VERSION + 1;
 		expect(parseSave(JSON.stringify(future))).toBeNull();
 		expect(parseSave(JSON.stringify(raw))).not.toBeNull();
+	});
+
+	test("paid medical stock and body state are frozen per member and move with the common stage clock", () => {
+		const state = funded(), memberIds = ids(state);
+		state.scavs[1]!.loadout.medkit = true;
+		expect(dispatchSquadRaid(state, memberIds, "courtyard", state.lastUpdated).ok).toBe(true);
+		for (const member of state.raids[0]!.squad!.members) {
+			const raid = state.raids.find((raid) => raid.id === member.raidId)!;
+			expect(member.medical).toEqual(raid.expedition!.medical!.start);
+			expect(member.medicalAt).toBe(raid.endsAt);
+			expect(member.medical!.inventory.medkit).toBe(member.medkit ? 120 : 0);
+		}
+		const invalid = structuredClone(state);
+		for (const raid of invalid.raids) raid.squad!.members[0]!.medicalAt!--;
+		expect(parseSave(saveGame(invalid))).toBeNull();
+		expect(parseSave(saveGame(state))).not.toBeNull();
+	});
+
+	test("actual anatomical death drives squad rescue forecasts and medical report provenance", () => {
+		const { departure, state, report } = genuineSettlement("casualty");
+		const raw = getSquadRawOutcomes(departure.raids[0]!.squad!, report.mapId);
+		for (const predicted of raw) {
+			expect(predicted.medical).not.toBeNull();
+			expect(predicted.lostScav).toBe(predicted.medical!.dead);
+			const settled = state.history.find((item) => item.raidId === predicted.member.raidId)!;
+			expect(settled.lostScav).toBe(predicted.lostScav);
+		}
+		for (const mutate of [
+			(state: GameState) => { state.history.find((item) => item.raidId === report.raidId)!.medical!.body.parts.chest.hp += 1; },
+			(state: GameState) => { state.history.find((item) => item.raidId === report.raidId)!.medical!.inventory.medkit += 40; },
+		]) {
+			const invalid = structuredClone(state); mutate(invalid);
+			expect(parseSave(saveGame(invalid))).toBeNull();
+		}
+		expect(parseSave(saveGame(state))).not.toBeNull();
+	});
+
+	test("a rescue spends the helper's remaining real supplies and rejects refunded rescue medicine", () => {
+		const { departure, state, report } = genuineSettlement("rescue");
+		const action = report.squad!.actions.find((action) => action.kind === "rescue")!;
+		const helper = getSquadRawOutcomes(departure.raids[0]!.squad!, report.mapId).find((outcome) => outcome.member.scavId === action.actorId)!;
+		const settled = state.history.find((item) => item.raidId === helper.member.raidId)!;
+		const cost = getSquadRescueCost(report.squad!, report.mapId, action.actorId)!;
+		for (const type of ["medkit", "bandage", "tourniquet"] as const) expect(settled.medical!.inventory[type]).toBe(helper.medical!.inventory[type] - cost[type]);
+		const refunded = structuredClone(state);
+		refunded.history.find((item) => item.raidId === settled.raidId)!.medical!.inventory.medkit += 40;
+		expect(parseSave(saveGame(refunded))).toBeNull();
+		expect(parseSave(saveGame(state))).not.toBeNull();
+	});
+
+	test("a backwards clock preserves active pain relief in every frozen medical copy", () => {
+		const state = funded(), person = state.scavs[0]!;
+		person.body = createHealth(40); person.health = 40;
+		person.body.painUntil = state.lastUpdated + 90_000;
+		person.loadout.medkit = true;
+		expect(dispatchSquadRaid(state, ids(state), "courtyard", state.lastUpdated).ok).toBe(true);
+		const restored = loadGameWithSummary(saveGame(state), NOW - 60_000)!;
+		expect(restored).not.toBeNull();
+		const restoredPerson = restored.state.scavs.find((scav) => scav.id === person.id)!;
+		expect(restoredPerson.body!.painUntil - restored.state.lastUpdated).toBe(90_000);
+		const raid = restored.state.raids.find((raid) => raid.scavId === person.id)!;
+		expect(raid.expedition!.medical!.start.body).toEqual(restoredPerson.body!);
+		expect(raid.squad!.members.find((member) => member.scavId === person.id)!.medical!.body).toEqual(restoredPerson.body!);
+		expect(parseSave(saveGame(restored.state))).not.toBeNull();
 	});
 });

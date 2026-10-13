@@ -1,5 +1,6 @@
 import { LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT, type EconomyLoot, type LiveCommand, type LiveDrop, type LiveEntity, type LiveEvent, type LiveContainerKind, type LiveDistrict, type LiveDistrictId, type LiveMapSummary, type LivePlayer, type LivePurpose, type LiveSnapshot, type LiveStatus, type LiveWorld } from './game/live';
 import { LOOT_MODEL_BY_ID } from './game/loot';
+import { BODY_PARTS, parseHealth, parseMedicalInventory, type BodyPart, type TreatmentType } from './game/health';
 
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const number = (value: unknown, min = 0, max = Number.MAX_SAFE_INTEGER): value is number => typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max;
@@ -55,6 +56,9 @@ function liveErrorMessage(status: number, code: string): string {
   if (['downed', 'dead', 'player_downed', 'respawn_not_ready'].includes(code)) return 'Боец ранен. Дождись возвращения на Периметр.';
   if (code === 'no_ammo') return 'Патроны закончились. Доберись до выхода для пополнения комплекта.';
   if (code === 'no_medkits') return 'Аптечек больше нет. На выходе можно пополнить комплект.';
+  if (code === 'treatment_in_progress') return 'Лечение ещё идёт. Заверши его или отмени; движение и стрельба прервут лечение.';
+  if (code === 'aim_in_progress') return 'Боец готовит прицельный выстрел. Движение отменяет прицеливание.';
+  if (code.startsWith('medicine_')) return 'Средство закончилось или не подходит для этой зоны. Выбери нужное лечение по состоянию тела.';
   if (['target_missing', 'drop_missing', 'target_gone', 'target_unavailable', 'loot_unavailable'].includes(code)) return 'Цель уже исчезла. Сводка обновляется.';
   if (code === 'spawn_protection') return 'Эта цель пока под защитой после входа. Подожди несколько секунд.';
   if (code === 'cargo_full') return 'Груз заполнен. Доставь добычу к зелёному выходу.';
@@ -135,7 +139,11 @@ export function readLiveSnapshot(value: unknown, cachedWorld?: LiveWorld): LiveS
   if (!world || world.version !== value.worldVersion) return invalid();
   const bounds = { width: world.width, height: world.height };
   const self = value.self;
-  if (!keys(self, ['id', 'ammo', 'medkits', 'cargo', 'stash', 'kills', 'respawnAt', 'travelReadyAt', 'patrol', 'targetId', 'districtId', 'purpose', 'searching', 'gameId', 'lootItems', 'pendingDelivery', 'economyMessage']) || self.id !== value.selfId || !['ammo', 'medkits', 'cargo', 'stash', 'kills', 'respawnAt', 'travelReadyAt'].every(key => integer(self[key])) || typeof self.patrol !== 'boolean' || !(self.targetId === null || text(self.targetId)) || !districtId(self.districtId) || !purpose(self.purpose) || !(self.searching === null || record(self.searching) && keys(self.searching, ['id', 'readyAt']) && text(self.searching.id) && integer(self.searching.readyAt)) || !(self.gameId === undefined || uuid(self.gameId)) || !(self.economyMessage === undefined || typeof self.economyMessage === 'string' && self.economyMessage.length <= 2000)) return invalid();
+  if (!keys(self, ['id', 'ammo', 'medkits', 'cargo', 'stash', 'kills', 'respawnAt', 'travelReadyAt', 'patrol', 'targetId', 'districtId', 'purpose', 'searching', 'body', 'medicine', 'treatment', 'leaveAt', 'gameId', 'lootItems', 'pendingDelivery', 'economyMessage']) || self.id !== value.selfId || !['ammo', 'medkits', 'cargo', 'stash', 'kills', 'respawnAt', 'travelReadyAt', 'leaveAt'].every(key => integer(self[key])) || typeof self.patrol !== 'boolean' || !(self.targetId === null || text(self.targetId)) || !districtId(self.districtId) || !purpose(self.purpose) || !(self.searching === null || record(self.searching) && keys(self.searching, ['id', 'readyAt']) && text(self.searching.id) && integer(self.searching.readyAt)) || !(self.gameId === undefined || uuid(self.gameId)) || !(self.economyMessage === undefined || typeof self.economyMessage === 'string' && self.economyMessage.length <= 2000)) return invalid();
+  let body: LivePlayer['body'], medicine: LivePlayer['medicine'];
+  try { body = parseHealth(self.body); medicine = parseMedicalInventory(self.medicine); } catch { return invalid(); }
+  const treatment = self.treatment;
+  if (treatment !== null && (!record(treatment) || !keys(treatment, ['type', 'part', 'startedAt', 'endsAt']) || !['medkit', 'bandage', 'tourniquet', 'splint', 'painkiller', 'surgery'].includes(treatment.type as string) || !BODY_PARTS.includes(treatment.part as BodyPart) || !number(treatment.startedAt) || !number(treatment.endsAt) || treatment.endsAt < treatment.startedAt)) return invalid();
   const pendingDelivery = self.pendingDelivery === undefined ? undefined : (() => {
     if (!Array.isArray(self.pendingDelivery) || self.pendingDelivery.length > 32) return invalid();
     return self.pendingDelivery.map(parcel => {
@@ -143,7 +151,7 @@ export function readLiveSnapshot(value: unknown, cachedWorld?: LiveWorld): LiveS
       return { items: readLoot(parcel.items), money: parcel.money, message: parcel.message };
     });
   })();
-  const player: LivePlayer = { id: value.selfId, ammo: self.ammo as number, medkits: self.medkits as number, cargo: self.cargo as number, stash: self.stash as number, kills: self.kills as number, respawnAt: self.respawnAt as number, patrol: self.patrol, targetId: self.targetId as string | null, travelReadyAt: self.travelReadyAt as number, districtId: self.districtId, purpose: self.purpose, searching: self.searching === null ? null : { id: (self.searching as { id: string }).id, readyAt: (self.searching as { readyAt: number }).readyAt } };
+  const player: LivePlayer = { id: value.selfId, ammo: self.ammo as number, medkits: self.medkits as number, cargo: self.cargo as number, stash: self.stash as number, kills: self.kills as number, respawnAt: self.respawnAt as number, patrol: self.patrol, targetId: self.targetId as string | null, travelReadyAt: self.travelReadyAt as number, districtId: self.districtId, purpose: self.purpose, searching: self.searching === null ? null : { id: (self.searching as { id: string }).id, readyAt: (self.searching as { readyAt: number }).readyAt }, body, medicine, treatment: treatment === null ? null : { type: treatment.type as TreatmentType, part: treatment.part as BodyPart, startedAt: treatment.startedAt as number, endsAt: treatment.endsAt as number }, leaveAt: self.leaveAt as number };
   if (self.gameId !== undefined) player.gameId = self.gameId as string;
   if (self.lootItems !== undefined) player.lootItems = readLoot(self.lootItems);
   if (pendingDelivery !== undefined) player.pendingDelivery = pendingDelivery;
@@ -151,7 +159,8 @@ export function readLiveSnapshot(value: unknown, cachedWorld?: LiveWorld): LiveS
   if (!Array.isArray(value.entities) || value.entities.length > 256 || !Array.isArray(value.drops) || value.drops.length > 512 || !Array.isArray(value.events) || value.events.length > 256 || !Array.isArray(value.visibleChunks) || value.visibleChunks.length > 256) return invalid();
   const entities: LiveEntity[] = value.entities.map(entity => {
     if (!point(entity, bounds) || !record(entity) || !integer(entity.x) || !integer(entity.y) || !text(entity.id) || !text(entity.name, 80) || !['player', 'scav'].includes(entity.kind as string) || !integer(entity.appearance, 0, 31) || !number(entity.health, 0, 100) || !['idle', 'moving', 'combat', 'downed'].includes(entity.action as string) || !number(entity.safeUntil) || !(entity.faction === undefined || ['scavs', 'raiders'].includes(entity.faction as string)) || !(entity.role === undefined || ['patrol', 'guard', 'marksman'].includes(entity.role as string))) return invalid();
-    return { x: entity.x, y: entity.y, id: entity.id, name: entity.name, kind: entity.kind as LiveEntity['kind'], appearance: entity.appearance, health: entity.health, action: entity.action as LiveEntity['action'], safeUntil: entity.safeUntil, ...(entity.faction ? { faction: entity.faction as LiveEntity['faction'] } : {}), ...(entity.role ? { role: entity.role as LiveEntity['role'] } : {}) };
+    if (!(entity.bleeding === undefined || typeof entity.bleeding === 'boolean') || !(entity.limping === undefined || typeof entity.limping === 'boolean') || !(entity.aimUntil === undefined || number(entity.aimUntil)) || !(entity.aimTargetId === undefined || text(entity.aimTargetId))) return invalid();
+    return { x: entity.x, y: entity.y, id: entity.id, name: entity.name, kind: entity.kind as LiveEntity['kind'], appearance: entity.appearance, health: entity.health, action: entity.action as LiveEntity['action'], safeUntil: entity.safeUntil, ...(entity.faction ? { faction: entity.faction as LiveEntity['faction'] } : {}), ...(entity.role ? { role: entity.role as LiveEntity['role'] } : {}), ...(entity.bleeding === undefined ? {} : { bleeding: entity.bleeding as boolean }), ...(entity.limping === undefined ? {} : { limping: entity.limping as boolean }), ...(entity.aimUntil === undefined ? {} : { aimUntil: entity.aimUntil as number }), ...(entity.aimTargetId === undefined ? {} : { aimTargetId: entity.aimTargetId as string }) };
   });
   if (new Set(entities.map(entity => entity.id)).size !== entities.length || !entities.some(entity => entity.id === value.selfId && entity.kind === 'player')) return invalid();
   const drops: LiveDrop[] = value.drops.map(drop => {
