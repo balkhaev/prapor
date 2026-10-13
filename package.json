@@ -17,6 +17,7 @@
     "start": "bun server.ts"
   },
   "dependencies": {
+    "google-auth-library": "^11.3.0",
     "phaser": "^3.90.0"
   },
   "devDependencies": {

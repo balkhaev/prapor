@@ -31,6 +31,15 @@
 .account-button:hover{background:#435836;border-color:#bcc894}
 .account-button.account-primary{background:#c9aa71;border-color:#ddc18b;color:#1f281c}
 .account-button.account-primary:hover{background:#e2c389}
+.account-google-button{gap:10px;background:#fff;border-color:#dadce0;color:#3c4043;font-weight:600;min-height:44px}
+.account-google-button:hover{background:#f8fafd;border-color:#a9b3c3;color:#202124}
+.account-google-button>svg{flex-shrink:0}
+.account-google-entry{margin:0 0 16px}
+.account-google-hint{margin:8px 0 16px;color:#b9c9a4;font-size:10px;line-height:1.7;text-align:center}
+.account-divider{display:flex;align-items:center;gap:10px;color:#aebf98;font-size:10px}
+.account-divider:before,.account-divider:after{content:"";flex:1;height:1px;background:#526148}
+.account-google-card{border:1px solid #647955;border-radius:8px;background:#203020;padding:16px;margin:0 0 19px}
+.account-google-card>p{font-size:11px;color:#bfd0a9;line-height:1.8;margin:5px 0 12px}
 .account-button:disabled,.account-tabs button:disabled,.account-text-button:disabled,.account-password-toggle:disabled{opacity:.5;cursor:wait}
 .account-text-button{border:0;background:transparent;padding:7px 0;color:#d2cfac;font:11px Manrope,system-ui,sans-serif;line-height:1.5;text-decoration:underline;text-underline-offset:3px;cursor:pointer}
 .account-text-button:hover{color:#f0d493}

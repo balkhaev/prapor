@@ -4,8 +4,9 @@ import { chmodSync, mkdirSync } from "node:fs";
 import { isIP } from "node:net";
 import { dirname } from "node:path";
 import { readResendSender, type MailSender } from "./mail";
+import { createGoogleExchange, GOOGLE_CALLBACK_PATH, readGoogleOptions, type GoogleOptions, type GoogleProfile } from "./google";
 
-export interface AccountUser { id: string; username: string; email: string | null; emailVerified: boolean; pendingEmail: string | null }
+export interface AccountUser { id: string; username: string; email: string | null; emailVerified: boolean; pendingEmail: string | null; googleLinked: boolean; passwordEnabled: boolean }
 export interface AccountService {
   fetch(request: Request, clientAddress?: string): Promise<Response | null>;
   resolveLiveIdentity(request: Request): { id: string; name: string } | null;
@@ -20,18 +21,21 @@ export interface AccountOptions {
   maxHashingConcurrency?: number;
   sendMail?: MailSender | null;
   publicBaseUrl?: string;
+  google?: GoogleOptions | null;
 }
 interface UserRow {
   id: string; username: string; password_hash: string; recovery_hash: string; credential_version: number;
   email: string | null; email_verified_at: number | null; pending_email: string | null;
   email_version: number; email_sent_at: number | null; reset_sent_at: number | null;
+  password_enabled: number; google_linked?: number;
 }
+interface GoogleAttempt { state_hash: string; verifier: string; nonce: string; redirect_uri: string; intent: "login" | "link"; user_id: string | null; credential_version: number | null; session_hash: string | null; expires_at: number }
 interface EmailTicket { token_hash: string; ticket_id: string; user_id: string; purpose: "verify" | "reset"; email: string; credential_version: number; email_version: number; expires_at: number }
 interface SaveRow { revision: number; saved_at: number | null; save: string | null }
 const SESSION_SECONDS = 30 * 24 * 60 * 60;
 const AUTH_BODY_BYTES = 4096;
 const hashToken = (token: string): string => createHash("sha256").update(token).digest("hex");
-const publicUser = (user: UserRow): AccountUser => ({ id: user.id, username: user.username, email: user.email ?? user.pending_email, emailVerified: user.email !== null && user.email_verified_at !== null, pendingEmail: user.pending_email });
+const publicUser = (user: UserRow): AccountUser => ({ id: user.id, username: user.username, email: user.email ?? user.pending_email, emailVerified: user.email !== null && user.email_verified_at !== null, pendingEmail: user.pending_email, googleLinked: Boolean(user.google_linked), passwordEnabled: user.password_enabled === 1 });
 const isObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
 const exactKeys = (value: Record<string, unknown>, keys: string[]): boolean => Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
 const validUsername = (value: unknown): value is string => typeof value === "string" && /^[a-zA-Z0-9_-]{3,24}$/.test(value);
@@ -103,6 +107,7 @@ export function readAccountOptions(env: Record<string, string | undefined>): Acc
     secureCookies: production,
     maxHashingConcurrency: Number(env.AUTH_HASH_CONCURRENCY ?? "2"),
     sendMail: readResendSender(env),
+    google: readGoogleOptions(env),
     publicBaseUrl: env.PUBLIC_BASE_URL ?? "https://game.balkhaev.com",
     allowedOrigins: (env.APP_ORIGINS ?? (production ? "https://game.delopusk.ru,https://game.balkhaev.com" : "http://localhost:3020,http://127.0.0.1:3020,http://localhost:3000,http://127.0.0.1:3000")).split(",").map(value => value.trim()).filter(Boolean),
   };
@@ -125,6 +130,17 @@ export function createAccountService(options: AccountOptions): AccountService {
   const publicBase = new URL(options.publicBaseUrl ?? "https://game.balkhaev.com");
   if (publicBase.username || publicBase.password || publicBase.search || publicBase.hash || publicBase.pathname !== "/" || !["https:", "http:"].includes(publicBase.protocol) || secure && publicBase.protocol !== "https:") throw new Error("PUBLIC_BASE_URL must be a trusted application origin");
   const sendMail = options.sendMail ?? null;
+  const google = options.google ?? null;
+  const googleCallbacks = new Map<string, string>();
+  if (google) {
+    if (!google.clientId.trim() || !google.clientSecret.trim() || !google.redirectUris.length) throw new Error("Incomplete Google OAuth configuration");
+    for (const uri of google.redirectUris) {
+      const callback = new URL(uri);
+      if (!origins.has(callback.origin) || callback.pathname !== GOOGLE_CALLBACK_PATH || callback.search || callback.hash || callback.username || callback.password || callback.href !== uri) throw new Error("Google callbacks must be exact permitted application URLs");
+      googleCallbacks.set(callback.origin, uri);
+    }
+  }
+  const exchangeGoogle = google ? google.exchange ?? createGoogleExchange(google) : null;
   if (options.dbPath !== ":memory:") mkdirSync(dirname(options.dbPath), { recursive: true, mode: 0o700 });
   const db = new Database(options.dbPath, { create: true, strict: true });
   if (options.dbPath !== ":memory:" && process.platform !== "win32") chmodSync(options.dbPath, 0o600);
@@ -144,7 +160,7 @@ export function createAccountService(options: AccountOptions): AccountService {
       revision INTEGER NOT NULL DEFAULT 0, saved_at INTEGER, save TEXT
     );`);
   const columns = new Set(db.query<{ name: string }, []>("PRAGMA table_info(users)").all().map(column => column.name));
-  for (const [column, definition] of Object.entries({ email: "TEXT", email_verified_at: "INTEGER", pending_email: "TEXT", email_version: "INTEGER NOT NULL DEFAULT 1", email_sent_at: "INTEGER", reset_sent_at: "INTEGER" })) {
+  for (const [column, definition] of Object.entries({ email: "TEXT", email_verified_at: "INTEGER", pending_email: "TEXT", email_version: "INTEGER NOT NULL DEFAULT 1", email_sent_at: "INTEGER", reset_sent_at: "INTEGER", password_enabled: "INTEGER NOT NULL DEFAULT 1" })) {
     if (!columns.has(column)) db.exec(`ALTER TABLE users ADD COLUMN ${column} ${definition}`);
   }
   db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS verified_email_owner ON users(email) WHERE email IS NOT NULL;
@@ -154,10 +170,14 @@ export function createAccountService(options: AccountOptions): AccountService {
       email TEXT NOT NULL, credential_version INTEGER NOT NULL, email_version INTEGER NOT NULL,
       created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
     ); CREATE INDEX IF NOT EXISTS email_ticket_user ON email_tickets(user_id,purpose);
-    CREATE TABLE IF NOT EXISTS mail_recipient_limits (recipient_hash TEXT PRIMARY KEY,last_sent_at INTEGER NOT NULL);`);
-  const findUser = db.query<UserRow, [string]>("SELECT * FROM users WHERE username_key=?");
-  const findUserById = db.query<UserRow, [string]>("SELECT * FROM users WHERE id=?");
-  const findSession = db.query<UserRow, [string, number]>(`SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id
+    CREATE TABLE IF NOT EXISTS mail_recipient_limits (recipient_hash TEXT PRIMARY KEY,last_sent_at INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS google_identities (subject TEXT PRIMARY KEY,user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,created_at INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS google_attempts (state_hash TEXT PRIMARY KEY,verifier TEXT NOT NULL,nonce TEXT NOT NULL,redirect_uri TEXT NOT NULL,intent TEXT NOT NULL CHECK(intent IN ('login','link')),user_id TEXT,credential_version INTEGER,session_hash TEXT,expires_at INTEGER NOT NULL);
+    CREATE INDEX IF NOT EXISTS google_attempt_expiry ON google_attempts(expires_at);`);
+  const userProjection = "u.*, EXISTS(SELECT 1 FROM google_identities g WHERE g.user_id=u.id) AS google_linked";
+  const findUser = db.query<UserRow, [string]>(`SELECT ${userProjection} FROM users u WHERE username_key=?`);
+  const findUserById = db.query<UserRow, [string]>(`SELECT ${userProjection} FROM users u WHERE id=?`);
+  const findSession = db.query<UserRow, [string, number]>(`SELECT ${userProjection} FROM sessions s JOIN users u ON u.id=s.user_id
     WHERE s.token_hash=? AND s.expires_at>? AND s.credential_version=u.credential_version`);
   const readSave = db.query<SaveRow, [string]>("SELECT revision, saved_at, save FROM saves WHERE user_id=?");
   const dummyHash = Bun.password.hashSync(randomBytes(32).toString("hex"), { algorithm: "argon2id", memoryCost: 65536, timeCost: 2 });
@@ -171,6 +191,7 @@ export function createAccountService(options: AccountOptions): AccountService {
       for (const [key, value] of limits) if (value.expires <= time) limits.delete(key);
       db.query("DELETE FROM sessions WHERE expires_at<=?").run(time);
       db.query("DELETE FROM email_tickets WHERE expires_at<=?").run(time);
+      db.query("DELETE FROM google_attempts WHERE expires_at<=?").run(time);
       db.query("DELETE FROM mail_recipient_limits WHERE last_sent_at<?").run(time - 60 * 60_000);
       lastCleanup = time;
     }
@@ -193,6 +214,20 @@ export function createAccountService(options: AccountOptions): AccountService {
     if (cookies.length !== 1) return null;
     const token = cookies[0]!.slice(cookieName.length + 1);
     return /^[a-zA-Z0-9_-]{43}$/.test(token) ? token : null;
+  };
+  const googleCookieName = secure ? "__Host-prapor_google" : "prapor_google";
+  const googleCookie = (state: string, maxAge = 600): string => `${googleCookieName}=${state}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure ? "; Secure" : ""}`;
+  const googleStateFrom = (request: Request): string | null => {
+    const cookies = (request.headers.get("cookie") ?? "").split(";").map(value => value.trim()).filter(value => value.startsWith(`${googleCookieName}=`));
+    if (cookies.length !== 1) return null;
+    const state = cookies[0]!.slice(googleCookieName.length + 1);
+    return /^[a-zA-Z0-9_-]{43}$/.test(state) ? state : null;
+  };
+  const googleRedirect = (outcome: string, session?: string): Response => {
+    const result = response(null, 303, { Location: `/#account-google=${outcome}` });
+    result.headers.append("Set-Cookie", googleCookie("", 0));
+    if (session) result.headers.append("Set-Cookie", cookie(session));
+    return result;
   };
   const currentUser = (request: Request): UserRow | null => {
     const token = tokenFrom(request);
@@ -218,6 +253,61 @@ export function createAccountService(options: AccountOptions): AccountService {
     if (request.headers.get("x-prapor-account") !== user.id) throw new ApiError(401, "account-changed");
     return user;
   };
+  const checkGoogleSession = (attempt: GoogleAttempt, request: Request): UserRow | null => {
+    const user = currentUser(request), token = tokenFrom(request);
+    if (attempt.session_hash !== (token ? hashToken(token) : null) || attempt.user_id !== (user?.id ?? null)
+      || attempt.credential_version !== (user?.credential_version ?? null)) throw new ApiError(401, "session-changed");
+    return user;
+  };
+  const googleAccount = (profile: GoogleProfile, attempt: GoogleAttempt, request: Request): UserRow => {
+    const current = checkGoogleSession(attempt, request);
+    if (typeof profile.subject !== "string" || !/^[\x21-\x7e]{1,255}$/.test(profile.subject)) throw new ApiError(400, "failed");
+    const identity = db.query<{ user_id: string }, [string]>("SELECT user_id FROM google_identities WHERE subject=?").get(profile.subject);
+    if (attempt.intent === "link") {
+      if (!current) throw new ApiError(401, "session-changed");
+      if (identity && identity.user_id !== current.id || current.google_linked && !identity) throw new ApiError(409, "already-linked");
+      if (!identity) db.query("INSERT INTO google_identities(subject,user_id,created_at) VALUES(?,?,?)").run(profile.subject, current.id, now());
+      return findUserById.get(current.id)!;
+    }
+    if (identity) return findUserById.get(identity.user_id)!;
+    const email = normalizeEmail(profile.email);
+    if (!email) throw new ApiError(400, "failed");
+    // Matching email is never proof of ownership of a pre-existing game account.
+    if (db.query("SELECT 1 FROM users WHERE email=?").get(email)) throw new ApiError(409, "email-in-use");
+    const id = randomUUID(), username = `Scav_${randomBytes(8).toString("hex")}`;
+    // No secret password or recovery code exists for a Google-only account.
+    db.query(`INSERT INTO users(id,username,username_key,password_hash,recovery_hash,created_at,password_enabled,email,email_verified_at,pending_email)
+      VALUES(?,?,?,?,?,?,0,?,?,?)`).run(id, username, username.toLowerCase(), dummyHash, hashToken(randomBytes(32).toString("hex")), now(), profile.emailAuthoritative ? email : null, profile.emailAuthoritative ? now() : null, profile.emailAuthoritative ? null : email);
+    db.query("INSERT INTO saves(user_id) VALUES(?)").run(id);
+    db.query("INSERT INTO google_identities(subject,user_id,created_at) VALUES(?,?,?)").run(profile.subject, id, now());
+    return findUserById.get(id)!;
+  };
+  async function googleCallback(request: Request, url: URL, clientAddress: string): Promise<Response> {
+    if (request.method !== "GET") return response({ code: "method_not_allowed" }, 405, { Allow: "GET" });
+    try {
+      if (closed || !exchangeGoogle) return googleRedirect("unavailable");
+      limit(`google-callback:${hashToken(clientAddress)}`, 60, 60_000);
+      const state = url.searchParams.get("state"), browserState = googleStateFrom(request);
+      if (!state || state !== browserState || url.searchParams.getAll("state").length !== 1 || url.search.length > 8192) throw new ApiError(400, "failed");
+      const attempt = db.transaction(() => {
+        const value = db.query<GoogleAttempt, [string]>("SELECT * FROM google_attempts WHERE state_hash=?").get(hashToken(state));
+        if (!value || value.expires_at <= now() || new URL(value.redirect_uri).host !== url.host) throw new ApiError(400, "failed");
+        db.query("DELETE FROM google_attempts WHERE state_hash=?").run(value.state_hash);
+        return value;
+      })();
+      checkGoogleSession(attempt, request);
+      if (url.searchParams.has("error")) return googleRedirect(url.searchParams.get("error") === "access_denied" ? "cancelled" : "failed");
+      const code = url.searchParams.get("code");
+      if (!code || code.length > 4096 || url.searchParams.getAll("code").length !== 1) throw new ApiError(400, "failed");
+      const profile = await exchangeGoogle({ code, redirectUri: attempt.redirect_uri, verifier: attempt.verifier, nonce: attempt.nonce });
+      if (closed) return googleRedirect("unavailable");
+      const session = db.transaction(() => newSession(googleAccount(profile, attempt, request), request))();
+      return googleRedirect(attempt.intent === "link" ? "linked" : "success", session);
+    } catch (error) {
+      const outcome = error instanceof ApiError && ["session-changed", "email-in-use", "already-linked"].includes(error.code) ? error.code : "failed";
+      return googleRedirect(outcome);
+    }
+  }
   const assertCurrentCredentials = (snapshot: UserRow, request?: Request): UserRow => {
     const fresh = findUserById.get(snapshot.id);
     if (!fresh || fresh.credential_version !== snapshot.credential_version || request && currentUser(request)?.id !== snapshot.id) throw new ApiError(401, "unauthorized");
@@ -271,11 +361,15 @@ export function createAccountService(options: AccountOptions): AccountService {
 
   async function fetchApi(request: Request, clientAddress = "unknown"): Promise<Response | null> {
     const url = new URL(request.url), path = url.pathname;
+    if (path === GOOGLE_CALLBACK_PATH) {
+      if (!hosts.has(url.host)) return response({ code: "host_not_allowed" }, 403);
+      return googleCallback(request, url, clientAddress);
+    }
     if (path !== "/api" && !path.startsWith("/api/")) return null;
     try {
       if (closed) throw new ApiError(503, "service-unavailable");
       if (!hosts.has(url.host)) throw new ApiError(403, "host-not-allowed");
-      const method = path === "/api/auth/session" ? "GET" : path === "/api/save" ? "GET, PUT" : ["/api/auth/register", "/api/auth/login", "/api/auth/recover", "/api/auth/logout", "/api/auth/email", "/api/auth/email/resend", "/api/auth/email/verify", "/api/auth/password/forgot", "/api/auth/password/reset"].includes(path) ? "POST" : null;
+      const method = path === "/api/auth/session" ? "GET" : path === "/api/save" ? "GET, PUT" : ["/api/auth/google", "/api/auth/register", "/api/auth/login", "/api/auth/recover", "/api/auth/logout", "/api/auth/email", "/api/auth/email/resend", "/api/auth/email/verify", "/api/auth/password/forgot", "/api/auth/password/reset"].includes(path) ? "POST" : null;
       if (!method) return response({ code: "not_found" }, 404);
       if (!method.split(", ").includes(request.method)) return response({ code: "method_not_allowed" }, 405, { Allow: method });
       const ipKey = hashToken(clientAddress);
@@ -285,7 +379,7 @@ export function createAccountService(options: AccountOptions): AccountService {
       }
       if (path === "/api/auth/session") {
         const user = currentUser(request);
-        return response({ user: user ? publicUser(user) : null, emailEnabled: Boolean(sendMail) }, 200, !user && tokenFrom(request) ? { "Set-Cookie": cookie("", 0) } : {});
+        return response({ user: user ? publicUser(user) : null, emailEnabled: Boolean(sendMail), googleEnabled: [...googleCallbacks.keys()].some(origin => new URL(origin).host === url.host) }, 200, !user && tokenFrom(request) ? { "Set-Cookie": cookie("", 0) } : {});
       }
       if (path === "/api/auth/logout") {
         const body = await readJson(request, AUTH_BODY_BYTES);
@@ -306,6 +400,26 @@ export function createAccountService(options: AccountOptions): AccountService {
         return response({ code: "server_authoritative" }, 410);
       }
       limit(`auth-ip:${ipKey}`, 120, 15 * 60_000);
+      if (path === "/api/auth/google") {
+        if (!google) throw new ApiError(503, "google-disabled");
+        const body = await readJson(request, AUTH_BODY_BYTES);
+        if (!exactKeys(body, ["intent"]) || !["login", "link"].includes(String(body.intent))) throw new ApiError(400, "invalid-request");
+        const origin = request.headers.get("origin")!, redirectUri = googleCallbacks.get(origin);
+        if (!redirectUri || new URL(origin).host !== url.host) throw new ApiError(503, "google-unavailable");
+        limit(`google-start:${ipKey}`, 20, 60_000);
+        const user = body.intent === "link" ? authenticatedAccount(request) : currentUser(request);
+        if (Number(db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM google_attempts").get()?.count) >= 10_000) throw new ApiError(429, "server-busy", 60);
+        const state = randomBytes(32).toString("base64url"), verifier = randomBytes(32).toString("base64url"), nonce = randomBytes(32).toString("base64url"), token = tokenFrom(request);
+        const previous = googleStateFrom(request);
+        db.transaction(() => {
+          if (previous) db.query("DELETE FROM google_attempts WHERE state_hash=?").run(hashToken(previous));
+          db.query("INSERT INTO google_attempts(state_hash,verifier,nonce,redirect_uri,intent,user_id,credential_version,session_hash,expires_at) VALUES(?,?,?,?,?,?,?,?,?)").run(hashToken(state), verifier, nonce, redirectUri, String(body.intent), user?.id ?? null, user?.credential_version ?? null, token ? hashToken(token) : null, now() + 600_000);
+        })();
+        const authorization = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+        authorization.search = new URLSearchParams({ client_id: google.clientId, redirect_uri: redirectUri, response_type: "code", scope: "openid email", state, nonce,
+          code_challenge: createHash("sha256").update(verifier).digest("base64url"), code_challenge_method: "S256", prompt: "select_account" }).toString();
+        return response({ url: authorization.href }, 200, { "Set-Cookie": googleCookie(state) });
+      }
       if (path === "/api/auth/email" || path === "/api/auth/email/resend") {
         const user = authenticatedAccount(request);
         if (!sendMail) throw new ApiError(503, "email-disabled");
@@ -315,6 +429,7 @@ export function createAccountService(options: AccountOptions): AccountService {
         const email = attaching ? normalizeEmail(body.email) : user.pending_email;
         if (!email) throw new ApiError(400, attaching ? "invalid-email" : "email-already-verified");
         if (attaching) {
+          if (!user.password_enabled) throw new ApiError(400, "password-required");
           if (!validPassword(body.password)) throw new ApiError(400, "invalid-request");
           limit(`auth-user:${hashToken(user.username.toLowerCase())}`, 8, 15 * 60_000);
           const matches = await withHash(() => Bun.password.verify(body.password as string, user.password_hash));
@@ -363,7 +478,7 @@ export function createAccountService(options: AccountOptions): AccountService {
         const nextCode = recoveryCode();
         db.transaction(() => {
           readTicket(body.token, "reset");
-          db.query("UPDATE users SET password_hash=?,recovery_hash=?,credential_version=credential_version+1 WHERE id=?").run(passwordHash, hashRecovery(nextCode), proof.user.id);
+          db.query("UPDATE users SET password_hash=?,recovery_hash=?,password_enabled=1,credential_version=credential_version+1 WHERE id=?").run(passwordHash, hashRecovery(nextCode), proof.user.id);
           db.query("DELETE FROM sessions WHERE user_id=?").run(proof.user.id);
           db.query("DELETE FROM email_tickets WHERE user_id=?").run(proof.user.id);
         })();
@@ -380,7 +495,7 @@ export function createAccountService(options: AccountOptions): AccountService {
         if (Object.hasOwn(body, "email") && !email) throw new ApiError(400, "invalid-email");
         const passwordHash = await withHash(() => Bun.password.hash(password, { algorithm: "argon2id", memoryCost: 65536, timeCost: 2 }));
         const id = randomUUID(), code = recoveryCode();
-        const user: UserRow = { id, username, password_hash: passwordHash, recovery_hash: hashRecovery(code), credential_version: 1, email: null, email_verified_at: null, pending_email: email, email_version: 1, email_sent_at: null, reset_sent_at: null };
+        const user: UserRow = { id, username, password_hash: passwordHash, recovery_hash: hashRecovery(code), credential_version: 1, email: null, email_verified_at: null, pending_email: email, email_version: 1, email_sent_at: null, reset_sent_at: null, password_enabled: 1 };
         const token = db.transaction(() => {
           if (findUser.get(usernameKey)) throw new ApiError(409, "username-taken");
           db.query("INSERT INTO users(id,username,username_key,password_hash,recovery_hash,created_at,pending_email) VALUES(?,?,?,?,?,?,?)").run(id, username, usernameKey, passwordHash, user.recovery_hash, now(), email);
@@ -396,14 +511,14 @@ export function createAccountService(options: AccountOptions): AccountService {
       }
       const user = findUser.get(usernameKey);
       if (path === "/api/auth/login") {
-        const matches = await withHash(() => Bun.password.verify(password, user?.password_hash ?? dummyHash));
-        if (!matches || !user) throw new ApiError(401, "invalid-credentials");
+        const matches = await withHash(() => Bun.password.verify(password, user?.password_enabled ? user.password_hash : dummyHash));
+        if (!matches || !user || !user.password_enabled) throw new ApiError(401, "invalid-credentials");
         const token = db.transaction(() => newSession(user, request))();
         return response({ user: publicUser(user) }, 200, { "Set-Cookie": cookie(token) });
       }
       const code = normalizeRecovery(body.recoveryCode);
       const candidate = hashRecovery(code ?? "invalid"), expected = user?.recovery_hash ?? hashToken("unknown");
-      if (!timingSafeEqual(Buffer.from(candidate, "hex"), Buffer.from(expected, "hex")) || !code || !user) throw new ApiError(401, "invalid-recovery");
+      if (!timingSafeEqual(Buffer.from(candidate, "hex"), Buffer.from(expected, "hex")) || !code || !user || !user.password_enabled) throw new ApiError(401, "invalid-recovery");
       const passwordHash = await withHash(() => Bun.password.hash(password, { algorithm: "argon2id", memoryCost: 65536, timeCost: 2 }));
       const nextCode = recoveryCode();
       db.transaction(() => {

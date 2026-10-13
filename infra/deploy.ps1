@@ -5,6 +5,7 @@ param(
     [string] $Commit,
     [string] $Project = 'F:/code/prapor',
     [string] $ResendKeyFile = 'F:/AI/prapor/resend_api_key',
+    [string] $GoogleSecretFile = 'F:/AI/prapor/google_client_secret',
     [switch] $ValidateOnly
 )
 
@@ -21,6 +22,8 @@ $remoteScratch = '/tmp/' + $releaseId
 $remoteStarted = $false
 $secretSource = $null
 $secretHash = $null
+$googleSecretSource = $null
+$googleSecretHash = $null
 
 function Get-GitText([string[]] $Arguments) {
     $output = & git -C $projectPath @Arguments
@@ -45,25 +48,26 @@ function Copy-ToManagement([string] $LocalPath, [string] $RemotePath) {
     if ($LASTEXITCODE -ne 0) { throw "Upload failed ($LASTEXITCODE)" }
 }
 
-function Ensure-ResendSecret([string] $LocalFile, [string] $Checksum) {
+function Ensure-RuntimeSecret([string] $Name, [string] $LocalFile, [string] $Checksum) {
+    if ($Name -notin @('resend_api_key', 'google_client_secret')) { throw 'Unsupported runtime secret.' }
     if ($LocalFile) {
-        # The key is a sibling of the source export, never a build-context input.
-        Copy-ToManagement $LocalFile "$remoteScratch/resend_api_key"
-        Invoke-Management "set -eu`nchmod 600 '$remoteScratch/resend_api_key'`ntest `"`$(sha256sum '$remoteScratch/resend_api_key' | awk '{print `$1}')`" = '$Checksum'`nscp -i '$originKey' -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 '$remoteScratch/resend_api_key' '${originTarget}:$remoteScratch/resend_api_key'"
+        # Secrets are siblings of the source export, never build-context inputs.
+        Copy-ToManagement $LocalFile "$remoteScratch/$Name"
+        Invoke-Management "set -eu`nchmod 600 '$remoteScratch/$Name'`ntest `"`$(sha256sum '$remoteScratch/$Name' | awk '{print `$1}')`" = '$Checksum'`nscp -i '$originKey' -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 '$remoteScratch/$Name' '${originTarget}:$remoteScratch/$Name'"
         $secretScript = @'
 set -eu
 scratch='__SCRATCH__'
-secret=/data/prapor/secrets/resend_api_key
+secret=/data/prapor/secrets/__NAME__
 test ! -L /data/prapor/secrets
 test ! -L "$secret"
 test ! -e "$secret" || test -f "$secret"
-chmod 600 "$scratch/resend_api_key"
-test "$(sha256sum "$scratch/resend_api_key" | awk '{print $1}')" = '__HASH__'
+chmod 600 "$scratch/__NAME__"
+test "$(sha256sum "$scratch/__NAME__" | awk '{print $1}')" = '__HASH__'
 install -d -m 700 /data/prapor/secrets
 chown 0:0 /data/prapor/secrets
-if test ! -f "$secret" || ! cmp -s "$scratch/resend_api_key" "$secret"; then
+if test ! -f "$secret" || ! cmp -s "$scratch/__NAME__" "$secret"; then
     test ! -e "$secret.next"
-    install -m 400 "$scratch/resend_api_key" "$secret.next"
+    install -m 400 "$scratch/__NAME__" "$secret.next"
     chown 1000:1000 "$secret.next"
     mv "$secret.next" "$secret"
 fi
@@ -73,18 +77,19 @@ test -s "$secret"
 test "$(stat -c '%a:%u:%g' "$secret")" = '400:1000:1000'
 test "$(sha256sum "$secret" | awk '{print $1}')" = '__HASH__'
 '@
-        Invoke-Origin ($secretScript.Replace('__SCRATCH__', $remoteScratch).Replace('__HASH__', $Checksum))
+        Invoke-Origin ($secretScript.Replace('__SCRATCH__', $remoteScratch).Replace('__HASH__', $Checksum).Replace('__NAME__', $Name))
     } else {
-        # With no local key, preserve the existing provisioned value verbatim.
-        Invoke-Origin @'
+        # With no local file, preserve the existing provisioned value verbatim.
+        $existingSecretScript = @'
 set -eu
-secret=/data/prapor/secrets/resend_api_key
+secret=/data/prapor/secrets/__NAME__
 test ! -L /data/prapor/secrets
 test ! -L "$secret"
 test -f "$secret" && test -s "$secret"
 test "$(stat -c '%a:%u:%g' "$secret")" = '400:1000:1000'
 test "$(stat -c '%a:%u:%g' /data/prapor/secrets)" = '700:0:0'
 '@
+        Invoke-Origin ($existingSecretScript.Replace('__NAME__', $Name))
     }
 }
 
@@ -106,6 +111,17 @@ try {
         $secretHash = (Get-FileHash -LiteralPath $secretSource -Algorithm SHA256).Hash.ToLowerInvariant()
     } elseif ($PSBoundParameters.ContainsKey('ResendKeyFile') -and $ResendKeyFile) {
         throw 'Explicit Resend key file is missing.'
+    }
+
+    if ($GoogleSecretFile -and (Test-Path -LiteralPath $GoogleSecretFile -PathType Leaf)) {
+        $googleSecretSource = (Resolve-Path -LiteralPath $GoogleSecretFile).Path
+        $googleSecretItem = Get-Item -LiteralPath $googleSecretSource
+        $projectPrefix = $projectPath.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+        if ($googleSecretSource.StartsWith($projectPrefix, [StringComparison]::OrdinalIgnoreCase)) { throw 'Google client secret must live outside the Git checkout.' }
+        if (($googleSecretItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $googleSecretItem.Length -lt 1 -or $googleSecretItem.Length -gt 1024) { throw 'Google client secret must be a small regular protected file.' }
+        $googleSecretHash = (Get-FileHash -LiteralPath $googleSecretSource -Algorithm SHA256).Hash.ToLowerInvariant()
+    } elseif ($PSBoundParameters.ContainsKey('GoogleSecretFile') -and $GoogleSecretFile) {
+        throw 'Explicit Google client secret file is missing.'
     }
 
     New-Item -ItemType Directory -Path $scratchPath | Out-Null
@@ -155,7 +171,8 @@ test ! -e /data/prapor/release.env || grep -Fq 'Managed by prapor infra/deploy.p
     Copy-ToManagement $archivePath "$remoteScratch/source.tar"
     Copy-ToManagement $releaseEnvPath "$remoteScratch/release.env"
     Invoke-Management "set -eu`ntest `"`$(sha256sum '$remoteScratch/source.tar' | awk '{print `$1}')`" = '$archiveHash'`nssh -i '$originKey' -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 '$originTarget' 'mkdir -m 700 $remoteScratch'`nscp -i '$originKey' -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 '$remoteScratch/source.tar' '$remoteScratch/release.env' '${originTarget}:$remoteScratch/'"
-    Ensure-ResendSecret $secretSource $secretHash
+    Ensure-RuntimeSecret 'resend_api_key' $secretSource $secretHash
+    Ensure-RuntimeSecret 'google_client_secret' $googleSecretSource $googleSecretHash
 
     $originScript = @'
 set -eu
@@ -173,7 +190,7 @@ trap 'docker rm -f "$smoke" >/dev/null 2>&1 || true' EXIT
 signature=''
 for mode in absent inherited configured; do
     if test "$mode" = configured; then
-        docker run --rm -d --name "$smoke" --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true --tmpfs /app/data:uid=1000,gid=1000,mode=0700 --tmpfs /tmp:uid=1000,gid=1000,mode=1770 --mount type=bind,src=/data/prapor/secrets/resend_api_key,dst=/run/secrets/resend_api_key,readonly -e RESEND_API_KEY_FILE=/run/secrets/resend_api_key -e 'RESEND_FROM=ggpick <noreply@ggpick.club>' -e PUBLIC_BASE_URL=https://game.balkhaev.com "prapor-game:$commit" >/dev/null
+        docker run --rm -d --name "$smoke" --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true --tmpfs /app/data:uid=1000,gid=1000,mode=0700 --tmpfs /tmp:uid=1000,gid=1000,mode=1770 --mount type=bind,src=/data/prapor/secrets/resend_api_key,dst=/run/secrets/resend_api_key,readonly --mount type=bind,src=/data/prapor/secrets/google_client_secret,dst=/run/secrets/google_client_secret,readonly -e RESEND_API_KEY_FILE=/run/secrets/resend_api_key -e 'RESEND_FROM=ggpick <noreply@ggpick.club>' -e PUBLIC_BASE_URL=https://game.balkhaev.com -e GOOGLE_CLIENT_ID=764541788875-0bj0prqnptqop4u5b2v5qgf2i4ut7t26.apps.googleusercontent.com -e GOOGLE_CLIENT_SECRET_FILE=/run/secrets/google_client_secret -e GOOGLE_REDIRECT_URIS=https://game.delopusk.ru/callback/auth/google,https://game.balkhaev.com/callback/auth/google "prapor-game:$commit" >/dev/null
     elif test "$mode" = inherited; then
         docker run --rm -d --name "$smoke" --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true --tmpfs /app/data:uid=1000,gid=1000,mode=0700 --tmpfs /tmp:uid=1000,gid=1000,mode=1770 -e NODE_ENV=production -e DEVHUB_ORIGIN=http://evil.invalid -e DEVHUB_ROOT=/missing -e DEVHUB_PORT=1 -e DEVHUB_EMBEDDED=true "prapor-game:$commit" >/dev/null
     else
@@ -191,9 +208,21 @@ if (page.headers.get("x-frame-options") !== "DENY" || !page.headers.get("content
 console.log(Bun.hash(JSON.stringify(names.map(name=>[name,health.headers.get(name),page.headers.get(name)]))).toString());
 ')
     if test "$mode" = absent; then signature="$current"; else test "$signature" = "$current"; fi
+    if test "$mode" = configured; then
+        docker exec "$smoke" bun -e '
+const session = await fetch("http://127.0.0.1:3000/api/auth/session", {headers:{Host:"game.delopusk.ru"}});
+if (session.status !== 200 || (await session.json()).googleEnabled !== true) throw new Error("Google OAuth configuration failed");
+for (const origin of ["https://game.delopusk.ru", "https://game.balkhaev.com"]) {
+    const response = await fetch("http://127.0.0.1:3000/api/auth/google", {method:"POST", headers:{Origin:origin,"Content-Type":"application/json",Host:new URL(origin).host}, body:JSON.stringify({intent:"login"})});
+    if (response.status !== 200 || !response.headers.get("set-cookie")) throw new Error("Google OAuth start failed");
+    const url = new URL((await response.json()).url);
+    if (url.origin !== "https://accounts.google.com" || url.searchParams.get("redirect_uri") !== `${origin}/callback/auth/google`) throw new Error("Google OAuth callback origin failed");
+}
+'
+    fi
     docker stop -t 5 "$smoke" >/dev/null
 done
-printf '%s\n' 'Standalone artifact smoke passed without/with DEVHUB variables and with the runtime email secret.'
+printf '%s\n' 'Standalone artifact smoke passed without/with DEVHUB variables and with runtime email/Google secrets.'
 app_uid=$(docker run --rm --entrypoint id "prapor-game:$commit" -u)
 app_gid=$(docker run --rm --entrypoint id "prapor-game:$commit" -g)
 test "$app_uid:$app_gid" = '1000:1000'

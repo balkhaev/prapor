@@ -36,7 +36,10 @@
         "ACCOUNT_DB_PATH": "F:/AI/prapor/accounts.sqlite",
         "RESEND_API_KEY_FILE": "F:/AI/prapor/resend_api_key",
         "RESEND_FROM": "ggpick <noreply@ggpick.club>",
-        "PUBLIC_BASE_URL": "http://127.0.0.1:3020"
+        "PUBLIC_BASE_URL": "http://127.0.0.1:3020",
+        "GOOGLE_CLIENT_ID": "764541788875-0bj0prqnptqop4u5b2v5qgf2i4ut7t26.apps.googleusercontent.com",
+        "GOOGLE_CLIENT_SECRET_FILE": "F:/AI/prapor/google_client_secret",
+        "GOOGLE_REDIRECT_URIS": "http://127.0.0.1:3020/callback/auth/google,http://localhost:3020/callback/auth/google"
       }
     }
   ]
