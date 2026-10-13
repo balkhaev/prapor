@@ -504,7 +504,7 @@ export function createWorld(
 				: room ? `Идёт: ${ROOM_DEFINITIONS[room.type].label}` : slot.routine?.activity === "sweep" ? "Идёт убирать двор"
 					: slot.routine?.activity === "maintain" ? "Идёт чинить скамейку" : "Идёт по двору";
 			if (slot.working) return presentation?.stageLabel ?? "Работает";
-			return room ? production?.reason ?? production?.status ?? "Ждёт заказ" : slot.routine?.label ?? "Во дворе";
+			return room ? production?.status ?? "Ждёт заказ" : slot.routine?.label ?? "Во дворе";
 		}
 
 		restorePresentationState(value: unknown): void {
