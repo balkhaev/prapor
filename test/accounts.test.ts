@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { createAccountService, getClientAddress, readAccountOptions, type AccountService } from "../server/accounts";
 import { createHandler } from "../server/handler";
 import { createGame, saveGame } from "../src/game/engine";
-import { exportGameSave } from "../src/game-save";
 import type { AccountMail } from "../server/mail";
 
 const ORIGIN = "https://game.delopusk.ru";
@@ -155,11 +154,11 @@ describe("account authentication security", () => {
   });
 });
 
-describe("account save ownership and durability", () => {
-  test("an old account request cannot access or overwrite the account selected by a changed cookie", async () => {
+describe("read-only legacy save archives", () => {
+  test("an old account request cannot access the account selected by a changed cookie", async () => {
     const first = await register("First"), second = await register("Second");
     const save = saveGame(createGame(time));
-    expect((await call("/api/save", "PUT", { revision: 0, save }, second.cookie)).status).toBe(200);
+    expect((await call("/api/save", "PUT", { revision: 0, save }, second.cookie)).status).toBe(410);
     for (const expectedId of [first.id, ""]) {
       const get = await call("/api/save", "GET", undefined, second.cookie, { "x-prapor-account": expectedId });
       expect(get.status).toBe(401);
@@ -168,24 +167,22 @@ describe("account save ownership and durability", () => {
       expect(put.status).toBe(401);
       expect(await put.json()).toEqual({ code: "account_changed" });
     }
-    expect(await (await call("/api/save", "GET", undefined, second.cookie)).json()).toEqual({ revision: 1, savedAt: time, save });
+    expect(await (await call("/api/save", "GET", undefined, second.cookie)).json()).toEqual({ revision: 0, savedAt: null, save: null });
     expect(await (await call("/api/save", "GET", undefined, first.cookie)).json()).toEqual({ revision: 0, savedAt: null, save: null });
   });
 
-  test("strict game validation, compare-and-swap and per-account isolation survive a restart", async () => {
+  test("forged and arbitrary snapshots are rejected without altering archived saves, including after restart", async () => {
     const first = await register("First"), second = await register("Second");
     expect(await (await call("/api/save", "GET", undefined, first.cookie)).json()).toEqual({ revision: 0, savedAt: null, save: null });
-    const state = createGame(time), save = exportGameSave(state, { version: 1 });
-    for (const invalid of ["{}", JSON.stringify({ ...state, schemaVersion: 100 }), save.replace(/"checksum":"[a-f0-9]+"/, '"checksum":"00000000"')]) {
-      expect((await call("/api/save", "PUT", { revision: 0, save: invalid }, first.cookie)).status).toBe(400);
+    const save = saveGame(createGame(time));
+    const db = new Database(dbPath);
+    db.query("UPDATE saves SET revision=7,saved_at=?,save=? WHERE user_id=?").run(time, save, first.id); db.close();
+    const current = { revision: 7, savedAt: time, save };
+    for (const forged of [save, "{}", JSON.stringify({ credits: 1_000_000_000, lastTick: time + 1_000_000_000 }), "arbitrary data"]) {
+      const denied = await call("/api/save", "PUT", { revision: 7, save: forged }, first.cookie);
+      expect(denied.status).toBe(410); expect(await denied.json()).toEqual({ code: "server_authoritative" });
     }
-    const writers = await Promise.all([save, saveGame(state)].map(save => call("/api/save", "PUT", { revision: 0, save }, first.cookie)));
-    expect(writers.map(reply => reply.status).sort()).toEqual([200, 409]);
-    const current = await (await call("/api/save", "GET", undefined, first.cookie)).json() as { revision: number; save: string; savedAt: number };
-    expect(current).toEqual({ revision: 1, savedAt: time, save });
-    const conflict = await call("/api/save", "PUT", { revision: 0, save: saveGame(state) }, first.cookie);
-    expect(conflict.status).toBe(409);
-    expect(await conflict.json()).toEqual({ code: "save_conflict", revision: 1 });
+    expect(await (await call("/api/save", "GET", undefined, first.cookie)).json()).toEqual(current);
     expect(await (await call("/api/save", "GET", undefined, second.cookie)).json()).toEqual({ revision: 0, savedAt: null, save: null });
     service.close();
     service = createAccountService(options());
@@ -196,16 +193,14 @@ describe("account save ownership and durability", () => {
     expect((await call("/api/save", "GET", undefined, first.cookie)).status).toBe(503);
   });
 
-  test("a password recovery while a save request is being read prevents that stale session from writing", async () => {
+  test("legacy uploads are rejected before reading a streaming body and never change archive revisions", async () => {
     const account = await register();
     let controller!: ReadableStreamDefaultController<Uint8Array>;
     const body = new ReadableStream<Uint8Array>({ start(value) { controller = value; } });
     const pending = service.fetch(new Request(`${ORIGIN}/api/save`, { method: "PUT", headers: { origin: ORIGIN, "content-type": "application/json", cookie: account.cookie, "x-prapor-account": account.id }, body }), "192.0.2.8");
-    const recovered = await call("/api/auth/recover", "POST", { username: "Scav_1", recoveryCode: account.recoveryCode, password: "another password 123" });
-    expect(recovered.status).toBe(200);
+    expect((await pending)!.status).toBe(410);
     controller.enqueue(new TextEncoder().encode(JSON.stringify({ revision: 0, save: saveGame(createGame(time)) })));
     controller.close();
-    expect((await pending)!.status).toBe(401);
     const db = new Database(dbPath, { readonly: true });
     expect(db.query<{ revision: number }, []>("SELECT revision FROM saves").get()!.revision).toBe(0);
     db.close();
@@ -327,7 +322,8 @@ describe("optional account email and password mail", () => {
     enableMail(async message => { mails.push(message); throw new Error("private provider failure"); });
     const account = await registerEmail("shared@example.com");
     expect(account.emailDelivery).toBe("failed");
-    expect((await call("/api/save", "PUT", { revision: 0, save: saveGame(createGame(time)) }, account.cookie)).status).toBe(200);
+    expect((await call("/api/save", "PUT", { revision: 0, save: saveGame(createGame(time)) }, account.cookie)).status).toBe(410);
+    expect(await (await call("/api/save", "GET", undefined, account.cookie)).json()).toEqual({ revision: 0, savedAt: null, save: null });
     expect((await call("/api/auth/email/verify", "POST", { token: tokenOf(mails[0]!) })).status).toBe(400);
     service.close();
     service = createAccountService({ ...options(), sendMail: async message => { mails.push(message); } });

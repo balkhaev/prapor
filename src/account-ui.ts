@@ -60,7 +60,7 @@ export function mountAccountUI(options: AccountUIOptions): AccountUI {
 	const close = root.querySelector<HTMLButtonElement>(".account-close")!;
 	const body = root.querySelector<HTMLElement>(".account-dialog-body")!;
 	let user: AccountUser | null = null;
-	let status = "Гостевая игра · прогресс на этом устройстве";
+	let status = "Гостевая игра · прогресс на сервере";
 	let statusTone: AccountStatusTone = "neutral";
 	let mode: DialogMode = "login";
 	let busy = false;
@@ -528,9 +528,9 @@ export function mountAccountUI(options: AccountUIOptions): AccountUI {
 			if (options.onBeforeLogout && !await options.onBeforeLogout()) return;
 			await accountApi.logout();
 			setUser(null);
-			setStatus("Гостевая игра · прогресс на этом устройстве", "neutral");
+			setStatus("Гостевая игра · прогресс на сервере", "neutral");
 			await options.onLogout();
-			if (!disposed) renderForm("login", "Ты вышел из аккаунта. Убежище осталось на этом устройстве.");
+			if (!disposed) renderForm("login", "Ты вышел из аккаунта. Убежище аккаунта сохранено на сервере.");
 		} catch (error) { if (!disposed) showError(accountErrorMessage(error)); }
 		finally { workflowDepth--; if (!disposed) setBusy(false); openDeferredLink(); }
 	}

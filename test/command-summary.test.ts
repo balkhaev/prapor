@@ -4,7 +4,7 @@ import {
 	advance, assignWorker, buildRoom, createGame, craftModule, dispatchRaid, getModuleCapacity,
 	getBuildRoomQuote, getResourceProductionQuote, getRoomProductionState,
 	getRoomUpgradeQuote, getSupplyCapacity, queueModuleProduction,
-	saveGame, sellModule, setRoomRecipe, upgradeRoom, type GameState, type RoomInstance,
+	saveGame, sellModule, setRoomRecipe, setRoomStockTarget, setProductionReserve, ensureShelterLogistics, upgradeRoom, type GameState, type RoomInstance,
 } from "../src/game/engine";
 
 const NOW = 1_792_000_000_000;
@@ -32,6 +32,34 @@ function build(state: GameState, type: RoomInstance["type"], column: number, row
 }
 
 describe("command next-step projection", () => {
+	test("a completed stocking plan remains quiet after its worker leaves for a raid", () => {
+		const state = funded(), medbay = room(state, "medbay"), worker = state.scavs[1]!;
+		state.supplies.medicine = getSupplyCapacity(state).medicine;
+		expect(assignWorker(state, worker.id, medbay.id, NOW).ok).toBe(true);
+		expect(setRoomRecipe(state, medbay.id, "medicine-batch", true, NOW).ok).toBe(true);
+		expect(setRoomStockTarget(state, medbay.id, state.supplies.medicine, NOW).ok).toBe(true);
+		expect(assignWorker(state, worker.id, null, NOW).ok).toBe(true);
+		const saved = saveGame(state), summary = getCommandSummary(state);
+		expect(status(state, medbay)).toMatchObject({ kind: "ready", title: "Запас по плану", cta: null });
+		expect(summary.attention.some(item => item.roomId === medbay.id)).toBe(false);
+		expect(saveGame(state)).toBe(saved);
+	});
+
+	test("a protected reserve and a full kit shelf describe the actual reason for waiting", () => {
+		const state = funded(), workshop = room(state, "workshop");
+		expect(assignWorker(state, state.scavs[0]!.id, workshop.id, NOW).ok).toBe(true);
+		expect(setProductionReserve(state, { money: state.money, supplies: { ammo: 0, medicine: 0, scrap: 0, intel: 0 } }, NOW).ok).toBe(true);
+		expect(setRoomRecipe(state, workshop.id, "maintenance-kit", true, NOW).ok).toBe(true);
+		expect(status(state, workshop)).toMatchObject({ kind: "ready", title: "Резерв сохранён" });
+		expect(workshop.queue).toHaveLength(0);
+		expect(setProductionReserve(state, { money: 0, supplies: { ammo: 0, medicine: 0, scrap: 0, intel: 0 } }, NOW).ok).toBe(true);
+		expect(workshop.queue).toHaveLength(1);
+		ensureShelterLogistics(state).kits.maintenance = 8;
+		advance(state, NOW + 120_000);
+		expect(status(state, workshop)).toMatchObject({ kind: "capacity", title: "Готовая партия ждёт места" });
+		expect(workshop.queue[0]!.workDone).toBe(workshop.queue[0]!.workRequired);
+	});
+
 	test("repeated projections do not advance orders, reorder ownership or change paid work", () => {
 		const state = funded(), workshop = room(state, "workshop");
 		expect(queueModuleProduction(state, workshop.id, "optic-reflex", NOW).ok).toBe(true);

@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
-	SAVE_VERSION, advance, continueExpedition, createGame, dispatchRaid, dispatchSquadRaid,
-	extractRaid, getExpeditionChoices, getLoadoutStats, getRaidQuote, getSquadRaidQuote,
+	SAVE_VERSION, advance, assignWorker, continueExpedition, createGame, dispatchRaid, dispatchSquadRaid,
+	extractRaid, FIELD_KITS, getExpeditionChoices, getFieldKitStock, getLoadoutStats, getRaidQuote,
+	getRoomProductionState, getSquadRaidQuote,
 	getWeaponRole, getWeaponStats, installModule, loadGameWithSummary, parseSave, removeModule,
-	saveGame, setAutoRaid, setAutoRaidDepth, setLoadoutOption, setRaidPlan, setRaidTactic,
-	type GameState, type Raid, type WeaponInstance,
+	queueFieldKitProduction, saveGame, setAutoRaid, setAutoRaidDepth, setFieldKit, setLoadoutOption,
+	setProductionReserve, setRaidPlan, setRaidTactic, setRoomRecipe, setRoomStockTarget,
+	type FieldKit, type GameState, type Raid, type WeaponInstance,
 } from "../src/game/engine";
 import { AMMO_TYPES, getAmmoEffect, getAmmoModel, type AmmoType } from "../src/game/ammunition";
 import { MAP_BY_ID, WEAPONS } from "../src/game/data";
@@ -61,6 +63,37 @@ function checkpoint(type: AmmoType, count = 1, completedRecon = false): { state:
 		return { state, raid };
 	}
 	throw new Error("No genuine expanded-ammunition checkpoint found");
+}
+/** Released v14 fields are produced and paid through their public actions. */
+function logisticsCheckpoint(type: AmmoType, kit: FieldKit): { state: GameState; raid: Raid } {
+	for (let offset = 0; offset < 512; offset++) {
+		const state = funded(NOW + offset), scav = state.scavs[0]!, worker = state.scavs[1]!;
+		const room = state.shelter.rooms.find((item) => item.type === (kit === "maintenance" ? "workshop" : "medbay"))!;
+		expect(setProductionReserve(state, { money: 2_000, supplies: { ammo: 60, medicine: 4, scrap: 10, intel: 2 } }, state.lastUpdated).ok).toBe(true);
+		for (let batch = 0; batch < 2; batch++) {
+			expect(queueFieldKitProduction(state, room.id, kit, state.lastUpdated).ok).toBe(true);
+			expect(assignWorker(state, worker.id, room.id, state.lastUpdated).ok).toBe(true);
+			const seconds = getRoomProductionState(state, room).remainingSeconds;
+			expect(seconds).not.toBeNull();
+			advance(state, state.lastUpdated + Math.ceil(seconds! * 1_000));
+			expect(assignWorker(state, worker.id, null, state.lastUpdated).ok).toBe(true);
+		}
+		expect(getFieldKitStock(state)[kit]).toBe(2);
+		expect(setRoomRecipe(state, room.id, FIELD_KITS[kit].recipeId, true, state.lastUpdated).ok).toBe(true);
+		expect(setRoomStockTarget(state, room.id, 3, state.lastUpdated).ok).toBe(true);
+		expect(queueFieldKitProduction(state, room.id, kit, state.lastUpdated).ok).toBe(true);
+		state.sectorIntel = { courtyard: { knowledge: 3, pressure: 2 } };
+		expect(setFieldKit(state, scav.id, kit).ok).toBe(true);
+		expect(setLoadoutOption(state, scav.id, "ammoType", type).ok).toBe(true);
+		expect(setRaidPlan(state, scav.id, "intel", "scouted").ok).toBe(true);
+		expect(dispatchRaid(state, scav.id, "courtyard", state.lastUpdated).ok).toBe(true);
+		const raid = state.raids[0]!;
+		expect(raid.fieldKit).toBe(kit);
+		expect(getFieldKitStock(state)[kit]).toBe(1);
+		advance(state, raid.endsAt);
+		if (state.raids[0]?.expedition?.status === "choice") return { state, raid };
+	}
+	throw new Error("No genuine v14 ammunition and logistics checkpoint found");
 }
 
 describe("expanded cartridges stay real through dispatch, settlement and saved expeditions", () => {
@@ -201,16 +234,47 @@ describe("expanded cartridges stay real through dispatch, settlement and saved e
 		}
 	});
 
-	test("v13 cannot inject newer choices into a free loadout, active paid load or historical squad member", () => {
+	test("released v14 ammunition preserves paid field kits, reserve and queued production through migration and settlement", () => {
+		for (const type of RELEASED_TYPES) for (const kit of ["maintenance", "trauma"] as const) {
+			const { state, raid } = logisticsCheckpoint(type, kit), paid = structuredClone(raid), shelter = structuredClone(state.shelter);
+			const raw = JSON.parse(saveGame(state)); raw.schemaVersion = 14;
+			const migrated = parseSave(JSON.stringify(raw));
+			expect(migrated).not.toBeNull();
+			expect(migrated!.schemaVersion).toBe(SAVE_VERSION);
+			expect(migrated).toEqual(state);
+			expect(migrated!.shelter).toEqual(shelter);
+			expect(migrated!.raids[0]).toEqual(paid);
+			expect(migrated!.raids[0]!.fieldKit).toBe(kit);
+			expect(migrated!.scavs[0]!.fieldKit).toBe(kit);
+			expect(getFieldKitStock(migrated!)[kit]).toBe(1);
+			const room = migrated!.shelter.rooms.find((item) => item.type === (kit === "maintenance" ? "workshop" : "medbay"))!;
+			expect(room.stockTarget).toBe(3);
+			expect(room.queue[0]!.output.fieldKit).toBe(kit);
+			const perk = raid.expedition!.offers[0]!, choices = getExpeditionChoices(state, raid, perk);
+			expect(getExpeditionChoices(migrated!, migrated!.raids[0]!, perk)).toEqual(choices);
+			for (const current of [state, migrated!]) {
+				expect(setFieldKit(current, current.scavs[0]!.id, "none").ok).toBe(true);
+				expect(current.raids[0]!.fieldKit).toBe(kit);
+				expect(continueExpedition(current, current.raids[0]!.id, "combat", perk, current.lastUpdated).ok).toBe(true);
+			}
+			const offline = saveGame(migrated!), until = raid.endsAt + 3_017;
+			advance(state, until); settleIrregularly(migrated!, until);
+			expect(migrated).toEqual(state);
+			expect(loadGameWithSummary(offline, until)!.state).toEqual(state);
+		}
+	});
+
+	test("v13 and v14 cannot inject v15 choices into a free loadout, active paid load or historical squad member", () => {
 		const ready = JSON.parse(saveGame(funded())), { state, raid } = checkpoint("standard", 3);
 		const active = JSON.parse(saveGame(state));
 		expect(extractRaid(state, raid.id, state.lastUpdated).ok).toBe(true);
 		const history = JSON.parse(saveGame(state));
-		for (const fixture of [ready, active, history]) {
-			fixture.schemaVersion = 13;
-			expect(parseSave(JSON.stringify(fixture))).not.toBeNull();
-		}
-		for (const type of EXPANDED_TYPES) {
+		for (const version of [13, 14]) {
+			for (const fixture of [ready, active, history]) {
+				fixture.schemaVersion = version;
+				expect(parseSave(JSON.stringify(fixture))).not.toBeNull();
+			}
+			for (const type of EXPANDED_TYPES) {
 			const scav = structuredClone(ready); scav.scavs[0].loadout.ammoType = type;
 			expect(parseSave(JSON.stringify(scav))).toBeNull();
 			const paid = structuredClone(active);
@@ -225,6 +289,7 @@ describe("expanded cartridges stay real through dispatch, settlement and saved e
 			const historical = structuredClone(history);
 			for (const report of historical.history) report.squad.members[0].loadout.ammoType = type;
 			expect(parseSave(JSON.stringify(historical))).toBeNull();
+			}
 		}
 	});
 

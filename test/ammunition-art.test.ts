@@ -3,6 +3,18 @@ import { AMMO_MODELS, type AmmoType } from "../src/game/ammunition";
 import { AMMUNITION_ART_CALIBERS, AMMUNITION_ART_TYPES, ammunitionArt, getAmmunitionArtwork } from "../src/ammunition-art";
 
 describe("generated ammunition pack atlas mapping", () => {
+	test("every referenced atlas ships a full-size transparent PNG with square cells", async () => {
+		for (const caliber of AMMUNITION_ART_CALIBERS) {
+			const file = Bun.file(new URL(`../public/art/ammo/ammo-${caliber}.png`, import.meta.url));
+			const bytes = new Uint8Array(await file.arrayBuffer()), header = new DataView(bytes.buffer);
+			expect(Array.from(bytes.slice(0, 8))).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
+			expect(header.getUint32(16)).toBe(header.getUint32(20) * 2);
+			expect(header.getUint32(20)).toBeGreaterThanOrEqual(800);
+			expect(bytes[25]).toBe(6); // RGBA; generated transparency must survive copying.
+			expect(file.size).toBeGreaterThan(100_000);
+		}
+	});
+
 	test("all 72 products map to a distinct compatible pack, with stable legacy first-row positions", () => {
 		const positions = new Set<string>();
 		const codes = ["FMJ", "AP", "HP", "MATCH", "SUB", "TR", "+P", "STOCK"];

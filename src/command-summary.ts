@@ -1,6 +1,6 @@
 import {
 	ROOM_DEFINITIONS, RESOURCE_RECIPES, getModuleCapacity, getSupplyCapacity,
-	getRoomProductionState, getResourceProductionQuote,
+	getRoomProductionState, getResourceProductionQuote, getFieldKitStock, FIELD_KIT_CAPACITY,
 	type GameState, type RoomInstance, type ProductionJob,
 } from "./game/engine";
 
@@ -27,6 +27,7 @@ export interface CommandSummary {
 
 function outputFull(state: GameState, output: ProductionJob["output"]) {
 	if (output.moduleModelId && state.modules.length >= getModuleCapacity(state)) return true;
+	if (output.fieldKit && getFieldKitStock(state)[output.fieldKit] >= FIELD_KIT_CAPACITY) return true;
 	const capacity = getSupplyCapacity(state);
 	return (Object.keys(output.supplies) as (keyof GameState["supplies"])[]).some((key) => output.supplies[key] > 0 && state.supplies[key] + output.supplies[key] > capacity[key]);
 }
@@ -43,14 +44,17 @@ function describeRoom(state: GameState, room: RoomInstance): RoomCommandStatus {
 		return result("ready", "Партия готова", "Готовая партия поступает на склад; новая работа продолжится по приказу.", "production", null);
 	}
 	const configured = Boolean(room.recipeId && (room.repeat || room.pending));
+	const quote = configured && room.recipeId ? getResourceProductionQuote(state, room.id, room.recipeId) : null;
+	if (!job && quote?.block === "target") return result("ready", "Запас по плану", quote.reason!, "production", null);
 	if (production.rate === 0) return result("workers", room.workerIds.length ? "Нужен здоровый работник" : "Ждёт работников", production.reason ?? "Назначь бойца: производство требует здоровья от 25%.", "staff", "Назначить людей", job || configured ? 90 : 45);
 	if (job) return result("running", "Производство идёт", production.status, "production", null);
 	if (configured && room.recipeId) {
 		const quote = getResourceProductionQuote(state, room.id, room.recipeId);
 		const recipe = RESOURCE_RECIPES.find((item) => item.id === room.recipeId);
 		if (quote.reason) {
+			if (quote.block === "reserve") return result("ready", "Резерв сохранён", quote.reason, "production", "Проверить резерв и рецепт", 30);
 			const inputsAvailable = Boolean(recipe && state.money >= recipe.cost.money && (Object.keys(recipe.cost.supplies) as (keyof GameState["supplies"])[]).every((key) => state.supplies[key] >= recipe.cost.supplies[key]));
-			const blockedOutput = inputsAvailable && recipe && outputFull(state, { supplies: recipe.output, moduleModelId: null });
+			const blockedOutput = quote.block === "capacity" || inputsAvailable && recipe && outputFull(state, { supplies: recipe.output, moduleModelId: null, ...(recipe.outputKit ? { fieldKit: recipe.outputKit } : {}) });
 			return blockedOutput
 				? result("capacity", "Нет места для следующей партии", quote.reason, "production", "Проверить склад", 75)
 				: result("resources", "Партия ждёт припасов", quote.reason, "production", "Проверить рецепт", 80);
