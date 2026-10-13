@@ -15,6 +15,7 @@ import { TACTICS } from "../src/game/operations";
 import { EXPEDITION_BRANCHES } from "../src/game/systems";
 import { useWeaponPlatformFixture } from "./weapon-fixtures";
 import { withoutArsenalLoot } from "./legacy-strategy-fixture";
+import { withoutLoot } from "./legacy-loot-fixture";
 
 const NOW = 1_792_010_000_000;
 const EXPANDED_TYPES: readonly AmmoType[] = ["subsonic", "tracer", "highpressure", "surplus"];
@@ -53,7 +54,7 @@ function checkpoint(type: AmmoType, count = 1, completedRecon = false, legacyCat
 		}
 		expect((count === 1 ? dispatchRaid(state, ids[0]!, "courtyard", state.lastUpdated)
 			: dispatchSquadRaid(state, ids, "courtyard", state.lastUpdated)).ok).toBe(true);
-		if (legacyCatalog) withoutArsenalLoot(state);
+		if (legacyCatalog) withoutLoot(withoutArsenalLoot(state));
 		advance(state, Math.max(...state.raids.map((raid) => raid.endsAt)));
 		if (state.raids.length !== count || state.raids.some((raid) => raid.expedition?.status !== "choice")) continue;
 		const raid = state.raids[0]!;
@@ -89,7 +90,7 @@ function logisticsCheckpoint(type: AmmoType, kit: FieldKit): { state: GameState;
 		expect(setLoadoutOption(state, scav.id, "ammoType", type).ok).toBe(true);
 		expect(setRaidPlan(state, scav.id, "intel", "scouted").ok).toBe(true);
 		expect(dispatchRaid(state, scav.id, "courtyard", state.lastUpdated).ok).toBe(true);
-		withoutArsenalLoot(state);
+		withoutLoot(withoutArsenalLoot(state));
 		const raid = state.raids[0]!;
 		expect(raid.fieldKit).toBe(kit);
 		expect(getFieldKitStock(state)[kit]).toBe(1);
@@ -214,7 +215,9 @@ describe("expanded cartridges stay real through dispatch, settlement and saved e
 
 	test("released v13 active loads retain their exact paid snapshots, cargo, recon, strategy and offline settlement", () => {
 		for (const type of RELEASED_TYPES) {
-			const { state, raid } = checkpoint(type, 1, true, true), paid = structuredClone(raid), raw = JSON.parse(saveGame(state));
+			const { state, raid } = checkpoint(type, 1, true, true);
+			withoutLoot(state);
+			const paid = structuredClone(raid), raw = JSON.parse(saveGame(state));
 			raw.schemaVersion = 13;
 			const migrated = parseSave(JSON.stringify(raw));
 			expect(migrated).not.toBeNull();
@@ -239,7 +242,9 @@ describe("expanded cartridges stay real through dispatch, settlement and saved e
 
 	test("released v14 ammunition preserves paid field kits, reserve and queued production through migration and settlement", () => {
 		for (const type of RELEASED_TYPES) for (const kit of ["maintenance", "trauma"] as const) {
-			const { state, raid } = logisticsCheckpoint(type, kit), paid = structuredClone(raid), shelter = structuredClone(state.shelter);
+			const { state, raid } = logisticsCheckpoint(type, kit);
+			withoutLoot(state);
+			const paid = structuredClone(raid), shelter = structuredClone(state.shelter);
 			const raw = JSON.parse(saveGame(state)); raw.schemaVersion = 14;
 			const migrated = parseSave(JSON.stringify(raw));
 			expect(migrated).not.toBeNull();
@@ -269,9 +274,9 @@ describe("expanded cartridges stay real through dispatch, settlement and saved e
 
 	test("v13 and v14 cannot inject v15 choices into a free loadout, active paid load or historical squad member", () => {
 		const ready = JSON.parse(saveGame(funded())), { state, raid } = checkpoint("standard", 3, false, true);
-		const active = JSON.parse(saveGame(state));
+		const active = withoutLoot(JSON.parse(saveGame(state)));
 		expect(extractRaid(state, raid.id, state.lastUpdated).ok).toBe(true);
-		const history = JSON.parse(saveGame(state));
+		const history = withoutLoot(JSON.parse(saveGame(state)));
 		for (const version of [13, 14]) {
 			for (const fixture of [ready, active, history]) {
 				fixture.schemaVersion = version;

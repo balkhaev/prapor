@@ -13,6 +13,7 @@ import { getAmmunitionArtwork } from "../src/ammunition-art";
 import { ammunitionCaliberLabel, ammunitionCards, ammunitionSnapshot } from "../src/ammunition-ui";
 import { useWeaponPlatformFixture } from "./weapon-fixtures";
 import { withoutArsenalLoot } from "./legacy-strategy-fixture";
+import { withoutLoot } from "./legacy-loot-fixture";
 
 const NOW = 1_792_210_000_000;
 const NEW_PLATFORMS = ["m4a1", "hk416", "p90", "mp7", "ump45", "m1911", "mcx", "scarh", "trg42"] as const;
@@ -53,7 +54,7 @@ function checkpoint(weaponId: string, type: AmmoType, legacyCatalog = false): { 
 	for (let offset = 0; offset < 128; offset++) {
 		const state = funded(weaponId, type, NOW + offset);
 		expect(dispatchRaid(state, state.scavs[0]!.id, "courtyard", state.lastUpdated).ok).toBe(true);
-		if (legacyCatalog) withoutArsenalLoot(state);
+		if (legacyCatalog) withoutLoot(withoutArsenalLoot(state));
 		const raid = state.raids[0]!;
 		advance(state, raid.endsAt);
 		if (state.raids[0]?.expedition?.status === "choice") return { state, raid };

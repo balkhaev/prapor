@@ -1,5 +1,5 @@
 import "./account.css";
-import { AccountApiError, accountApi, accountErrorMessage, type AccountEmailDelivery, type AccountSavedAt, type AccountUser } from "./account-client";
+import { AccountApiError, accountApi, accountErrorMessage, type AccountEmailDelivery, type AccountGoogleResult, type AccountSavedAt, type AccountUser } from "./account-client";
 
 export type AccountAuthSource = "login" | "register" | "session";
 export type AccountStatusTone = "neutral" | "success" | "warning";
@@ -18,6 +18,7 @@ export interface AccountUIOptions {
 	onAuthenticated: (user: AccountUser, source: AccountAuthSource) => void | Promise<void>;
 	onLogout: () => void | Promise<void>;
 	onBeforeLogout?: () => boolean | Promise<boolean>;
+	onBeforeGoogle?: () => boolean | Promise<boolean>;
 	onDialogChange?: (open: boolean) => void;
 	onSync?: () => void | Promise<void>;
 	onReconnect?: () => void | Promise<void>;
@@ -30,6 +31,8 @@ export interface AccountUI {
 	setUser: (user: AccountUser | null) => void;
 	setStatus: (text: string, tone?: AccountStatusTone) => void;
 	setEmailEnabled: (enabled: boolean) => void;
+	setGoogleEnabled: (enabled: boolean) => void;
+	handleGoogleResult: (result: AccountGoogleResult) => void;
 	handleEmailLink: (kind: "verify" | "reset", token: string) => void;
 	open: () => void;
 	chooseProgress: (options: ProgressChoiceOptions) => Promise<ProgressChoice>;
@@ -74,6 +77,8 @@ export function mountAccountUI(options: AccountUIOptions): AccountUI {
 	let progressOptions: ProgressChoiceOptions | null = null;
 	let disposed = false;
 	let emailEnabled = false;
+	let googleEnabled = false;
+	let deferredGoogleResult: AccountGoogleResult | null = null;
 	let emailNotice = "";
 	let resendUntil = 0;
 	let forgotUntil = 0;
@@ -84,6 +89,36 @@ export function mountAccountUI(options: AccountUIOptions): AccountUI {
 	function setEmailEnabled(enabled: boolean) {
 		emailEnabled = enabled;
 		if (mode === "dashboard" && dialog.open && !busy) renderDashboard();
+	}
+
+	function setGoogleEnabled(enabled: boolean) {
+		if (googleEnabled === enabled) return;
+		googleEnabled = enabled;
+		if (!dialog.open || busy) return;
+		if (mode === "dashboard") renderDashboard();
+		else if (mode === "login" || mode === "register") renderForm(mode);
+	}
+
+	function googleButton(intent: "login" | "link"): string {
+		return `<button type="button" class="account-button account-google-button" data-google="${intent}" data-lock><svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24"><path fill="#4285F4" d="M21.6 12.2c0-.7-.1-1.5-.2-2.2H12v4.2h5.4c-.2 1.1-.8 2.1-1.8 2.8v3.5h3.1c1.8-1.7 2.9-4.2 2.9-8.3Z"/><path fill="#34A853" d="M12 22c2.7 0 5-.9 6.7-2.5l-3.1-2.5c-.9.6-2.1 1-3.6 1-2.6 0-4.8-1.7-5.6-4.1H3.2v3.6C4.9 20.2 8.2 22 12 22Z"/><path fill="#FBBC05" d="M6.4 13.9a6 6 0 0 1 0-3.8V6.5H3.2a10 10 0 0 0 0 11l3.2-3.6Z"/><path fill="#EA4335" d="M12 6c1.5 0 2.8.5 3.8 1.5l2.8-2.8A9.5 9.5 0 0 0 12 2C8.2 2 4.9 3.8 3.2 6.5l3.2 3.6C7.2 7.7 9.4 6 12 6Z"/></svg>${intent === "link" ? "Привязать Google" : "Продолжить с Google"}</button>`;
+	}
+
+	function handleGoogleResult(result: AccountGoogleResult) {
+		if (disposed) return;
+		if (busy || workflowDepth > 0 || pendingChoice || recoveryCode) { deferredGoogleResult = result; return; }
+		const messages: Record<AccountGoogleResult, string> = {
+			success: user?.googleLinked ? "Вход через Google выполнен. Ты вошёл в свой аккаунт." : "Не удалось подтвердить вход через Google. Попробуй войти ещё раз.",
+			linked: user?.googleLinked ? "Google привязан. Теперь в этот аккаунт можно войти через Google." : "Не удалось подтвердить привязку Google. Проверь аккаунт и попробуй снова.",
+			cancelled: "Вход через Google отменён. Ты можешь повторить попытку, войти с паролем или продолжить игру.",
+			unavailable: "Вход через Google временно недоступен. Попробуй позже или используй позывной и пароль.",
+			failed: "Не удалось завершить вход через Google. Попробуй ещё раз.",
+			"email-in-use": "Эта почта уже принадлежит аккаунту. Сначала войди в него с позывным и паролем или восстанови доступ по почте, затем нажми «Привязать Google».",
+			"already-linked": "Этот Google уже привязан к аккаунту. Для входа выбери «Продолжить с Google» и используй нужный Google.",
+			"session-changed": "Сессия изменилась во время привязки. Проверь текущий аккаунт и повтори привязку Google.",
+		};
+		user ? renderDashboard() : renderForm("login");
+		body.querySelector(".account-intro")!.insertAdjacentHTML("afterend", `<p class="account-notice" role="status">${e(messages[result])}</p>`);
+		showDialog(); focusFirst();
 	}
 
 	function deliveryNotice(delivery: AccountEmailDelivery): string {
@@ -227,6 +262,7 @@ export function mountAccountUI(options: AccountUIOptions): AccountUI {
 
 	function renderEmailForm(next: "forgot" | "email" | "reset", notice?: string) {
 		if (next === "email" && !user) { renderForm("login"); return; }
+		if (next === "email" && user?.passwordEnabled === false) { renderDashboard(); showError("Сначала задай пароль через подтверждённую почту. После этого можно изменить адрес."); return; }
 		if (next !== "reset") linkToken = "";
 		mode = next; busy = false; dialog.setAttribute("aria-busy", "false"); close.disabled = false;
 		title.textContent = next === "forgot" ? "Восстановить по почте" : next === "reset" ? "Задать новый пароль" : user?.email ? "Изменить почту" : "Добавить почту";
@@ -254,7 +290,9 @@ export function mountAccountUI(options: AccountUIOptions): AccountUI {
 	}
 
 	function openDeferredLink() {
-		if (!deferredLink || busy || workflowDepth > 0 || recoveryCode || pendingChoice) return;
+		if (busy || workflowDepth > 0 || recoveryCode || pendingChoice) return;
+		if (deferredGoogleResult) { const result = deferredGoogleResult; deferredGoogleResult = null; handleGoogleResult(result); return; }
+		if (!deferredLink) return;
 		const link = deferredLink; deferredLink = null;
 		handleEmailLink(link.kind, link.token);
 	}
@@ -270,13 +308,14 @@ export function mountAccountUI(options: AccountUIOptions): AccountUI {
 		const registering = next === "register";
 		const passwordLabel = recovering ? "Новый пароль" : "Пароль";
 		title.textContent = registering ? "Создать аккаунт" : recovering ? "Вернуть доступ" : "Войти в аккаунт";
-		body.innerHTML = `<p id="account-description" class="account-intro">${registering ? "Закрепи позывной и сохрани убежище в аккаунте. Можно продолжать играть без регистрации." : recovering ? "Введи свой позывной и сохранённый код. Все старые сессии будут завершены; после смены пароля войди заново." : "Продолжи свою игру на другом устройстве. Гостевой прогресс остаётся в этом браузере."}</p>${!recovering ? `<div class="account-tabs" role="group" aria-label="Регистрация и вход"><button type="button" data-mode="login" data-lock aria-pressed="${!registering}">Вход</button><button type="button" data-mode="register" data-lock aria-pressed="${registering}">Регистрация</button></div>` : ""}${notice ? `<p class="account-notice">${e(notice)}</p>` : ""}<form class="account-form"><label class="account-field" for="account-username">Позывной<input id="account-username" name="username" value="${e(rememberedUsername)}" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" minlength="3" maxlength="24" pattern="[A-Za-z0-9_-]{3,24}" required data-lock autofocus aria-describedby="account-username-hint"></label><p class="account-field-hint" id="account-username-hint">3–24 символа: латинские буквы, цифры, _ и -. Регистр букв не важен.</p>${recovering ? `<label class="account-field" for="account-recovery">Код восстановления<input id="account-recovery" name="recoveryCode" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="128" required data-lock placeholder="Код из сохранённого личного дела"></label>` : ""}<label class="account-field" for="account-password">${passwordLabel}<span class="account-password-field"><input id="account-password" name="password" type="password" autocomplete="${registering || recovering ? "new-password" : "current-password"}" minlength="12" maxlength="128" required data-lock aria-describedby="account-password-hint"><button type="button" class="account-password-toggle" data-show-password="account-password" data-lock aria-pressed="false" aria-label="Показать пароль">Показать</button></span></label><p class="account-field-hint" id="account-password-hint">12–128 символов. Подойдёт длинная фраза; сохрани пароль в менеджере паролей.</p>${registering || recovering ? `<label class="account-field" for="account-password-repeat">Повтори ${recovering ? "новый " : ""}пароль<span class="account-password-field"><input id="account-password-repeat" name="passwordRepeat" type="password" autocomplete="new-password" minlength="12" maxlength="128" required data-lock><button type="button" class="account-password-toggle" data-show-password="account-password-repeat" data-lock aria-pressed="false" aria-label="Показать повтор пароля">Показать</button></span></label>` : ""}${registering ? `<p class="account-footnote">Почта и телефон не нужны. После регистрации мы один раз покажем код восстановления — сохрани его отдельно от пароля.</p>` : ""}${errorMarkup}<button type="submit" class="account-button account-primary" data-submit data-lock>${registering ? "Создать аккаунт" : recovering ? "Изменить пароль" : "Войти"}</button></form><div class="account-form-footer"><button type="button" class="account-text-button" data-mode="${recovering ? "login" : "recover"}" data-lock>${recovering ? "Назад ко входу" : "Забыл пароль"}</button><button type="button" class="account-text-button" data-close data-lock>Продолжить без аккаунта</button></div>`;
+		body.innerHTML = `<p id="account-description" class="account-intro">${registering ? "Создай личный аккаунт, чтобы продолжать его игру на других устройствах. Можно играть без регистрации." : recovering ? "Введи свой позывной и сохранённый код. Все старые сессии будут завершены; после смены пароля войди заново." : "Продолжи игру своего аккаунта на другом устройстве. Гостевое убежище останется в гостевой игре на этом устройстве."}</p>${!recovering ? `<div class="account-tabs" role="group" aria-label="Регистрация и вход"><button type="button" data-mode="login" data-lock aria-pressed="${!registering}">Вход</button><button type="button" data-mode="register" data-lock aria-pressed="${registering}">Регистрация</button></div>` : ""}${notice ? `<p class="account-notice">${e(notice)}</p>` : ""}<form class="account-form"><label class="account-field" for="account-username">Позывной<input id="account-username" name="username" value="${e(rememberedUsername)}" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" minlength="3" maxlength="24" pattern="[A-Za-z0-9_-]{3,24}" required data-lock autofocus aria-describedby="account-username-hint"></label><p class="account-field-hint" id="account-username-hint">3–24 символа: латинские буквы, цифры, _ и -. Регистр букв не важен.</p>${recovering ? `<label class="account-field" for="account-recovery">Код восстановления<input id="account-recovery" name="recoveryCode" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="128" required data-lock placeholder="Код из сохранённого личного дела"></label>` : ""}<label class="account-field" for="account-password">${passwordLabel}<span class="account-password-field"><input id="account-password" name="password" type="password" autocomplete="${registering || recovering ? "new-password" : "current-password"}" minlength="12" maxlength="128" required data-lock aria-describedby="account-password-hint"><button type="button" class="account-password-toggle" data-show-password="account-password" data-lock aria-pressed="false" aria-label="Показать пароль">Показать</button></span></label><p class="account-field-hint" id="account-password-hint">12–128 символов. Подойдёт длинная фраза; сохрани пароль в менеджере паролей.</p>${registering || recovering ? `<label class="account-field" for="account-password-repeat">Повтори ${recovering ? "новый " : ""}пароль<span class="account-password-field"><input id="account-password-repeat" name="passwordRepeat" type="password" autocomplete="new-password" minlength="12" maxlength="128" required data-lock><button type="button" class="account-password-toggle" data-show-password="account-password-repeat" data-lock aria-pressed="false" aria-label="Показать повтор пароля">Показать</button></span></label>` : ""}${registering ? `<p class="account-footnote">Почта и телефон не нужны. После регистрации мы один раз покажем код восстановления — сохрани его отдельно от пароля.</p>` : ""}${errorMarkup}<button type="submit" class="account-button account-primary" data-submit data-lock>${registering ? "Создать аккаунт" : recovering ? "Изменить пароль" : "Войти"}</button></form><div class="account-form-footer"><button type="button" class="account-text-button" data-mode="${recovering ? "login" : "recover"}" data-lock>${recovering ? "Назад ко входу" : "Забыл пароль"}</button><button type="button" class="account-text-button" data-close data-lock>Продолжить без аккаунта</button></div>`;
 		if (registering && emailEnabled) {
 			body.querySelector("#account-username-hint")!.insertAdjacentHTML("afterend", emailField("", false));
 			body.querySelector<HTMLElement>(".account-footnote")!.textContent = "Почта необязательна. После регистрации подтверди её по письму. Код восстановления всё равно понадобится — мы покажем его один раз.";
 		}
 		if (!recovering && emailEnabled) body.querySelector<HTMLButtonElement>('[data-mode="recover"]')!.dataset.mode = "forgot";
 		if (recovering && emailEnabled) body.querySelector(".account-form-footer")!.insertAdjacentHTML("afterbegin", `<button type="button" class="account-text-button" data-mode="forgot" data-lock>Восстановить по почте</button>`);
+		if (!recovering && googleEnabled) body.querySelector(".account-form")!.insertAdjacentHTML("beforebegin", `<div class="account-google-entry">${googleButton("login")}<p class="account-google-hint">${registering ? "Создадим аккаунт с позывным и почтой Google. Пароль не понадобится." : "Вход и создание аккаунта через твой Google."}</p><div class="account-divider"><span>или с позывным и паролем</span></div></div>`);
 		focusFirst();
 	}
 
@@ -285,7 +324,13 @@ export function mountAccountUI(options: AccountUIOptions): AccountUI {
 		const verified = Boolean(user.emailVerified && user.email);
 		const pending = user.pendingEmail ?? (!verified ? user.email : null);
 		const primaryAddress = verified ? user.email : pending;
-		return `<section class="account-email-card" aria-label="Почта для восстановления"><div class="account-email-head"><span class="account-eyebrow">Почта для восстановления</span><span class="account-email-badge ${verified ? "is-verified" : ""}">${verified ? "Подтверждена" : primaryAddress ? "Не подтверждена" : "Не добавлена"}</span></div>${primaryAddress ? `<strong class="account-email-address">${e(primaryAddress)}</strong>` : `<p>Добавь почту, чтобы восстановить доступ, если забудешь пароль и потеряешь код.</p>`}${verified && pending && pending !== user.email ? `<p class="account-email-pending">Ожидает подтверждения: <strong>${e(pending)}</strong>. Прежний адрес продолжает работать до подтверждения нового.</p>` : pending ? `<p>Открой письмо и подтверди адрес по ссылке. До этого для восстановления доступен код.</p>` : ""}${emailNotice ? `<p class="account-email-notice" role="status">${e(emailNotice)}</p>` : ""}${emailEnabled ? `<div class="account-email-actions"><button type="button" class="account-text-button" data-mode="email" data-lock>${primaryAddress ? "Изменить почту" : "Добавить почту"}</button>${pending ? `<button type="button" class="account-text-button" data-resend-email data-lock>Отправить письмо ещё раз</button>` : ""}</div>` : `<p class="account-field-hint">Отправка писем временно недоступна. Восстановление по коду работает.</p>`}</section>`;
+		const canChangeEmail = user.passwordEnabled !== false;
+		return `<section class="account-email-card" aria-label="Почта для восстановления"><div class="account-email-head"><span class="account-eyebrow">Почта для восстановления</span><span class="account-email-badge ${verified ? "is-verified" : ""}">${verified ? "Подтверждена" : primaryAddress ? "Не подтверждена" : "Не добавлена"}</span></div>${primaryAddress ? `<strong class="account-email-address">${e(primaryAddress)}</strong>` : `<p>Добавь почту, чтобы восстановить доступ, если забудешь пароль и потеряешь код.</p>`}${verified && pending && pending !== user.email ? `<p class="account-email-pending">Ожидает подтверждения: <strong>${e(pending)}</strong>. Прежний адрес продолжает работать до подтверждения нового.</p>` : pending ? `<p>Открой письмо и подтверди адрес по ссылке. ${canChangeEmail ? "До этого для восстановления доступен код." : "До подтверждения продолжай входить через Google."}</p>` : ""}${!canChangeEmail ? `<p>Сейчас ты входишь через Google. Чтобы входить с позывным и паролем или изменить почту, сначала задай пароль по письму на подтверждённый адрес.</p>` : ""}${emailNotice ? `<p class="account-email-notice" role="status">${e(emailNotice)}</p>` : ""}${emailEnabled ? `<div class="account-email-actions">${canChangeEmail ? `<button type="button" class="account-text-button" data-mode="email" data-lock>${primaryAddress ? "Изменить почту" : "Добавить почту"}</button>` : verified ? `<button type="button" class="account-text-button" data-set-password data-lock>Задать пароль по почте</button>` : ""}${pending ? `<button type="button" class="account-text-button" data-resend-email data-lock>Отправить письмо ещё раз</button>` : ""}</div>` : `<p class="account-field-hint">${canChangeEmail ? "Отправка писем временно недоступна. Восстановление по коду работает." : "Отправка писем временно недоступна. Ты можешь продолжать входить через Google."}</p>`}</section>`;
+	}
+
+	function googleCard(): string {
+		if (!user || !googleEnabled && !user.googleLinked) return "";
+		return `<section class="account-google-card" aria-label="Вход через Google"><div class="account-email-head"><span class="account-eyebrow">Вход через Google</span>${user.googleLinked ? `<span class="account-email-badge is-verified">Привязан</span>` : ""}</div><p>${user.googleLinked ? "Ты можешь войти в этот аккаунт через Google на другом устройстве." : "Привяжи Google к текущему аккаунту, чтобы входить без пароля. Твой позывной и убежище сохранятся."}</p>${googleEnabled && !user.googleLinked ? googleButton("link") : ""}</section>`;
 	}
 
 	function renderDashboard() {
@@ -295,8 +340,8 @@ export function mountAccountUI(options: AccountUIOptions): AccountUI {
 		dialog.setAttribute("aria-busy", "false");
 		close.disabled = false;
 		title.textContent = user.username;
-		body.innerHTML = `<p id="account-description" class="account-intro">Личное дело доступно на других устройствах. Подключи убежище к аккаунту, чтобы продолжить игру после входа.</p><div class="account-summary"><span class="account-eyebrow">Связь с аккаунтом</span><p class="account-sync-status" data-account-status data-tone="${statusTone}" role="status">${e(status)}</p></div>${errorMarkup}<div class="account-actions">${options.onSync ? `<button type="button" class="account-button account-primary" data-sync data-lock>Синхронизировать</button>` : ""}${options.onReconnect ? `<button type="button" class="account-button" data-reconnect data-lock>Подключить убежище</button>` : ""}<button type="button" class="account-button" data-close data-lock>Вернуться в штаб</button></div><p class="account-footnote">После выхода сохранение остаётся в этом браузере. На другом устройстве для доступа к нему понадобится вход.</p><button type="button" class="account-text-button account-logout" data-logout data-lock>Выйти из аккаунта</button>`;
-		body.querySelector(".account-summary")!.insertAdjacentHTML("afterend", emailCard());
+		body.innerHTML = `<p id="account-description" class="account-intro">У аккаунта своё убежище и серверный прогресс. После входа на другом устройстве ты продолжишь эту же игру.</p><div class="account-summary"><span class="account-eyebrow">Связь с аккаунтом</span><p class="account-sync-status" data-account-status data-tone="${statusTone}" role="status">${e(status)}</p></div>${errorMarkup}<div class="account-actions">${options.onSync ? `<button type="button" class="account-button account-primary" data-sync data-lock>Синхронизировать</button>` : ""}${options.onReconnect ? `<button type="button" class="account-button" data-reconnect data-lock>Подключить убежище</button>` : ""}<button type="button" class="account-button" data-close data-lock>Вернуться в штаб</button></div><p class="account-footnote">После выхода ты вернёшься к гостевой игре на этом устройстве. Убежище аккаунта останется на сервере и будет доступно после входа.</p><button type="button" class="account-text-button account-logout" data-logout data-lock>Выйти из аккаунта</button>`;
+		body.querySelector(".account-summary")!.insertAdjacentHTML("afterend", googleCard() + emailCard());
 		updateResendButton();
 		focusFirst();
 	}
@@ -535,6 +580,24 @@ export function mountAccountUI(options: AccountUIOptions): AccountUI {
 		finally { workflowDepth--; if (!disposed) setBusy(false); openDeferredLink(); }
 	}
 
+	async function beginGoogle(intent: "login" | "link") {
+		if (busy || !googleEnabled || intent === "link" && (!user || user.googleLinked)) return;
+		const expectedId = user?.id;
+		let navigating = false;
+		workflowDepth++;
+		clearError(); setBusy(true);
+		try {
+			if (options.onBeforeGoogle && !await options.onBeforeGoogle()) { showError("Подожди завершения текущего действия в игре, затем повтори вход через Google."); return; }
+			const result = await accountApi.beginGoogle(intent, expectedId);
+			if (disposed) return;
+			if (intent === "link" && user?.id !== expectedId) throw new AccountApiError(401, "account_changed");
+			if (options.onBeforeGoogle && !await options.onBeforeGoogle()) { showError("Подожди завершения текущего действия в игре, затем повтори вход через Google."); return; }
+			window.location.assign(result.url);
+			navigating = true;
+		} catch (error) { if (!disposed) showError(accountErrorMessage(error)); }
+		finally { workflowDepth--; if (!disposed && !navigating) setBusy(false); openDeferredLink(); }
+	}
+
 	async function handleClick(event: MouseEvent) {
 		const target = event.target instanceof Element ? event.target.closest<HTMLButtonElement>("button") : null;
 		if (!target || target.disabled) return;
@@ -542,6 +605,13 @@ export function mountAccountUI(options: AccountUIOptions): AccountUI {
 		if (target.hasAttribute("data-dashboard") && !busy) { linkToken = ""; renderDashboard(); return; }
 		if (target.hasAttribute("data-resend-email")) { await resendEmail(); return; }
 		if (target.hasAttribute("data-verify-email")) { await verifyEmail(); return; }
+		if (target.dataset.google === "login" || target.dataset.google === "link") { await beginGoogle(target.dataset.google); return; }
+		if (target.hasAttribute("data-set-password") && !busy && user?.emailVerified && user.email && emailEnabled) {
+			const email = user.email;
+			renderEmailForm("forgot", "По ссылке из письма ты задашь пароль для этого аккаунта. Затем можно будет входить и через Google, и с позывным и паролем.");
+			body.querySelector<HTMLInputElement>("#account-email")!.value = email;
+			return;
+		}
 		if (target.dataset.mode && !busy) {
 			const usernameInput = body.querySelector<HTMLInputElement>("#account-username");
 			if (usernameInput) rememberedUsername = usernameInput.value;
@@ -629,6 +699,8 @@ export function mountAccountUI(options: AccountUIOptions): AccountUI {
 		setUser,
 		setStatus,
 		setEmailEnabled,
+		setGoogleEnabled,
+		handleGoogleResult,
 		handleEmailLink,
 		open,
 		chooseProgress,
@@ -640,6 +712,7 @@ export function mountAccountUI(options: AccountUIOptions): AccountUI {
 			recoveryCode = "";
 			linkToken = "";
 			deferredLink = null;
+			deferredGoogleResult = null;
 			stopResendTimer();
 			secretContinue = null;
 			finishClose();

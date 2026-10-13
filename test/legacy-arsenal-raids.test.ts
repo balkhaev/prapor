@@ -5,6 +5,9 @@ import {
 } from "../src/game/engine";
 import { ARSENAL_SAVE_VERSION } from "../src/game/catalog-releases";
 import { useWeaponPlatformFixture } from "./weapon-fixtures";
+import { withoutLoot } from "./legacy-loot-fixture";
+import { withoutArsenalLoot } from "./legacy-strategy-fixture";
+import type { AmmoType } from "../src/game/ammunition";
 
 // Generated with the released v15 engine at 7df999da336ea1c70797ed519ec8f35e1823e63e.
 // Public actions reproduce the actual paid saves; their fingerprints prove the
@@ -166,11 +169,14 @@ function canonical(value: unknown): string {
 const fingerprint = (value: unknown) => new Bun.CryptoHasher("sha256").update(canonical(value)).digest("hex");
 function oldFormat(state: GameState) {
 	const raw = JSON.parse(saveGame(state)); raw.schemaVersion = 15;
+	const lootArrays = [raw.lootItems, ...raw.raids.map((raid: { expedition?: { cargo?: { lootItems?: unknown[] } } }) => raid.expedition?.cargo?.lootItems), ...raw.history.flatMap((report: { lootItems?: unknown[]; lootAutoSold?: unknown[]; lostCargo?: { lootItems?: unknown[] } }) => [report.lootItems, report.lootAutoSold, report.lostCargo?.lootItems])];
+	for (const items of lootArrays) expect(items?.length ?? 0).toBe(0);
+	withoutLoot(raw);
 	for (const raid of raw.raids) if (raid.expedition) delete raid.expedition.lootCatalogVersion;
 	return raw;
 }
 const stateFingerprint = (state: GameState) => fingerprint(oldFormat(state));
-function paidFixture(fixture: typeof FIXTURES[number]): GameState {
+function departRecipe(fixture: { now: number; weaponId: string; mapId: string; type: AmmoType }): GameState {
 	const state = createGame(fixture.now), scav = state.scavs[0]!;
 	state.money = 100_000; state.supplies = { ammo: 10_000, medicine: 100, scrap: 1_000, intel: 100 };
 	state.level = 9; state.xp = 5_760;
@@ -178,6 +184,10 @@ function paidFixture(fixture: typeof FIXTURES[number]): GameState {
 	scav.combat = 90; scav.scouting = 90;
 	state.sectorIntel = { [fixture.mapId]: { knowledge: 3, pressure: 2 } };
 	for (const action of [setRaidTactic(state, scav.id, "cautious"), setLoadoutOption(state, scav.id, "ammoType", fixture.type), setRaidPlan(state, scav.id, "intel", "scouted"), dispatchRaid(state, scav.id, fixture.mapId, state.lastUpdated)]) expect(action.ok).toBe(true);
+	return state;
+}
+function paidFixture(fixture: typeof FIXTURES[number]): GameState {
+	const state = departRecipe(fixture);
 	const raw = oldFormat(state);
 	expect(fingerprint(raw)).toBe(fixture.paid);
 	const migrated = parseSave(JSON.stringify(raw));
@@ -237,8 +247,96 @@ describe("paid v15 expeditions retain their original weapon and module loot cata
 		expect(state.raids[0]!.expedition!.lootCatalogVersion!).toBeGreaterThanOrEqual(ARSENAL_SAVE_VERSION);
 		expect(parseSave(saveGame(state))).toEqual(state);
 		const raw = JSON.parse(saveGame(state)); raw.schemaVersion = 15;
+		withoutLoot(raw);
 		expect(parseSave(JSON.stringify(raw))).toBeNull();
 		delete raw.raids[0].expedition.lootCatalogVersion;
 		expect(parseSave(JSON.stringify(raw))).not.toBeNull();
 	});
+});
+
+// The released loot/flea v16 engine at 7d307ea generated these real paid saves.
+// Unlike v15, these retain lootVersion, individual trophies and their receipts.
+const V16_FIXTURES = [
+  {
+    "now": 1792310003004,
+    "weaponId": "akm",
+    "type": "precision",
+    "mapId": "reserve",
+    "branch": "combat",
+    "paid": "db65a4836e99e19dc17fbdc5f767e84da5bd339029c25bb8fae6c6067ed757b2",
+    "first": "0b4f05604e3553b8592f1017cfa1c6abd2fb544f247f502ab17582b0b1e07830",
+    "choices": "290918d41fe566214a76c8d5e0f6b51618ec829f7c049a1ee3b70cb88fd981d4",
+    "nextPaid": "902f400aa0382b98c9967fece032fb2fcd24649f2ea2c94f6adb54814f7f6307",
+    "second": "29f910a70fb8c23f2751f077107b0351144e0aca45e9f2db46cce858dbe12e7d",
+    "extracted": "e10d5bb4add3988e4726fee3796ea911a062c54a45fc9f75408db6a8443b1217",
+    "cargoModels": [
+      "mount-barrel-ring",
+      "receiver-asval",
+      "flashlight-mini",
+      "muzzle-7.62x39-flash"
+    ],
+    "cargoWeapons": [],
+    "cargoLoot": [
+      "patrol-log",
+      "antiseptic"
+    ]
+  },
+  {
+    "now": 1792310006001,
+    "weaponId": "sks",
+    "type": "highpressure",
+    "mapId": "bunker",
+    "branch": "combat",
+    "paid": "b025df40019f3ec948d1381e63ee1e31066f069a1dd3e6eb7b868e66f4a36c03",
+    "first": "1e10af669f9a307a83674d15baf9ed27887964c942e627a92dbba599ed1cadc5",
+    "choices": "3d80fc4f8a86d572410a1d480404376d899748c457fdca81a91287f1d1be2c4b",
+    "nextPaid": "c1e8490d7550d5312071c341e8af4e1c3d2076d466c027e693513bd7f43897d0",
+    "second": "114cedad97499e0d1559c1f67c300e6cc29955983899d97a41fa72f44d90d185",
+    "extracted": "4aa0f2c40b7d75cac62e2a24c56d50b8482ccf12e8e830a4750dabe1dd670954",
+    "cargoModels": [
+      "foregrip-stubby",
+      "laser-micro",
+      "mount-barrel-dual"
+    ],
+    "cargoWeapons": [],
+    "cargoLoot": [
+      "tool-case",
+      "battery"
+    ]
+  }
+] as const;
+function v16Fingerprint(state: GameState): string {
+	const raw = JSON.parse(saveGame(state)); raw.schemaVersion = 16;
+	for (const raid of raw.raids) if (raid.expedition) delete raid.expedition.lootCatalogVersion;
+	return fingerprint(raw);
+}
+test("released v16 paid trophies, receipt provenance and seed outcomes migrate without enabling future arsenal drops", () => {
+	for (const fixture of V16_FIXTURES) {
+		const departed = withoutArsenalLoot(departRecipe(fixture)), raw = JSON.parse(saveGame(departed)); raw.schemaVersion = 16;
+		expect(fingerprint(raw)).toBe(fixture.paid);
+		const state = parseSave(JSON.stringify(raw));
+		expect(state).not.toBeNull();
+		expect(state).toEqual(departed);
+		const raid = state!.raids[0]!;
+		expect(raid.lootVersion).toBe(1);
+		expect(raid.expedition!.lootCatalogVersion).toBeUndefined();
+		advance(state!, raid.endsAt);
+		expect(v16Fingerprint(state!)).toBe(fixture.first);
+		const perk = raid.expedition!.offers[0]!;
+		expect(fingerprint(getExpeditionChoices(state!, raid, perk))).toBe(fixture.choices);
+		expect(continueExpedition(state!, raid.id, fixture.branch, perk, state!.lastUpdated).ok).toBe(true);
+		expect(v16Fingerprint(state!)).toBe(fixture.nextPaid);
+		const active = saveGame(state!), restored = parseSave(active)!, until = raid.endsAt;
+		advance(state!, until); settleIrregularly(restored, until);
+		expect(v16Fingerprint(state!)).toBe(fixture.second);
+		expect(restored).toEqual(state!);
+		expect(loadGameWithSummary(active, until)!.state).toEqual(state!);
+		expect(raid.expedition!.cargo.lootItems!.map((item) => item.modelId)).toEqual([...fixture.cargoLoot]);
+		expect(raid.expedition!.cargo.lootItems!.length).toBeGreaterThan(0);
+		expect(raid.expedition!.cargo.modules.map((module) => module.modelId)).toEqual([...fixture.cargoModels]);
+		expect(extractRaid(state!, raid.id, state!.lastUpdated).ok).toBe(true);
+		expect(v16Fingerprint(state!)).toBe(fixture.extracted);
+		expect(state!.history[0]!.lootItems!.length).toBeGreaterThan(0);
+		expect(parseSave(saveGame(state!))).toEqual(state);
+	}
 });

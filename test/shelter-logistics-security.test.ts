@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { withoutLoot } from "./legacy-loot-fixture";
 import {
 	advance, assignWorker, buildRoom, cancelProduction, continueExpedition, createGame,
 	dispatchRaid, dispatchSquadRaid, extractRaid, getFieldKitStock,
@@ -358,6 +359,7 @@ describe("shelter logistics boundaries and paid event ownership", () => {
 		withoutArsenalLoot(current);
 		// Derive a genuine pre-ballistics sortie: v12 never contained the later ammo snapshot.
 		delete current.raids[0]!.expedition!.ammunition;
+		withoutLoot(current);
 		advance(current, NOW + 7_123);
 		const raw = JSON.parse(saveGame(current)); raw.schemaVersion = 12;
 		delete raw.shelter.logistics;

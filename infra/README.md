@@ -31,7 +31,9 @@ Dockerfile должны быть закреплены по digest. Образ п
 
 Игра запускается отдельным Compose-проектом `prapor-production`, контейнер
 `prapor-game`, в существующей сети `coolify`. Его Traefik labels обслуживают
-только `game.delopusk.ru`, включают HTTPS и редирект HTTP. На сервере остаются
+`game.delopusk.ru` и HTTPS-запросы зеркала с Host `game.balkhaev.com`; сертификат
+origin запрашивается только для `game.delopusk.ru`. Внешние адреса используют
+HTTPS и редирект HTTP. На сервере остаются
 `/data/prapor/compose.yaml`, `/data/prapor/release.env` с именем образа и SHA,
 а также постоянная папка данных. Порты приложения не публикуются на хосте.
 Процесс работает от пользователя Bun без root, с read-only образом; запись
@@ -78,11 +80,62 @@ access: Sending access ограничен отправкой, согласно
 только согласованным тестовым письмом; smoke-проверка и статус verified домена
 сами по себе её не доказывают.
 
+## Google OAuth
+
+В Google Auth Platform для web-клиента должны быть разрешены точные адреса:
+
+- `https://game.delopusk.ru/callback/auth/google`
+- `https://game.balkhaev.com/callback/auth/google`
+
+Клиент использует только `openid email`. Сервер задаёт `GOOGLE_CLIENT_ID`
+и `GOOGLE_REDIRECT_URIS`, читает секрет из `GOOGLE_CLIENT_SECRET_FILE`.
+При начале входа callback выбирается по проверенному Origin; при возврате его
+домен сверяется с реальным Host. `X-Forwarded-Host` не определяет callback.
+Одноразовый state привязан к cookie браузера, а обмен кода использует PKCE и nonce.
+Секрет, токены Google и код авторизации не передаются в интерфейс и не сохраняются
+в журналах. Аккаунты связываются по Google subject; одинаковая почта не разрешает
+автоматическую привязку к существующему аккаунту.
+
+Локальный защищённый файл — `F:/AI/prapor/google_client_secret`, параметр выпуска
+`-GoogleSecretFile` использует его по умолчанию. Если файл по умолчанию отсутствует,
+выпуск проверяет и сохраняет существующий production-секрет. Явно указанный,
+но отсутствующий файл блокирует выпуск. Секрет передаётся отдельно от исходников
+по проверенным SSH-переходам; SHA-256 проверяется без вывода содержимого.
+На origin он хранится в `/data/prapor/secrets/google_client_secret` с владельцем
+`1000:1000` и правами `0400`, в папке с правами `0700`. Compose монтирует его
+read-only в `/run/secrets/google_client_secret` без автоматического создания.
+Повторный выпуск сохраняет файл с прежним значением; новый явно предоставленный
+секрет заменяется атомарно. Он не входит в Git, `release.env`, build context,
+образ или `dist`.
+
+Configured smoke-контейнер читает оба runtime-секрета без сети, проверяет
+доступность Google-входа и выбор callback для двух origins без обращения
+к Google. Настоящий вход требует отдельной проверки браузером на каждом домене:
+вход, отмена, привязка к существующему аккаунту, повторный вход и доступ
+к прежнему прогрессу. Результат callback используется один раз; повтор и чужой
+браузер не получают сессию.
+
+Для разработки DevHub использует два отдельных адреса:
+`http://127.0.0.1:3020/callback/auth/google` и
+`http://localhost:3020/callback/auth/google`. Их наличие в локальной конфигурации
+не добавляет их автоматически в Google Auth Platform: для настоящего локального
+входа нужно добавить оба в Authorized redirect URIs. Google требует точное
+совпадение URI, включая схему, hostname, порт и путь, согласно
+[документации web server OAuth](https://developers.google.com/identity/protocols/oauth2/web-server).
+Vite проксирует callback на API с исходным Host.
+
+## HTTPS-зеркало
+
 Зеркало — отдельный Compose-проект и контейнер `prapor-game-mirror`.
 Конфигурация находится в `/data/prapor/mirror/`, собственный маршрут Traefik —
 `/data/coolify/proxy/dynamic/prapor-game-mirror.yaml`. Nginx принимает только
 `game.balkhaev.com`; неизвестный Host получает 421. Upstream фиксирован на
-`81.90.31.214`, Host и TLS SNI — `game.delopusk.ru`; сертификат проверяется по CA.
+`81.90.31.214`, TLS SNI — `game.delopusk.ru`; сертификат проверяется по CA.
+Host сохраняется как `game.balkhaev.com`, чтобы callback Google возвращался
+на домен начатого входа. Origin принимает оба точных Host, но ACME-сертификат
+origin ограничен `game.delopusk.ru` через `tls.domains`; этот параметр имеет
+приоритет над Host rule, согласно
+[документации Traefik](https://doc.traefik.io/traefik/reference/routing-configuration/http/tls/overview/).
 Origin и Referer сохраняются для проверки точных разрешённых origins самим
 приложением. Cookie не переписываются, ответы не кешируются, запросы не
 повторяются после ошибки. Лимит тела — 2 MiB, таймаут ответа — 60 секунд.

@@ -25,12 +25,21 @@ services:
       RESEND_API_KEY_FILE: /run/secrets/resend_api_key
       RESEND_FROM: "ggpick <noreply@ggpick.club>"
       PUBLIC_BASE_URL: https://game.balkhaev.com
+      GOOGLE_CLIENT_ID: 764541788875-0bj0prqnptqop4u5b2v5qgf2i4ut7t26.apps.googleusercontent.com
+      GOOGLE_CLIENT_SECRET_FILE: /run/secrets/google_client_secret
+      GOOGLE_REDIRECT_URIS: https://game.delopusk.ru/callback/auth/google,https://game.balkhaev.com/callback/auth/google
       RELEASE_COMMIT: ${PRAPOR_COMMIT:?Set the checked release commit}
     volumes:
       - /data/prapor/data:/app/data
       - type: bind
         source: /data/prapor/secrets/resend_api_key
         target: /run/secrets/resend_api_key
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /data/prapor/secrets/google_client_secret
+        target: /run/secrets/google_client_secret
         read_only: true
         bind:
           create_host_path: false
@@ -47,10 +56,11 @@ services:
       traefik.enable: "true"
       traefik.docker.network: coolify
       traefik.http.services.prapor-game.loadbalancer.server.port: "3000"
-      traefik.http.routers.prapor-game-https.rule: Host(`game.delopusk.ru`)
+      traefik.http.routers.prapor-game-https.rule: Host(`game.delopusk.ru`) || Host(`game.balkhaev.com`)
       traefik.http.routers.prapor-game-https.entrypoints: https
       traefik.http.routers.prapor-game-https.service: prapor-game
       traefik.http.routers.prapor-game-https.tls.certresolver: letsencrypt
+      traefik.http.routers.prapor-game-https.tls.domains[0].main: game.delopusk.ru
       traefik.http.routers.prapor-game-http.rule: Host(`game.delopusk.ru`)
       traefik.http.routers.prapor-game-http.entrypoints: http
       traefik.http.routers.prapor-game-http.service: prapor-game

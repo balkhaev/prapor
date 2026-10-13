@@ -3,6 +3,10 @@ import { createHash, randomBytes, randomInt, randomUUID } from 'node:crypto';
 import { chmodSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import * as engine from '../src/game/engine';
+import { creditMarketMoney, getTradeQuote, parseTradeAsset, receiveTradeAsset, takeTradeAsset } from '../src/game/trade';
+import type { TradeRef } from '../src/game/trade';
+import { getMarketCommission, getMarketListingFee, MARKET_MAX_ACTIVE, MARKET_MAX_PRICE } from '../src/game/flea';
+import type { MarketListing, MarketSnapshot } from '../src/game/flea';
 import type { AccountService } from './accounts';
 import type { GameActionSnapshot, GameCommand, GameCommandType, GameIdentity, GameSnapshot } from '../src/game/commands';
 
@@ -17,6 +21,11 @@ export interface GameService {
   healthy(): boolean; close(): void;
 }
 interface GameRow { identity: string; id: string; name: string; state: string; revision: number }
+interface MarketRow {
+  id: string; owner: string; buyer: string | null; asset: string; label: string; guide_price: number;
+  price: number; listing_fee: number; commission: number; proceeds: number; created_at: number;
+  status: MarketListing['status']; sold_at: number | null; claimed_at: number | null;
+}
 type Identity = { key: string; kind: GameIdentity['kind']; name: string };
 type Rule = (value: unknown) => boolean;
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -31,11 +40,15 @@ const coord = integer(-engine.SHELTER_COORDINATE_LIMIT, engine.SHELTER_COORDINAT
 const slot = choose(...engine.MODULE_SLOTS);
 const gear = choose('armor', 'backpack', 'helmet');
 const fieldKit = choose(...Object.keys(engine.FIELD_KITS));
+const tradeRef: Rule = value => object(value) && exact(value, ['kind', 'id', 'quantity'])
+  && choose('loot', 'weapon', 'module', 'gear', 'supply', 'kit')(value.kind) && id(value.id) && integer(1, 1_000_000)(value.quantity);
 const productionReserve: Rule = value => {
   if (!object(value) || !exact(value, ['money', 'supplies']) || !integer(0, 1e9)(value.money) || !object(value.supplies)) return false;
   return exact(value.supplies, ['ammo', 'medicine', 'scrap', 'intel']) && Object.values(value.supplies).every(integer(0, 1e6));
 };
 const COMMAND_RULES: Record<GameCommandType, Rule[]> = {
+  listMarketItem: [tradeRef, integer(1, MARKET_MAX_PRICE)], buyMarketListing: [id], cancelMarketListing: [id], claimMarketSale: [id],
+  sellLootItem: [id], recycleLootItem: [id],
   excavateShelter: [coord, rowCoord], buildRoom: [choose(...Object.keys(engine.ROOM_DEFINITIONS)), coord, rowCoord], upgradeRoom: [id],
   assignWorker: [id, nullableId], queueModuleProduction: [id, id], setRoomRecipe: [id, nullableId, bool], cancelProduction: [id, id],
   setProductionReserve: [productionReserve], setRoomStockTarget: [id, value => value === null || integer(0, 1e6)(value)],
@@ -62,6 +75,7 @@ export function readGameCommand(value: unknown): GameCommand {
   return value as unknown as GameCommand;
 }
 function execute(state: engine.GameState, command: GameCommand, now: number): engine.ActionResult {
+  if (command.type === 'listMarketItem' || command.type === 'buyMarketListing' || command.type === 'cancelMarketListing' || command.type === 'claimMarketSale') throw new Error('Market commands require the authoritative escrow transaction');
   if (command.type === 'markAchievementsSeen') {
     engine.markAchievementsSeen(state, command.args[0] as engine.AchievementId[]);
     return { ok: true, message: 'Нашивки просмотрены.' };
@@ -129,17 +143,31 @@ export function createGameService(options: GameOptions): GameService {
   db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
     CREATE TABLE IF NOT EXISTS authoritative_games(identity TEXT PRIMARY KEY,id TEXT NOT NULL UNIQUE,name TEXT NOT NULL,state TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS authoritative_guests(token_hash TEXT PRIMARY KEY,identity TEXT NOT NULL REFERENCES authoritative_games(identity) ON DELETE CASCADE,expires_at INTEGER NOT NULL);
-    CREATE INDEX IF NOT EXISTS authoritative_guest_expiry ON authoritative_guests(expires_at);`);
+    CREATE INDEX IF NOT EXISTS authoritative_guest_expiry ON authoritative_guests(expires_at);
+    CREATE TABLE IF NOT EXISTS authoritative_market(
+      id TEXT PRIMARY KEY,owner TEXT NOT NULL REFERENCES authoritative_games(identity),buyer TEXT REFERENCES authoritative_games(identity) ON DELETE SET NULL,
+      asset TEXT NOT NULL,label TEXT NOT NULL,guide_price INTEGER NOT NULL CHECK(guide_price>=0),
+      price INTEGER NOT NULL CHECK(price BETWEEN 1 AND ${MARKET_MAX_PRICE}),listing_fee INTEGER NOT NULL CHECK(listing_fee>=1),
+      commission INTEGER NOT NULL CHECK(commission>=1),proceeds INTEGER NOT NULL CHECK(proceeds>=0),created_at INTEGER NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('active','sold','cancelled')),sold_at INTEGER,claimed_at INTEGER);
+    CREATE INDEX IF NOT EXISTS authoritative_market_active ON authoritative_market(status,created_at);
+    CREATE INDEX IF NOT EXISTS authoritative_market_owner ON authoritative_market(owner,status,claimed_at);`);
   const read = db.query<GameRow, [string]>('SELECT identity,id,name,state,revision FROM authoritative_games WHERE identity=?');
   const update = db.query('UPDATE authoritative_games SET state=?,revision=?,name=? WHERE identity=?');
   const guests = db.query<{ identity: string; name: string }, [string, number]>('SELECT g.identity,p.name FROM authoritative_guests g JOIN authoritative_games p ON p.identity=g.identity WHERE g.token_hash=? AND g.expires_at>?');
+  const marketRow = db.query<MarketRow, [string]>('SELECT * FROM authoritative_market WHERE id=?');
   let closed = false, lastCleanup = now();
   const limits = new Map<string, { count: number; expires: number }>();
   const limit = (key: string, max: number, window = 60_000) => {
     const time = now();
     if (time - lastCleanup >= 60_000) {
       for (const [key, bucket] of limits) if (bucket.expires <= time) limits.delete(key);
-      db.transaction(() => { db.query('DELETE FROM authoritative_guests WHERE expires_at<=?').run(time); db.query("DELETE FROM authoritative_games WHERE identity LIKE 'guest:%' AND identity NOT IN (SELECT identity FROM authoritative_guests)").run(); })();
+      db.transaction(() => {
+        db.query('DELETE FROM authoritative_guests WHERE expires_at<=?').run(time);
+        // A token can expire; persistent escrow and sale payments must never vanish with it.
+        db.query("DELETE FROM authoritative_market WHERE owner LIKE 'guest:%' AND owner NOT IN (SELECT identity FROM authoritative_guests) AND owner NOT IN (SELECT owner FROM authoritative_market WHERE status='active' OR (status='sold' AND claimed_at IS NULL))").run();
+        db.query("DELETE FROM authoritative_games WHERE identity LIKE 'guest:%' AND identity NOT IN (SELECT identity FROM authoritative_guests) AND identity NOT IN (SELECT owner FROM authoritative_market WHERE status='active' OR (status='sold' AND claimed_at IS NULL))").run();
+      })();
       lastCleanup = time;
     }
     let bucket = limits.get(key); if (!bucket || bucket.expires <= time) { if (!bucket && limits.size >= 10_000) throw new GameError(429, 'rate_limited', 60); bucket = { count: 0, expires: time + window }; limits.set(key, bucket); }
@@ -175,13 +203,91 @@ export function createGameService(options: GameOptions): GameService {
     // Every action still reads and validates against the latest complete state inside its transaction.
     if (encoded !== before || action) { if (action) snapshot.revision++; update.run(encoded, snapshot.revision, identity.name, identity.key); }
   };
+  const marketAsset = (row: MarketRow) => {
+    const asset = parseTradeAsset(JSON.parse(row.asset) as unknown);
+    if (!asset) throw new Error('Invalid stored market escrow');
+    return asset;
+  };
+  const publicListing = (row: MarketRow, identity: Identity): MarketListing => ({
+    id: row.id, asset: marketAsset(row), label: row.label, guidePrice: row.guide_price, price: row.price,
+    listingFee: row.listing_fee, commission: row.commission, proceeds: row.proceeds, createdAt: row.created_at,
+    status: row.status, soldAt: row.sold_at, claimedAt: row.claimed_at, owner: row.owner === identity.key,
+    claimable: row.owner === identity.key && row.status === 'sold' && row.claimed_at === null,
+  });
+  const marketSnapshot = (identity: Identity, snapshot: GameSnapshot): MarketSnapshot => ({
+    serverNow: snapshot.serverNow, identity: snapshot.identity,
+    offers: db.query<MarketRow, []>("SELECT * FROM authoritative_market WHERE status='active' ORDER BY created_at DESC,id LIMIT 200").all().map(row => publicListing(row, identity)),
+    mine: db.query<MarketRow, [string]>("SELECT * FROM authoritative_market WHERE owner=? ORDER BY CASE WHEN status='active' THEN 0 WHEN status='sold' AND claimed_at IS NULL THEN 1 ELSE 2 END,created_at DESC,id LIMIT 50").all(identity.key).map(row => publicListing(row, identity)),
+    receivables: db.query<{ total: number }, [string]>("SELECT COALESCE(SUM(proceeds),0) AS total FROM authoritative_market WHERE owner=? AND status='sold' AND claimed_at IS NULL").get(identity.key)!.total,
+  });
+  const validateTransfer = (state: engine.GameState) => {
+    if (!engine.parseSave(engine.saveGame(state))) throw new Error('Market transfer produced an invalid authoritative game');
+  };
+  const executeMarket = (identity: Identity, snapshot: GameSnapshot, command: GameCommand): engine.ActionResult | null => {
+    const fail = (message: string): engine.ActionResult => ({ ok: false, message });
+    const time = snapshot.serverNow;
+    if (command.type === 'listMarketItem') {
+      const [ref, price] = command.args;
+      const count = db.query<{ total: number }, [string]>("SELECT COUNT(*) AS total FROM authoritative_market WHERE owner=? AND status='active'").get(identity.key)!.total;
+      if (count >= MARKET_MAX_ACTIVE) return fail(`На барахолке можно держать ${MARKET_MAX_ACTIVE} объявлений одновременно.`);
+      const quote = getTradeQuote(snapshot.state, ref as TradeRef);
+      if (quote.reason || !quote.asset) return fail(quote.reason ?? 'Предмет недоступен для продажи.');
+      const fee = getMarketListingFee(price);
+      if (snapshot.state.money < fee) return fail(`Для объявления нужно ${fee} ₽. Сбор не возвращается.`);
+      const state = structuredClone(snapshot.state), taken = takeTradeAsset(state, ref);
+      if (!taken.ok || !taken.asset) return taken;
+      const asset = parseTradeAsset(taken.asset);
+      if (!asset) throw new Error('Invalid verified market asset');
+      state.money -= fee; validateTransfer(state);
+      const commission = getMarketCommission(price);
+      db.query('INSERT INTO authoritative_market(id,owner,asset,label,guide_price,price,listing_fee,commission,proceeds,created_at,status) VALUES(?,?,?,?,?,?,?,?,?,?,\'active\')')
+        .run(randomUUID(), identity.key, JSON.stringify(asset), quote.label, quote.guidePrice, price, fee, commission, price - commission, time);
+      snapshot.state = state;
+      return { ok: true, message: `${quote.label}: объявление за ${price} ₽ размещено. Сбор ${fee} ₽ оплачен.` };
+    }
+    if (!['buyMarketListing', 'cancelMarketListing', 'claimMarketSale'].includes(command.type)) return null;
+    const listing = marketRow.get(command.args[0] as string);
+    if (!listing) return fail('Объявление не найдено.');
+    if (command.type === 'buyMarketListing') {
+      if (listing.owner === identity.key) return fail('Собственное объявление купить нельзя.');
+      if (listing.status !== 'active') return fail('Этот предмет уже продан или снят с продажи.');
+      if (snapshot.state.money < listing.price) return fail(`Для покупки нужно ${listing.price} ₽.`);
+      const state = structuredClone(snapshot.state), received = receiveTradeAsset(state, marketAsset(listing), time, true);
+      if (!received.ok) return received;
+      state.money -= listing.price; validateTransfer(state);
+      const sold = db.query("UPDATE authoritative_market SET status='sold',buyer=?,sold_at=? WHERE id=? AND status='active'").run(identity.key, Math.max(time, listing.created_at), listing.id);
+      if (sold.changes !== 1) return fail('Этот предмет уже продан или снят с продажи.');
+      snapshot.state = state;
+      return { ok: true, message: `${listing.label} куплен за ${listing.price} ₽ и доставлен на склад.` };
+    }
+    if (listing.owner !== identity.key) return fail('Это чужое объявление.');
+    if (command.type === 'cancelMarketListing') {
+      if (listing.status !== 'active') return fail('Это объявление уже закрыто.');
+      const state = structuredClone(snapshot.state), returned = receiveTradeAsset(state, marketAsset(listing), time, false);
+      if (!returned.ok) return returned;
+      validateTransfer(state);
+      const cancelled = db.query("UPDATE authoritative_market SET status='cancelled' WHERE id=? AND owner=? AND status='active'").run(listing.id, identity.key);
+      if (cancelled.changes !== 1) return fail('Это объявление уже закрыто.');
+      snapshot.state = state;
+      return { ok: true, message: `${listing.label} возвращён на склад. Сбор за объявление не возвращается.` };
+    }
+    if (listing.status !== 'sold' || listing.claimed_at !== null) return fail('Выручки к получению нет.');
+    const state = structuredClone(snapshot.state);
+    const credited = creditMarketMoney(state, listing.proceeds);
+    if (!credited.ok) return credited;
+    validateTransfer(state);
+    const claimed = db.query("UPDATE authoritative_market SET claimed_at=? WHERE id=? AND owner=? AND status='sold' AND claimed_at IS NULL").run(Math.max(time, listing.sold_at ?? time), listing.id, identity.key);
+    if (claimed.changes !== 1) return fail('Выручка уже получена.');
+    snapshot.state = state;
+    return { ok: true, message: `Получено ${listing.proceeds} ₽ за ${listing.label}. Комиссия ${listing.commission} ₽ удержана.` };
+  };
   return { fetch: async (request, clientAddress = 'unknown') => {
     const url = new URL(request.url), path = url.pathname;
     if (path !== '/api/game' && !path.startsWith('/api/game/')) return null;
     try {
       if (closed) throw new GameError(503, 'service_unavailable');
       if (!hosts.has(url.host)) throw new GameError(403, 'host_not_allowed');
-      const method = path === '/api/game/state' ? 'GET' : ['/api/game/join', '/api/game/action'].includes(path) ? 'POST' : null;
+      const method = ['/api/game/state', '/api/game/market'].includes(path) ? 'GET' : ['/api/game/join', '/api/game/action'].includes(path) ? 'POST' : null;
       if (!method) return reply({ code: 'not_found' }, 404);
       if (request.method !== method) return reply({ code: 'method_not_allowed' }, 405, { Allow: method });
       const ip = hash(clientAddress); limit(`api:${ip}`, 6000);
@@ -208,6 +314,10 @@ export function createGameService(options: GameOptions): GameService {
         const snapshot = db.transaction(() => { const { identity, row } = current(request); const { snapshot, before } = advanceRow(row, identity); persistSnapshot(identity, snapshot, before); return snapshot; })();
         return reply(publicSnapshot(snapshot));
       }
+      if (path === '/api/game/market') {
+        const snapshot = db.transaction(() => { const { identity, row } = current(request); const { snapshot, before } = advanceRow(row, identity); persistSnapshot(identity, snapshot, before); return marketSnapshot(identity, snapshot); })();
+        return reply(snapshot);
+      }
       const body = await readJson(request);
       if (!exact(body, ['revision', 'command']) || !Number.isSafeInteger(body.revision) || (body.revision as number) < 0) throw new GameError(400, 'invalid_request');
       const command = readGameCommand(body.command); limit(`action:${previous.row.id}`, 120);
@@ -215,7 +325,7 @@ export function createGameService(options: GameOptions): GameService {
         const { identity, row } = current(request); if (row.id !== previous.row.id) throw new GameError(401, 'game_identity_changed');
         const { snapshot, before } = advanceRow(row, identity);
         if (body.revision !== row.revision) { persistSnapshot(identity, snapshot, before); return { conflict: true as const, snapshot }; }
-        const result = execute(snapshot.state, command, snapshot.serverNow);
+        const result = executeMarket(identity, snapshot, command) ?? execute(snapshot.state, command, snapshot.serverNow);
         persistSnapshot(identity, snapshot, before, result.ok);
         return { conflict: false as const, snapshot: { ...snapshot, result } satisfies GameActionSnapshot };
       })();

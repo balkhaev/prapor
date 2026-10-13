@@ -1,0 +1,75 @@
+import { MAP_BY_ID, type Rarity } from "../src/game/data";
+import {
+	advance, continueExpedition, createGame, dispatchRaid, extractRaid, craftGear, equipGear,
+	getExpeditionChoices, xpForLevel, type ActionResult,
+} from "../src/game/engine";
+import { LOOT_MODELS, getLootModel, getLootTraderPrice, getRaidLootPool } from "../src/game/loot";
+import { getMarketFees } from "../src/game/flea";
+
+const NOW = 1_792_000_000_000;
+const requested = Number(Bun.argv[2]);
+const samples = Number.isFinite(requested) && requested > 0 ? Math.max(80, Math.min(300, Math.floor(requested))) : 120;
+const round = (value: number) => Math.round(value * 100) / 100;
+const requireAction = (result: ActionResult) => { if (!result.ok) throw new Error(result.message); };
+const rows = [];
+
+// Count all departures, including zero delivery on failure. The guide and its
+// hypothetical sale are separate from real banked cash and guaranteed vendor money.
+for (const sector of ["courtyard", "depot", "factory", "bunker"]) {
+	if (!MAP_BY_ID[sector]) throw new Error(`Unknown sector ${sector}`);
+	for (const branch of ["scavenge", "combat", "recon"] as const) for (const targetDepth of [1, 3]) for (const backpack of ["none", "cargo_pack"]) {
+		let extracted = 0, deliveredCount = 0, deliveredWeight = 0, guide = 0, vendor = 0, hypotheticalNet = 0, cash = 0, settledDepth = 0;
+		const rarities: Record<Rarity, number> = { common: 0, uncommon: 0, rare: 0, epic: 0, legendary: 0 };
+		const models = new Set<string>();
+		for (let seed = 1; seed <= samples; seed++) {
+			const state = createGame(NOW), scav = state.scavs[0]!;
+			state.level = 9; state.xp = xpForLevel(9); state.money = 20_000;
+			state.supplies = { ammo: 72, medicine: 0, scrap: 12, intel: 12 };
+			if (backpack !== "none") {
+				state.blueprints.push("cargo_pack");
+				requireAction(craftGear(state, backpack));
+				const pack = state.gearItems.find(item => item.modelId === backpack)!;
+				requireAction(equipGear(state, scav.id, "backpack", pack.id));
+			}
+			state.supplies.scrap = 0;
+			state.rng = Math.imul(seed, 0x9e3779b1) >>> 0 || 1;
+			const beforeMoney = state.money;
+			requireAction(dispatchRaid(state, scav.id, sector, NOW));
+			for (let guard = 0; state.raids.length && guard < 4; guard++) {
+				const raid = state.raids[0]!;
+				advance(state, raid.endsAt);
+				if (!state.raids.length) break;
+				if (raid.expedition?.status !== "choice") throw new Error("Missing actual checkpoint");
+				if (raid.expedition.stage >= targetDepth) requireAction(extractRaid(state, raid.id, state.lastUpdated));
+				else {
+					const perk = raid.expedition.offers[0]!, choice = getExpeditionChoices(state, raid, perk).find(item => item.branch === branch)!;
+					if (choice.reason) requireAction(extractRaid(state, raid.id, state.lastUpdated));
+					else requireAction(continueExpedition(state, raid.id, branch, perk, state.lastUpdated));
+				}
+			}
+			const report = state.history[0];
+			if (!report || state.raids.length) throw new Error("Unsettled sortie");
+			extracted += Number(report.success); settledDepth += report.depth; cash += state.money - beforeMoney;
+			for (const item of report.lootItems ?? []) {
+				const model = getLootModel(item), fees = getMarketFees(model.guidePrice);
+				deliveredCount++; deliveredWeight += model.weight; guide += model.guidePrice; vendor += getLootTraderPrice(item);
+				hypotheticalNet += fees.proceeds - fees.listingFee; rarities[model.rarity]++; models.add(model.id);
+			}
+			if (report.lootAutoSold?.length) throw new Error("Empty trophy warehouse unexpectedly overflowed");
+		}
+		rows.push({ sector, branchAfterFirst: branch, targetDepth, backpack, extractedPct: round(extracted * 100 / samples),
+			averageSettledDepth: round(settledDepth / samples), cashAfterRaidFees: round(cash / samples),
+			namedItemsDelivered: round(deliveredCount / samples), namedWeightDelivered: round(deliveredWeight / samples),
+			guideValueDelivered: round(guide / samples), guaranteedVendorValue: round(vendor / samples),
+			hypotheticalMarketNetAtGuide: round(hypotheticalNet / samples), distinctModels: models.size,
+			rarityDelivered: Object.fromEntries(Object.entries(rarities).map(([key, value]) => [key, round(value / samples)])) });
+	}
+}
+
+console.log(JSON.stringify({ samples,
+	conditions: "Fresh Boroda/SKS, 100% health and condition, balanced tactic, no armor/support kit, neutral sector, reputation9 only to open all sectors. Ordinary small bag or actually crafted/equipped cargo frame. Each condition uses the same seeds; the first genuinely offered perk is selected. Money stays above passive allowance; no production runs. Failures deliver zero loot. Report receipts count only delivered named trophies after bag trimming. Stash is empty. Gear acquisition, repairs, hiring, ordinary weapon/module value and sale of supplies are excluded. Guide price is not a measured market price; hypothetical net assumes every separate trophy gets a real buyer at its guide, deducting both fees. No simulated buyer or actual flea trade is performed.",
+	catalog: LOOT_MODELS.map(model => ({ model: model.id, label: model.label, rarity: model.rarity, weight: model.weight,
+		guide: model.guidePrice, guaranteedVendor: getLootTraderPrice({ id: "loot-1", modelId: model.id, foundAt: NOW }),
+		guidePerWeight: round(model.guidePrice / model.weight), salvage: model.salvage, minDepth: model.minDepth, minSectorLevel: model.minSectorLevel,
+		availablePools: Object.keys(MAP_BY_ID).flatMap(map => [1, 2, 3].filter(depth => getRaidLootPool(map, "scavenge", depth).some(entry => entry.model.id === model.id)).map(depth => `${map}:${depth}`)) })),
+	rows }, null, 2));

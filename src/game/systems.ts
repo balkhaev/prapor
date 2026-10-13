@@ -2,11 +2,12 @@ import { MAPS, type Attachment, type Supplies, type WeaponCategory } from "./dat
 import type { ModuleInstance } from "./modules";
 import type { GearEquipmentSlot } from "./operations";
 import type { AmmoType } from "./ammunition";
+import type { LootItem } from "./loot";
 export type { AmmoType } from "./ammunition";
 
 export type ExpeditionBranch = "scavenge" | "combat" | "recon";
 export type RunPerk = "careful" | "haggler" | "pathfinder" | "fieldMedic" | "gunsmith";
-export interface Cargo { money: number; supplies: Supplies; weaponIds: string[]; modules: ModuleInstance[] }
+export interface Cargo { money: number; supplies: Supplies; weaponIds: string[]; modules: ModuleInstance[]; lootItems?: LootItem[] }
 export interface GearItem { id: string; modelId: string; durability: number }
 export interface Loadout {
 	armorItemId: string | null; backpackItemId: string | null;

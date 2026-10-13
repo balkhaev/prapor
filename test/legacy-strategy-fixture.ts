@@ -1,3 +1,5 @@
+import { withoutLoot } from "./legacy-loot-fixture";
+
 /** A paid pre-arsenal sortie keeps the loot catalogue that existed on departure. */
 export function withoutArsenalLoot<T>(value: T): T {
 	const state = value as { raids?: { expedition?: { lootCatalogVersion?: unknown } | null }[] };
@@ -24,5 +26,5 @@ export function withoutRaidStrategy<T>(value: T): T {
 		delete report.sectorOutcome;
 		delete report.reconCompleted;
 	}
-	return withoutArsenalLoot(value);
+	return withoutLoot(withoutArsenalLoot(value));
 }

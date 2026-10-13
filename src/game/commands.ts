@@ -1,7 +1,11 @@
 import type { ActionResult, GameState, ShelterCost } from './engine';
+import type { TradeRef } from './trade';
 
 /** Commands contain intent only. The server supplies the state, clock and RNG. */
 export interface GameCommandArguments {
+  listMarketItem: [TradeRef, number]; buyMarketListing: [string];
+  cancelMarketListing: [string]; claimMarketSale: [string];
+  sellLootItem: [string]; recycleLootItem: [string];
   excavateShelter: [number, number]; buildRoom: [string, number, number]; upgradeRoom: [string];
   assignWorker: [string, string | null]; queueModuleProduction: [string, string];
   setRoomRecipe: [string, string | null, boolean]; cancelProduction: [string, string];
