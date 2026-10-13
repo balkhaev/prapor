@@ -1,6 +1,6 @@
 import { SHELTER_FLOOR_Y } from "./shelter-motion";
 
-export interface LiftRequest { id: string; from: number; to: number }
+export interface LiftRequest { id: string; from: number; to: number; /** False while the caller is walking through the open doorway. */ ready?: boolean }
 export type LiftPhase = "idle" | "pickup" | "boarding" | "travel" | "alighting";
 export interface ShelterLiftState {
 	y: number;
@@ -25,7 +25,8 @@ export const SHELTER_LIFT_SPEED = 78;
 export const SHELTER_LIFT_BOARD_MS = 300;
 export const SHELTER_LIFT_ALIGHT_MS = 250;
 const EPSILON = 1e-7;
-const copyRequest = (request: LiftRequest): LiftRequest => ({ ...request });
+// Readiness is the live caller's signal, never a property of a saved ticket.
+const copyRequest = (request: LiftRequest): LiftRequest => ({ id: request.id, from: request.from, to: request.to });
 const sameRequest = (a: LiftRequest, b: LiftRequest) => a.id === b.id && a.from === b.from && a.to === b.to;
 function nearestFloor(y: number): number {
 	return SHELTER_FLOOR_Y.reduce<number>((nearest, floor) => Math.abs(floor - y) < Math.abs(nearest - y) ? floor : nearest, 228);
@@ -53,7 +54,7 @@ export function advanceShelterLift(previous: ShelterLiftState, requests: readonl
 		// never replaces its physical position with a new caller's pickup value.
 		const from = state.passengerId === request.id && state.trip ? state.trip.from : canonicalFloor(request.from);
 		if (from === null || to === null || from === to && state.passengerId !== request.id) continue;
-		current.set(request.id, { id: request.id, from, to });
+		current.set(request.id, { id: request.id, from, to, ...(request.ready === false ? { ready: false } : {}) });
 	}
 	state.completed = state.completed.filter((done) => {
 		const live = current.get(done.id); return Boolean(live && sameRequest(live, done));
@@ -134,6 +135,9 @@ export function advanceShelterLift(previous: ShelterLiftState, requests: readonl
 			}
 		}
 		if (state.phase === "boarding" || state.phase === "alighting") {
+			// Doors stay open until the person is physically inside. Legacy callers
+			// without a readiness signal retain the original timed boarding contract.
+			if (state.phase === "boarding" && state.trip && current.get(state.trip.id)?.ready === false) break;
 			if (budget + EPSILON < state.remainingMs) { state.remainingMs -= budget; break; }
 			budget = Math.max(0, budget - state.remainingMs);
 			state.remainingMs = 0;
@@ -151,4 +155,37 @@ export function advanceShelterLift(previous: ShelterLiftState, requests: readonl
 		}
 	}
 	return result;
+}
+
+/** Parse presentation data without snapping a moving cabin to another floor. */
+export function restoreShelterLift(value: unknown): ShelterLiftState | null {
+	if (!value || typeof value !== "object") return null;
+	const data = value as Record<string, unknown>;
+	const phases: LiftPhase[] = ["idle", "pickup", "boarding", "travel", "alighting"];
+	if (!phases.includes(data.phase as LiftPhase) || typeof data.y !== "number" || !Number.isFinite(data.y)
+		|| data.y < SHELTER_FLOOR_Y[0] || data.y > SHELTER_FLOOR_Y[3] || typeof data.targetY !== "number" || canonicalFloor(data.targetY) === null
+		|| typeof data.remainingMs !== "number" || !Number.isFinite(data.remainingMs) || data.remainingMs < 0
+		|| typeof data.cancelledTrip !== "boolean" || !(data.passengerId === null || typeof data.passengerId === "string" && data.passengerId.length > 0)) return null;
+	const request = (input: unknown): LiftRequest | null => {
+		if (!input || typeof input !== "object") return null;
+		const r = input as Record<string, unknown>;
+		return typeof r.id === "string" && r.id.length > 0 && r.id.length <= 160 && typeof r.from === "number" && typeof r.to === "number"
+			&& canonicalFloor(r.from) !== null && canonicalFloor(r.to) !== null ? { id: r.id, from: r.from, to: r.to } : null;
+	};
+	const trip = data.trip === null ? null : request(data.trip);
+	if (data.trip !== null && !trip || !Array.isArray(data.queue) || !Array.isArray(data.completed) || data.queue.length > 32 || data.completed.length > 32) return null;
+	const queue = data.queue.map(request), completed = data.completed.map(request);
+	if (queue.some((item) => !item) || completed.some((item) => !item)) return null;
+	const phase = data.phase as LiftPhase, passengerId = data.passengerId as string | null;
+	if (phase === "idle" && (trip || passengerId || canonicalFloor(data.y) === null)
+		|| phase === "boarding" && (!trip || passengerId || data.y !== trip.from)
+		|| phase === "travel" && (!trip || passengerId !== trip.id)
+		|| phase === "pickup" && passengerId
+		|| phase === "alighting" && (passengerId || canonicalFloor(data.y) === null)) return null;
+	const targetY = phase === "travel" && trip ? trip.to : (phase === "pickup" || phase === "boarding") && trip ? trip.from : phase === "idle" || phase === "alighting" ? data.y : data.targetY;
+	const remainingMs = phase === "boarding" ? Math.min(SHELTER_LIFT_BOARD_MS, data.remainingMs)
+		: phase === "alighting" ? Math.min(SHELTER_LIFT_ALIGHT_MS, data.remainingMs)
+		: phase === "idle" ? 0 : Math.abs(targetY - data.y) / SHELTER_LIFT_SPEED * 1000;
+	return { y: data.y, phase, passengerId, trip, queue: queue as LiftRequest[], completed: completed as LiftRequest[], targetY,
+		remainingMs, cancelledTrip: data.cancelledTrip, doorOpen: phase === "boarding" || phase === "alighting" };
 }

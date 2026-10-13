@@ -103,11 +103,9 @@ import {
 	setRoomRecipe,
 	cancelProduction,
 	healScav,
-	loadGameWithSummary,
 	recruitCost,
 	recruitScav,
 	repairWeapon,
-	saveGame,
 	sellWeapon,
 	setAutoRaid,
 	setRaidTactic,
@@ -138,6 +136,8 @@ import { getCommandSummary, type CommandSummary, type CommandRoomTab, type RoomC
 import { MIN_SHELTER_ZOOM, MAX_SHELTER_ZOOM } from "./shelter-camera";
 import { getShelterProductionPresentation, getShelterProductionStages, SHELTER_PRODUCTION_STAGES, type ProductionPresentation } from "./shelter-production";
 import { renderLiveRaidPanel, updateLiveRaidPanel, getWatchedReport } from "./raid-ui";
+import { createGameSaveStore, parseGameSave, PREVIOUS_SAVE_KEY, MAX_GAME_SAVE_LENGTH } from "./game-save";
+import { readGameSession, type GameSession } from "./game-session";
 
 type Page = "home" | "raids" | "arsenal" | "base" | "contracts" | "journal";
 const e = (value: unknown) =>
@@ -181,15 +181,19 @@ const icon = (name: string, size = 19) =>
 	`<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${paths[name] ?? paths.base}"/></svg>`;
 
 
-let raw: string | null = null;
-try {
-	raw = localStorage.getItem(SAVE_KEY);
-} catch {
-	/* A playable session still works without storage. */
-}
-const loaded = loadGameWithSummary(raw);
-let state: GameState = loaded?.state ?? createGame();
-let offlineSummary: AdvanceSummary | null = loaded && (loaded.summary.elapsedMs >= 60_000 || loaded.summary.completedCount) ? loaded.summary : null;
+let ownsSaveLease = false;
+let saveOwnershipPending = true;
+let saveConflict = false;
+let saveConflictReason: string | null = null;
+let releaseSaveLease: (() => void) | null = null;
+let saveUiTimer: ReturnType<typeof setTimeout> | null = null;
+const saveStore = createGameSaveStore({ getItem: key => localStorage.getItem(key), setItem: (key, value) => localStorage.setItem(key, value) }, { writerId: crypto.randomUUID(), isExclusiveHeld: () => ownsSaveLease });
+const openedSave = saveStore.open();
+let raw = openedSave.protectedRaw ?? openedSave.raw;
+let protectedSave = openedSave.protectedRaw !== null;
+let state: GameState = openedSave.state ?? createGame();
+let offlineSummary: AdvanceSummary | null = openedSave.summary && (openedSave.summary.elapsedMs >= 60_000 || openedSave.summary.completedCount) ? openedSave.summary : null;
+let resumedJournal: string[] = [];
 let page: Page = "home";
 let selectedMap = MAPS[0]!.id;
 let selectedWeapon = state.weapons[0]?.id ?? "";
@@ -240,13 +244,37 @@ let suppressWorkerClickUntil = 0;
 let workerRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 type CameraViewState = { zoom: number; x: number; y: number; panMode: boolean; view?: "base" | "map" | "raid"; following?: boolean; minZoom?: number; maxZoom?: number };
 let cameraView: CameraViewState = { zoom: 1, x: 0, y: 0, panMode: false };
+const initialSession = readGameSession(openedSave.session, state);
+let presentationFallback = initialSession.presentation;
+applySession(initialSession);
+function applySession(session: GameSession) {
+	page = session.page; worldView = session.view; selectedMap = session.mapId;
+	selectedWeapon = session.weaponId; selectedScav = session.scavId; selectedRoomId = session.roomId;
+	selectedRaidId = session.raidId; lastWatchedRaid = state.raids.find(raid => raid.id === session.raidId) ?? null; lastWatchedReport = null;
+	contextMode = session.context; selectedShelterSite = session.site; roomContextTab = session.roomTab;
+	arsenalTab = session.armoryTab; selectedModuleSlot = session.moduleSlot; selectedBenchModule = session.benchModuleId; productionWorkshopId = session.workshopId;
+	selectedPerks.clear(); for (const item of session.perks) selectedPerks.set(item.raidId,item.perk);
+	resumedJournal = session.journal;
+	weaponSearch = session.filters.weaponSearch; category = session.filters.category; collection = session.filters.collection;
+	moduleSearch = session.filters.moduleSearch; benchPartSearch = session.filters.benchSearch; moduleSlotFilter = session.filters.moduleSlot;
+	moduleRarityFilter = session.filters.moduleRarity as typeof moduleRarityFilter; roomModuleSearch = session.filters.roomModuleSearch; roomModuleSlot = session.filters.roomModuleSlot;
+	moduleCraftForWeapon = session.filters.craftForWeapon; contractFilter = session.filters.contracts;
+}
+function captureSession(): GameSession {
+	return readGameSession({version:1,page,view:worldView,mapId:selectedMap,weaponId:selectedWeapon,scavId:selectedScav,roomId:selectedRoomId,raidId:selectedRaidId,context:contextMode,site:selectedShelterSite,roomTab:roomContextTab,armoryTab:arsenalTab,moduleSlot:selectedModuleSlot,benchModuleId:selectedBenchModule,workshopId:productionWorkshopId,perks:[...selectedPerks].flatMap(([raidId,perk])=>{const raid=state.raids.find(item=>item.id===raidId);return raid?.expedition?[{raidId,perk,stage:raid.expedition.stage,seed:raid.seed}]:[]}),journal:[...document.querySelectorAll<HTMLDetailsElement>('details[data-report][open]')].map(item=>item.dataset.report),filters:{weaponSearch,category,collection,moduleSearch,benchSearch:benchPartSearch,moduleSlot:moduleSlotFilter,moduleRarity:moduleRarityFilter,roomModuleSearch,roomModuleSlot,craftForWeapon:moduleCraftForWeapon,contracts:contractFilter},presentation:world?.getPresentationState() ?? presentationFallback},state);
+}
+function scheduleSessionSave() {
+	if (!ownsSaveLease || saveConflict || protectedSave) return;
+	if (saveUiTimer !== null) clearTimeout(saveUiTimer);
+	saveUiTimer = setTimeout(() => { saveUiTimer = null; persist(); }, 300);
+}
 function holdWorldInput() { worldInputBlockedUntil = Date.now() + 350; }
 function canWorldDrag() {
-	return worldView === "base" && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal") && !(window.innerWidth <= 850 && contextMode !== "overview");
+	return ownsSaveLease && !saveConflict && !protectedSave && worldView === "base" && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal") && !(window.innerWidth <= 850 && contextMode !== "overview");
 }
-function canWorldCamera() { return (canWorldDrag() || (worldView === "raid" && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal"))) && !workerPlacement && !crewPointer; }
+function canWorldCamera() { return ownsSaveLease && !saveConflict && !protectedSave && (canWorldDrag() || (worldView === "raid" && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal"))) && !workerPlacement && !crewPointer; }
 function canWorldInteract() {
-	return !workerPlacement && !crewPointer?.started && Date.now() >= worldInputBlockedUntil && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal") && !(window.innerWidth <= 850 && contextMode !== "overview");
+	return ownsSaveLease && !saveConflict && !protectedSave && !workerPlacement && !crewPointer?.started && Date.now() >= worldInputBlockedUntil && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal") && !(window.innerWidth <= 850 && contextMode !== "overview");
 }
 function captureInterfacePointer(event: PointerEvent) {
 	const target = event.target instanceof Element ? event.target : null;
@@ -262,7 +290,7 @@ const names: Record<Page, string> = {
 	contracts: "Контракты",
 	journal: "Журнал",
 };
-app.innerHTML = `<div class="shell command-shell"><header class="topbar command-hud"><div class="command-brand"><span class="brand-mark">П</span><div><strong>ПРАПОР</strong><small>УБЕЖИЩЕ 07</small></div></div><div class="level"><span class="eyebrow">Репутация</span><strong id="level-label"></strong><div class="xp-track"><i id="xp-fill"></i></div></div><div class="resources">${[["money", "Рубли"], ["ammo", "Патроны"], ["medicine", "Медикаменты"], ["scrap", "Материалы"], ["intel", "Разведданные"]].map(([key, label]) => `<div class="resource" title="${label}">${icon(key!,18)}<div><label>${label}</label><strong id="res-${key}"></strong></div><i class="resource-cap" id="cap-${key}"></i></div>`).join("")}</div><button class="settings" data-action="settings" aria-label="Сохранение и помощь">${icon("settings",18)}</button></header><main class="main command-main"><div class="command-toolbar"><div class="command-heading"><h1>Свои люди. Своё убежище.</h1><span><i class="status-dot"></i><span id="passive-note">База на связи</span></span></div><nav class="nav command-tools" aria-label="Инструменты штаба">${(Object.keys(names) as Page[]).map((id) => `<button data-page="${id}" aria-label="${names[id]}" title="${names[id]}">${icon(id,17)}<span>${names[id]}</span>${id === "raids" ? '<b class="badge" id="raid-badge">0</b>' : ""}</button>`).join("")}</nav></div><div class="command-stage-layout"><section id="hero" class="hero-grid"><section class="world-card"><div class="world-head"><div class="view-switch" aria-label="Вид сцены"><button class="active" data-view="base" aria-label="Убежище" title="Убежище" aria-pressed="true">${icon("home",14)} Убежище</button><button data-view="map" aria-label="Сектора" title="Сектора" aria-pressed="false">${icon("raids",14)} Сектора</button><button data-view="raid" aria-label="Живой рейд" title="Живой рейд" aria-pressed="false" disabled>${icon("people",14)} Рейд</button></div><button class="text-button room-index-button" data-page="base">${icon("base",14)} Комнаты</button><span class="world-coordinate mono">БАЗА 07 · СЕВЕР</span></div><div id="world" aria-label="Графический штаб: комнаты, рабочие и стройка"></div><div class="world-bottom"><span><i class="status-dot"></i><span id="scene-hint">Нажми на комнату или бойца</span></span><span id="world-raid-note">ОТРЯД НА БАЗЕ</span></div><div class="room-shortcuts" hidden></div></section></section><aside id="command-dock" class="command-dock" aria-label="Сводка и управление выбранным объектом"></aside></div><section id="command-crew" class="command-crew" aria-label="Отряд и рабочие"></section><section id="command-routes" class="command-routes" aria-label="Рейды и сектора"></section><div id="offline-summary"></div><footer class="footer-line command-footer"><span id="save-status">ПРОГРЕСС НА ЭТОМ УСТРОЙСТВЕ</span><span>ПРАПОР · 0.10.0</span></footer></main></div><div id="tool-root" class="tool-backdrop" hidden><section class="tool-window" role="dialog" aria-modal="true" aria-labelledby="tool-title"><header class="tool-head"><div id="page-head" class="page-head"></div><button class="icon-button" data-action="close-tools" aria-label="Закрыть инструмент и вернуться в штаб">×</button></header><div class="tool-scroll"><div id="expedition-alerts"></div><div id="panel"></div></div></section></div><div id="context-shade" class="context-shade" hidden></div><div id="toast" role="status" aria-live="polite" hidden></div><div id="inspector-root"></div><div id="modal-root"></div>`;
+app.innerHTML = `<div id="save-banner" class="save-banner" role="status" hidden></div><div class="shell command-shell"><header class="topbar command-hud"><div class="command-brand"><span class="brand-mark">П</span><div><strong>ПРАПОР</strong><small>УБЕЖИЩЕ 07</small></div></div><div class="level"><span class="eyebrow">Репутация</span><strong id="level-label"></strong><div class="xp-track"><i id="xp-fill"></i></div></div><div class="resources">${[["money", "Рубли"], ["ammo", "Патроны"], ["medicine", "Медикаменты"], ["scrap", "Материалы"], ["intel", "Разведданные"]].map(([key, label]) => `<div class="resource" title="${label}">${icon(key!,18)}<div><label>${label}</label><strong id="res-${key}"></strong></div><i class="resource-cap" id="cap-${key}"></i></div>`).join("")}</div><button class="settings" data-action="settings" aria-label="Сохранение и помощь">${icon("settings",18)}</button></header><main class="main command-main"><div class="command-toolbar"><div class="command-heading"><h1>Свои люди. Своё убежище.</h1><span><i class="status-dot"></i><span id="passive-note">База на связи</span></span></div><nav class="nav command-tools" aria-label="Инструменты штаба">${(Object.keys(names) as Page[]).map((id) => `<button data-page="${id}" aria-label="${names[id]}" title="${names[id]}">${icon(id,17)}<span>${names[id]}</span>${id === "raids" ? '<b class="badge" id="raid-badge">0</b>' : ""}</button>`).join("")}</nav></div><div class="command-stage-layout"><section id="hero" class="hero-grid"><section class="world-card"><div class="world-head"><div class="view-switch" aria-label="Вид сцены"><button class="active" data-view="base" aria-label="Убежище" title="Убежище" aria-pressed="true">${icon("home",14)} Убежище</button><button data-view="map" aria-label="Сектора" title="Сектора" aria-pressed="false">${icon("raids",14)} Сектора</button><button data-view="raid" aria-label="Живой рейд" title="Живой рейд" aria-pressed="false" disabled>${icon("people",14)} Рейд</button></div><button class="text-button room-index-button" data-page="base">${icon("base",14)} Комнаты</button><span class="world-coordinate mono">БАЗА 07 · СЕВЕР</span></div><div id="world" aria-label="Графический штаб: комнаты, рабочие и стройка"></div><div class="world-bottom"><span><i class="status-dot"></i><span id="scene-hint">Нажми на комнату или бойца</span></span><span id="world-raid-note">ОТРЯД НА БАЗЕ</span></div><div class="room-shortcuts" hidden></div></section></section><aside id="command-dock" class="command-dock" aria-label="Сводка и управление выбранным объектом"></aside></div><section id="command-crew" class="command-crew" aria-label="Отряд и рабочие"></section><section id="command-routes" class="command-routes" aria-label="Рейды и сектора"></section><div id="offline-summary"></div><footer class="footer-line command-footer"><span id="save-status">ПРОГРЕСС НА ЭТОМ УСТРОЙСТВЕ</span><span>ПРАПОР · 0.11.0</span></footer></main></div><div id="tool-root" class="tool-backdrop" hidden><section class="tool-window" role="dialog" aria-modal="true" aria-labelledby="tool-title"><header class="tool-head"><div id="page-head" class="page-head"></div><button class="icon-button" data-action="close-tools" aria-label="Закрыть инструмент и вернуться в штаб">×</button></header><div class="tool-scroll"><div id="expedition-alerts"></div><div id="panel"></div></div></section></div><div id="context-shade" class="context-shade" hidden></div><div id="toast" role="status" aria-live="polite" hidden></div><div id="inspector-root"></div><div id="modal-root"></div>`;
 const panel = document.querySelector<HTMLDivElement>("#panel")!;
 document.querySelector(".command-footer")!.prepend(document.querySelector("#offline-summary")!);
 document.querySelector(".world-head .view-switch")!.insertAdjacentHTML("afterend", '<div class="camera-controls" role="group" aria-label="Вид убежища"><button data-camera="out" aria-label="Отдалить убежище" title="Отдалить (−)">−</button><span id="camera-scale" class="camera-scale" aria-label="Масштаб">100%</span><button data-camera="in" aria-label="Приблизить убежище" title="Приблизить (+)">+</button><button data-camera="fit" class="camera-fit" aria-label="Обзор всего убежища" title="Обзор всего убежища (0)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 9V3h6m6 0h6v6m0 6v6h-6M9 21H3v-6"/></svg><span>Обзор</span></button><button data-camera="pan" aria-label="Рука: перемещать вид" title="Рука: перетаскивать убежище" aria-pressed="false"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 12V5a2 2 0 0 1 4 0v7-8a2 2 0 0 1 4 0v8-5a2 2 0 0 1 4 0v8c0 4-3 7-7 7h-1c-2 0-4-1-5-3L3 12a2 2 0 0 1 3-2l2 2"/></svg></button></div>');
@@ -306,6 +334,7 @@ function onWorldCameraChange(value: CameraViewState) {
 	cameraView = value;
 	updateCameraControls();
 	positionWorkerRoomTargets();
+	scheduleSessionSave();
 }
 function cameraAction(action: string) {
 	if (!canWorldCamera() || !world) return;
@@ -327,18 +356,19 @@ function inspectRoomView(id: string) {
 	revealAssignmentControl(worldViewport);
 	holdWorldInput();
 }
-let protectedSave = Boolean(raw && !loaded);
 function persist(): boolean {
+	if (!ownsSaveLease || saveConflict) { updateSaveBanner(); return false; }
 	if (protectedSave) {
 		document.querySelector("#save-status")!.textContent = "ИСХОДНЫЙ ПРОГРЕСС НЕ ПЕРЕЗАПИСАН · НУЖЕН КОРРЕКТНЫЙ ИМПОРТ";
 		return false;
 	}
-	try {
-		localStorage.setItem(SAVE_KEY, saveGame(state));
-		document.querySelector("#save-status")!.textContent =
-			"СОХРАНЕНО НА ЭТОМ УСТРОЙСТВЕ";
+	const result = saveStore.saveSync(state, captureSession());
+	if (result.ok) {
+		storageWarning = false;
+		document.querySelector("#save-status")!.textContent = `СОХРАНЕНО · ${new Date(result.savedAt!).toLocaleTimeString('ru-RU')} · ЭКРАН И ПРОГРЕСС`;
 		return true;
-	} catch {
+	} else {
+		if (result.code === 'conflict' || result.code === 'verification') { saveConflict = true; saveConflictReason = result.reason; setOverlayState(); updateSaveBanner(); return false; }
 		document.querySelector("#save-status")!.textContent =
 			"ХРАНИЛИЩЕ НЕДОСТУПНО · ЭКСПОРТИРУЙ СОХРАНЕНИЕ";
 		if (!storageWarning) {
@@ -350,6 +380,40 @@ function persist(): boolean {
 		}
 		return false;
 	}
+}
+function updateSaveBanner() {
+	const banner = document.querySelector<HTMLElement>('#save-banner'); if (!banner) return;
+	const blocked = !ownsSaveLease || saveConflict || protectedSave;
+	banner.hidden = !blocked;
+	if (!blocked) return;
+	const pending = saveOwnershipPending && !saveConflict && !protectedSave;
+	const recovered = openedSave.status === 'recovered' && protectedSave;
+	const message = protectedSave ? recovered ? 'Найдена последняя исправная запись. Исходный повреждённый файл сохранён до восстановления.' : 'Эта запись не читается или создана более новой версией. Исходный файл защищён от перезаписи.' : saveConflict ? saveConflictReason === 'storage-unavailable' || saveConflictReason === 'save-not-opened' ? 'Хранилище не удалось прочитать. Вкладка приостановлена; обнови игру, чтобы проверить запись снова.' : 'В другой вкладке появился новый прогресс. Эта вкладка остановлена, чтобы сохранить обе версии.' : pending ? 'Подключаем сохранение…' : 'Игра уже открыта в другой вкладке. Продолжай там или закрой её и обнови эту страницу.';
+	banner.innerHTML = `<p>${e(message)}</p><div>${recovered ? '<button class="button" data-action="recover-save">Восстановить исправную запись</button>' : protectedSave ? '<button class="button secondary" data-action="import">Импортировать сохранение</button>' : !pending ? '<button class="button secondary" data-action="reload-save">Обновить игру</button>' : ''}${!pending ? `<button class="button ghost" data-action="export">${protectedSave ? 'Скачать исходный файл' : 'Экспорт этой вкладки'}</button>` : ''}</div>`;
+}
+function storedProgressChanged(): boolean {
+	const conflict = saveStore.detectConflict();
+	if (conflict.conflict) { saveConflict = true; saveConflictReason = conflict.reason; setOverlayState(); updateSaveBanner(); }
+	return saveConflict;
+}
+function requestSaveOwnership() {
+	if (ownsSaveLease) return;
+	if (!navigator.locks) { saveOwnershipPending = false; updateSaveBanner(); document.querySelector('#save-banner p')!.textContent = 'Этот браузер не поддерживает безопасное автосохранение. Экспортируй игру, чтобы сохранить прогресс.'; return; }
+	saveOwnershipPending = true;
+	void navigator.locks.request('prapor-game-writer', {ifAvailable:true}, async lock => {
+		saveOwnershipPending = false;
+		if (!lock) { updateSaveBanner(); setOverlayState(); return; }
+		if (storedProgressChanged()) { updateSaveBanner(); return; }
+		ownsSaveLease = true; updateSaveBanner(); setOverlayState();
+		persist();
+		await new Promise<void>(resolve => { releaseSaveLease = resolve; });
+		ownsSaveLease = false; releaseSaveLease = null;
+	}).catch(() => { saveOwnershipPending = false; updateSaveBanner(); document.querySelector('#save-banner p')!.textContent = 'Не удалось подключить сохранение. Экспортируй текущую запись и обнови игру.'; });
+}
+function flushAndReleaseSave() {
+	persist();
+	releaseSaveLease?.();
+	ownsSaveLease = false;
 }
 function toast(message: string, ok = true) {
 	const node = document.querySelector<HTMLDivElement>("#toast")!;
@@ -505,6 +569,7 @@ function beginKeyboardAssignment(id: string) {
 	if (target) revealAssignmentControl(target);
 }
 function assignPlacedWorker(scavId: string, roomId: string) {
+	if (storedProgressChanged()) { cancelWorkerPlacement(false, true); return; }
 	if (!canWorldDrag()) { cancelWorkerPlacement(false, true); return; }
 	const scav = state.scavs.find((item) => item.id === scavId), room = state.shelter.rooms.find((item) => item.id === roomId);
 	const alreadyAssigned = scav?.assignment === roomId;
@@ -1002,8 +1067,9 @@ function setOverlayState() {
 		holdWorldInput();
 	}
 	const shell = document.querySelector<HTMLElement>(".shell")!;
-	shell.inert = modalOpen || drawerOpen || toolsOpen;
-	const tools = document.querySelector<HTMLElement>("#tool-root")!; tools.inert = modalOpen || drawerOpen;
+	shell.inert = !ownsSaveLease || saveConflict || protectedSave || modalOpen || drawerOpen || toolsOpen;
+	const tools = document.querySelector<HTMLElement>("#tool-root")!; tools.inert = !ownsSaveLease || saveConflict || protectedSave || modalOpen || drawerOpen;
+	document.querySelector<HTMLElement>('#inspector-root')!.inert = !ownsSaveLease || saveConflict || protectedSave;
 	if (mobileContext && !shell.inert) {
 		document.querySelector<HTMLElement>(".command-hud")!.inert = true;
 		document.querySelector<HTMLElement>(".command-toolbar")!.inert = true;
@@ -1313,7 +1379,8 @@ function render() {
 	deferredRender = false;
 	const tabsScroll = panel.querySelector<HTMLElement>(".armory-tabs")?.scrollLeft ?? 0;
 	const panelFocus = document.activeElement instanceof HTMLElement && panel.contains(document.activeElement) ? document.activeElement.dataset.focusKey : undefined;
-	const expandedReports = Array.from(panel.querySelectorAll<HTMLDetailsElement>("details[data-report][open]")).map((node) => node.dataset.report);
+	const expandedReports = [...resumedJournal, ...Array.from(panel.querySelectorAll<HTMLDetailsElement>("details[data-report][open]")).map((node) => node.dataset.report)];
+	resumedJournal = [];
 	document
 		.querySelectorAll<HTMLButtonElement>(".nav button")
 		.forEach((button) =>
@@ -1604,8 +1671,10 @@ function weaponDetail(weapon: WeaponInstance) {
 	return `<aside class="weapon-detail"><span class="eyebrow" style="color:${RARITY_COLORS[def.rarity]}">${RARITY_LABELS[def.rarity]} · ${CATEGORY_LABELS[def.category]}</span><h2>${e(def.name)}</h2>${weaponBuildArt(weapon)}${weaponReadiness(weapon)}<p>${e(def.description)}</p>${preservedTuning(weapon)}<div class="weapon-role"><strong>${e(role.label)}</strong><p>${e(role.description)}</p><div class="loadout-stats"><span>Вес ${stats.weight.toFixed(2)} кг</span><span>Патроны ×${(stats.ammoMultiplier * role.ammoMultiplier).toFixed(2)}</span><span>Модулей ${Object.keys(weapon.modules).length} / 8</span></div></div><div class="detail-row"><span>Мощность</span><strong>${stats.power}</strong></div><div class="detail-row"><span>Эргономика</span><strong>${Math.round(stats.ergonomics)}</strong></div><div class="detail-row"><span>Отдача · ниже лучше</span><strong>${Math.round(stats.recoil)}</strong></div><div class="detail-row"><span>Надёжность</span><strong>${Math.round(stats.reliability)}%</strong></div><div class="detail-row"><span>Состояние</span><strong>${Math.round(weapon.durability)}%</strong></div><div class="health-track"><i style="width:${weapon.durability}%"></i></div>${issues.length ? `<p class="risk-note">${issues.map(e).join(" · ")}</p>` : ""}<button class="button bench-entry" data-action="open-bench" data-id="${weapon.id}">${icon("scrap", 18)} Открыть оружейный верстак</button><div class="detail-row"><span>Выдано</span><strong>${owner ? e(owner.name) : "На складе"}</strong></div><div class="weapon-assign">${owner ? `<button class="button ghost" data-scav="${owner.id}">${icon("people", 16)} Личное дело: ${e(owner.name)}</button>` : `<label class="field-label">Выдать бойцу<select data-assign-weapon="${weapon.id}" aria-label="Выдать ${e(def.name)} бойцу"><option value="">Выбери бойца</option>${state.scavs.filter((scav) => scav.status !== "raiding").map((scav) => `<option value="${scav.id}">${e(scav.name)}${scav.weaponInstanceId ? " · заменить ствол" : " · без оружия"}</option>`).join("")}</select></label>`}</div><div class="detail-actions"><button class="button secondary" data-action="repair" data-id="${weapon.id}" ${busy || !needsWeaponRepair(weapon) || !canAfford(repair) ? "disabled" : ""}>Ремонт сборки · ${costLabel(repair)}</button><small class="cost-reason" data-weapon-cost="${weapon.id}-repair">${busy ? "Оружие в рейде" : !needsWeaponRepair(weapon) ? "Ремонт не нужен" : costReason(repair)}</small><button class="button ghost" data-action="sell" data-id="${weapon.id}" ${liquidationReason ? "disabled" : ""} title="${e(liquidationReason ?? "Продажа вместе с установленными модулями")}">Продать сборку · ${n(getWeaponSaleValue(weapon))} ₽</button><button class="button ghost" data-action="recycle-weapon" data-id="${weapon.id}" ${liquidationReason ? "disabled" : ""} title="${e(liquidationReason ?? "Уничтожить сборку и модули, получить материалы")}">Утилизация сборки · ${getWeaponRecycleYield(weapon)} дет.</button><small class="quote-note" data-recycle-note>${e(liquidationReason ?? "Продажа и утилизация удалят всю сборку с модулями. Чтобы сохранить модули, используй верстак")}</small></div></aside>`;
 }
 function showSettings() {
+	const meta = saveStore.getMetadata();
+	const saveDescription = storageWarning ? 'Последняя запись не подтверждена. Экспортируй игру перед закрытием.' : meta.savedAt ? `Последняя запись: ${new Date(meta.savedAt).toLocaleTimeString('ru-RU')}. Прогресс, текущий экран, камера и выбранные приёмы сохраняются вместе.` : 'Первая запись появится после подключения хранилища.';
 	document.querySelector("#modal-root")!.innerHTML =
-		`<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title"><h2 id="settings-title">Твоё дело — при тебе.</h2><p>Прогресс хранится в этом браузере. Перед сменой устройства экспортируй сохранение. За отсутствие учитывается до 8 часов стройки, пополнения резерва, работы назначенных бойцов, лечения и рейдов по постоянным приказам. Рубли и припасы пополняются до предела базы.</p><p>Автовыходы повторяются офлайн до выбранной глубины и нехватки ресурсов, здоровья или исправного оружия. Ручная экспедиция остановится в точке связи до твоего приказа. Они несут риск потери бойца и ствола. Останови постоянный приказ в карточке дикого, чтобы отменить будущие выходы.</p>${protectedSave ? '<p class="order-risk">Исходный файл не удалось прочитать. Он остаётся в браузере без изменений; автоматическое сохранение временной сессии отключено. Скачай исходный файл и импортируй корректное сохранение.</p>' : ""}<p>Для назначения на работу перетащи бойца на комнату: мышью — за портрет или фигурку, на телефоне — за значок рядом с портретом. Кнопка «Назначить» рядом с портретом позволяет выбрать комнату с клавиатуры; Tab переключает комнаты, Enter назначает, Esc отменяет. Для выхода в рейд сначала освободи работника.</p><p>Начни с «Дворов»: выбери бойца и оружие, отправь на первый этап. После точки связи эвакуируйся или выбери бонус и путь дальше. Чертежи и память маршрутов сохраняются после потерь; рубли и найденные предметы попадут на базу при эвакуации.</p><div class="detail-actions"><button class="button secondary" data-action="export">${protectedSave ? "Скачать исходный файл" : "Экспорт"}</button><button class="button ghost" data-action="import">Импорт</button></div><input type="file" accept="application/json,.json" id="save-file" hidden><div class="save-note">Сохранение восстанавливает отряд, физические сборки и запасные модули с их состоянием, комплекты, чертежи, приказы и текущие этапы. Ручные экспедиции ждут твоего приказа в точке связи. Импорт заменит текущий прогресс после проверки файла.</div><button class="button ghost" style="width:100%;margin-top:20px" data-action="close-modal">Продолжить</button></section></div>`;
+		`<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title"><h2 id="settings-title">Твоё дело — при тебе.</h2><div class="save-summary"><span class="eyebrow">Прогресс на этом устройстве</span><p>${e(saveDescription)}</p><button class="button secondary" data-action="save-now">Сохранить сейчас</button></div><p>Прогресс хранится в этом браузере. Перед сменой устройства экспортируй сохранение. За отсутствие учитывается до 8 часов стройки, пополнения резерва, работы назначенных бойцов, лечения и рейдов по постоянным приказам. Рубли и припасы пополняются до предела базы.</p><p>Автовыходы повторяются офлайн до выбранной глубины и нехватки ресурсов, здоровья или исправного оружия. Ручная экспедиция остановится в точке связи до твоего приказа. Они несут риск потери бойца и ствола. Останови постоянный приказ в карточке дикого, чтобы отменить будущие выходы.</p>${protectedSave ? '<p class="order-risk">Исходный файл не удалось прочитать. Он остаётся в браузере без изменений; автоматическое сохранение временной сессии отключено. Скачай исходный файл и импортируй корректное сохранение.</p>' : ""}<p>Для назначения на работу перетащи бойца на комнату: мышью — за портрет или фигурку, на телефоне — за значок рядом с портретом. Кнопка «Назначить» рядом с портретом позволяет выбрать комнату с клавиатуры; Tab переключает комнаты, Enter назначает, Esc отменяет. Для выхода в рейд сначала освободи работника.</p><p>Начни с «Дворов»: выбери бойца и оружие, отправь на первый этап. После точки связи эвакуируйся или выбери бонус и путь дальше. Чертежи и память маршрутов сохраняются после потерь; рубли и найденные предметы попадут на базу при эвакуации.</p><div class="detail-actions"><button class="button secondary" data-action="export">${protectedSave ? "Скачать исходный файл" : "Экспорт"}</button><button class="button ghost" data-action="import">Импорт</button></div><input type="file" accept="application/json,.json" id="save-file" hidden><div class="save-note">Сохранение восстанавливает отряд, физические сборки и запасные модули с их состоянием, комплекты, чертежи, приказы и текущие этапы. Ручные экспедиции ждут твоего приказа в точке связи. Импорт заменит текущий прогресс после проверки файла.</div><button class="button ghost" style="width:100%;margin-top:20px" data-action="close-modal">Продолжить</button></section></div>`;
 	focusModal();
 }
 function showAutoRaidOrder(scavId: string) {
@@ -1616,12 +1685,14 @@ function showAutoRaidOrder(scavId: string) {
 	focusModal();
 }
 document.addEventListener("click", (event) => {
+	storedProgressChanged();
 	if ((event.target as Element).closest("#tool-root, #inspector-root, #modal-root, #command-dock, #context-shade, button, select, input, summary")) holdWorldInput();
 	const artSlot = (event.target as Element).closest<SVGElement>('.workbench-stage [data-module-slot]');
 	if (artSlot?.dataset.moduleSlot) { selectBenchSlot(artSlot.dataset.moduleSlot as ModuleSlot); return; }
 	const target = (event.target as HTMLElement).closest<HTMLButtonElement>(
 		"button"
 	);
+	if (target && (!ownsSaveLease || saveConflict || protectedSave) && !['settings','close-modal','export','import','recover-save','reload-save'].includes(target.dataset.action ?? '')) return;
 	if (!target || target.disabled) {
 		if ((event.target as HTMLElement).classList.contains("inspector-backdrop")) closeInspector();
 		if ((event.target as HTMLElement).classList.contains("modal-backdrop")) closeModal();
@@ -1973,9 +2044,9 @@ document.addEventListener("click", (event) => {
 			closeModal();
 			break;
 		case "export": {
-			persist();
+			if (ownsSaveLease && !saveConflict && !protectedSave) persist();
 			const url = URL.createObjectURL(
-				new Blob([protectedSave && raw ? raw : saveGame(state)], { type: "application/json" })
+				new Blob([protectedSave && raw !== null ? raw : saveStore.exportCurrent(state, captureSession())], { type: "application/json" })
 			);
 			const a = document.createElement("a");
 			a.href = url;
@@ -1986,12 +2057,28 @@ document.addEventListener("click", (event) => {
 			break;
 		}
 		case "import":
+			if (!document.querySelector('#save-file')) showSettings();
 			document.querySelector<HTMLInputElement>("#save-file")!.click();
 			break;
+		case "save-now":
+			{ const saved = persist(); toast(saved ? "Сохранены прогресс, текущий экран и приказы." : "Запись не подтверждена. Используй экспорт.", saved); }
+			break;
+		case "reload-save":
+			window.location.reload();
+			break;
+		case "recover-save": {
+			const result = saveStore.saveSync(state, captureSession(), {replaceProtected:true});
+			if (!result.ok) { toast("Не удалось подтвердить восстановление. Исходный файл защищён.",false); break; }
+			protectedSave = false; raw = null; updateSaveBanner(); setOverlayState(); persist();
+			toast("Исправная запись восстановлена.");
+			break;
+		}
 	}
 });
 document.addEventListener("change", async (event) => {
 	const target = event.target as HTMLInputElement | HTMLSelectElement;
+	storedProgressChanged();
+	if ((!ownsSaveLease || saveConflict || protectedSave) && target.id !== 'save-file') return;
 	if (target.hasAttribute("data-live-raid-select")) { watchRaid(target.value); document.querySelector<HTMLSelectElement>('[data-live-raid-select]')?.focus({ preventScroll: true }); return; }
 	if (target.dataset.roomWorker) { chosenWorkers.set(target.dataset.roomWorker, target.value); return; }
 	if (target.dataset.roomRepeat) {
@@ -2040,46 +2127,37 @@ document.addEventListener("change", async (event) => {
 	if (target.id === "save-file") {
 		const file = (target as HTMLInputElement).files?.[0];
 		if (!file) return;
-		if (file.size > 1_000_000) {
+		if (file.size > MAX_GAME_SAVE_LENGTH) {
 			toast("Файл слишком большой.", false);
 			return;
 		}
 		try {
-			const imported = loadGameWithSummary(await file.text());
+			const imported = parseGameSave(await file.text());
 			if (!imported) {
 				toast("Сохранение повреждено или имеет другую версию.", false);
 				return;
 			}
-			const old = state;
-			const oldProtected = protectedSave;
-			cancelWorkerPlacement();
-			state = imported.state;
-			protectedSave = false;
-			if (!persist()) {
-				state = old;
-				protectedSave = oldProtected;
+			const session = readGameSession(imported.session, imported.state);
+			const written = saveStore.saveSync(imported.state,session,{replaceProtected:true});
+			if (!written.ok) {
 				toast("Импорт отменён: браузер не смог записать сохранение.", false);
 				return;
 			}
+			cancelWorkerPlacement();
+			state = imported.state; protectedSave = false; raw = null;
 			closeModal();
 			closeInspector();
-			page = "home";
-			contextMode = "overview";
-			selectedShelterSite = null;
-			selectedRoomId = state.shelter.rooms[0]?.id ?? null;
-			selectedRaidId = state.raids[0]?.id ?? null;
-			lastWatchedRaid = null;
-			lastWatchedReport = null;
-			world?.selectRaid(selectedRaidId);
-			selectedBenchModule = null;
-			productionWorkshopId = null;
 			selectedPerks.clear(); chosenWorkers.clear(); roomRepeatPreferences.clear();
 			toolOrigin = null; commandOrigin = null;
 			offlineSummary = imported.summary.elapsedMs >= 60_000 || imported.summary.completedCount ? imported.summary : null;
-			selectedWeapon = state.weapons[0]?.id ?? "";
-			selectedMap = MAPS[0]!.id;
+			applySession(session);
+			presentationFallback = session.presentation;
 			render();
-			setView("base"); world?.setPanMode(false); world?.resetCamera();
+			setView(worldView);
+			world?.selectRaid(selectedRaidId);
+			world?.restorePresentationState(session.presentation);
+			updateSaveBanner(); setOverlayState(); persist();
+			(target as HTMLInputElement).value = '';
 			toast("Сохранение восстановлено.");
 		} catch {
 			toast("Не удалось прочитать сохранение.", false);
@@ -2111,6 +2189,7 @@ document.addEventListener("input", (event) => {
 	if (caret != null) replacement?.setSelectionRange(caret, caret);
 });
 document.addEventListener("keydown", (event) => {
+	if ((!ownsSaveLease || saveConflict || protectedSave) && !document.querySelector('#modal-root .modal')) return;
 	if ((workerPlacement || crewPointer) && event.key === "Escape") { event.preventDefault(); cancelWorkerPlacement(true, true); return; }
 	if (workerPlacement?.mode === "keyboard" && event.key === "Tab") {
 		const controls = Array.from(document.querySelectorAll<HTMLButtonElement>("#worker-room-targets button, #worker-placement button")).filter((node) => node.getClientRects().length > 0);
@@ -2143,7 +2222,10 @@ function watchedRaid() {
 }
 function watchedReport() {
 	const report = getWatchedReport(state, selectedRaidId);
-	if (report) lastWatchedReport = report;
+	if (report && report !== lastWatchedReport) {
+		if (lastWatchedRaid?.id === report.raidId && !state.raids.some(raid=>raid.id===report.raidId)) lastWatchedRaid = structuredClone(lastWatchedRaid);
+		lastWatchedReport = report;
+	}
 	return report ?? (lastWatchedReport?.raidId === selectedRaidId ? lastWatchedReport : null);
 }
 function liveCheckpointControls(raid: Raid | null) {
@@ -2228,7 +2310,6 @@ world = createWorld(
 		onShelterRoom: (id) => { if (canWorldInteract()) openShelterRoom(id); },
 		onBuildSite: ({ column, row }) => { if (canWorldInteract()) openShelterSite(column, row); } }
 );
-let ticks = 0;
 const readyContracts = () =>
 	CONTRACTS.filter(
 		(contract) =>
@@ -2253,14 +2334,14 @@ function notifyCompleted(summary: AdvanceSummary) {
 	}
 }
 const simulationTimer = setInterval(() => {
-	if (document.hidden) return;
+	if (document.hidden || !ownsSaveLease || protectedSave || storedProgressChanged()) return;
 	const beforeLevel = state.level,
 		beforeStatus = rosterStatus(),
 		beforeShelter = shelterStatus(),
 		beforeContracts = readyContracts();
 	const summary = advance(state);
 	hud();
-	if (worldView === "raid") { const raid = watchedRaid(); if (raid) updateLiveRaidPanel(document.querySelector<HTMLElement>('#command-dock')!, raid, watchedReport()); }
+	if (worldView === "raid") { const raid = watchedRaid(); if (raid) updateLiveRaidPanel(document.querySelector<HTMLElement>('#command-dock')!, raid, watchedReport(), state); }
 	if (
 		summary.completedCount ||
 		state.level !== beforeLevel ||
@@ -2272,19 +2353,22 @@ const simulationTimer = setInterval(() => {
 		notifyCompleted(summary);
 	}
 	if (deferredRender && !interacting()) render();
-	if (++ticks % 5 === 0) persist();
+	persist();
 }, 1000);
 document.addEventListener("visibilitychange", () => {
 	if (document.hidden) { cancelWorkerPlacement(false, true); world?.cancelCameraGesture(); persist(); }
-	else {
+	else if (ownsSaveLease && !protectedSave && !storedProgressChanged()) {
 		const summary = advance(state);
 		if (summary.elapsedMs >= 60_000 || summary.completedCount) offlineSummary = summary;
 		refreshAfterAdvance();
 		persist();
 	}
 });
-window.addEventListener("pagehide", persist);
+window.addEventListener("pagehide", flushAndReleaseSave);
 window.addEventListener("beforeunload", persist);
+window.addEventListener('pageshow', event => { if (event.persisted) requestSaveOwnership(); });
+window.addEventListener('storage', event => { if (event.key === null || event.key === SAVE_KEY || event.key === PREVIOUS_SAVE_KEY) storedProgressChanged(); });
+for (const type of ['click','change','input','toggle','pointerup']) document.addEventListener(type, scheduleSessionSave);
 let contextIsMobile = window.innerWidth <= 850;
 const responsiveContext = () => {
 	cancelWorkerPlacement(false, true);
@@ -2301,6 +2385,8 @@ import.meta.hot?.dispose(() => {
 	clearInterval(simulationTimer);
 	clearTimeout(toastTimer);
 	if (workerRefreshTimer != null) clearTimeout(workerRefreshTimer);
+	if (saveUiTimer !== null) clearTimeout(saveUiTimer);
+	flushAndReleaseSave();
 	world?.game.destroy(true);
 	window.removeEventListener("resize", responsiveContext);
 	document.removeEventListener("pointerdown", captureInterfacePointer, true);
@@ -2321,3 +2407,8 @@ if (protectedSave) {
 		false
 	);
 }
+setView(worldView);
+world?.selectRaid(selectedRaidId);
+world?.restorePresentationState(initialSession.presentation);
+updateSaveBanner();
+requestSaveOwnership();

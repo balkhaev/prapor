@@ -42,6 +42,19 @@ export interface RaidFieldFrame {
 export interface RaidFieldOutcome {
 	moneyMultiplier: number; resourceBonus: Supplies; preferredSlots: ModuleSlot[]; narrative: string;
 }
+export interface RaidFieldCameraState { zoom: number; x: number; y: number; following: boolean }
+/** Presentation data is separate from the simulation save; malformed camera values are ignored. */
+export function readRaidFieldCamera(value: unknown): RaidFieldCameraState | null {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+	const camera = value as Record<string, unknown>;
+	if (![camera.zoom, camera.x, camera.y].every((item) => typeof item === "number" && Number.isFinite(item)) || typeof camera.following !== "boolean") return null;
+	return { zoom: Math.min(4, Math.max(.7, camera.zoom as number)), x: camera.x as number, y: camera.y as number, following: camera.following };
+}
+export interface RaidFieldObjective {
+	action: RaidFieldAction; label: string; detail: string; progress: number; remainingSeconds: number;
+	searchTargetId: string | null; visited: { id: string; label: string; at: number }[];
+	segment: number; segments: number; totalSearches: number; settling: boolean;
+}
 
 const THEMES: Record<string, RaidFieldTheme> = {
 	courtyard: { label: "Панельные дворы", ground: 0x485143, road: 0x66624f, wall: 0x9c9980, roof: 0x626b59, accent: 0xc1b88a, weather: "rain" },
@@ -251,6 +264,25 @@ export function getRaidFieldFrame(raid: Raid, now: number, suppliedPlan?: RaidFi
 		observedEvents, visitedLootIds, visibleLootIds: segment.kind === "search" && segment.targetId && !visitedLootIds.includes(segment.targetId) ? [...visitedLootIds, segment.targetId] : [...visitedLootIds],
 		weatherPhase: Math.max(0, (Number.isFinite(now) ? now : raid.startedAt) - raid.startedAt) / 1000,
 	};
+}
+
+/** Current observations only: an inspected street spot is not yet confirmed checkpoint cargo. */
+export function getRaidFieldObjective(raid: Raid, now: number, suppliedPlan?: RaidFieldPlan): RaidFieldObjective {
+	const plan = suppliedPlan?.id === fieldIdentity(raid) ? suppliedPlan : getRaidFieldPlan(raid);
+	const frame = getRaidFieldFrame(raid, now, plan), segment = plan.segments[frame.segmentIndex]!;
+	const duration = Math.max(1, raid.endsAt - raid.startedAt);
+	const settling = frame.progress >= 1 && raid.expedition?.status !== "choice";
+	const target = frame.action === "search" ? plan.lootSpots.find((spot) => spot.id === segment.targetId) : null;
+	const labels: Record<RaidFieldAction, string> = {
+		move: "Пройти к следующему укрытию", cover: "Переждать контакт в укрытии", skirmish: "Удержать проход под огнём",
+		search: target ? `Осмотреть «${target.label}»` : "Осмотреть точку", extract: "Дойти до контрольной точки", checkpoint: "Эвакуировать груз или идти дальше",
+	};
+	return { action: frame.action, label: settling ? "Ожидается сводка с контрольной точки" : labels[frame.action],
+		detail: frame.action === "search" ? "Находки будут подтверждены в сводке на контрольной точке." : frame.detail,
+		progress: frame.segmentProgress, remainingSeconds: frame.paused ? 0 : Math.max(0, Math.ceil((segment.end - frame.progress) * duration / 1000)),
+		searchTargetId: target?.id ?? null,
+		visited: plan.segments.filter((item) => item.kind === "search" && item.end <= frame.progress).map((item) => ({ id: item.targetId!, label: plan.lootSpots.find((spot) => spot.id === item.targetId)?.label ?? "Точка", at: raid.startedAt + Math.round(item.end * duration) })),
+		segment: frame.segmentIndex + 1, segments: plan.segments.length, totalSearches: plan.segments.filter((item) => item.kind === "search").length, settling };
 }
 
 /** Used only when the real checkpoint settles. Modifiers add no RNG draws or success knowledge. */
