@@ -115,12 +115,13 @@ beforeEach(async () => {
 afterEach(async () => { service.close(); await rm(directory, { recursive: true, force: true }); });
 
 describe("multiplayer loot and durable headquarters economy", () => {
-  test("all 24 trophies occur in authored map pools, rare finds follow danger, and drops carry private source UUIDs", async () => {
+  test("all 32 trophy and junk models occur in authored pools, legendary finds follow danger, and drops carry private source UUIDs", async () => {
     const models = new Set(LIVE_MAPS.flatMap(map => map.lootSpawns.flatMap(point => getLiveLootPool(map.id, point).map(entry => entry.model.id))));
     expect([...models].sort()).toEqual(LOOT_MODELS.map(model => model.id).sort());
     expect(getLiveLootPool("perimeter", { x: 0, y: 0 }).every(entry => entry.model.minDepth === 1)).toBe(true);
     const contested = getLiveMap("perimeter").pois.find(poi => poi.danger === 3 && poi.districtId === "depot")!;
     expect(getLiveLootPool("perimeter", { x: contested.x + 10, y: contested.y + 10 }).some(entry => entry.model.id === "secure-drive")).toBe(true);
+    expect(getLiveLootPool("perimeter", { x: contested.x + 10, y: contested.y + 10 }).filter(entry => entry.model.rarity === "legendary")).toHaveLength(2);
     const first = await enter();
     expect(first.state.self.gameId).toBe(first.session.gameId);
     expect(first.state.drops.every(drop => drop.amount === 0 && drop.items === undefined)).toBe(true);

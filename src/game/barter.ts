@@ -42,6 +42,8 @@ export const BARTER_OFFERS: readonly BarterOffer[] = [
 	offer("frame_pack", [["thermal-sensor", 1]]),
 	offer("tactical_helmet", [["gold-ring", 1], ["bandage-roll", 1]], "-ring"),
 	offer("plate_armor", [["cipher-book", 1], ["duct-tape", 1]], "-cipher"),
+	offer("heavy_armor", [["military-cpu", 1]], "-processor"),
+	offer("frame_pack", [["prototype-optics", 1]], "-prototype"),
 ];
 export const getBarterOffers = (): readonly BarterOffer[] => BARTER_OFFERS;
 export function getBarterQuote(state: GameState, offerId: string): BarterQuote {

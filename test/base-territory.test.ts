@@ -1,3 +1,4 @@
+import { fundConstructionLoot } from './loot-material-fixture';
 import { describe, expect, test } from "bun:test";
 import {
 	advance, assignWorker, buildRoom, createGame, excavateShelter, getBuildRoomQuote,
@@ -13,7 +14,7 @@ function funded(level = 1): GameState {
 	state.level = level; state.xp = (level - 1) ** 2 * 90;
 	state.money = 20_000;
 	state.supplies = { ammo: 100, medicine: 0, scrap: 200, intel: 20 };
-	return state;
+	return fundConstructionLoot(state);
 }
 function restored(state: GameState): GameState {
 	const copy = parseSave(saveGame(state)); expect(copy).not.toBeNull(); return copy!;
@@ -109,7 +110,7 @@ describe("free placement on expandable base territory", () => {
 		expect(getBuildRoomQuote(locked, "hangar", 0, 1).reason).toContain("4");
 		expect(buildRoom(locked, "hangar", 0, 1, NOW).ok).toBe(false); expect(saveGame(locked)).toBe(before);
 		const state = funded(4), guns = getStorageCapacity(state), modules = getModuleCapacity(state), supplies = getSupplyCapacity(state);
-		expect(getBuildRoomQuote(state, "hangar", 0, 1)).toEqual({ money: 900, scrap: 30, duration: 180, reason: null });
+		expect(getBuildRoomQuote(state, "hangar", 0, 1)).toMatchObject({ money: 900, scrap: 30, duration: 180, reason: null });
 		expect(buildRoom(state, "hangar", 0, 1, NOW).ok).toBe(true);
 		expect(state.money).toBe(19_100); expect(state.supplies.scrap).toBe(170);
 		const room = hangar(state); expect(getRoomSites(room)).toHaveLength(6);

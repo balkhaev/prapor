@@ -1,3 +1,4 @@
+import { fundConstructionLoot } from './loot-material-fixture';
 import { describe, expect, test } from "bun:test";
 import {
 	advance, buildRoom, createGame, excavateShelter, getRoomSites, getRoomProductionState,
@@ -15,6 +16,8 @@ const NOW = 1_792_000_000_000;
 function withHangar(rotation: 0 | 1 = 0) {
 	const state = createGame(NOW);
 	state.level = 4; state.xp = 810; state.money = 5_000; state.supplies.scrap = 40;
+	for(const need of ROOM_DEFINITIONS.hangar.lootRequirements??[])for(let i=0;i<need.quantity;i++)(state.lootItems??=[]).push({id:`loot-${state.nextId++}`,modelId:need.modelId,foundAt:NOW});
+	fundConstructionLoot(state);
 	if (rotation) {
 		for (const column of [0, 1]) expect(excavateShelter(state, column, 3, state.lastUpdated).ok).toBe(true);
 		advance(state, NOW + 20_000);
@@ -50,12 +53,13 @@ describe("territory presentation and restored controls", () => {
 	});
 
 	test("catalogue communicates the future footprint and disables locked construction", () => {
-		const state = createGame(NOW); state.money = 5_000; state.supplies.scrap = 40;
+		const state = fundConstructionLoot(createGame(NOW)); state.money = 5_000; state.supplies.scrap = 40;
 		const locked = buildingCatalogue(state).match(/<article[^>]*>.*?<h3>Ангар<\/h3>.*?<\/article>/s)?.[0] ?? "";
 		expect(locked).toContain("3 × 2 участков");
 		expect(locked).toContain("Откроется на уровне 4");
 		expect(locked.match(/<button[^>]*data-room-type="hangar"[^>]*>/)?.[0]).toContain("disabled");
 		state.level = 4; state.xp = 810;
+		for(const need of ROOM_DEFINITIONS.hangar.lootRequirements??[])for(let i=0;i<need.quantity;i++)(state.lootItems??=[]).push({id:`loot-${state.nextId++}`,modelId:need.modelId,foundAt:NOW});
 		const unlocked = buildingCatalogue(state);
 		expect(unlocked.match(/<button[^>]*data-room-type="hangar"[^>]*>/)?.[0]).not.toContain("disabled");
 	});

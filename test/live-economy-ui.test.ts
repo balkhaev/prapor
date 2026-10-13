@@ -60,7 +60,9 @@ describe('live loot and headquarters presentation',()=>{
       const totals=liveLootTotals([item]);
       expect(totals.weight).toBe(model.weight);expect(totals.guide).toBe(model.guidePrice);expect(totals.trader).toBeLessThan(totals.guide);
       const html=liveLootCargo(player);
-      expect(html).toContain(model.label);expect(html).toContain('Ориентир');expect(html).toContain('торговцу');expect(html).toContain('свою цену');
+      expect(html).toContain(model.label);expect(html).toContain('Ориентир');
+      if(model.autoSell){expect(html).toContain('автопродажа при доставке');expect(html).not.toContain('свою цену');}
+      else{expect(html).toContain('торговцу');expect(html).toContain('свою цену');}
       expect(liveDropLabel({id:'drop',x:2,y:2,amount:0,items:[item]})).toBe(model.label);
       expect(liveDropDetails({id:'drop',x:2,y:2,amount:0,items:[item]})).toContain('ориентир');
     }

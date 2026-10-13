@@ -1,3 +1,4 @@
+import { fundConstructionLoot } from './loot-material-fixture';
 import { withoutRaidStrategy } from "./legacy-strategy-fixture";
 import { describe, expect, test } from "bun:test";
 import {
@@ -24,7 +25,7 @@ function funded(): GameState {
 	const state = createGame(NOW);
 	state.money = 20_000;
 	state.supplies = { ammo: 200, medicine: 0, scrap: 200, intel: 50 };
-	return state;
+	return fundConstructionLoot(state);
 }
 function room(state: GameState, type: RoomInstance["type"]) {
 	return state.shelter.rooms.find(room => room.type === type)!;

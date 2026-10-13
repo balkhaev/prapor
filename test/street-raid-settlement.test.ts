@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	advance, continueExpedition, createGame, dispatchRaid, extractRaid, getExpeditionChoices,
-	getRaidPhase, healthPercent, resolveMedicalEncounter, loadGameWithSummary, parseSave, saveGame, SAVE_VERSION, type GameState,
+	getRaidPhase, healthPercent, resolveMedicalEncounter, loadGameWithSummary, parseSave, saveGame, SAVE_VERSION, getLootModel, getLootTraderPrice, type GameState,
 } from "../src/game/engine";
 import { getRaidFieldFrame, getRaidFieldOutcome, getRaidFieldPlan } from "../src/raid-field";
 import { MAP_BY_ID } from '../src/game/data';
@@ -85,9 +85,10 @@ describe("street encounters remain real checkpoint settlements", () => {
 		expect(state.money).toBe(control.money);
 		expect(state.supplies).toEqual(control.supplies);
 		const cargo = structuredClone(raid.expedition!.cargo), beforeExtraction = state.money;
+		const junkCash = (cargo.lootItems ?? []).filter(item => getLootModel(item).autoSell).reduce((sum, item) => sum + getLootTraderPrice(item), 0);
 		expect(extractRaid(state, raid.id, state.lastUpdated).ok).toBe(true);
-		expect(state.history[0]!.money).toBe(cargo.money);
-		expect(state.money).toBe(beforeExtraction + cargo.money);
+		expect(state.history[0]!.money).toBe(cargo.money + junkCash);
+		expect(state.money).toBe(beforeExtraction + cargo.money + junkCash);
 		expect(state.history[0]!.moduleIds).toHaveLength(cargo.modules.length);
 		const extracted = saveGame(state);
 		expect(extractRaid(state, raid.id, state.lastUpdated).ok).toBe(false);

@@ -71,7 +71,7 @@ function renderRaidDebrief(state: GameState, report: RaidReport, receipts: RaidR
   supplies.ammo > 0 ? 'Патроны пополняют запас для следующего выхода.' : '',
   supplies.medicine > 0 ? 'Медикаменты — на лечение бойцов и аптечки.' : '',
   modules > 0 ? 'Модули — для сборки и улучшения оружия; детали сверх вместимости уже проданы.' : '',
-  delivered.some(item => item.weaponId && !item.weaponAutoSold) ? 'Оружейный трофей проверь в арсенале перед выдачей бойцу.' : '',loot.length?`Доставлено трофеев: ${loot.length}, ориентир ${n(lootGuide)} ₽. Сохрани для бартера на снаряжение диких или выбери предметы для продажи.`:'',pending.length?`${pending.length} трофеев при эвакуации не поместились на склад и были сохранены в посылке. Текущий статус доставки — в разделе «Мой склад».`:''].filter(Boolean);
+  delivered.some(item => item.weaponId && !item.weaponAutoSold) ? 'Оружейный трофей проверь в арсенале перед выдачей бойцу.' : '',loot.length?`Доставлено трофеев: ${loot.length}, ориентир ${n(lootGuide)} ₽. Сохрани целые предметы для стройки, производства и бартера на снаряжение диких или выбери предметы для продажи.`:'',pending.length?`${pending.length} трофеев при эвакуации не поместились на склад и были сохранены в посылке. Текущий статус доставки — в разделе «Мой склад».`:''].filter(Boolean);
  if (!uses.length) uses.push(report.squad && receipts.length < report.squad.members.length
   ? 'В сохранившихся личных отчётах нет доставленной добычи. Полный итог груза отряда в последних записях не сохранился.'
   : receipts.some(item => !item.success)

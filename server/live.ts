@@ -95,12 +95,14 @@ export function getLiveLootPool(mapId: LiveMapId, point: LivePoint): { model: Lo
   const depth = world.zones.filter(zone => point.x >= zone.x && point.x < zone.x + zone.width && point.y >= zone.y && point.y < zone.y + zone.height)
     .reduce((danger, zone) => Math.max(danger, zone.danger), 1);
   const district = districtAt(point);
-  const pool = getRaidLootPool(({ customs: "factory", sawmill: "forest", depot: "reserve", village: "forest" } as const)[district],
+  const sector = depth === 3 && district === "depot" ? "bunker" : ({ customs: "factory", sawmill: "forest", depot: "reserve", village: "forest" } as const)[district];
+  const pool = getRaidLootPool(sector,
     ({ customs: "scavenge", sawmill: "recon", depot: "combat", village: "scavenge" } as const)[district], depth);
   const table = world.containers.find(anchor => anchor.x === point.x && anchor.y === point.y)?.lootTable;
   const category = table === "medical" ? "medicine" : table;
   const matching = pool.filter(entry => entry.model.category === category);
-  return matching.length ? matching : pool;
+  // Dedicated containers favour their contents, while broken remnants may still appear there.
+  return matching.length ? [...matching, ...pool.filter(entry => entry.model.autoSell).map(entry => ({ ...entry, weight: entry.weight * .5 }))] : pool;
 }
 
 class LiveError extends Error {

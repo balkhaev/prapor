@@ -19,7 +19,8 @@ function start(seed = 9) {
 	const raid = state.raids[0]!; raid.seed = seed; raid.chance = 1; raid.expedition!.capacity = 50;
 	return { state, raid };
 }
-function checkpoint(seed = 9) { const value = start(seed); advance(value.state, value.raid.endsAt); return value; }
+// These shelf/receipt fixtures exercise useful trophies from the released catalog; junk delivery has separate coverage.
+function checkpoint(seed = 9) { const value = start(seed); value.raid.expedition!.lootCatalogVersion = 20; advance(value.state, value.raid.endsAt); return value; }
 function put(state: GameState, modelId = "duct-tape"): LootItem { const item = { id: `loot-${state.nextId++}`, modelId, foundAt: state.lastUpdated }; (state.lootItems ??= []).push(item); return item; }
 function valid(state: GameState) { expect(parseSave(saveGame(state))).toEqual(state); }
 function random(seed: number) { let x = seed; return () => { x ^= x << 13; x ^= x >>> 17; x ^= x << 5; return (x >>> 0) / 4294967296; }; }
@@ -36,12 +37,12 @@ describe("named physical raid loot", () => {
 		const premature = structuredClone(old); premature.schemaVersion = 14; expect(parseSave(saveGame(premature))).toBeNull();
 		const contaminated = withoutMedical(structuredClone(state)); contaminated.schemaVersion = 15; expect(parseSave(saveGame(contaminated))).toBeNull();
 	});
-	test("all 24 finds have distinct identities, meaningful weights, prices and useful salvage", () => {
-		expect(LOOT_MODELS).toHaveLength(24); expect(new Set(LOOT_MODELS.map(item => item.id)).size).toBe(24);
-		expect(new Set(LOOT_MODELS.map(item => item.category)).size).toBe(6);
+	test("all 32 finds have distinct identities, weights and prices; useful trophies offer salvage while marked junk sells", () => {
+		expect(LOOT_MODELS).toHaveLength(32); expect(new Set(LOOT_MODELS.map(item => item.id)).size).toBe(32);
+		expect(new Set(LOOT_MODELS.map(item => item.category)).size).toBe(7);
 		for (const model of LOOT_MODELS) {
-			expect(model.weight).toBeGreaterThan(0); expect(model.guidePrice).toBeGreaterThanOrEqual(25); expect(model.guidePrice).toBeLessThanOrEqual(900);
-			expect(Object.values(model.salvage).some(value => value > 0)).toBe(true);
+			expect(model.weight).toBeGreaterThan(0); expect(model.guidePrice).toBeGreaterThanOrEqual(model.autoSell ? 2 : 25); expect(model.guidePrice).toBeLessThanOrEqual(1050);
+			expect(Object.values(model.salvage).some(value => value > 0)).toBe(!model.autoSell);
 			expect(MAPS.some(map => getRaidLootPool(map.id, "scavenge", 3).some(entry => entry.model.id === model.id))).toBe(true);
 		}
 	});
@@ -56,7 +57,7 @@ describe("named physical raid loot", () => {
 		expect(getRaidLootPool("__proto__", "scavenge", 1)).toEqual([]);
 		const found = new Set<string>();
 		for (const map of MAPS) for (let seed = 1; seed <= 500; seed++) for (const model of rollRaidLoot(map.id, "scavenge", 3, random(seed * 7919))) found.add(model.id);
-		expect(found.size).toBe(24);
+		expect(found.size).toBe(32);
 	});
 	test("new loot changes no combat, cash, parts or perk rolls and only begins on newly dispatched sorties", () => {
 		for (let seed = 1; seed <= 30; seed++) {
