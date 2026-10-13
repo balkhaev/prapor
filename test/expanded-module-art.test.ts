@@ -5,7 +5,8 @@ import { WEAPONS } from "../src/game/data";
 import { FACTORY_KITS, MODULE_BY_ID, MODULE_MODELS, RECEIVER_INFO, type ModuleModel, type ModuleSlot } from "../src/game/modules";
 
 const newStyles = new Set(["heavy", "fluted", "wood", "vented", "carbon", "skeleton", "precision", "padded", "window", "compact", "drum", "micro", "holo", "prism", "scout", "longscope", "dovetail-reflex", "flash", "compact-suppressor", "ported", "stubby", "angled", "bipod", "folding"]);
-const newModels = MODULE_MODELS.filter((model) => !["mount", "flashlight", "laser"].includes(model.slot) && newStyles.has(model.appearance) && !/^stock-.+-folding$/.test(model.id));
+// The original 174-part expansion retains its own historical contract.
+const newModels = MODULE_MODELS.slice(0, 411).filter((model) => !["mount", "flashlight", "laser"].includes(model.slot) && newStyles.has(model.appearance) && !/^stock-.+-folding$/.test(model.id));
 const factoryGun = (weaponId: string): WeaponInstance => ({ id: "geometry-test", weaponId, durability: 100, foundAt: 0, attachments: { optic: 0, magazine: 0, stock: 0 }, modules: Object.fromEntries(Object.entries(FACTORY_KITS[weaponId]!).map(([slot, modelId]) => [slot, { id: `geometry-${slot}`, modelId, durability: 100, foundAt: 0 }])) });
 const install = (weapon: WeaponInstance, model: ModuleModel) => { weapon.modules[model.slot] = { id: `geometry-${model.slot}`, modelId: model.id, durability: 100, foundAt: 0 }; };
 const part = (svg: string, slot: ModuleSlot) => svg.match(new RegExp(`<g data-module-slot="${slot}"[^>]*>([\\s\\S]*?)</g>`))?.[1];

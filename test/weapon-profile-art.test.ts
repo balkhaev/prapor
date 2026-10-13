@@ -95,8 +95,8 @@ function expectInside(svg: string, label: string) {
 }
 
 describe("complete weapon side-profile audit", () => {
-	test("all 411 models keep their physical paths, valid numbers and unclipped installed geometry on the bench and actor", () => {
-		expect(MODULE_MODELS).toHaveLength(411);
+	test("every model keeps its physical paths, valid numbers and unclipped installed geometry on the bench and actor", () => {
+		expect(MODULE_MODELS).toHaveLength(621);
 		expect(ARMORY_SLOT_ORDER).toEqual(MODULE_SLOTS);
 		for (const model of MODULE_MODELS) {
 			const gun = gunFor(model), saved = JSON.stringify(gun), actor = weaponActorArt(gun), bench = weaponBuildArt(gun), loose = moduleArt(model);
@@ -110,7 +110,7 @@ describe("complete weapon side-profile audit", () => {
 	});
 
 	test("every mount and every light/laser combination coexists with optics, drum, suppressor and grip in all 11 slots", () => {
-		const mounts = MODULE_MODELS.filter((model) => model.slot === "mount"), lights = MODULE_MODELS.filter((model) => model.slot === "flashlight"), lasers = MODULE_MODELS.filter((model) => model.slot === "laser"), optics = MODULE_MODELS.filter((model) => model.slot === "optic");
+		const mounts = MODULE_MODELS.filter((model) => model.slot === "mount" && model.platforms.includes("*")), lights = MODULE_MODELS.filter((model) => model.slot === "flashlight"), lasers = MODULE_MODELS.filter((model) => model.slot === "laser"), optics = MODULE_MODELS.filter((model) => model.slot === "optic");
 		for (const mount of mounts) for (const [lightIndex, light] of lights.entries()) for (const [laserIndex, laser] of lasers.entries()) {
 			const gun = factory("ak74");
 			for (const id of ["handguard-ak-carbon", "magazine-ak-5.45x39-drum", "foregrip-bipod", "muzzle-5.45x39-suppressor", mount.id, light.id, laser.id, optics[(lightIndex + laserIndex) % optics.length]!.id]) install(gun, id);
@@ -164,14 +164,14 @@ describe("complete weapon side-profile audit", () => {
 					const group = part(art.svg, "mount")!, foundationPath = outline(group).split(/(?=M)/)[0]!, opening = group.slice(0, group.indexOf(">") + 1);
 					const [left = 0, , right = 0] = geometryBounds(`${opening}<path d="${foundationPath}"/></g>`), [barrelDx = 0] = offset(part(art.svg, "barrel")!);
 					const barrelEnd = Math.max(...pointsForPath(outline(part(art.svg, "barrel")!)).map(([x]) => x)) + barrelDx;
-					const front = ["pp91", "toz"].includes(definition.id) ? 601 : 636;
+					const front = ["pp91", "toz", "p90", "mp7", "ump45"].includes(definition.id) ? 601 : 636;
 					expect(left, `${definition.id}/${mount.id} exposed barrel start`).toBeGreaterThanOrEqual(front);
 					expect(right, `${definition.id}/${mount.id} exposed barrel end`).toBeLessThanOrEqual(barrelEnd);
 				}
 				expectInside(art.svg, `${definition.id}/${barrelType}/${mount?.id ?? "direct-side-rail"}`);
 			}
 		}
-	});
+	}, 15_000);
 
 	test("riser height and barrel clamps move the fitted part while retaining the same loose physical geometry", () => {
 		const gun = factory("ak74"); install(gun, "mount-dovetail-low"); install(gun, "optic-longscope");

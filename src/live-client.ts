@@ -1,4 +1,5 @@
-import type { LiveCommand, LiveDrop, LiveEntity, LiveEvent, LiveContainerKind, LiveDistrict, LiveDistrictId, LiveMapSummary, LivePlayer, LivePurpose, LiveSnapshot, LiveStatus, LiveWorld } from './game/live';
+import { LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT, type EconomyLoot, type LiveCommand, type LiveDrop, type LiveEntity, type LiveEvent, type LiveContainerKind, type LiveDistrict, type LiveDistrictId, type LiveMapSummary, type LivePlayer, type LivePurpose, type LiveSnapshot, type LiveStatus, type LiveWorld } from './game/live';
+import { LOOT_MODEL_BY_ID } from './game/loot';
 
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const number = (value: unknown, min = 0, max = Number.MAX_SAFE_INTEGER): value is number => typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max;
@@ -9,6 +10,18 @@ const containerKind = (value: unknown): value is LiveContainerKind => ['duffel',
 const text = (value: unknown, max = 100): value is string => typeof value === 'string' && value.length > 0 && value.length <= max;
 const point = (value: unknown, world: Pick<LiveWorld, 'width' | 'height'>): value is Record<string, unknown> & { x: number; y: number } => record(value) && number(value.x, 0, world.width - 1) && number(value.y, 0, world.height - 1);
 const invalid = (): never => { throw new LiveApiError(0, 'invalid_response'); };
+const keys = (value: Record<string, unknown>, allowed: readonly string[]) => Object.keys(value).every(key => allowed.includes(key));
+const uuid = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+
+function readLoot(value: unknown): EconomyLoot[] {
+  if (!Array.isArray(value) || value.length > LIVE_LOOT_CAPACITY) return invalid();
+  const items = value.map(item => {
+    if (!record(item) || !keys(item, ['id', 'modelId', 'foundAt']) || !uuid(item.id) || typeof item.modelId !== 'string' || !Object.hasOwn(LOOT_MODEL_BY_ID, item.modelId) || !integer(item.foundAt, 0, 1e15)) return invalid();
+    return { id: item.id, modelId: item.modelId, foundAt: item.foundAt };
+  });
+  if (new Set(items.map(item => item.id)).size !== items.length || items.reduce((weight, item) => weight + LOOT_MODEL_BY_ID[item.modelId]!.weight, 0) > LIVE_LOOT_WEIGHT + .000001) return invalid();
+  return items;
+}
 
 /** Vetted messages keep private diagnostics and arbitrary response HTML out of the UI. */
 export class LiveApiError extends Error {
@@ -22,13 +35,20 @@ function liveErrorMessage(status: number, code: string): string {
   if (code === 'network' || code === 'timeout') return 'Связь с Периметром прервалась. Подключаемся снова; последний приказ автоматически не повторяется.';
   if (code === 'invalid_response') return 'Сервер прислал неполную сводку. Ожидаем новое состояние.';
   if (code === 'join_required') return 'Связь с сервером восстановлена. Подключаемся к Периметру снова.';
-  if (status === 401 || ['account_changed', 'identity_changed', 'live_identity_changed'].includes(code)) return 'Игровая сессия изменилась. Войди на сервер заново с текущим аккаунтом.';
+  if (status === 401 || ['account_changed', 'identity_changed', 'live_identity_changed', 'game_identity_changed'].includes(code)) return 'Игровая сессия изменилась. Дождись подключения к текущему убежищу и войди на Периметр снова.';
+  if (code === 'game_required' || code === 'economy_required' || code === 'not_ready') return 'Сначала подключись к серверному убежищу. Оно хранит твой лут и припасы.';
+  if (code === 'game_stash_full' || code === 'delivery_pending') return 'Добыча уже вынесена и ждёт места на складе убежища. Освободи место: доставка продолжится автоматически.';
+  if (code === 'delivery_pending_full') return 'Несколько грузов уже ждут места в убежище. Освободи склад перед следующей доставкой.';
+  if (code === 'supply_pending') return 'Пополнение уже отправлено в убежище. Дождись подтверждения; второй расход не нужен.';
+  if (code === 'already_supplied') return 'Патроны и аптечки уже пополнены.';
+  if (code === 'resupply_out_of_range') return 'Для пополнения припасов доберись до зелёного выхода.';
+  if (code === 'no_supplies' || code === 'supply_empty') return 'На складе убежища не хватает припасов. Купи их или изготовь, затем пополни комплект у выхода.';
   if (code === 'server_full' || code === 'full') return 'Периметр заполнен. Подожди свободного места и попробуй войти ещё раз.';
   if (['not_joined', 'not_online', 'player_missing'].includes(code)) return 'Ты уже вышел с Периметра. Подключись снова.';
   if (['too_far', 'out_of_range', 'loot_out_of_range', 'extract_out_of_range'].includes(code)) return 'Цель слишком далеко. Подойди ближе.';
   if (code === 'target_out_of_range') return 'Цель далеко или за укрытием. Подойди ближе и найди прямую линию огня.';
   if (code === 'travel_out_of_range') return 'Для перехода на другую карту доберись до зелёного выхода.';
-  if (code === 'travel_in_combat' || code === 'combat_active' || code === 'in_combat') return 'Переход недоступен в бою. Укройся и подожди 8 секунд после последнего попадания.';
+  if (code === 'travel_in_combat' || code === 'combat_active' || code === 'in_combat') return 'Выход недоступен в бою. Укройся и подожди 8 секунд после последнего попадания.';
   if (code === 'travel_cooldown') return 'Переход ещё не готов. Подожди у выхода.';
   if (code === 'same_map' || code === 'already_on_map') return 'Ты уже на этой карте.';
   if (code === 'blocked' || code === 'invalid_move') return 'Этот путь перекрыт. Выбери свободную клетку.';
@@ -50,8 +70,8 @@ function liveErrorMessage(status: number, code: string): string {
 }
 
 /** Presence can be restored after a restart; game commands and changed identities cannot be retried. */
-export function shouldRejoinLivePresence(error: unknown, requestAccount: string | null, currentAccount: string | null): boolean {
-  return error instanceof LiveApiError && error.status === 401 && error.code === 'join_required' && requestAccount === currentAccount;
+export function shouldRejoinLivePresence(error: unknown, requestAccount: string | null, currentAccount: string | null, requestGame?: string | null, currentGame?: string | null): boolean {
+  return error instanceof LiveApiError && error.status === 401 && error.code === 'join_required' && requestAccount === currentAccount && requestGame === currentGame;
 }
 
 const rectangle = (value: unknown, bounds: Pick<LiveWorld, 'width' | 'height'>): value is Record<string, unknown> & { x: number; y: number; width: number; height: number } =>
@@ -110,13 +130,24 @@ export function readLiveWorld(source: unknown): LiveWorld {
 }
 
 export function readLiveSnapshot(value: unknown, cachedWorld?: LiveWorld): LiveSnapshot {
-  if (!record(value) || !number(value.now) || !text(value.selfId) || !text(value.worldVersion, 128) || !record(value.self)) return invalid();
+  if (!record(value) || !keys(value, ['server', 'now', 'selfId', 'world', 'self', 'entities', 'drops', 'events', 'worldVersion', 'visibleChunks']) || !number(value.now) || !text(value.selfId) || !text(value.worldVersion, 128) || !record(value.self)) return invalid();
   const world = value.world === undefined ? cachedWorld : readLiveWorld(value.world);
   if (!world || world.version !== value.worldVersion) return invalid();
   const bounds = { width: world.width, height: world.height };
   const self = value.self;
-  if (self.id !== value.selfId || !['ammo', 'medkits', 'cargo', 'stash', 'kills', 'respawnAt', 'travelReadyAt'].every(key => integer(self[key])) || typeof self.patrol !== 'boolean' || !(self.targetId === null || text(self.targetId)) || !districtId(self.districtId) || !purpose(self.purpose) || !(self.searching === null || record(self.searching) && text(self.searching.id) && integer(self.searching.readyAt))) return invalid();
+  if (!keys(self, ['id', 'ammo', 'medkits', 'cargo', 'stash', 'kills', 'respawnAt', 'travelReadyAt', 'patrol', 'targetId', 'districtId', 'purpose', 'searching', 'gameId', 'lootItems', 'pendingDelivery', 'economyMessage']) || self.id !== value.selfId || !['ammo', 'medkits', 'cargo', 'stash', 'kills', 'respawnAt', 'travelReadyAt'].every(key => integer(self[key])) || typeof self.patrol !== 'boolean' || !(self.targetId === null || text(self.targetId)) || !districtId(self.districtId) || !purpose(self.purpose) || !(self.searching === null || record(self.searching) && keys(self.searching, ['id', 'readyAt']) && text(self.searching.id) && integer(self.searching.readyAt)) || !(self.gameId === undefined || uuid(self.gameId)) || !(self.economyMessage === undefined || typeof self.economyMessage === 'string' && self.economyMessage.length <= 2000)) return invalid();
+  const pendingDelivery = self.pendingDelivery === undefined ? undefined : (() => {
+    if (!Array.isArray(self.pendingDelivery) || self.pendingDelivery.length > 32) return invalid();
+    return self.pendingDelivery.map(parcel => {
+      if (!record(parcel) || !keys(parcel, ['items', 'money', 'message']) || !integer(parcel.money) || !text(parcel.message, 2000)) return invalid();
+      return { items: readLoot(parcel.items), money: parcel.money, message: parcel.message };
+    });
+  })();
   const player: LivePlayer = { id: value.selfId, ammo: self.ammo as number, medkits: self.medkits as number, cargo: self.cargo as number, stash: self.stash as number, kills: self.kills as number, respawnAt: self.respawnAt as number, patrol: self.patrol, targetId: self.targetId as string | null, travelReadyAt: self.travelReadyAt as number, districtId: self.districtId, purpose: self.purpose, searching: self.searching === null ? null : { id: (self.searching as { id: string }).id, readyAt: (self.searching as { readyAt: number }).readyAt } };
+  if (self.gameId !== undefined) player.gameId = self.gameId as string;
+  if (self.lootItems !== undefined) player.lootItems = readLoot(self.lootItems);
+  if (pendingDelivery !== undefined) player.pendingDelivery = pendingDelivery;
+  if (self.economyMessage !== undefined) player.economyMessage = self.economyMessage as string;
   if (!Array.isArray(value.entities) || value.entities.length > 256 || !Array.isArray(value.drops) || value.drops.length > 512 || !Array.isArray(value.events) || value.events.length > 256 || !Array.isArray(value.visibleChunks) || value.visibleChunks.length > 256) return invalid();
   const entities: LiveEntity[] = value.entities.map(entity => {
     if (!point(entity, bounds) || !record(entity) || !integer(entity.x) || !integer(entity.y) || !text(entity.id) || !text(entity.name, 80) || !['player', 'scav'].includes(entity.kind as string) || !integer(entity.appearance, 0, 31) || !number(entity.health, 0, 100) || !['idle', 'moving', 'combat', 'downed'].includes(entity.action as string) || !number(entity.safeUntil) || !(entity.faction === undefined || ['scavs', 'raiders'].includes(entity.faction as string)) || !(entity.role === undefined || ['patrol', 'guard', 'marksman'].includes(entity.role as string))) return invalid();
@@ -124,16 +155,18 @@ export function readLiveSnapshot(value: unknown, cachedWorld?: LiveWorld): LiveS
   });
   if (new Set(entities.map(entity => entity.id)).size !== entities.length || !entities.some(entity => entity.id === value.selfId && entity.kind === 'player')) return invalid();
   const drops: LiveDrop[] = value.drops.map(drop => {
-    if (!point(drop, bounds) || !integer(drop.x) || !integer(drop.y) || !text(drop.id) || !integer(drop.amount)) return invalid();
+    if (!point(drop, bounds) || !keys(drop, ['id', 'x', 'y', 'amount', 'items', 'containerId', 'containerKind', 'searched']) || !integer(drop.x) || !integer(drop.y) || !text(drop.id) || !integer(drop.amount)) return invalid();
+    const items = drop.items === undefined ? undefined : readLoot(drop.items);
     if (drop.containerId !== undefined) {
       const anchor = world.containers.find(anchor => anchor.id === drop.containerId);
-      if (!anchor || anchor.x !== drop.x || anchor.y !== drop.y || !containerKind(drop.containerKind) || anchor.kind !== drop.containerKind || typeof drop.searched !== 'boolean' || (!drop.searched && drop.amount !== 0)) return invalid();
-      return { x: drop.x, y: drop.y, id: drop.id, amount: drop.amount, containerId: anchor.id, containerKind: drop.containerKind, searched: drop.searched };
+      if (!anchor || anchor.x !== drop.x || anchor.y !== drop.y || !containerKind(drop.containerKind) || anchor.kind !== drop.containerKind || typeof drop.searched !== 'boolean' || (!drop.searched && (drop.amount !== 0 || items !== undefined))) return invalid();
+      return { x: drop.x, y: drop.y, id: drop.id, amount: drop.amount, containerId: anchor.id, containerKind: drop.containerKind, searched: drop.searched, ...(items ? { items } : {}) };
     }
-    if (drop.amount < 1 || drop.containerKind !== undefined || drop.searched !== undefined) return invalid();
-    return { x: drop.x, y: drop.y, id: drop.id, amount: drop.amount };
+    if ((!drop.amount && !items?.length) || drop.containerKind !== undefined || drop.searched !== undefined) return invalid();
+    return { x: drop.x, y: drop.y, id: drop.id, amount: drop.amount, ...(items ? { items } : {}) };
   });
-  if (new Set(drops.map(drop => drop.id)).size !== drops.length) return invalid();
+  const physicalIds = [...(player.lootItems ?? []), ...(player.pendingDelivery ?? []).flatMap(parcel => parcel.items), ...drops.flatMap(drop => drop.items ?? [])].map(item => item.id);
+  if (new Set(drops.map(drop => drop.id)).size !== drops.length || new Set(physicalIds).size !== physicalIds.length) return invalid();
   const events: LiveEvent[] = value.events.map(event => {
     if (!record(event) || !text(event.id) || !number(event.at) || !text(event.text, 500) || !['join', 'leave', 'combat', 'loot', 'extract', 'respawn', 'travel'].includes(event.kind as string) || !(event.actorId === undefined || text(event.actorId)) || !(event.targetId === undefined || text(event.targetId)) || !(event.from === undefined && event.to === undefined || point(event.from, bounds) && point(event.to, bounds)) || !(event.damage === undefined || number(event.damage, 0, 100))) return invalid();
     return { id: event.id, at: event.at, text: event.text, kind: event.kind as LiveEvent['kind'], ...(typeof event.actorId === 'string' ? { actorId: event.actorId } : {}), ...(typeof event.targetId === 'string' ? { targetId: event.targetId } : {}), ...(point(event.from, bounds) && point(event.to, bounds) ? { from: { x: event.from.x, y: event.from.y }, to: { x: event.to.x, y: event.to.y } } : {}), ...(typeof event.damage === 'number' ? { damage: event.damage } : {}) };
@@ -147,17 +180,17 @@ export function readLiveSnapshot(value: unknown, cachedWorld?: LiveWorld): LiveS
   if (map.width !== world.width || map.height !== world.height || map.theme !== world.theme || map.name !== world.name) return invalid();
   return { server, now: value.now, selfId: value.selfId, self: player, world, entities, drops, events, worldVersion: value.worldVersion, visibleChunks };
 }
-export interface LiveIdentity { accountId: string | null; playerId?: string; worldVersion?: string }
+export interface LiveIdentity { accountId: string | null; playerId?: string; worldVersion?: string; gameId?: string | null }
 export interface LiveJoinOptions { districtId: LiveDistrictId; purpose: LivePurpose }
-export async function liveRequest<T>(path: 'status' | 'join' | 'state' | 'action' | 'leave', identity: LiveIdentity, read: (value: unknown) => T, command?: LiveCommand, signal?: AbortSignal, joinOptions?: LiveJoinOptions): Promise<T> {
+export async function liveRequest<T>(path: 'status' | 'join' | 'state' | 'action' | 'leave', identity: LiveIdentity, read: (value: unknown) => T, command?: LiveCommand, signal?: AbortSignal, joinOptions?: LiveJoinOptions, transport: typeof fetch = globalThis.fetch): Promise<T> {
   const controller = new AbortController();
   const abort = () => controller.abort();
   signal?.addEventListener('abort', abort, { once: true });
   if (signal?.aborted) controller.abort();
-  const timeout = window.setTimeout(abort, 12_000);
+  const timeout = globalThis.setTimeout(abort, 12_000);
   try {
     const post = path === 'join' || path === 'action' || path === 'leave';
-    const response = await fetch(`/api/live/${path}`, { method: post ? 'POST' : 'GET', body: post ? JSON.stringify(path === 'join' && joinOptions ? joinOptions : command ?? {}) : undefined, credentials: 'same-origin', mode: 'same-origin', cache: 'no-store', redirect: 'error', headers: { Accept: 'application/json', ...(post ? { 'Content-Type': 'application/json' } : {}), ...(identity.accountId ? { 'x-prapor-account': identity.accountId } : {}), ...(identity.playerId ? { 'x-prapor-live': identity.playerId } : {}), ...(identity.worldVersion ? { 'x-prapor-world-version': identity.worldVersion } : {}) }, signal: controller.signal });
+    const response = await transport(`/api/live/${path}`, { method: post ? 'POST' : 'GET', body: post ? JSON.stringify(path === 'join' && joinOptions ? joinOptions : command ?? {}) : undefined, credentials: 'same-origin', mode: 'same-origin', cache: 'no-store', redirect: 'error', headers: { Accept: 'application/json', ...(post ? { 'Content-Type': 'application/json' } : {}), ...(identity.accountId ? { 'x-prapor-account': identity.accountId } : {}), ...(identity.playerId ? { 'x-prapor-live': identity.playerId } : {}), ...(identity.gameId ? { 'x-prapor-game': identity.gameId } : {}), ...(identity.worldVersion ? { 'x-prapor-world-version': identity.worldVersion } : {}) }, signal: controller.signal });
     const value: unknown = await response.json().catch(() => null);
     if (!response.ok) throw new LiveApiError(response.status, record(value) && typeof value.error === 'string' ? value.error : record(value) && typeof value.code === 'string' ? value.code : 'unknown');
     return read(value);
@@ -165,7 +198,7 @@ export async function liveRequest<T>(path: 'status' | 'join' | 'state' | 'action
     if (error instanceof LiveApiError) throw error;
     throw new LiveApiError(0, controller.signal.aborted ? 'timeout' : 'network');
   } finally {
-    window.clearTimeout(timeout);
+    globalThis.clearTimeout(timeout);
     signal?.removeEventListener('abort', abort);
   }
 }

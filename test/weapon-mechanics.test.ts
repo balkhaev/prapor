@@ -52,7 +52,7 @@ function buildFor(model: ModuleModel): WeaponInstance {
 }
 
 describe("weapon mechanics and contextual loadout balance", () => {
-	test("all 16 factory weapons have explicit, bounded profiles and different tactical roles", () => {
+	test("all factory weapons have explicit, bounded profiles and different tactical roles", () => {
 		const signatures = new Set<string>();
 		for (const definition of WEAPONS) {
 			const weapon = factory(definition.id), profile = getWeaponMechanics(weapon);
@@ -66,8 +66,8 @@ describe("weapon mechanics and contextual loadout balance", () => {
 			expect(getWeaponStats(weapon).ready).toBe(true);
 			signatures.add(JSON.stringify([profile.closeBonus, profile.rangeBonus, profile.stealthBonus, profile.supportBonus, profile.wearMultiplier]));
 		}
-		expect(WEAPONS).toHaveLength(16);
-		expect(signatures.size).toBe(16);
+		expect(WEAPONS).toHaveLength(25);
+		expect(signatures.size).toBe(WEAPONS.length);
 		expect(effect(factory("pp91"), "factory").bonus).toBeGreaterThan(effect(factory("mosin"), "factory").bonus);
 		expect(effect(factory("mosin"), "forest").bonus).toBeGreaterThan(effect(factory("pp91"), "forest").bonus);
 	});
@@ -189,7 +189,7 @@ describe("weapon mechanics and contextual loadout balance", () => {
 		expect(saveGame(state)).toBe(dispatched);
 	});
 
-	test("all 411 real modules stay finite and bounded across every sector, branch, tactic and wear level", () => {
+	test("all real modules stay finite and bounded across every sector, branch, tactic and wear level", () => {
 		for (const model of MODULE_MODELS) {
 			const healthy = buildFor(model);
 			expect(getWeaponBuildIssues(healthy), model.id).toEqual([]);
@@ -242,7 +242,7 @@ describe("weapon mechanics and contextual loadout balance", () => {
 			}
 			setups++;
 		}
-		expect(setups).toBe(128);
+		expect(setups).toBe(WEAPONS.length * 8);
 		expect(capped).toBeGreaterThan(0);
 	});
 });

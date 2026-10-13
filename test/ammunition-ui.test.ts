@@ -43,6 +43,13 @@ describe("ammunition presentation", () => {
 		expect(ammunitionCaliberLabel("5.45x39")).toBe("5,45×39 мм");
 		expect(ammunitionCaliberLabel("12g")).toBe("12 калибр");
 		expect(ammunitionCaliberLabel("20g")).toBe("20 калибр");
+		expect(ammunitionCaliberLabel("5.56x45")).toBe("5,56×45 мм");
+		expect(ammunitionCaliberLabel("5.7x28")).toBe("5,7×28 мм");
+		expect(ammunitionCaliberLabel("4.6x30")).toBe("4,6×30 мм");
+		expect(ammunitionCaliberLabel("7.62x51")).toBe("7,62×51 мм");
+		expect(ammunitionCaliberLabel(".45acp")).toBe(".45 ACP");
+		expect(ammunitionCaliberLabel(".300blk")).toBe(".300 BLK");
+		expect(ammunitionCaliberLabel(".338lapua")).toBe(".338 Lapua");
 	});
 
 	test("requires a weapon before presenting caliber-specific options or modifiers", () => {

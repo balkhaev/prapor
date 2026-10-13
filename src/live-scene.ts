@@ -1,5 +1,6 @@
 import type { LiveCommand, LiveDrop, LiveEntity, LiveEvent, LiveObstacle, LivePoint, LiveSnapshot, LiveTerrain, LiveWorld } from './game/live';
 import { scavDirection, type ScavDirection } from './scav-isometric';
+import { liveDropLabel, liveLootTotals } from './live-loot-ui';
 
 type AtlasFrame = { frame: { x: number; y: number; w: number; h: number }; spriteSourceSize: { x: number; y: number; w: number; h: number }; sourceSize: { w: number; h: number } };
 type Atlas = { image: HTMLImageElement; frames: Record<string, AtlasFrame> };
@@ -193,7 +194,13 @@ export class LiveScene {
       else { c.strokeStyle = '#665333'; c.beginPath(); c.moveTo(-10, -10); c.lineTo(10, 1); c.moveTo(10, -10); c.lineTo(-10, 1); c.stroke(); }
     }
     c.restore();
-    if (scale > .55) this.label(drop.containerId ? drop.searched ? drop.amount ? `${drop.amount} ₽` : 'ПУСТО' : 'ОБЫСКАТЬ' : `${drop.amount} ₽`, p.x, p.y + 19, '#e6d19a', 8);
+    if (scale > .55) {
+      const known = !drop.containerId || drop.searched;
+      const kindLabels = { duffel: 'СУМКА', jacket: 'КУРТКА', toolbox: 'ИНСТРУМЕНТЫ', medbag: 'МЕДСУМКА', cabinet: 'ШКАФ', crate: 'ЯЩИК' };
+      const label = !known ? drop.containerKind ? kindLabels[drop.containerKind] : 'ОБЫСКАТЬ' : drop.amount || drop.items?.length ? liveDropLabel(drop) : 'ПУСТО';
+      this.label(label.length > 35 ? `${label.slice(0, 32)}…` : label, p.x, p.y + 19, '#e6d19a', 8);
+      if (known && drop.items?.length && scale > .9) this.label(`≈ ${liveLootTotals(drop.items).guide.toLocaleString('ru-RU')} ₽`, p.x, p.y + 31, '#c6bd9a', 7);
+    }
   }
   private ground(terrain: LiveTerrain, shade: number): string {
     const palettes: Record<LiveTerrain, string[]> = { road: ['#55584e', '#505447', '#55594e', '#4e554b', '#575b50'], concrete: ['#707365', '#6b7062', '#686e61', '#6e7365', '#707568'], forest: ['#334937', '#354d36', '#3b5037', '#3a4b32', '#405139'], water: ['#3b5b5d', '#355153', '#3c5757', '#3b5351', '#3e5a58'], yard: ['#5f6247', '#5a6145', '#5c6649', '#626a4b', '#64694c'] };

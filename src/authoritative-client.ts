@@ -59,6 +59,7 @@ export function createAuthoritativeClient(options: AuthoritativeClientOptions) {
   let chain: Promise<unknown> = Promise.resolve();
   let joining: Promise<GameSnapshot> | null = null, polling: Promise<GameSnapshot> | null = null;
   let marketReading: Promise<MarketSnapshot> | null = null, marketSnapshot: MarketSnapshot | null = null;
+  let marketGeneration = 0;
   const controllers = new Set<AbortController>();
   const transport = options.fetch ?? globalThis.fetch;
   const notify = () => options.onStatus?.({ phase, message, busy: actionPending });
@@ -113,6 +114,7 @@ export function createAuthoritativeClient(options: AuthoritativeClientOptions) {
 
   function resetIdentity(): void {
     generation++; current = null; accountId = options.getAccountId(); joining = null; polling = null; marketReading = null; marketSnapshot = null; actionPending = false;
+    marketGeneration++;
     for (const controller of controllers) controller.abort(); controllers.clear();
     phase = 'connecting'; message = 'Подключаемся к серверному убежищу.'; notify();
   }
@@ -177,11 +179,13 @@ export function createAuthoritativeClient(options: AuthoritativeClientOptions) {
     if (destroyed) return Promise.reject(new GameApiError(0,'destroyed'));
     if (!current || phase !== 'online') return Promise.reject(new GameApiError(409,'not_ready'));
     if (marketReading) return marketReading;
-    const version = generation, account = accountId, expected = current.identity.id;
+    const version = generation, marketVersion = marketGeneration, account = accountId, expected = current.identity.id;
     const result = enqueue(async () => {
       try {
+        if (marketVersion !== marketGeneration) throw new GameApiError(409,'market_changed');
         const next = readMarketSnapshot(await request('market',version,account));
         requireCurrent(version,account);
+        if (marketVersion !== marketGeneration) throw new GameApiError(409,'market_changed');
         if (next.identity.id !== expected || next.identity.kind !== (account ? 'account' : 'guest')) throw new GameApiError(401,'identity_changed');
         marketSnapshot = next;
         return next;
@@ -197,7 +201,9 @@ export function createAuthoritativeClient(options: AuthoritativeClientOptions) {
     return result;
   }
 
-  return { join, poll, action, market, resetIdentity, isReady: () => current !== null && phase === 'online' && !destroyed, isBusy: () => actionPending, getSnapshot: () => current, getMarketSnapshot: () => marketSnapshot,
+  function invalidateMarket(): void { marketGeneration++; marketReading = null; marketSnapshot = null; }
+
+  return { join, poll, action, market, invalidateMarket, resetIdentity, isReady: () => current !== null && phase === 'online' && !destroyed, isBusy: () => actionPending, getSnapshot: () => current, getMarketSnapshot: () => marketSnapshot,
     get ready() { return current !== null && phase === 'online' && !destroyed; }, get busy() { return actionPending; },
     destroy: () => { destroyed = true; generation++; current = null; joining = null; polling = null; marketReading = null; marketSnapshot = null; for (const controller of controllers) controller.abort(); controllers.clear(); } };
 }

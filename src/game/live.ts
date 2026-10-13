@@ -1,7 +1,12 @@
 /** Shared wire contract. The server owns every live position, clock and reward. */
+export type { EconomyLoot } from "../../server/live-economy";
+import type { EconomyLoot } from "../../server/live-economy";
 export const LIVE_SERVER_ID = "perimeter-1";
 export const LIVE_SERVER_NAME = "Периметр 01";
 export const LIVE_CAPACITY = 32;
+export const LIVE_LOOT_WEIGHT = 12;
+export const LIVE_LOOT_CAPACITY = 32;
+export const LIVE_PENDING_CAPACITY = 32;
 export type LivePoint = { x: number; y: number };
 export type LiveMapId = "perimeter";
 export type LiveDistrictId = "customs" | "sawmill" | "depot" | "village";
@@ -80,9 +85,14 @@ export interface LivePlayer {
   districtId: LiveDistrictId;
   purpose: LivePurpose;
   searching: { id: string; readyAt: number } | null;
+  /** Only the current player's private inventory is included in a snapshot. */
+  gameId?: string;
+  lootItems?: EconomyLoot[];
+  pendingDelivery?: { items: EconomyLoot[]; money: number; message: string }[];
+  economyMessage?: string;
 }
 export interface LiveDrop extends LivePoint {
-  id: string; amount: number;
+  id: string; amount: number; items?: EconomyLoot[];
   containerId?: string; containerKind?: LiveContainerKind;
   searched?: boolean;
 }
@@ -128,4 +138,5 @@ export type LiveCommand =
   | { type: "heal" }
   | { type: "extract" }
   | { type: "respawn"; districtId?: LiveDistrictId; purpose?: LivePurpose }
+  | { type: "resupply" }
   | { type: "patrol"; enabled: boolean };

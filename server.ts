@@ -7,8 +7,8 @@ import { createGameService, readGameOptions } from "./server/game";
 
 const { hostname, port } = readServerOptions(process.env);
 const accounts = createAccountService(readAccountOptions(process.env));
-const live = createLiveService(readLiveOptions(process.env, accounts));
 const game = createGameService(readGameOptions(process.env, accounts));
+const live = createLiveService({ ...readLiveOptions(process.env, accounts), economy: game.liveEconomy });
 const trustedProxies = (process.env.TRUSTED_PROXIES ?? "").split(",").map(value => value.trim()).filter(Boolean);
 if (trustedProxies.some(value => !isIP(value))) throw new Error("TRUSTED_PROXIES must contain exact proxy IP addresses");
 const handler = createHandler(join(import.meta.dir, "dist"), accounts, live, game);

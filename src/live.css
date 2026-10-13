@@ -31,6 +31,7 @@
 .live-poi-route>span{display:flex;flex-direction:column;gap:4px;min-width:0}.live-poi-route strong{font-size:10px;overflow-wrap:anywhere}.live-poi-route small{font-size:8px;color:#a5bd95}.live-poi-route b{font-size:9px;white-space:nowrap;color:#e0d9ad;flex:none}
 .live-container-row{display:flex;align-items:center;justify-content:space-between;gap:7px;padding:10px 8px;margin:6px 0;border:1px solid #b3aa7155;border-radius:4px;background:#73633222}
 .live-container-row>div:first-child{display:flex;flex-direction:column;gap:5px;min-width:0}.live-container-row strong{font-size:10px;color:#dccb98}.live-container-row small{font-size:8px;color:#b5b691;line-height:1.6}
+.live-container-content{font-size:10px;line-height:1.6;color:#e4d8b1;overflow-wrap:anywhere;margin:3px 0 0}
 .live-search-progress{flex:none;display:flex;flex-direction:column;gap:5px;width:104px}.live-search-progress progress{width:100%;height:5px;accent-color:#bdc781}.live-search-progress span{font-size:8px;color:#d0d5a6;text-align:center}
 .live-map-list{display:flex;flex-direction:column;gap:8px;margin:0 0 14px}
 .live-map-card{display:flex;align-items:center;gap:11px;min-width:0;width:100%;border:1px solid #8e9d654d;border-radius:5px;background:linear-gradient(125deg,#40513c88,#24392c);padding:12px;text-align:left;color:#dfe2bc;font-family:inherit;cursor:pointer;transition:border-color .15s,background .15s}
@@ -177,4 +178,25 @@
  .live-dock .button{font-size:10px}.live-orders{grid-template-columns:minmax(0,1fr) 112px;column-gap:7px}
 }
 @media(prefers-reduced-motion:reduce){.live-health i{transition:none}}
+
+.live-cargo,.live-delivery{padding:13px 0;border-top:1px solid #a19a7540}
+.live-cargo h3,.live-delivery h3{display:flex;justify-content:space-between;gap:10px;font-size:12px;color:#e3d3ac;margin:0 0 10px}
+.live-cargo h3>span{color:#b2b895;font:10px "IBM Plex Mono",monospace}
+.live-cargo p,.live-delivery p{color:#aeb59d;font-size:10px;line-height:1.7;margin:9px 0 0}
+.live-cargo .live-cargo-risk{color:#d2b28c}
+.live-cargo-weight{display:flex;justify-content:space-between;gap:9px;font:9px "IBM Plex Mono",monospace;color:#cbbf99}
+.live-load-bar{height:4px;background:#0b1a14;margin:9px 0;overflow:hidden;border-radius:2px}
+.live-load-bar i{display:block;height:100%;background:#bac88e}
+.live-loot-items{list-style:none;padding:0;margin:8px 0;max-height:210px;overflow-y:auto;overscroll-behavior:contain}
+.live-loot-item{display:flex;align-items:start;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid #93a27b20}
+.live-loot-item>span{min-width:0;flex:1}.live-loot-item>span:last-child{flex:0 0 auto;text-align:right;max-width:45%}
+.live-loot-item strong{font-size:10px;color:#e2ddc4;display:block;overflow-wrap:anywhere}
+.live-loot-item b{font:10px "IBM Plex Mono",monospace;color:#e2cf9d;white-space:nowrap}
+.live-loot-item small{display:block;color:#a3ad97;font-size:8px;line-height:1.6;margin-top:3px}
+.live-loot-item.rarity-rare strong{color:#a5ced3}.live-loot-item.rarity-epic strong{color:#d4b1df}
+.live-delivery{border:1px solid #b89b6355;padding:12px;margin:4px 0 12px;background:#b28d4912;border-radius:4px}
+.live-resupply{margin:8px 0}.live-resupply .button{width:100%}.live-resupply small{display:block;font-size:9px;line-height:1.7;color:#adb99a;margin-top:7px}
+.live-market{width:100%;margin-top:10px}.live-loot>span{min-width:0}.live-loot strong{display:block;overflow-wrap:anywhere;font-size:11px;text-align:left}.live-loot small{display:block;font-size:9px;color:#bac09d;margin-top:5px;line-height:1.6}.live-loot>b{flex:0 0 auto;font-size:18px;margin-left:8px}
+@media(max-width:850px){.live-resupply{grid-column:1;grid-row:3}.live-orders>.live-controls-help{grid-column:1;grid-row:4}.live-orders>.live-direction-pad{grid-row:1 / span 4}.live-cargo,.live-delivery{grid-column:1 / -1}}
+@media(max-width:480px){.live-cargo-weight{flex-wrap:wrap}.live-loot-items{max-height:250px}.live-loot-item>span:last-child{max-width:43%}.live-loot-item strong{font-size:11px}.live-cargo p,.live-delivery p{font-size:11px}.live-resupply small{font-size:10px}}
 

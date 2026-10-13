@@ -15,10 +15,10 @@ describe("generated ammunition pack atlas mapping", () => {
 		}
 	});
 
-	test("all 72 products map to a distinct compatible pack, with stable legacy first-row positions", () => {
+	test("all 128 products map to a distinct compatible pack, with stable legacy first-row positions", () => {
 		const positions = new Set<string>();
 		const codes = ["FMJ", "AP", "HP", "MATCH", "SUB", "TR", "+P", "STOCK"];
-		expect(AMMO_MODELS).toHaveLength(72);
+		expect(AMMO_MODELS).toHaveLength(128);
 		for (const model of AMMO_MODELS) {
 			const art = getAmmunitionArtwork(model)!;
 			expect(art).not.toBeNull();
@@ -29,7 +29,7 @@ describe("generated ammunition pack atlas mapping", () => {
 			expect(art.row).toBe(index < 4 ? 0 : 1);
 			positions.add(`${art.url}/${art.column}/${art.row}`);
 		}
-		expect(positions.size).toBe(72);
+		expect(positions.size).toBe(128);
 		expect(new Set(AMMO_MODELS.map((model) => getAmmunitionArtwork(model)!.url)).size).toBe(AMMUNITION_ART_CALIBERS.length);
 	});
 

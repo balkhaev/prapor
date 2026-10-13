@@ -270,7 +270,8 @@ install -m 644 "$scratch/mirror/infra/mirror.nginx.conf" /data/prapor/mirror/ngi
 install -m 644 "$scratch/mirror/infra/mirror.compose.yaml" /data/prapor/mirror/compose.yaml.next
 mv /data/prapor/mirror/nginx.conf.next /data/prapor/mirror/nginx.conf
 mv /data/prapor/mirror/compose.yaml.next /data/prapor/mirror/compose.yaml
-docker compose -f /data/prapor/mirror/compose.yaml up -d --wait --wait-timeout 90
+# The config is a file bind mount replaced atomically above. Recreate to mount its new inode.
+docker compose -f /data/prapor/mirror/compose.yaml up -d --force-recreate --wait --wait-timeout 90
 install -m 644 "$scratch/mirror/infra/mirror.edge.yaml" /data/coolify/proxy/dynamic/prapor-game-mirror.yaml.next
 mv /data/coolify/proxy/dynamic/prapor-game-mirror.yaml.next /data/coolify/proxy/dynamic/prapor-game-mirror.yaml
 ready=0
@@ -279,6 +280,7 @@ for attempt in $(seq 1 30); do
     sleep 3
 done
 test "$ready" = 1 || { curl --fail --silent --show-error --max-time 10 --output /dev/null https://game.balkhaev.com/health; exit 1; }
+curl --fail --silent --show-error --max-time 10 --header 'Origin: https://game.balkhaev.com' --header 'Content-Type: application/json' --data '{"intent":"login"}' --output /dev/null https://game.balkhaev.com/api/auth/google
 '@
     Invoke-Management ($mirrorScript.Replace('__SCRATCH__', $remoteScratch))
     Write-Output "Published ${Commit}: https://game.delopusk.ru and https://game.balkhaev.com. Verify account and save flows on both domains."
