@@ -7,7 +7,7 @@ import type { ShelterPoint } from "./shelter-motion";
 
 /** Structural cells also accept room instances and the model's unopened frontier cells. */
 export interface ShelterLayoutSite { column: number; row: number }
-export interface ShelterLayoutBuilding extends ShelterLayoutSite { width: number; height: number; position?: ShelterPoint }
+export interface ShelterLayoutBuilding extends ShelterLayoutSite { width: number; height: number; position?: ShelterPoint; facing?: 0 | 1 | 2 | 3 }
 export interface ShelterCorridorSegment { from: ShelterPoint; to: ShelterPoint }
 export const SHELTER_STREET_CORRIDOR_Y = 132;
 const EPSILON = .001;
@@ -32,7 +32,7 @@ export function getShelterTerritoryCell(point: ShelterPoint): ShelterLayoutSite 
 	return { column: Math.floor((point.x - 30) / SHELTER_COLUMN_STRIDE), row: Math.floor((point.y - 132) / SHELTER_ROW_STRIDE) };
 }
 
-type ShelterBuildingShape = ShelterLayoutSite & Partial<Pick<ShelterLayoutBuilding, "width" | "height" | "position">>;
+type ShelterBuildingShape = ShelterLayoutSite & Partial<Pick<ShelterLayoutBuilding, "width" | "height" | "position" | "facing">>;
 
 /** Ground origins are continuous; legacy lot coordinates are only a save-compatible fallback. */
 export function getShelterBuildingPosition(building: ShelterBuildingShape): ShelterPoint {
@@ -40,7 +40,8 @@ export function getShelterBuildingPosition(building: ShelterBuildingShape): Shel
 }
 
 export function getShelterBuildingRect(building: ShelterBuildingShape): ShelterRect {
-	return { ...shelterRoomRect(building.column, building.row, building.width, building.height), ...getShelterBuildingPosition(building) };
+	const rect = shelterRoomRect(building.column, building.row, building.width, building.height);
+	return { ...rect, ...getShelterBuildingPosition(building), ...(building.facing === 1 || building.facing === 3 ? { width: rect.height, height: rect.width } : {}) };
 }
 
 export function getShelterTerritoryRects(sites: readonly ShelterLayoutSite[]): ShelterRect[] {
@@ -73,12 +74,27 @@ function insideBuilding(point: ShelterPoint, building: ShelterLayoutBuilding): b
 
 export function getShelterRoomDoor(site: ShelterBuildingShape): ShelterPoint {
 	const rect = getShelterBuildingRect(site);
-	return { x: rect.x + rect.width / 2, y: rect.y + rect.height };
+	switch (site.facing ?? 0) {
+		case 1: return { x: rect.x, y: rect.y + rect.height / 2 };
+		case 2: return { x: rect.x + rect.width / 2, y: rect.y };
+		case 3: return { x: rect.x + rect.width, y: rect.y + rect.height / 2 };
+		default: return { x: rect.x + rect.width / 2, y: rect.y + rect.height };
+	}
+}
+
+/** A quarter turn rotates the doorway as well as the physical ground footprint. */
+export function getShelterRoomEntranceDirection(site: ShelterBuildingShape): ShelterPoint {
+	return [{ x: 0, y: 1 }, { x: -1, y: 0 }, { x: 0, y: -1 }, { x: 1, y: 0 }][site.facing ?? 0]!;
 }
 
 export function getShelterCorridorPoint(site: ShelterBuildingShape): ShelterPoint {
-	const door = getShelterRoomDoor(site);
-	return { x: door.x, y: door.y + (SHELTER_ROW_STRIDE - SHELTER_ROOM_HEIGHT) / 2 };
+	const door = getShelterRoomDoor(site), normal = getShelterRoomEntranceDirection(site), clearance = (SHELTER_ROW_STRIDE - SHELTER_ROOM_HEIGHT) / 2;
+	return { x: door.x + normal.x * clearance, y: door.y + normal.y * clearance };
+}
+
+function entranceLead(point: ShelterPoint, building: ShelterBuildingShape): ShelterPoint[] {
+	const door = getShelterRoomDoor(building), normal = getShelterRoomEntranceDirection(building);
+	return [normal.x ? { x: point.x, y: door.y } : { x: door.x, y: point.y }, door];
 }
 
 /** Only carved cells contribute corridors; frontier rock never adds a walkable edge. */
@@ -140,10 +156,10 @@ function corridorAccess(point: ShelterPoint, sites: readonly ShelterLayoutSite[]
 	return null;
 }
 
-/** BFS follows actual corridor edges and south doors, never the old lift or room-to-room diagonals. */
+/** Legacy corridors remain stable; explicit placements and facing use actual ground and entrances. */
 export function getShelterWalkingRoute(from: ShelterPoint, to: ShelterPoint, sites: readonly ShelterLayoutSite[], buildings: readonly ShelterLayoutBuilding[] = []): ShelterPoint[] {
 	if (!finitePoint(from) || !finitePoint(to) || samePoint(from, to)) return [];
-	if (buildings.some((building) => building.position && finitePoint(building.position))) return freeWalkingRoute(from, to, sites, buildings);
+	if (buildings.some((building) => building.position && finitePoint(building.position) || building.facing !== undefined)) return freeWalkingRoute(from, to, sites, buildings);
 	const cells = validSites(sites), fromCell = getShelterLayoutCell(from), toCell = getShelterLayoutCell(to);
 	const fromBuilding = buildings.find((candidate) => insideBuilding(from, candidate));
 	const toBuilding = buildings.find((candidate) => insideBuilding(to, candidate));
@@ -234,8 +250,10 @@ function freeWalkingRoute(from: ShelterPoint, to: ShelterPoint, sites: readonly 
 	const gate = { x: 318, y: SHELTER_STREET_CORRIDOR_Y };
 	const access = (point: ShelterPoint, building: ShelterLayoutBuilding | undefined): CorridorAccess | null => {
 		if (building) {
-			const door = getShelterRoomDoor(building);
-			return walkable(door) ? { anchor: door, lead: [{ x: door.x, y: point.y }, door] } : null;
+			const door = getShelterRoomDoor(building), outside = getShelterCorridorPoint(building);
+			if (!walkable(door)) return null;
+			const anchor = walkable(outside) && visibleOnGround(door, outside, lots, obstacles) ? outside : door;
+			return { anchor, lead: [...entranceLead(point, building), anchor] };
 		}
 		if (walkable(point)) return { anchor: { ...point }, lead: [] };
 		if (point.y <= SHELTER_STREET_CORRIDOR_Y && walkable(gate)) return { anchor: gate, lead: [{ x: gate.x, y: point.y }, gate] };

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { getShelterLandscape } from "../src/shelter-landscape";
-import { getShelterBuildingRect, getShelterCorridorSegments, getShelterRoomDoor, getShelterTerritoryCell, getShelterWorldBounds, type ShelterLayoutBuilding } from "../src/shelter-layout";
+import { getShelterBuildingRect, getShelterCorridorPoint, getShelterCorridorSegments, getShelterRoomDoor, getShelterRoomEntranceDirection, getShelterTerritoryCell, getShelterWorldBounds, isShelterPointInTerritory, type ShelterLayoutBuilding } from "../src/shelter-layout";
 import { projectShelterPoint, shelterRoomPosition } from "../src/shelter-isometric";
 import type { ShelterPoint } from "../src/shelter-motion";
 
@@ -12,6 +12,37 @@ function overlaps(point: ShelterPoint, radius: number, building: ShelterLayoutBu
 }
 
 describe("surface base landscaping", () => {
+	test("all four facings redraw worn paths and gravel thresholds on the selected entrance side", () => {
+		const base: ShelterLayoutBuilding = { column: 1, row: 1, width: 1, height: 1, position: { x: 311.25, y: 288.75 } }, plans = [];
+		for (const facing of [0, 1, 2, 3] as const) {
+			const room = { ...base, facing }, plan = getShelterLandscape(sites, [room]), door = getShelterRoomDoor(room), normal = getShelterRoomEntranceDirection(room), outside = getShelterCorridorPoint(room);
+			const threshold = plan.paths.find(({ from, to }) => from.x === outside.x && from.y === outside.y && to.x === door.x && to.y === door.y);
+			expect(threshold).toBeDefined();
+			expect(plan.aprons).toHaveLength(1);
+			for (const point of plan.aprons[0]!.points) {
+				expect(isShelterPointInTerritory(point, sites)).toBe(true);
+				expect((point.x - door.x) * normal.x + (point.y - door.y) * normal.y).toBeGreaterThanOrEqual(0);
+			}
+			expect(plan.decorations.filter((d) => d.kind !== "gate").every((d) => !overlaps(d.point, d.radius + 12, room))).toBe(true);
+			expect(getShelterLandscape([...sites].reverse(), [room])).toEqual(plan);
+			plans.push(plan);
+		}
+		for (let i = 1; i < plans.length; i++) expect(plans[i]!.aprons).not.toEqual(plans[i - 1]!.aprons);
+	});
+
+	test("entrance aprons shrink in a narrow gap and stay clear of neighbouring buildings", () => {
+		const left: ShelterLayoutBuilding = { column: 1, row: 1, width: 1, height: 1, position: { x: 311, y: 285 }, facing: 3 };
+		const right: ShelterLayoutBuilding = { column: 2, row: 1, width: 1, height: 1, position: { x: 419, y: 300 }, facing: 0 };
+		const plan = getShelterLandscape(sites, [left, right]), door = getShelterRoomDoor(left), normal = getShelterRoomEntranceDirection(left);
+		const apron = plan.aprons.find((item) => item.points.some((point) => point.x === door.x));
+		expect(apron).toBeDefined();
+		expect(Math.max(...apron!.points.map((point) => (point.x - door.x) * normal.x + (point.y - door.y) * normal.y))).toBe(8);
+		for (const item of plan.aprons) for (const point of item.points) for (const building of [left, right]) {
+			const rect = getShelterBuildingRect(building);
+			expect(point.x > rect.x + .001 && point.x < rect.x + rect.width - .001 && point.y > rect.y + .001 && point.y < rect.y + rect.height - .001).toBe(false);
+		}
+	});
+
 	test("a contiguous yard has one exterior fence and one clear entrance", () => {
 		const plan = getShelterLandscape(sites, buildings);
 		expect(plan.perimeter).toHaveLength(5);
