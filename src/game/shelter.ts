@@ -12,6 +12,8 @@ export interface ProductionJob {
 	output: { supplies: Supplies; moduleModelId: string | null; fieldKit?: FieldKit }; createdAt: number;
 	/** Consumed once at payment; these are receipts, not usable inventory. */
 	paidLoot?: LootItem[];
+	/** Only migrated paid orders of the three revised recipes retain the v24 output. */
+	recipeVersion?: 24;
 }
 export interface RoomInstance {
 	id: string; type: ShelterRoomType; column: number; row: number; level: number;
@@ -158,12 +160,26 @@ export const RESOURCE_RECIPES: { id: string; roomType: ShelterRoomType; label: s
 	{ id: "maintenance-from-loot", roomType: "workshop", label: "Ремкомплект из трофеев", description: "Пассатижи и скотч превращаются в 1 ремкомплект за 8 ₽. Целые трофеи расходуются при запуске и при отмене не возвращаются.", durationSeconds: 55, cost: { money: 8, supplies: supplies() }, output: supplies(), outputKit: "maintenance", lootRequirements: [{ modelId: "pliers", quantity: 1 }, { modelId: "duct-tape", quantity: 1 }] },
 	{ id: "trauma-from-loot", roomType: "medbay", label: "Травмокомплект из находок", description: "Бинт и антисептик превращаются в 1 травмокомплект за 5 ₽. Целые трофеи расходуются при запуске и при отмене не возвращаются.", durationSeconds: 60, cost: { money: 5, supplies: supplies() }, output: supplies(), outputKit: "trauma", lootRequirements: [{ modelId: "bandage-roll", quantity: 1 }, { modelId: "antiseptic", quantity: 1 }] },
 	{ id: "ammo-from-loot", roomType: "ammo", label: "Патроны из медного кабеля", description: "1 целый кабель и 8 ₽ дают 24 патрона. Трофей расходуется при запуске и при отмене не возвращается.", durationSeconds: 55, cost: { money: 8, supplies: supplies() }, output: supplies({ ammo: 24 }), lootRequirements: [{ modelId: "copper-wire", quantity: 1 }] },
-	{ id: "intel-from-loot", roomType: "radio", label: "Расшифровка журнала патрулей", description: "1 целый журнал и 10 ₽ дают 6 разведданных. Трофей расходуется при запуске и при отмене не возвращается.", durationSeconds: 70, cost: { money: 10, supplies: supplies() }, output: supplies({ intel: 6 }), lootRequirements: [{ modelId: "patrol-log", quantity: 1 }] },
+	{ id: "intel-from-loot", roomType: "radio", label: "Расшифровка журнала патрулей", description: "1 целый журнал и 10 ₽ дают 9 разведданных. Трофей расходуется при запуске и при отмене не возвращается.", durationSeconds: 70, cost: { money: 10, supplies: supplies() }, output: supplies({ intel: 9 }), lootRequirements: [{ modelId: "patrol-log", quantity: 1 }] },
 	{ id: "ammo-from-powder", roomType: "ammo", releasedIn: 24, label: "Патроны из пороха", description: "Порох, капсюли и 8 ₽ дают 36 патронов. Целые трофеи расходуются при запуске и не возвращаются при отмене.", durationSeconds: 55, cost: { money: 8, supplies: supplies() }, output: supplies({ ammo: 36 }), lootRequirements: [{ modelId: "gunpowder", quantity: 1 }, { modelId: "primer", quantity: 1 }] },
-	{ id: "medicine-from-antibiotics", roomType: "medbay", releasedIn: 24, label: "Медицина из аптечных находок", description: "Антибиотики, обезболивающее и 5 ₽ дают 5 медикаментов. Целые трофеи расходуются при запуске и не возвращаются при отмене.", durationSeconds: 75, cost: { money: 5, supplies: supplies() }, output: supplies({ medicine: 5 }), lootRequirements: [{ modelId: "antibiotics", quantity: 1 }, { modelId: "painkillers", quantity: 1 }] },
-	{ id: "maintenance-from-sewing", roomType: "workshop", releasedIn: 24, label: "Ремкомплект из крепежа", description: "2 набора крепежа, швейный набор и 8 ₽ дают 1 ремкомплект. Целые трофеи расходуются при запуске и не возвращаются при отмене.", durationSeconds: 60, cost: { money: 8, supplies: supplies() }, output: supplies(), outputKit: "maintenance", lootRequirements: [{ modelId: "screws", quantity: 2 }, { modelId: "sewing-kit", quantity: 1 }] },
+	{ id: "medicine-from-antibiotics", roomType: "medbay", releasedIn: 24, label: "Медицина из аптечных находок", description: "Антибиотики, обезболивающее и 5 ₽ дают 6 медикаментов. Целые трофеи расходуются при запуске и не возвращаются при отмене.", durationSeconds: 75, cost: { money: 5, supplies: supplies() }, output: supplies({ medicine: 6 }), lootRequirements: [{ modelId: "antibiotics", quantity: 1 }, { modelId: "painkillers", quantity: 1 }] },
+	{ id: "maintenance-from-sewing", roomType: "workshop", releasedIn: 24, label: "Ремкомплект из крепежа", description: "2 набора крепежа, швейный набор и 8 ₽ дают 1 ремкомплект, 1 деталь и 1 медикамент. Целые трофеи расходуются при запуске и не возвращаются при отмене.", durationSeconds: 60, cost: { money: 8, supplies: supplies() }, output: supplies({ scrap: 1, medicine: 1 }), outputKit: "maintenance", lootRequirements: [{ modelId: "screws", quantity: 2 }, { modelId: "sewing-kit", quantity: 1 }] },
 ];
 export const RESOURCE_RECIPE_BY_ID = Object.fromEntries(RESOURCE_RECIPES.map((recipe) => [recipe.id, recipe])) as Record<string, typeof RESOURCE_RECIPES[number]>;
+const freezeSnapshot = <T>(value: T): T => {
+	if (value && typeof value === "object") { for (const item of Object.values(value)) freezeSnapshot(item); Object.freeze(value); }
+	return value;
+};
+/** Exact released payment/output definitions, independent of the current catalogue. */
+export const LEGACY_RESOURCE_RECIPES_V24: Readonly<Record<string, typeof RESOURCE_RECIPES[number]>> = freezeSnapshot({
+	"intel-from-loot": { id: "intel-from-loot", roomType: "radio", label: "Расшифровка журнала патрулей", description: "1 целый журнал и 10 ₽ дают 6 разведданных. Трофей расходуется при запуске и при отмене не возвращается.", durationSeconds: 70, cost: { money: 10, supplies: supplies() }, output: supplies({ intel: 6 }), lootRequirements: [{ modelId: "patrol-log", quantity: 1 }] },
+	"medicine-from-antibiotics": { id: "medicine-from-antibiotics", roomType: "medbay", releasedIn: 24, label: "Медицина из аптечных находок", description: "Антибиотики, обезболивающее и 5 ₽ дают 5 медикаментов. Целые трофеи расходуются при запуске и не возвращаются при отмене.", durationSeconds: 75, cost: { money: 5, supplies: supplies() }, output: supplies({ medicine: 5 }), lootRequirements: [{ modelId: "antibiotics", quantity: 1 }, { modelId: "painkillers", quantity: 1 }] },
+	"maintenance-from-sewing": { id: "maintenance-from-sewing", roomType: "workshop", releasedIn: 24, label: "Ремкомплект из крепежа", description: "2 набора крепежа, швейный набор и 8 ₽ дают 1 ремкомплект. Целые трофеи расходуются при запуске и не возвращаются при отмене.", durationSeconds: 60, cost: { money: 8, supplies: supplies() }, output: supplies(), outputKit: "maintenance", lootRequirements: [{ modelId: "screws", quantity: 2 }, { modelId: "sewing-kit", quantity: 1 }] },
+});
+export function getProductionRecipe(recipeId: string, recipeVersion?: 24): typeof RESOURCE_RECIPES[number] | undefined {
+	const catalogue = recipeVersion === 24 ? LEGACY_RESOURCE_RECIPES_V24 : RESOURCE_RECIPE_BY_ID;
+	return Object.hasOwn(catalogue, recipeId) ? catalogue[recipeId] : undefined;
+}
 export function initialShelter(base: Record<string, number>): ShelterState {
 	return { sites: initialSites(), expansions: [], rooms: ["workshop", "medbay", "radio", "storage"].map((type, column) => ({ id: `room-${type}`, type: type as ShelterRoomType, column, row: 0,
 		level: base[type] ?? 1, status: "ready", construction: null, workerIds: [], queue: [], recipeId: null, repeat: false, pending: false, cycles: 0 })) };

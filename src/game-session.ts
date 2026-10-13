@@ -2,6 +2,7 @@ import { MAPS, RARITY_COLORS, type WeaponCategory } from './game/data';
 import { RUN_PERKS, LOOT_MODEL_BY_ID, getShelterSites, getShelterFrontier, getShelterRoomAt, isShelterSiteCoordinate, type GameState, type RunPerk } from './game/engine';
 import { MODULE_SLOTS, type ModuleSlot } from './game/modules';
 import { LOOT_CATEGORY_LABELS, type LootCategory } from './game/loot';
+import { readLootHunt, type LootHuntSelection } from './loot-decision-ui';
 
 export type SessionPage = 'home'|'raids'|'arsenal'|'base'|'contracts'|'journal'|'recruits'|'squad'|'achievements'|'flea';
 export interface GameSession {
@@ -24,7 +25,7 @@ export interface GameSession {
 	journal: string[];
 	/** A selection of existing people, never a second roster or reserved kit. */
 	squadDraft: string[];
-	flea: {tab:'inventory'|'barter'|'market'|'mine'|'catalog';search:string;kind:'all'|'loot'|'weapon'|'module'|'gear'|'supply'|'kit';barterModelId?:string|null;catalogGroup?:'all'|LootCategory|'gear'|'module'};
+	flea: {tab:'inventory'|'barter'|'market'|'mine'|'catalog';search:string;kind:'all'|'loot'|'weapon'|'module'|'gear'|'supply'|'kit';barterModelId?:string|null;catalogGroup?:'all'|LootCategory|'gear'|'module';hunt?:LootHuntSelection};
 	filters: {
 		weaponSearch:string;category:WeaponCategory|'all';collection:boolean;
 		moduleSearch:string;benchSearch:string;moduleSlot:ModuleSlot|'all';moduleRarity:string;
@@ -66,6 +67,7 @@ export function readGameSession(value:unknown,state:GameState):GameSession {
 	const fleaSource=object(valid.flea), flea:GameSession['flea']={tab:choose(fleaSource.tab,['inventory','barter','market','mine','catalog'] as const,'inventory'),search:query(fleaSource.search),kind:choose(fleaSource.kind,['all','loot','weapon','module','gear','supply','kit'] as const,'all')};
 	if(typeof fleaSource.barterModelId==='string'&&Object.hasOwn(LOOT_MODEL_BY_ID,fleaSource.barterModelId))flea.barterModelId=fleaSource.barterModelId;
 	if(typeof fleaSource.catalogGroup==='string'&&(['all','gear','module',...Object.keys(LOOT_CATEGORY_LABELS)]).includes(fleaSource.catalogGroup))flea.catalogGroup=fleaSource.catalogGroup as NonNullable<GameSession['flea']['catalogGroup']>;
+	const hunt=readLootHunt(fleaSource.hunt);if(hunt)flea.hunt=hunt;
 	try {if(valid.presentation!==null&&typeof valid.presentation==='object'&&JSON.stringify(valid.presentation).length<=48_000)presentation=JSON.parse(JSON.stringify(valid.presentation));}catch{/* Gameplay remains valid if its view state cannot be read. */}
 	return {version:1,page,view,mapId:choose(valid.mapId,MAPS.map(map=>map.id),MAPS[0]!.id),weaponId:id(valid.weaponId,state.weapons)??state.weapons[0]?.id??'',scavId:id(valid.scavId,state.scavs),roomId,raidId,context,site,roomTab:choose(valid.roomTab,['staff','production','upgrade'] as const,'staff'),armoryTab:choose(valid.armoryTab,['weapons','bench','modules','equipment','market'] as const,'weapons'),moduleSlot:choose(valid.moduleSlot,slots,'optic'),benchModuleId:id(valid.benchModuleId,state.modules),workshopId:id(valid.workshopId,state.shelter.rooms.filter(room=>room.type==='workshop')),perks,journal,squadDraft,flea,filters:{weaponSearch:query(filters.weaponSearch),category:choose(filters.category,['all','rifle','smg','shotgun','sniper','pistol'] as const,'all'),collection:filters.collection===true,moduleSearch:query(filters.moduleSearch),benchSearch:query(filters.benchSearch),moduleSlot:choose(filters.moduleSlot,['all',...slots],'all'),moduleRarity:choose(filters.moduleRarity,['all',...Object.keys(RARITY_COLORS)],'all'),roomModuleSearch:query(filters.roomModuleSearch),roomModuleSlot:choose(filters.roomModuleSlot,['all',...slots],'optic'),craftForWeapon:filters.craftForWeapon!==false,contracts:choose(filters.contracts,['open','done','all'] as const,'open'),achievements:choose(filters.achievements,['all','earned','active'] as const,'all')},presentation};
 }

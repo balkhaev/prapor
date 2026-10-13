@@ -25,7 +25,7 @@ describe('named junk and useful rarity catalog', () => {
     expect(isAutoSellLoot({ modelId: '__proto__' })).toBe(false);
   });
 
-  test('legendary useful finds require deep late-sector sorties, while common finds dominate each pool', () => {
+  test('legendary useful finds require deep late-sector sorties; paid v24 pools retain common dominance', () => {
     const legendary = USEFUL_LOOT_MODELS.filter(model => model.rarity === 'legendary');
     expect(legendary.map(model => model.id)).toEqual(['military-cpu', 'prototype-optics']);
     expect(legendary.every(model => model.minDepth === 3 && model.minSectorLevel >= 7)).toBe(true);
@@ -33,7 +33,7 @@ describe('named junk and useful rarity catalog', () => {
     expect(getRaidLootPool('reserve', 'recon', 3).some(entry => entry.model.id === 'prototype-optics')).toBe(false);
     expect(getRaidLootPool('bunker', 'recon', 3).filter(entry => entry.model.rarity === 'legendary')).toHaveLength(2);
     for (const map of MAPS) for (const branch of ['scavenge', 'combat', 'recon'] as const) for (const depth of [1, 2, 3]) {
-      const pool = getRaidLootPool(map.id, branch, depth), total = pool.reduce((sum, entry) => sum + entry.weight, 0);
+	  const pool = getRaidLootPool(map.id, branch, depth, 24), total = pool.reduce((sum, entry) => sum + entry.weight, 0);
       const common = pool.filter(entry => entry.model.rarity === 'common').reduce((sum, entry) => sum + entry.weight, 0);
       const rare = pool.filter(entry => ['rare', 'epic', 'legendary'].includes(entry.model.rarity)).reduce((sum, entry) => sum + entry.weight, 0);
       expect(common).toBeGreaterThan(rare);

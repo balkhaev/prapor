@@ -77,7 +77,7 @@ export function getShelterProductionPresentation(room: RoomInstance, production:
 	let quantity = model ? 1 : 0;
 	if (job.kind === "resource") {
 		if (job.output.fieldKit) { kind = "field-kit"; quantity = 1; }
-		for (const resource of ["ammo", "scrap", "medicine", "intel"] as const) {
+		for (const resource of job.output.fieldKit ? [] : ["ammo", "scrap", "medicine", "intel"] as const) {
 			if (job.output.supplies[resource] > 0) { kind = resource; quantity = job.output.supplies[resource]; break; }
 		}
 	}

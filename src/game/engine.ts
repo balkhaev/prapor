@@ -16,7 +16,7 @@ import { BLUEPRINTS, EXPEDITION_BRANCHES, GEAR_MODEL_BY_ID, MARKET_OFFERS, RUN_P
 export * from "./systems";
 import { FACTORY_KITS, getResolvedModuleMounts, MODULE_BY_ID, MODULE_MODELS, MODULE_SLOTS, MODULE_SLOT_LABELS, modulePlatformLabel, RECEIVER_INFO, type ModuleInstance, type ModuleSlot } from "./modules";
 export * from "./modules";
-import { initialShelter, ROOM_DEFINITIONS, RESOURCE_RECIPE_BY_ID, getShelterSites, getShelterFrontier, getRoomFootprint, getRoomFacing, getRoomSites, getRoomPosition, getRoomPositionSite, getRoomBounds, shelterBoundsOverlap, isShelterRoomPosition, isShelterSiteCoordinate, MAX_SHELTER_SITES, SHELTER_COORDINATE_LIMIT, SHELTER_POSITION_LIMIT, SHELTER_ROOM_CLEARANCE, SHELTER_GATE_APPROACH, SHELTER_EXCAVATION, type ProductionJob, type RoomInstance, type RoomFacing, type ShelterCost, type ShelterRoomType, type ShelterSite, type ShelterExpansion, type ShelterState } from "./shelter";
+import { initialShelter, ROOM_DEFINITIONS, RESOURCE_RECIPE_BY_ID, getProductionRecipe, LEGACY_RESOURCE_RECIPES_V24, getShelterSites, getShelterFrontier, getRoomFootprint, getRoomFacing, getRoomSites, getRoomPosition, getRoomPositionSite, getRoomBounds, shelterBoundsOverlap, isShelterRoomPosition, isShelterSiteCoordinate, MAX_SHELTER_SITES, SHELTER_COORDINATE_LIMIT, SHELTER_POSITION_LIMIT, SHELTER_ROOM_CLEARANCE, SHELTER_GATE_APPROACH, SHELTER_EXCAVATION, type ProductionJob, type RoomInstance, type RoomFacing, type ShelterCost, type ShelterRoomType, type ShelterSite, type ShelterExpansion, type ShelterState } from "./shelter";
 export * from "./shelter";
 import { getRaidFieldFrame, getRaidFieldOutcome, getRaidFieldPlan, type RaidFieldPlan } from "../raid-field";
 import { buildRecruitmentBoard, chooseRecruitCandidateAppearance, createRecruitmentState, getEarnedRecruitmentTier, getRecruitmentBoard, getScavProfileEffects, getScavTalentOffers, isRecruitDrawbackForRole, isRecruitTraitForRole, neutralScavProfile, RECOVERY_RECRUIT_ID, RECRUIT_BACKGROUNDS, RECRUIT_DRAWBACKS, RECRUIT_ROLES, RECRUIT_TRAITS, SCAV_TALENTS, stepRecruitmentSeed, type RecruitCandidate, type RecruitmentState, type RecruitRole, type RecruitTier, type ScavProfile } from "./recruitment";
@@ -54,7 +54,7 @@ import { getRaidGearLootPool, getRaidGearValue, rollRaidGearLoot } from "./raid-
 export * from "./raid-gear-loot";
 
 export const SAVE_KEY = "prapor.save.v1";
-export const SAVE_VERSION = 24;
+export const SAVE_VERSION = 25;
 export const MAX_PENDING_LOOT_DELIVERIES = 128;
 export const PENDING_LOOT_RAID_LIMIT = 96;
 export const MAX_OFFLINE_MS = 8 * 60 * 60 * 1000;
@@ -2963,7 +2963,7 @@ function parseProductionReserve(value: unknown): ShelterCost {
 }
 function parseProductionJob(value: unknown, roomType: ShelterRoomType, version: number): ProductionJob {
 	const source = record(value);
-	fields(source, ["id", "kind", "recipeId", "modelId", "workDone", "workRequired", "paid", "output", "createdAt", ...(version >= 21 ? ["paidLoot"] : [])]);
+	fields(source, ["id", "kind", "recipeId", "modelId", "workDone", "workRequired", "paid", "output", "createdAt", ...(version >= 21 ? ["paidLoot"] : []), ...(version >= 25 ? ["recipeVersion"] : [])]);
 	if (source.kind !== "module" && source.kind !== "resource") throw new Error("production-kind");
 	const paid = record(source.paid), output = record(source.output);
 	fields(paid, ["money", "supplies"]); fields(output, ["supplies", "moduleModelId", ...(version >= 14 ? ["fieldKit"] : [])]);
@@ -2971,16 +2971,18 @@ function parseProductionJob(value: unknown, roomType: ShelterRoomType, version: 
 		modelId: source.modelId === null ? null : versionedModuleId(source.modelId, version), workDone: number(source.workDone, 1e12, 0, true),
 		workRequired: number(source.workRequired, 1e12, 1, true), paid: { money: number(paid.money), supplies: parseSupplies(paid.supplies) },
 		output: { supplies: parseSupplies(output.supplies), moduleModelId: output.moduleModelId === null ? null : versionedModuleId(output.moduleModelId, version), ...(version >= 14 && Object.hasOwn(output, "fieldKit") ? { fieldKit: parseFieldKit(output.fieldKit) } : {}) }, createdAt: number(source.createdAt),
-		...(version >= 21 && Object.hasOwn(source, "paidLoot") ? { paidLoot: array(source.paidLoot, 16, value => parseLootItemForVersion(value, version)) } : {}) };
+		...(version >= 21 && Object.hasOwn(source, "paidLoot") ? { paidLoot: array(source.paidLoot, 16, value => parseLootItemForVersion(value, version)) } : {}),
+		...(version >= 25 && Object.hasOwn(source, "recipeVersion") ? { recipeVersion: number(source.recipeVersion, 24, 24, true) as 24 } : {}) };
 	if (job.workDone > job.workRequired) throw new Error("production-work");
 	if (job.kind === "module") {
 		const model = job.modelId ? ownValue(MODULE_BY_ID, job.modelId) : null;
-		if (!model || roomType !== "workshop" || job.recipeId !== `module:${model.id}` || job.output.moduleModelId !== model.id || job.output.fieldKit || job.paidLoot
+		if (!model || roomType !== "workshop" || job.recipeId !== `module:${model.id}` || job.output.moduleModelId !== model.id || job.output.fieldKit || job.paidLoot || job.recipeVersion !== undefined
 			|| !sameSupplies(job.output.supplies, emptySupplies()) || job.paid.money !== model.craftCost.money
 			|| !sameSupplies(job.paid.supplies, { ...emptySupplies(), scrap: model.craftCost.scrap })
 			|| job.workRequired !== Math.max(25, Math.round(35 + model.value * 0.25)) * 1_000_000) throw new Error("module-order");
 	} else {
-		const recipe = ownValue(RESOURCE_RECIPE_BY_ID, job.recipeId);
+		if (version < 25 && Object.hasOwn(LEGACY_RESOURCE_RECIPES_V24, job.recipeId)) job.recipeVersion = 24;
+		const recipe = getProductionRecipe(job.recipeId, job.recipeVersion);
 		if (!recipe || recipe.roomType !== roomType || job.modelId !== null || job.output.moduleModelId !== null || job.output.fieldKit !== recipe.outputKit
 			|| (version < 14 && (recipe.minLevel || recipe.outputKit))
 			|| (version < 21 && recipe.lootRequirements) || version < (recipe.releasedIn ?? 1) || (recipe.lootRequirements ? !job.paidLoot || !matchesLootPayment(job.paidLoot, recipe.lootRequirements) : job.paidLoot !== undefined)

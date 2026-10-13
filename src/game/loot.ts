@@ -82,16 +82,38 @@ const sectorCategories: Record<string, LootCategory[]> = {
 	factory: ["tools", "electronics"], reserve: ["medicine", "intel", "electronics"], bunker: ["electronics", "intel", "valuables"],
 };
 const branchCategories: Record<ExpeditionBranch, LootCategory[]> = { scavenge: ["tools", "provisions", "valuables"], combat: ["electronics", "medicine"], recon: ["intel", "electronics"] };
-export function getRaidLootPool(mapId: string, branch: ExpeditionBranch, depth: number, catalogVersion = 24): { model: LootModel; weight: number }[] {
+export const LOOT_BALANCE_VERSION = 25;
+export const LOOT_RARITY_BUDGETS: Readonly<Record<number, Readonly<Record<Rarity, number>>>> = {
+	1: { common: .76, uncommon: .24, rare: 0, epic: 0, legendary: 0 },
+	2: { common: .50, uncommon: .34, rare: .16, epic: 0, legendary: 0 },
+	3: { common: .30, uncommon: .34, rare: .25, epic: .09, legendary: .02 },
+};
+/** Rarity has its own budget: adding common models cannot dilute the rare tier. */
+export function balanceLootPool(pool: readonly { model: LootModel; weight: number }[], depth: number, junkShare = depth === 1 ? .10 : depth === 2 ? .08 : .06, branch: ExpeditionBranch = 'scavenge'): { model: LootModel; weight: number }[] {
+	const base = LOOT_RARITY_BUDGETS[depth];
+	if (!base || !Object.hasOwn(branchCategories, branch) || !Number.isFinite(junkShare) || junkShare < 0 || junkShare > 1) return [];
+	const boost = branch === 'combat' ? 1.35 : branch === 'recon' ? 1.20 : 1;
+	const budget = { ...base, rare: base.rare * boost, epic: base.epic * boost, legendary: base.legendary * boost };
+	const valid = pool.filter(entry => Number.isFinite(entry.weight) && entry.weight > 0);
+	const totals = Object.fromEntries(Object.keys(budget).map(rarity => [rarity, valid.filter(entry => !entry.model.autoSell && entry.model.rarity === rarity).reduce((sum, entry) => sum + entry.weight, 0)])) as Record<Rarity, number>;
+	const junkTotal = valid.filter(entry => entry.model.autoSell).reduce((sum, entry) => sum + entry.weight, 0);
+	const availableBudget = (Object.keys(budget) as Rarity[]).reduce((sum, rarity) => sum + (totals[rarity] > 0 ? budget[rarity] : 0), 0);
+	if (!availableBudget) return junkTotal ? valid.filter(entry => entry.model.autoSell).map(entry => ({ model: entry.model, weight: entry.weight / junkTotal })) : [];
+	const usefulShare = junkTotal ? 1 - junkShare : 1;
+	return valid.map(entry => ({ model: entry.model, weight: entry.model.autoSell ? entry.weight / junkTotal * junkShare
+		: entry.weight / totals[entry.model.rarity] * budget[entry.model.rarity] / availableBudget * usefulShare })).filter(entry => entry.weight > 0);
+}
+export function getRaidLootPool(mapId: string, branch: ExpeditionBranch, depth: number, catalogVersion = LOOT_BALANCE_VERSION): { model: LootModel; weight: number }[] {
 	if (!Object.hasOwn(MAP_BY_ID, mapId) || !Object.hasOwn(branchCategories, branch) || !Number.isInteger(depth) || depth < 1 || depth > 3) return [];
 	const level = MAP_BY_ID[mapId]!.level;
-	return LOOT_MODELS.filter(model => lootAvailableInCatalog(model.id, catalogVersion) && model.minDepth <= depth && model.minSectorLevel <= level).map(model => ({ model,
+	const pool = LOOT_MODELS.filter(model => lootAvailableInCatalog(model.id, catalogVersion) && model.minDepth <= depth && model.minSectorLevel <= level).map(model => ({ model,
 		weight: ({ common: 7, uncommon: 4, rare: 1.5, epic: .45, legendary: .15 }[model.rarity])
 			* (sectorCategories[mapId]!.includes(model.category) ? 3 : .6) * (branchCategories[branch].includes(model.category) ? 1.8 : 1)
 			* (model.rarity === "rare" || model.rarity === "epic" ? 1 + (depth - 1) * .25 + (level - 1) * .08 : 1),
 	}));
+	return catalogVersion < LOOT_BALANCE_VERSION ? pool : balanceLootPool(pool, depth, undefined, branch);
 }
-export function rollRaidLoot(mapId: string, branch: ExpeditionBranch, depth: number, random: () => number, catalogVersion = 24): LootModel[] {
+export function rollRaidLoot(mapId: string, branch: ExpeditionBranch, depth: number, random: () => number, catalogVersion = LOOT_BALANCE_VERSION): LootModel[] {
 	const pool = getRaidLootPool(mapId, branch, depth, catalogVersion); if (!pool.length) return [];
 	const count = 1 + (random() < (branch === "scavenge" ? .3 : .15) + (depth - 1) * .12 ? 1 : 0);
 	const result: LootModel[] = [], total = pool.reduce((sum, entry) => sum + entry.weight, 0);

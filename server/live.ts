@@ -7,7 +7,8 @@ import { LIVE_MAPS } from "../src/game/live-maps";
 import { createLiveNavigation } from "./live-navigation";
 import { migratedContainerAnchor, migratedLootCooldownKey } from "./live-world-migration";
 import { BODY_PARTS, BODY_PART_LABELS, TREATMENT_DURATION_MS, TREATMENT_LABELS, advanceBleeding, applyHit, canTreat, completeTreatment, createHealth, createMedicalInventory, healthPercent, injuryEffects, isAlive, isStable, parseHealth, parseMedicalInventory, selectTreatment, type BodyPart, type HealthState, type TreatmentType } from "../src/game/health";
-import { getRaidLootPool, type LootModel } from "../src/game/loot";
+import { type LootModel } from "../src/game/loot";
+import { getLiveLootSource, getLiveNamedLootPool } from '../src/game/live-loot-pool';
 import { getLiveLootDefinition, getLiveLootWeight, readEconomyLootItems } from '../src/game/live-loot';
 import { getLiveLootFamilyOdds, rollLiveLootModel } from '../src/game/live-physical-loot';
 import type { AccountService } from "./accounts";
@@ -94,21 +95,10 @@ const walkable = (mapId: LiveMapId, { x, y }: LivePoint): boolean => {
 /** Authored danger zones select the same trophy catalog used by headquarters. */
 function liveLootLocation(mapId: LiveMapId, point: LivePoint) {
   const world = maps.get(mapId)!;
-  const depth = world.zones.filter(zone => point.x >= zone.x && point.x < zone.x + zone.width && point.y >= zone.y && point.y < zone.y + zone.height)
-    .reduce((danger, zone) => Math.max(danger, zone.danger), 1);
-  const district = districtAt(point);
-  const sector = depth === 3 && district === "depot" ? "bunker" : ({ customs: "factory", sawmill: "forest", depot: "reserve", village: "forest" } as const)[district];
-  return { world, depth, sector, branch: ({ customs: "scavenge", sawmill: "recon", depot: "combat", village: "scavenge" } as const)[district] };
+  return { world, ...getLiveLootSource(world, point) };
 }
 export function getLiveLootPool(mapId: LiveMapId, point: LivePoint): { model: LootModel; weight: number }[] {
-  const { world, depth, sector, branch } = liveLootLocation(mapId, point), pool = getRaidLootPool(sector, branch, depth);
-  const table = world.containers.find(anchor => anchor.x === point.x && anchor.y === point.y)?.lootTable;
-  const category = table === "medical" ? "medicine" : table;
-  const matching = pool.filter(entry => entry.model.category === category);
-  // Dedicated containers favour their contents, while broken remnants may still appear there.
-  if (!matching.length) return pool;
-  const junk = pool.filter(entry => entry.model.autoSell), matchingWeight = matching.reduce((sum, entry) => sum + entry.weight, 0), junkWeight = junk.reduce((sum, entry) => sum + entry.weight, 0);
-  return [...matching, ...junk.map(entry => ({ ...entry, weight: junkWeight ? entry.weight * matchingWeight / (9 * junkWeight) : 0 }))];
+  return getLiveNamedLootPool(maps.get(mapId)!, point);
 }
 
 class LiveError extends Error {

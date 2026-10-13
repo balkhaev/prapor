@@ -5,6 +5,7 @@ import {
 } from "../src/game/engine";
 import { LOOT_MODELS, getLootModel, getLootTraderPrice, getRaidLootPool } from "../src/game/loot";
 import { getMarketFees } from "../src/game/flea";
+import { getLootDecisionProfile, getLootHuntOptions } from "../src/game/loot-value";
 
 const NOW = 1_792_000_000_000;
 const requested = Number(Bun.argv[2]);
@@ -81,4 +82,9 @@ console.log(JSON.stringify({ samples,
 		guide: model.guidePrice, disposition: model.autoSell ? "junk-auto-sale" : "useful-player-choice", guaranteedVendor: getLootTraderPrice({ id: "loot-1", modelId: model.id, foundAt: NOW }),
 		guidePerWeight: round(model.guidePrice / model.weight), salvage: model.salvage, minDepth: model.minDepth, minSectorLevel: model.minSectorLevel,
 		availablePools: Object.keys(MAP_BY_ID).flatMap(map => [1, 2, 3].filter(depth => getRaidLootPool(map, "scavenge", depth).some(entry => entry.model.id === model.id)).map(depth => `${map}:${depth}`)) })),
+	huntTargets: LOOT_MODELS.filter(model => ['rare', 'epic', 'legendary'].includes(model.rarity)).map(model => ({
+		model: model.id, label: model.label,
+		bestCurrent: getLootHuntOptions(model.id).slice(0, 3), bestPaidV24: getLootHuntOptions(model.id, 24)[0],
+		valueChoices: getLootDecisionProfile(model.id),
+	})),
 	rows }, null, 2));

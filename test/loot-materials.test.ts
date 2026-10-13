@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { FIELD_KIT_CAPACITY } from "../src/game/shelter-logistics";
-import { advance, assignWorker, buildRoom, cancelProduction, createGame, getBuildRoomQuote, getFieldKitStock, getLootRequirementQuote, getLootUses, getResourceProductionQuote, getSupplyCapacity, moveRoom, parseSave, receiveTradeAsset, RESOURCE_RECIPES, ROOM_DEFINITIONS, saveGame, setProductionReserve, setRoomRecipe, setRoomStockTarget, upgradeRoom, type GameState, type LootRequirement, type ShelterRoomType } from "../src/game/engine";
+import { advance, assignWorker, buildRoom, cancelProduction, createGame, getBuildRoomQuote, getFieldKitStock, getLootRequirementQuote, getLootUses, getResourceProductionQuote, getSupplyCapacity, moveRoom, parseSave, receiveTradeAsset, RESOURCE_RECIPES, ROOM_DEFINITIONS, SAVE_VERSION, saveGame, setProductionReserve, setRoomRecipe, setRoomStockTarget, upgradeRoom, type GameState, type LootRequirement, type ShelterRoomType } from "../src/game/engine";
 
 const NOW = 1_792_000_000_000;
 function fresh() { const state = createGame(NOW); state.money = 5000; state.supplies.scrap = 40; state.supplies.ammo = 0; state.supplies.intel = 0; return state; }
@@ -16,6 +16,7 @@ function prepareProduction(id: string) {
 		advance(state, state.lastUpdated + ROOM_DEFINITIONS[recipe.roomType].buildSeconds * 1000); room = state.shelter.rooms.find(value => value.type === recipe.roomType)!;
 	}
 	expect(assignWorker(state, state.scavs[0]!.id, room.id, state.lastUpdated).ok).toBe(true);
+	for (const key of ["ammo", "medicine", "scrap", "intel"] as const) if (recipe.output[key] > 0) state.supplies[key] = Math.min(state.supplies[key], getSupplyCapacity(state)[key] - recipe.output[key]);
 	return { state, recipe, room };
 }
 const newRecipes = RESOURCE_RECIPES.filter(recipe => recipe.lootRequirements);
@@ -60,7 +61,7 @@ describe("intact raid loot as shelter materials", () => {
 		for (const { id } of newRecipes.filter(recipe => recipe.releasedIn === 24)) {
 			const { state, room } = prepareProduction(id); room.recipeId = id; room.pending = true;
 			valid(state); state.schemaVersion = 23; expect(parseSave(saveGame(state))).toBeNull();
-			state.schemaVersion = 24; const items = add(state, RESOURCE_RECIPES.find(recipe => recipe.id === id)!.lootRequirements);
+			state.schemaVersion = SAVE_VERSION; const items = add(state, RESOURCE_RECIPES.find(recipe => recipe.id === id)!.lootRequirements);
 			expect(setRoomRecipe(state, room.id, id, false, state.lastUpdated).ok).toBe(true); expect(room.queue[0]!.paidLoot).toEqual(items); valid(state);
 			state.schemaVersion = 23; expect(parseSave(saveGame(state))).toBeNull();
 		}
