@@ -1,0 +1,61 @@
+.squad-compose { margin: 0 0 26px; padding: 24px; border: 1px solid #7f885b; border-radius: 14px; background: linear-gradient(145deg,#40503996,#213d37b0); box-shadow: inset 0 1px #b1b9881c; }
+.squad-compose-heading { display: flex; align-items: start; justify-content: space-between; gap: 18px; }
+.squad-compose-heading h2 { margin: 7px 0 8px; font-size: 27px; }
+.squad-compose-heading p { max-width: 650px; margin: 0; font-size: 13px; color: #c0c9aa; line-height: 1.7; }
+.squad-compose-count { display: grid; place-items: center; flex-shrink: 0; width: 64px; height: 64px; border-radius: 13px; background: #162e2b77; border: 1px solid #8a946269; font: 600 19px 'IBM Plex Mono',monospace; color:#e7dca8; }
+.squad-map { margin: 20px 0 15px; max-width: 340px; }
+.squad-picks { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; max-height: 350px; overflow-y: auto; }
+.squad-pick { display: flex; flex-direction: column; align-items: stretch; padding: 12px; border: 1px solid #6d7c575d; border-radius: 10px; background:#122e2960; }
+.squad-pick.selected { border-color:#c2ba72; background: #5c6a3a66; box-shadow:inset 0 0 0 1px #c2ba7229; }
+.squad-pick.unavailable { color:#a6ad98; }
+.squad-pick label { display: flex; gap: 9px; align-items: center; cursor:pointer; }
+.squad-pick label:has(input:disabled) { cursor: default; }
+.squad-pick input { flex-shrink: 0; width: 17px; height: 17px; accent-color:#d3c777; }
+.squad-pick label > span:last-child { display:flex; flex-direction: column; min-width:0; gap:4px; }
+.squad-pick strong { font-size: 14px; }
+.squad-pick small { font-size: 10px; line-height:1.5; overflow-wrap:anywhere; }
+.squad-pick-medkit { color:#d7c892; font-size:10px; line-height:1.5; }
+.squad-pick .text-button { align-self:flex-end; margin-top:8px; font-size:11px; }
+.squad-pick-face { display: block; flex-shrink:0; width:44px; height:55px; border:1px solid #77836174; border-radius:8px; overflow:hidden; background:#172d2a; }
+.squad-pick-face .scav-portrait { width:100%; height:100%; }
+.squad-compose-bottom { display:grid; grid-template-columns: minmax(0,1fr) 235px; gap:24px; margin-top:22px; }
+.squad-compose-preview { min-width:0; }
+.squad-formation { display: flex; align-items: center; justify-content: flex-start; gap:12px; min-height:66px; margin:12px 0; }
+.squad-formation > span { display:flex; align-items:center; gap:7px; }
+.squad-formation-face { display:block; flex-shrink:0; width:39px; height:48px; overflow:hidden; border:1px solid #8b977264; border-radius:7px; }
+.squad-formation b { font-size:12px; }
+.squad-formation i { font-style:normal; color:#b1bc8d; }
+.squad-quote-grid { display:flex; flex-wrap:wrap; gap:20px; }
+.squad-quote-grid > span { display:flex; flex-direction:column; gap:4px; }
+.squad-quote-grid strong { font-size:18px; color:#eee0b0; }
+.squad-quote-grid small { font-size:10px; color:#bac5a4; }
+.squad-relationship-notes { display:flex; flex-wrap:wrap; gap:6px; margin-top:13px; }
+.squad-relationship-notes span { padding:5px 8px; border-radius:5px; font-size:10px; background:#182f2988; border:1px solid #72815a55; color:#b4c39e; }
+.squad-relationship-notes .friend { border-color:#95b07d80; color:#d7e8b6; }
+.squad-relationship-notes .rival { border-color:#c6856e90; color:#efb69a; }
+.squad-rescue-note { margin:13px 0 0; color:#bdc8a6; font-size:11px; line-height:1.8; }
+.squad-compose-send { display:flex; flex-direction:column; gap:10px; justify-content:center; }
+.squad-compose-send .button { min-height:52px; }
+.squad-compose-send > span { color:#a4b195; font-size:10px; line-height:1.7; }
+.squad-ongoing { margin-bottom:16px; padding:18px; border:1px solid #91a07169; border-radius:10px; background:#25433a6e; }
+.squad-ongoing h3 { margin:8px 0 15px; font-size:19px; }
+.squad-ongoing p { font-size:11px; color:#b8c5a4; line-height:1.7; }
+.squad-mission-roster { display:flex; flex-direction:column; gap:8px; margin:12px 0 16px; }
+.squad-mission-roster > div { display:flex; align-items:center; gap:10px; padding:9px 11px; background:#18322c66; border:1px solid #70845a4d; border-radius:8px; }
+.squad-mission-roster > div > span:nth-child(2) { display:flex; flex-direction:column; min-width:0; gap:4px; flex:1; }
+.squad-mission-roster strong { font-size:13px; }
+.squad-mission-roster small { font-size:10px; color:#b8c5a4; line-height:1.5; }
+.squad-cargo-total { display:flex; flex-direction:column; gap:6px; margin:12px 0 18px; padding:15px; background:#2b422c99; border:1px solid #80936066; border-radius:8px; }
+.squad-cargo-total > span { color:#b5c69f; font-size:11px; }
+.squad-cargo-total strong { color:#edd99b; font:600 23px 'IBM Plex Mono',monospace; }
+.squad-cargo-total small { font-size:10px; color:#c2cba5; }
+.squad-live-members { margin-bottom:12px; }
+.squad-live-members .squad-mission-roster { margin:0; }
+.live-raid-scroll.has-party .live-kit { display:none; }
+.squad-member-cargo { margin-top:14px; }
+.squad-member-cargo h4 { margin:0 0 8px; color:#d0d9b0; font-size:12px; }
+.squad-live-action { padding:10px 12px; margin-top:6px; border-left:2px solid #b7be80; background:#273e2e88; color:#d0d9b0; font-size:11px; line-height:1.7; }
+.squad-live-action.rival { border-color:#d7987b; }
+.squad-compose :is(input,button,select):focus-visible { outline:2px solid #e3d895; outline-offset:3px; }
+@media(max-width:950px) { .squad-picks { grid-template-columns:repeat(2,minmax(0,1fr)); } .squad-compose-bottom { grid-template-columns:minmax(0,1fr); gap:15px; } .squad-compose-send { flex-direction:row; align-items:center; flex-wrap:wrap; } .squad-compose-send .button { flex:1; min-width:180px; } .squad-compose-send .quote-note { flex:2; min-width:200px; } .squad-compose-send > span { width:100%; } }
+@media(max-width:520px) { .squad-compose { padding:16px; } .squad-compose-heading h2 { font-size:23px; } .squad-compose-heading p { font-size:12px; } .squad-compose-count { width:49px; height:49px; font-size:16px; } .squad-picks { grid-template-columns:1fr; max-height:360px; } .squad-pick { flex-direction:row; align-items:center; gap:8px; } .squad-pick label { flex:1; } .squad-pick .text-button { margin:0; align-self:center; } .squad-formation { gap:7px; flex-wrap:wrap; } .squad-formation > span { gap:4px; } .squad-formation b { font-size:10px; } .squad-formation .scav-portrait { width:29px; height:39px; } .squad-quote-grid { gap:13px; } .squad-quote-grid strong { font-size:16px; } .squad-compose-send { flex-direction:column; align-items:stretch; } .squad-compose-send .quote-note { min-width:0; } .squad-mission-roster > div { gap:8px; padding:8px; } }

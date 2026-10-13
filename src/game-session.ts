@@ -21,6 +21,8 @@ export interface GameSession {
 	workshopId: string|null;
 	perks: {raidId:string;stage:number;seed:number;perk:RunPerk}[];
 	journal: string[];
+	/** A selection of existing people, never a second roster or reserved kit. */
+	squadDraft: string[];
 	filters: {
 		weaponSearch:string;category:WeaponCategory|'all';collection:boolean;
 		moduleSearch:string;benchSearch:string;moduleSlot:ModuleSlot|'all';moduleRarity:string;
@@ -43,6 +45,7 @@ export function readGameSession(value:unknown,state:GameState):GameSession {
 	let view=choose(valid.view,['base','map','raid'] as const,'base');
 	const raidId=id(valid.raidId,state.raids), report=state.history.find(item=>item.raidId===valid.raidId);
 	const journal=Array.isArray(valid.journal)?valid.journal.filter((item):item is string=>typeof item==='string'&&state.history.some(report=>report.id===item)).slice(0,30):[];
+	const squadDraft=Array.isArray(valid.squadDraft)?[...new Set(valid.squadDraft.filter((value):value is string=>typeof value==='string'&&state.scavs.some(scav=>scav.id===value)))].slice(0,3):state.scavs.filter(scav=>scav.status!=='raiding'&&!scav.assignment&&scav.health>=25&&scav.weaponInstanceId).slice(0,2).map(scav=>scav.id);
 	if(view==='raid'&&!raidId){view='base';if(report){page='journal';if(!journal.includes(report.id))journal.push(report.id);}}
 	const siteSource=object(valid.site);
 	const column=siteSource.column,row=siteSource.row;
@@ -58,5 +61,5 @@ export function readGameSession(value:unknown,state:GameState):GameSession {
 	}
 	let presentation:unknown=null;
 	try {if(valid.presentation!==null&&typeof valid.presentation==='object'&&JSON.stringify(valid.presentation).length<=48_000)presentation=JSON.parse(JSON.stringify(valid.presentation));}catch{/* Gameplay remains valid if its view state cannot be read. */}
-	return {version:1,page,view,mapId:choose(valid.mapId,MAPS.map(map=>map.id),MAPS[0]!.id),weaponId:id(valid.weaponId,state.weapons)??state.weapons[0]?.id??'',scavId:id(valid.scavId,state.scavs),roomId,raidId,context,site,roomTab:choose(valid.roomTab,['staff','production','upgrade'] as const,'staff'),armoryTab:choose(valid.armoryTab,['weapons','bench','modules','equipment','market'] as const,'weapons'),moduleSlot:choose(valid.moduleSlot,slots,'optic'),benchModuleId:id(valid.benchModuleId,state.modules),workshopId:id(valid.workshopId,state.shelter.rooms.filter(room=>room.type==='workshop')),perks,journal,filters:{weaponSearch:query(filters.weaponSearch),category:choose(filters.category,['all','rifle','smg','shotgun','sniper','pistol'] as const,'all'),collection:filters.collection===true,moduleSearch:query(filters.moduleSearch),benchSearch:query(filters.benchSearch),moduleSlot:choose(filters.moduleSlot,['all',...slots],'all'),moduleRarity:choose(filters.moduleRarity,['all',...Object.keys(RARITY_COLORS)],'all'),roomModuleSearch:query(filters.roomModuleSearch),roomModuleSlot:choose(filters.roomModuleSlot,['all',...slots],'optic'),craftForWeapon:filters.craftForWeapon!==false,contracts:choose(filters.contracts,['open','done','all'] as const,'open')},presentation};
+	return {version:1,page,view,mapId:choose(valid.mapId,MAPS.map(map=>map.id),MAPS[0]!.id),weaponId:id(valid.weaponId,state.weapons)??state.weapons[0]?.id??'',scavId:id(valid.scavId,state.scavs),roomId,raidId,context,site,roomTab:choose(valid.roomTab,['staff','production','upgrade'] as const,'staff'),armoryTab:choose(valid.armoryTab,['weapons','bench','modules','equipment','market'] as const,'weapons'),moduleSlot:choose(valid.moduleSlot,slots,'optic'),benchModuleId:id(valid.benchModuleId,state.modules),workshopId:id(valid.workshopId,state.shelter.rooms.filter(room=>room.type==='workshop')),perks,journal,squadDraft,filters:{weaponSearch:query(filters.weaponSearch),category:choose(filters.category,['all','rifle','smg','shotgun','sniper','pistol'] as const,'all'),collection:filters.collection===true,moduleSearch:query(filters.moduleSearch),benchSearch:query(filters.benchSearch),moduleSlot:choose(filters.moduleSlot,['all',...slots],'all'),moduleRarity:choose(filters.moduleRarity,['all',...Object.keys(RARITY_COLORS)],'all'),roomModuleSearch:query(filters.roomModuleSearch),roomModuleSlot:choose(filters.roomModuleSlot,['all',...slots],'optic'),craftForWeapon:filters.craftForWeapon!==false,contracts:choose(filters.contracts,['open','done','all'] as const,'open')},presentation};
 }
