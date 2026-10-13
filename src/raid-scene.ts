@@ -3,13 +3,14 @@ import { MODULE_BY_ID, type Raid, type RaidReport, type WeaponInstance } from ".
 import { WEAPON_BY_ID } from "./game/data";
 import { getRaidFieldFrame, getRaidFieldObjective, getRaidFieldPlan, projectRaidFieldPoint, readRaidFieldCamera, type RaidFieldCameraState } from "./raid-field";
 import { advanceScavAnimation, createScavAnimation, type ScavAnimationState } from "./shelter-animation";
+import { SCAV_ORIGIN, SCAV_POSES, SCAV_REFERENCE_HEIGHT, scavAppearance, scavAttachment, scavDirection, scavFrame, scavTexture, type ScavDirection } from "./scav-isometric";
 import type { ShelterCamera, ShelterViewport } from "./shelter-camera";
 
 type Point = { x: number; y: number };
 type Plan = ReturnType<typeof getRaidFieldPlan>;
 type Frame = ReturnType<typeof getRaidFieldFrame>;
-export interface RaidStreetSnapshot { raids: Raid[]; selectedRaidId?: string | null; history?: RaidReport[]; weapons?: WeaponInstance[] }
-type Pawn = { root: Phaser.GameObjects.Container; body: Phaser.GameObjects.Container; poses: Phaser.GameObjects.Image[]; weapon: Phaser.GameObjects.Graphics; animation: ScavAnimationState; point: Point | null; facing: -1 | 1 };
+export interface RaidStreetSnapshot { raids: Raid[]; selectedRaidId?: string | null; history?: RaidReport[]; weapons?: WeaponInstance[]; scavs?: { id: string; personality?: string }[] }
+type Pawn = { root: Phaser.GameObjects.Container; body: Phaser.GameObjects.Container; poses: Phaser.GameObjects.Image[]; weapon: Phaser.GameObjects.Graphics; animation: ScavAnimationState; point: Point | null; appearance: number; direction: ScavDirection };
 type Occluder = { object: Phaser.GameObjects.Container; x: number; y: number; width: number; height: number };
 const clamp = Phaser.Math.Clamp;
 const color = (value: string | number, fallback = 0x596355) => typeof value === "number" ? value : Number.parseInt(value.replace(/^#/, ""), 16) || fallback;
@@ -124,7 +125,7 @@ export class RaidStreetRenderer {
 		else { this.camera.x += (x - this.camera.x) * amount; this.camera.y += (y - this.camera.y) * amount; }
 	}
 
-	private build(plan: Plan, raid: Raid): void {
+	private build(plan: Plan, raid: Raid, appearance: number): void {
 		const newRaid = this.builtRaidId !== raid.id;
 		this.world.removeAll(true); this.occluders = []; this.loot.clear(); this.enemies = [];
 		this.plan = plan;
@@ -160,7 +161,7 @@ export class RaidStreetRenderer {
 		const entry = this.project(plan.entry), checkpoint = this.project(plan.checkpoint), gates = this.scene.add.graphics().setDepth(-900);
 		for (const [p, tint] of [[entry, 0x98b7a0], [checkpoint, 0xe1c590]] as const) { gates.lineStyle(2, tint, .7).strokeEllipse(p.x, p.y, 36, 17); line(gates, [{ x: p.x - 13, y: p.y }, { x: p.x + 13, y: p.y }], tint, 1, .5); }
 		this.world.add(gates);
-		this.pawn = this.makePawn(raid.seed % 4, false); this.pawn.root.setPosition(entry.x, entry.y);
+		this.pawn = this.makePawn(appearance, false); this.pawn.root.setPosition(entry.x, entry.y);
 		this.effects = this.scene.add.graphics().setDepth(10000); this.world.add(this.effects);
 		this.drawMiniGround(); if (newRaid) { this.camera = { zoom: 1.8, x: 0, y: 0 }; this.following = true; }
 		this.builtRaidId = raid.id; if (this.following) this.follow(1); this.applyCamera();
@@ -242,13 +243,18 @@ export class RaidStreetRenderer {
 
 	private makePawn(appearance: number, hostile: boolean): Pawn {
 		const body = this.scene.add.container(0, 0), shadow = this.scene.add.ellipse(0, 2, 23, 10, 0x071510, .62);
-		const poses = ["idle", "walk-a", "walk-b", "work"].map((pose) => this.scene.add.image(0, 0, "scav-workers", `${pose}-${Math.abs(appearance) % 4}`).setOrigin(.5, 332 / 340).setScale(48 / 319).setTint(hostile ? 0xaca08c : 0xffffff));
+		const texture = scavTexture(appearance), metadata = this.scene.textures.get(texture).customData as { meta?: { characterHeight?: number } };
+		const height = Number(metadata.meta?.characterHeight) || SCAV_REFERENCE_HEIGHT;
+		const poses = SCAV_POSES.map((pose) => this.scene.add.image(0, 0, texture, scavFrame(pose, "se")).setOrigin(SCAV_ORIGIN.x, SCAV_ORIGIN.y).setScale(48 / height).setTint(hostile ? 0xaca08c : 0xffffff));
 		const weapon = this.scene.add.graphics(); body.add(poses); body.add(weapon);
 		const root = this.scene.add.container(0, 0, [shadow, body]); this.world.add(root);
-		return { root, body, poses, weapon, animation: createScavAnimation(appearance * .31), point: null, facing: 1 };
+		return { root, body, poses, weapon, animation: createScavAnimation(appearance * .31), point: null, appearance, direction: "se" };
 	}
-	private paintRifle(g: Phaser.GameObjects.Graphics, angle: number, slung: boolean, hostile: boolean, fighting: boolean): void {
-		g.setPosition(slung ? -4 : fighting ? 12 : 8, slung ? -27 : fighting ? -21 : -19).setAngle(slung ? -65 : angle);
+	private paintRifle(pawn: Pawn, aim: number | null, slung: boolean, hostile: boolean): void {
+		const g = pawn.weapon, attachment = scavAttachment(pawn.direction, slung);
+		const bearing = slung ? attachment.flipX ? -115 : -65 : aim ?? attachment.angle;
+		g.setPosition(slung ? attachment.x * .45 : attachment.x, attachment.y - (slung ? 6 : 0)).setScale(attachment.flipX ? -1 : 1, 1).setAngle(bearing - (attachment.flipX ? 180 : 0) - pawn.body.angle);
+		if (attachment.behind || slung) pawn.body.sendToBack(g); else pawn.body.bringToTop(g);
 		const signature = hostile ? "enemy" : `${this.carriedWeapon?.weaponId ?? "unknown"}:${this.carriedWeapon?.modules.optic?.modelId ?? "none"}:${this.carriedWeapon?.modules.muzzle?.modelId ?? "none"}`;
 		if (this.weaponCache.get(g) === signature) return;
 		this.weaponCache.set(g, signature); g.clear();
@@ -268,18 +274,21 @@ export class RaidStreetRenderer {
 	}
 	private animatePawn(pawn: Pawn, point: Point, frame: Frame, delta: number, hostile = false): void {
 		const before = pawn.point, distance = before ? Math.hypot(point.x - before.x, point.y - before.y) : 0;
-		if (before && Math.abs(point.x - before.x) > .01) pawn.facing = point.x > before.x ? 1 : -1;
 		const searching = !hostile && frame.action === "search", fighting = frame.action === "skirmish" || frame.action === "cover", crouching = searching || fighting;
-		const animation = advanceScavAnimation(pawn.animation, { distance, elapsedMs: delta, walking: frame.walking && !hostile, working: crouching, facing: pawn.facing, role: searching ? "recycler" : "radio", workDone: frame.segmentProgress * 5, workRate: crouching && !frame.paused ? 1 : 0, jobId: crouching ? `search-${frame.segmentIndex}` : null, reducedMotion: this.reducedMotion });
+		const target = hostile ? this.pawn?.point ?? null : frame.enemyPositions[0] ? this.project(frame.enemyPositions[0]) : null;
+		const pathDirection = this.project({ x: frame.position.x + frame.direction.x, y: frame.position.y + frame.direction.y });
+		if (target && fighting) pawn.direction = scavDirection(target.x - point.x, target.y - point.y, pawn.direction);
+		else if (!hostile) pawn.direction = scavDirection(pathDirection.x - point.x, pathDirection.y - point.y, pawn.direction);
+		else if (before) pawn.direction = scavDirection(point.x - before.x, point.y - before.y, pawn.direction);
+		const facing = pawn.direction === "sw" || pawn.direction === "nw" ? -1 : 1;
+		const animation = advanceScavAnimation(pawn.animation, { distance, elapsedMs: delta, walking: frame.walking && !hostile, working: crouching, facing, role: searching ? "recycler" : "radio", workDone: frame.segmentProgress * 5, workRate: crouching && !frame.paused ? 1 : 0, jobId: crouching ? `search-${frame.segmentIndex}` : null, reducedMotion: this.reducedMotion });
 		pawn.animation = animation.state; pawn.point = { ...point };
 		pawn.root.setPosition(point.x, point.y).setDepth(point.y + .5);
 		const pose = animation.pose, weights = [pose.weights.idle, pose.weights.walkA, pose.weights.walkB, pose.weights.work];
-		pawn.poses.forEach((image, index) => image.setAlpha(weights[index]!).setVisible(weights[index]! > .001));
-		pawn.body.setScale(pose.scaleX, crouching ? .94 : pose.scaleY).setAngle(pose.angle * pose.scaleX);
-		const target = hostile ? this.pawn?.point ?? null : frame.enemyPositions[0] ? this.project(frame.enemyPositions[0]) : null;
-		const aim = target && fighting ? Math.atan2(target.y - point.y, Math.abs(target.x - point.x)) * 180 / Math.PI : -8;
-		if (target && fighting) pawn.body.setScale(target.x >= point.x ? 1 : -1, crouching ? .94 : pose.scaleY);
-		this.paintRifle(pawn.weapon, aim, searching, hostile, fighting);
+		pawn.poses.forEach((image, index) => image.setFrame(scavFrame(SCAV_POSES[index]!, pawn.direction)).setAlpha(weights[index]!).setVisible(weights[index]! > .001));
+		pawn.body.setScale(1, crouching ? .94 : pose.scaleY).setAngle(pose.angle * facing);
+		const aim = target && fighting ? Math.atan2(target.y - point.y, target.x - point.x) * 180 / Math.PI : null;
+		this.paintRifle(pawn, aim, searching, hostile);
 	}
 	private gunMuzzle(pawn: Pawn): Point {
 		const point = pawn.weapon.getWorldTransformMatrix().transformPoint(Number(pawn.weapon.getData("muzzleLength")) || 31, 0);
@@ -319,7 +328,10 @@ export class RaidStreetRenderer {
 		this.carriedWeapon = snapshot.weapons?.find((weapon) => weapon.id === raid.weaponInstanceId) ?? this.carriedWeapon;
 		const input = `${raid.mapId}:${raid.seed}:${raid.expedition?.stage ?? 1}:${raid.expedition?.branch ?? "scavenge"}:${raid.tactic}`;
 		const plan = this.plan && this.planInput === input ? this.plan : getRaidFieldPlan(raid); this.planInput = input;
-		if (this.plan?.id !== plan.id || this.builtRaidId !== raid.id) this.build(plan, raid);
+		const scav = snapshot.scavs?.find((candidate) => candidate.id === raid.scavId);
+		const identity = [...raid.scavId].reduce((value, character) => Math.imul(value, 31) + character.charCodeAt(0) | 0, 0);
+		const appearance = scav ? scavAppearance(scav.personality, identity) : this.builtRaidId === raid.id && this.pawn ? this.pawn.appearance : scavAppearance(undefined, identity);
+		if (this.plan?.id !== plan.id || this.builtRaidId !== raid.id) this.build(plan, raid, appearance);
 		const frame = getRaidFieldFrame(raid, this.report ? raid.endsAt : now, plan);
 		const objective = getRaidFieldObjective(raid, this.report ? raid.endsAt : now, plan);
 		const point = this.project(frame.position);
