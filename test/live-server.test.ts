@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLiveService, readLiveOptions, type LiveService } from "../server/live";
+import { createHealth } from "../src/game/health";
 import { createAccountService, type AccountService } from "../server/accounts";
 import { createHandler } from "../server/handler";
 import type { LiveCommand, LiveSnapshot, LiveStatus } from "../src/game/live";
@@ -123,10 +124,16 @@ describe("shared endless live server", () => {
     await act(first.session, { type: "attack", targetId: second.session.id });
     expect((await call("action", "POST", { type: "attack", targetId: second.session.id }, first.session)).status).toBe(429);
     const hurt = await state(second.session);
-    expect(hurt.entities.find(entity => entity.id === second.session.id)!.health).toBe(75);
+    expect(hurt.self.body.parts.chest.hp).toBe(53);
+    expect(hurt.entities.find(entity => entity.id === second.session.id)!.health).toBeCloseTo(408 / 440 * 100);
+    await act(second.session, { type: "treat", medicine: "tourniquet", part: "chest" });
+    await advance(4000, [first.session, second.session]);
     await act(second.session, { type: "heal" });
-    expect((await state(second.session)).self.medkits).toBe(1);
-    for (let hit = 0; hit < 4; hit++) { await advance(1000, [first.session, second.session]); await act(first.session, { type: "attack", targetId: second.session.id }); }
+    expect((await state(second.session)).self.treatment?.type).toBe("medkit");
+    expect((await state(second.session)).self.medicine.medkit).toBe(120);
+    await advance(5000, [first.session, second.session]);
+    expect((await state(second.session)).self.medicine.medkit).toBeLessThan(120);
+    for (let hit = 0; hit < 6 && (await state(second.session)).self.respawnAt === 0; hit++) { await advance(1000, [first.session, second.session]); await act(first.session, { type: "attack", targetId: second.session.id }); }
     const dead = await state(second.session);
     expect(dead.entities.find(entity => entity.id === second.session.id)!.action).toBe("downed");
     expect(dead.self.cargo).toBe(0); expect(dead.self.respawnAt).toBe(time + 10_000);
@@ -180,18 +187,22 @@ describe("shared endless live server", () => {
     editStorage(db => {
       const row = db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!;
       const world = JSON.parse(row.state) as { scavs: Array<Record<string, unknown>> };
-      Object.assign(world.scavs[0]!, { x: 3, y: 0, health: 25, nextAttack: 0 });
+      Object.assign(world.scavs[0]!, { x: 3, y: 0, health: 25, body: createHealth(25), nextAttack: 0 });
       db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify(world));
     });
     await enter(first.session); await enter(second.session);
-    await advance(5000, [first.session, second.session]);
+    await advance(6500, [first.session, second.session]);
     const underFire = await state(first.session);
     expect(underFire.entities.filter(entity => entity.kind === "player").some(entity => entity.health < 100)).toBe(true);
+    await act(first.session, { type: "attack", targetId: "scav-0" });
     await act(first.session, { type: "patrol", enabled: true }); await advance(250, [first.session, second.session]);
     expect((await state(first.session)).self.kills).toBe(1);
-    const before = (await state(second.session)).entities.find(entity => entity.id === second.session.id)!.health;
+    const before = (await state(second.session)).self.body.parts.chest.hp;
     await advance(2000, [first.session, second.session]);
-    expect((await state(second.session)).entities.find(entity => entity.id === second.session.id)!.health).toBe(before);
+    const after = await state(second.session);
+    expect(after.self.body.parts.chest.hp).toBeCloseTo(before - .5);
+    expect(after.events.some(event => event.actorId === first.session.id && event.targetId === second.session.id)).toBe(false);
+    await act(first.session, { type: "cancelTreatment" });
     await act(first.session, { type: "patrol", enabled: false }); await advance(8500, [first.session, second.session]);
     expect((await state(first.session)).entities.find(entity => entity.id === "scav-0")!.health).toBe(100);
   });

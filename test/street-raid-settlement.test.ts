@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
 	advance, continueExpedition, createGame, dispatchRaid, extractRaid, getExpeditionChoices,
-	getRaidPhase, loadGameWithSummary, parseSave, saveGame, SAVE_VERSION, type GameState,
+	getRaidPhase, healthPercent, resolveMedicalEncounter, loadGameWithSummary, parseSave, saveGame, SAVE_VERSION, type GameState,
 } from "../src/game/engine";
 import { getRaidFieldFrame, getRaidFieldOutcome, getRaidFieldPlan } from "../src/raid-field";
+import { MAP_BY_ID } from '../src/game/data';
 
 const NOW = 1_792_000_000_000;
 function clone(state: GameState) {
@@ -34,7 +35,9 @@ describe("street encounters remain real checkpoint settlements", () => {
 		expect(raid.seed).toBe(698906565);
 		expect(state.rng).toBe(698906565);
 		expect(raid.expedition!.status).toBe("choice");
-		expect(state.scavs[0]!.health).toBe(91);
+		const medical = resolveMedicalEncounter(raid.expedition!.medical!.start, raid.outcomeSeed ?? raid.seed, 1, MAP_BY_ID[raid.mapId]!.danger, true, raid.endsAt);
+		expect(state.scavs[0]!.body).toEqual(medical.body);
+		expect(state.scavs[0]!.health).toBe(healthPercent(medical.body));
 		expect(state.weapons[0]!.durability).toBe(91);
 		expect(Object.entries(state.weapons[0]!.modules).every(([slot, part]) => part!.durability === (slot === "receiver" ? 91 : 97))).toBe(true);
 		expect(raid.expedition!.offers).toEqual(["careful", "gunsmith"]);

@@ -3,9 +3,10 @@ import { getCommandSummary } from "../src/command-summary";
 import {
 	advance, assignWorker, buildRoom, createGame, craftModule, dispatchRaid, getModuleCapacity,
 	getBuildRoomQuote, getResourceProductionQuote, getRoomProductionState,
-	getRoomUpgradeQuote, getSupplyCapacity, queueModuleProduction,
+	getRoomUpgradeQuote, getSupplyCapacity, queueModuleProduction, healScav, getScavHealingQuote,
 	saveGame, sellModule, setRoomRecipe, setRoomStockTarget, setProductionReserve, ensureShelterLogistics, upgradeRoom, type GameState, type RoomInstance,
 } from "../src/game/engine";
+import { applyHit, createHealth, healthPercent } from "../src/game/health";
 
 const NOW = 1_792_000_000_000;
 
@@ -32,6 +33,26 @@ function build(state: GameState, type: RoomInstance["type"], column: number, row
 }
 
 describe("command next-step projection", () => {
+	test("a high-health fracture and a paid clinical course remove a worker from available staff", () => {
+		const state = funded(), workshop = room(state, "workshop"), worker = state.scavs[0]!;
+		state.supplies.medicine = 5;
+		expect(assignWorker(state, worker.id, workshop.id, NOW).ok).toBe(true);
+		expect(queueModuleProduction(state, workshop.id, "optic-reflex", NOW).ok).toBe(true);
+		worker.body = createHealth(); applyHit(worker.body, "leftLeg", 1, { fracture: true }); worker.health = healthPercent(worker.body); worker.status = "wounded";
+		expect(getCommandSummary(state).freeWorkers).toBe(2);
+		expect(status(state, workshop).kind).toBe("workers");
+		expect(status(state, workshop).detail).toContain("здоровье и подвижность");
+		const quote = getScavHealingQuote(state, worker);
+		expect(healScav(state, worker.id, NOW).ok).toBe(true);
+		const before = JSON.stringify(state), summary = getCommandSummary(state), course = status(state, workshop);
+		expect(summary.freeWorkers).toBe(2);
+		expect(course.title).toBe("Работник проходит лечение");
+		expect(course.detail).toContain(`оплаченный курс лечения, осталось ${Math.ceil(quote.duration)} сек.`);
+		expect(course.detail).toContain("Работа возобновится после восстановления");
+		expect(workshop.queue).toHaveLength(1);
+		expect(JSON.stringify(state)).toBe(before);
+	});
+
 	test("a completed stocking plan remains quiet after its worker leaves for a raid", () => {
 		const state = funded(), medbay = room(state, "medbay"), worker = state.scavs[1]!;
 		state.supplies.medicine = getSupplyCapacity(state).medicine;

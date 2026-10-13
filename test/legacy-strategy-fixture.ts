@@ -1,5 +1,7 @@
+import { withoutMedical } from './legacy-health-fixture';
 /** Remove fields unavailable in v1–11 when deriving an authentic old fixture. */
 export function withoutRaidStrategy<T>(value: T): T {
+	withoutMedical(value);
 	const state = value as {
 		sectorIntel?: unknown;
 		scavs?: { raidPlan?: unknown }[];

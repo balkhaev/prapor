@@ -85,6 +85,7 @@ function hire(state: GameState, role: "assault" | "scout" | "technician" = "assa
 function finishSuccessfulRaid(state: GameState, mapId: string) {
 	const scav = state.scavs[0]!;
 	scav.health = 100;
+	delete scav.body; delete scav.medicalTreatment;
 	scav.status = "ready";
 	const weapon = state.weapons.find((item) => item.id === scav.weaponInstanceId)!;
 	weapon.durability = 100;

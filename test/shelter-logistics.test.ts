@@ -1,5 +1,6 @@
+import { withoutMedical } from './legacy-health-fixture';
 import { expect, test } from "bun:test";
-import { advance, assignWorker, continueExpedition, createGame, dispatchRaid, FIELD_KITS, getAmmoEffect, getFieldKitStock, getResourceProductionQuote, getRoomProductionState, parseSave, queueFieldKitProduction, queueModuleProduction, saveGame, setAutoRaid, setFieldKit, setGameOutcomeSeedSource, setLoadoutOption, setRoomRecipe, setRoomStockTarget, TACTICS, upgradeRoom, type FieldKit, type GameState, type RoomInstance } from "../src/game/engine";
+import { advance, assignWorker, continueExpedition, createGame, dispatchRaid, FIELD_KITS, getAmmoEffect, getExpeditionChoices, healthPercent, resolveMedicalEncounter, getFieldKitStock, getResourceProductionQuote, getRoomProductionState, parseSave, queueFieldKitProduction, queueModuleProduction, saveGame, setAutoRaid, setFieldKit, setGameOutcomeSeedSource, setLoadoutOption, setRoomRecipe, setRoomStockTarget, TACTICS, upgradeRoom, type FieldKit, type GameState, type RoomInstance } from "../src/game/engine";
 import { MAP_BY_ID } from "../src/game/data";
 
 const NOW = 1_792_000_000_000;
@@ -106,7 +107,7 @@ test("the support slot changes real wear and injury over multiple stages without
 		expect(maintenance!.weapon.durability).toBeGreaterThan(base!.weapon.durability);
 		expect(trauma!.scav.health).toBeGreaterThanOrEqual(base!.scav.health);
 		if (trauma!.scav.health > base!.scav.health) reductions++;
-		if (base!.state.raids.length) {
+		if (base!.state.raids.length && runs.every(run => run.state.raids.length && getExpeditionChoices(run.state, run.raid, run.raid.expedition!.offers[0]).every(choice => !choice.reason))) {
 			expect(maintenance!.raid.expedition!.cargo).toEqual(base!.raid.expedition!.cargo);
 			expect(trauma!.raid.expedition!.cargo).toEqual(base!.raid.expedition!.cargo);
 			for (const run of runs) {
@@ -125,6 +126,7 @@ test("an automatic order waits for a newly produced kit after consuming its last
 	const state = kitFixture(), scav = state.scavs[0]!;
 	state.rng = Math.imul(1, 0x9e3779b1) >>> 0;
 	expect(setFieldKit(state, scav.id, "trauma").ok).toBe(true);
+	expect(setLoadoutOption(state, scav.id, "medkit", true).ok).toBe(true);
 	expect(setAutoRaid(state, scav.id, "courtyard", 25, state.lastUpdated).ok).toBe(true);
 	expect(state.raids[0]!.fieldKit).toBe("trauma"); expect(getFieldKitStock(state).trauma).toBe(0);
 	advance(state, state.raids[0]!.endsAt);
@@ -144,6 +146,7 @@ test("v13 ammunition and server outcome seeds migrate unchanged while shelter lo
 	setGameOutcomeSeedSource(state, () => 123_456);
 	expect(dispatchRaid(state, scav.id, "courtyard", NOW).ok).toBe(true);
 	advance(state, NOW + 7_123);
+	withoutMedical(state);
 	const raw = JSON.parse(saveGame(state)); raw.schemaVersion = 13;
 	const restored = parseSave(JSON.stringify(raw));
 	expect(restored).not.toBeNull(); expect(restored).toEqual(state);
@@ -181,10 +184,11 @@ test("ammo ballistics and physical kits multiply together, retaining exact damag
 				if (roll() >= raid.chance) continue;
 				const expectedWear = Math.ceil((5 + roll() * (7 + map.danger * 8) + 2) * raid.expedition!.weaponMechanics!.wearMultiplier * raid.expedition!.ammunition!.wearMultiplier * FIELD_KITS[kit].wearMultiplier);
 				const ammunition = getAmmoEffect(weapon, ammoType, map.id, "scavenge", 1, raid.tactic);
-				const expectedInjury = Math.ceil((3 + roll() * (8 + map.danger * 10) + 2) * TACTICS[raid.tactic].injuryMultiplier * ammunition.injuryMultiplier * FIELD_KITS[kit].injuryMultiplier);
+				expect(raid.expedition!.medical!.start.injuryMultiplier).toBeCloseTo(TACTICS[raid.tactic].injuryMultiplier * ammunition.injuryMultiplier * FIELD_KITS[kit].injuryMultiplier);
+				const expectedMedical = resolveMedicalEncounter(raid.expedition!.medical!.start, seed, 1, map.danger, true, raid.endsAt);
 				const restored = parseSave(saveGame(state)); expect(restored).not.toBeNull(); expect(restored).toEqual(state);
 				advance(state, raid.endsAt); advance(restored!, restored!.raids[0]!.endsAt);
-				expect(weapon.durability).toBe(100 - expectedWear); expect(scav.health).toBe(100 - expectedInjury);
+				expect(weapon.durability).toBe(100 - expectedWear); expect(scav.body).toEqual(expectedMedical.body); expect(scav.health).toBe(healthPercent(expectedMedical.body));
 				expect(restored).toEqual(state);
 				for (const [slot, part] of Object.entries(weapon.modules)) if (slot !== "receiver") expect(part.durability).toBeCloseTo(100 - 3 * FIELD_KITS[kit].wearMultiplier);
 				checked = true;

@@ -1,7 +1,8 @@
+import { withoutMedical } from './legacy-health-fixture';
 import { describe, expect, test } from "bun:test";
 import {
 	advance, assignWorker, buildRoom, cancelProduction, continueExpedition, createGame,
-	dispatchRaid, dispatchSquadRaid, extractRaid, getFieldKitStock,
+	dispatchRaid, dispatchSquadRaid, extractRaid, getExpeditionChoices, getFieldKitStock,
 	getProductionReserve, getRoomProductionState, getRoomUpgradeQuote, getSquadRaidQuote,
 	parseSave, queueFieldKitProduction, queueModuleProduction, saveGame, setFieldKit, setProductionReserve,
 	setRoomRecipe, setRoomStockTarget, upgradeRoom, type ActionResult, type GameState,
@@ -264,6 +265,7 @@ describe("shelter logistics boundaries and paid event ownership", () => {
 			expect(restore(state).raids[0]!.fieldKit).toBe("maintenance");
 			advance(state, raid.endsAt);
 			if (!state.raids.length) continue;
+			if (getExpeditionChoices(state, raid, raid.expedition!.offers[0]).some(choice => choice.reason)) continue;
 			requireAction(continueExpedition(state, raid.id, "scavenge", raid.expedition!.offers[0]!, state.lastUpdated));
 			expect(getFieldKitStock(state).maintenance).toBe(0);
 			advance(state, raid.endsAt);
@@ -357,6 +359,7 @@ describe("shelter logistics boundaries and paid event ownership", () => {
 		// Derive a genuine pre-ballistics sortie: v12 never contained the later ammo snapshot.
 		delete current.raids[0]!.expedition!.ammunition;
 		advance(current, NOW + 7_123);
+		withoutMedical(current);
 		const raw = JSON.parse(saveGame(current)); raw.schemaVersion = 12;
 		delete raw.shelter.logistics;
 		for (const item of raw.shelter.rooms) delete item.stockTarget;

@@ -130,6 +130,8 @@ describe("persistent scav model identities", () => {
 		for (const expedition of [false, true]) {
 			const state = createGame(NOW), scav = state.scavs[0]!;
 			scav.appearance = 7;
+			// A failed contact is medically fatal to an already critically wounded fighter.
+			if (expedition) scav.health = 25;
 			expect(dispatchRaid(state, scav.id, "courtyard", NOW).ok).toBe(true);
 			const raid = state.raids[0]!;
 			if (!expedition) raid.expedition = null;

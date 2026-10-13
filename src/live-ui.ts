@@ -1,4 +1,5 @@
 import { LIVE_CAPACITY, LIVE_SERVER_NAME, type LiveCommand, type LiveEntity, type LiveSnapshot, type LiveStatus } from './game/live';
+import { BODY_PARTS, BODY_PART_LABELS, TREATMENT_DURATION_MS, TREATMENT_LABELS, canTreat, injuryEffects, selectTreatment, type BodyPart, type TreatmentType } from './game/health';
 import { LiveApiError, liveRequest, readLiveSnapshot, readLiveStatus, shouldRejoinLivePresence, type LiveIdentity } from './live-client';
 import { LiveScene } from './live-scene';
 import './live.css';
@@ -21,10 +22,12 @@ export function createLiveMode(options: LiveModeOptions) {
   let active = false, destroyed = false, generation = 0, requestBusy = false, actionBusy = false;
   let identityAccount: string | null = null, snapshot: LiveSnapshot | null = null, status: LiveStatus | null = null;
   let message = '', offline = false, selectedId: string | null = null, receivedAt = 0;
+  let selectedPart: BodyPart = 'chest';
   let pollTimer = 0, lastKeyboardAt = 0;
   let controller: AbortController | null = null;
   let connection: Promise<unknown> = Promise.resolve();
   let reconnectPresence = false;
+  let exitIntent = false;
   const { world, dock } = options;
   world.classList.add('live-world');
   world.hidden = true;
@@ -35,7 +38,37 @@ export function createLiveMode(options: LiveModeOptions) {
   const isCurrent = (version: number, account: string | null) => active && !destroyed && version === generation && account === options.getAccountId();
   const stopRequest = () => { window.clearTimeout(pollTimer); pollTimer = 0; controller?.abort(); controller = null; requestBusy = false; actionBusy = false; };
   const schedule = (version: number) => { window.clearTimeout(pollTimer); if (active && version === generation && !destroyed) pollTimer = window.setTimeout(() => void poll(), 1000); };
-  const clearSession = () => { snapshot = null; receivedAt = 0; selectedId = null; scene.clear(); };
+  const clearSession = () => { snapshot = null; receivedAt = 0; selectedId = null; exitIntent = false; scene.clear(); };
+
+  function finishExit(): void {
+    clearSession(); hide(); options.onExit();
+  }
+
+  async function leave(): Promise<void> {
+    if (!active || actionBusy || destroyed || exitIntent) return;
+    if (!snapshot) { finishExit(); return; }
+    if (identityAccount !== options.getAccountId()) { resetIdentity(); return; }
+    stopRequest(); exitIntent = true;
+    const version = ++generation, account = identityAccount;
+    requestBusy = true; actionBusy = true; controller = new AbortController(); message = ''; render();
+    try {
+      const reply = await liveRequest('leave', identity(), value => {
+        if (!value || typeof value !== 'object' || !('ok' in value) || value.ok !== true || 'leaveAt' in value && (typeof value.leaveAt !== 'number' || !Number.isFinite(value.leaveAt) || value.leaveAt < 0)) throw new LiveApiError(0, 'invalid_response');
+        return value as { ok: true; leaveAt?: number };
+      }, undefined, controller.signal);
+      if (!isCurrent(version, account)) return;
+      if (!reply.leaveAt) { finishExit(); return; }
+      if (snapshot) {
+        snapshot = { ...snapshot, now: snapshot.now + (Date.now() - receivedAt), self: { ...snapshot.self, treatment: null, leaveAt: reply.leaveAt } };
+        receivedAt = Date.now();
+      }
+      offline = false;
+    } catch (error) {
+      if (isCurrent(version, account) && exitIntent && error instanceof LiveApiError && error.status === 401 && ['join_required', 'not_joined', 'not_online', 'player_missing'].includes(error.code)) finishExit();
+      else explain(error, version, account);
+    }
+    finally { if (version === generation) { controller = null; requestBusy = false; actionBusy = false; render(); schedule(version); } }
+  }
 
   function explain(error: unknown, version: number, account: string | null): void {
     if (!isCurrent(version, account)) return;
@@ -66,6 +99,7 @@ export function createLiveMode(options: LiveModeOptions) {
         const next = await liveRequest('state', identity(), readLiveSnapshot, undefined, controller.signal);
         if (!isCurrent(version, account)) return;
         if (next.selfId !== expected) throw new LiveApiError(401, 'identity_changed');
+        if (exitIntent && next.self.leaveAt === 0) { exitIntent = false; message = 'Выход прерван. Боец остаётся на Периметре.'; }
         snapshot = next; status = next.server; receivedAt = Date.now(); scene.update(next);
       } else {
         const next = await liveRequest('status', { accountId: null }, readLiveStatus, undefined, controller.signal);
@@ -74,7 +108,10 @@ export function createLiveMode(options: LiveModeOptions) {
       }
       if (offline) message = '';
       offline = false;
-    } catch (error) { explain(error, version, account); }
+    } catch (error) {
+      if (isCurrent(version, account) && exitIntent && error instanceof LiveApiError && error.status === 401 && ['join_required', 'not_joined', 'not_online', 'player_missing'].includes(error.code)) finishExit();
+      else explain(error, version, account);
+    }
     finally { if (version === generation) { controller = null; requestBusy = false; render(); schedule(version); } }
   }
 
@@ -116,6 +153,7 @@ export function createLiveMode(options: LiveModeOptions) {
       const next = await liveRequest('action', identity(), readLiveSnapshot, command, controller.signal);
       if (!isCurrent(version, account)) return;
       if (next.selfId !== expected) throw new LiveApiError(401, 'identity_changed');
+      if (exitIntent && next.self.leaveAt === 0) { exitIntent = false; message = 'Выход прерван приказом.'; }
       snapshot = next; status = next.server; receivedAt = Date.now(); offline = false; scene.update(next);
     } catch (error) { explain(error, version, account); }
     finally { if (version === generation) { controller = null; requestBusy = false; actionBusy = false; render(); schedule(version); } }
@@ -165,20 +203,33 @@ export function createLiveMode(options: LiveModeOptions) {
     } else {
       const self = snapshot.entities.find(entity => entity.id === snapshot!.selfId)!;
       const downed = self.health <= 0;
+      const body = snapshot.self.body, medicine = snapshot.self.medicine, treatment = snapshot.self.treatment;
+      const serverNow = snapshot.now + (Date.now() - receivedAt), effects = injuryEffects(body, serverNow);
+      const treatmentSeconds = treatment ? Math.max(0, Math.ceil((treatment.endsAt - serverNow) / 1000)) : 0;
+      const leavingSeconds = Math.max(0, Math.ceil((snapshot.self.leaveAt - serverNow) / 1000));
+      const leavingLabel = exitIntent ? snapshot.self.leaveAt ? leavingSeconds > 0 ? `Выход через ${leavingSeconds} сек.` : 'Завершаем выход…' : 'Выходим с Периметра…' : '';
+      const leavingNotice = exitIntent ? `<p class="live-notice live-leaving" role="status"><strong>${leavingLabel}</strong><br>Боец остаётся в опасной зоне. Движение, стрельба или лечение отменят выход.</p>` : '';
+      const totalHP = BODY_PARTS.reduce((sum, part) => sum + body.parts[part].hp, 0), maxHP = BODY_PARTS.reduce((sum, part) => sum + body.parts[part].maxHp, 0);
       const remaining = Math.max(0, Math.ceil((snapshot.self.respawnAt - snapshot.now - (Date.now() - receivedAt)) / 1000));
       const canAct = !downed && !actionBusy && !offline;
       const nearExtract = snapshot.world.extracts.some(point => distance(self, point) <= 1.5);
       const nearby = snapshot.entities.filter(entity => entity.id !== self.id).sort((a, b) => distance(self, a) - distance(self, b));
       const selected = nearby.find(entity => entity.id === selectedId);
+      const urgent = selectTreatment(body, medicine, serverNow);
+      const medicalPanel = `<section class="live-medical"><h3>Тело и медицина <span>${Math.ceil(totalHP)} / ${Math.ceil(maxHP)} HP</span></h3><div class="live-body-parts" aria-label="Выбор части тела">${BODY_PARTS.map(part => {
+        const state = body.parts[part], signs = [state.hp <= 0 ? 'выбита' : '', state.bleeding === 'heavy' ? 'тяжёлое кровотечение' : state.bleeding === 'light' ? 'лёгкое кровотечение' : '', state.fracture ? 'перелом' : ''].filter(Boolean).join(' · ');
+        return `<button class="live-body-part ${selectedPart === part ? 'selected' : ''} ${state.hp <= 0 || state.bleeding === 'heavy' ? 'critical' : signs ? 'injured' : ''}" data-live-button="part:${part}" aria-pressed="${selectedPart === part}"><span>${BODY_PART_LABELS[part]}<b>${Math.ceil(state.hp)} / ${state.maxHp}</b></span><i style="--part-health:${state.hp / state.maxHp * 100}%"></i><small>${signs || 'Без ранений'}</small></button>`;
+      }).join('')}</div><p class="live-medical-effects">${effects.movement < 1 ? `Ход ${Math.round(effects.movement * 100)}% · ` : ''}${effects.aim < 1 ? `Точность ${Math.round(effects.aim * 100)}% · ` : ''}${body.painUntil > serverNow ? 'Обезболивание действует' : 'Движение и огонь прерывают лечение'}</p>${treatment ? `<div class="live-treatment" role="status"><strong>${TREATMENT_LABELS[treatment.type]} · ${BODY_PART_LABELS[treatment.part]}</strong><span>${treatmentSeconds > 0 ? `${treatmentSeconds} сек.` : 'Завершаем…'}</span><button class="text-button" data-live-button="cancelTreatment" ${actionBusy || offline ? 'disabled' : ''}>Отменить</button></div>` : urgent && !downed ? `<button class="button live-urgent-treatment" data-live-button="treat:${urgent.type}:${urgent.part}" ${!canAct ? 'disabled' : ''}>Срочно: ${TREATMENT_LABELS[urgent.type]} · ${BODY_PART_LABELS[urgent.part]}</button>` : ''}<div class="live-medicines">${(['bandage', 'tourniquet', 'medkit', 'splint', 'painkiller', 'surgery'] as TreatmentType[]).map(type => `<button data-live-button="treat:${type}:${selectedPart}" ${!canAct || treatment || !canTreat(body, medicine, type, selectedPart, serverNow).ok ? 'disabled' : ''}><strong>${TREATMENT_LABELS[type]}</strong><span>${medicine[type]}${type === 'medkit' ? ' HP' : ' прим.'} · ${Math.ceil(TREATMENT_DURATION_MS[type] * effects.treatment / 1000)} сек.</span></button>`).join('')}</div><p class="live-medical-help">${BODY_PART_LABELS[selectedPart]} выбрана. Аптечка лечит живую зону. Хирургия возвращает выбитую конечность или живот к 1 HP и уменьшает её максимум.</p></section>`;
       const targetRow = (entity: LiveEntity) => {
         const range = distance(self, entity), protectedTarget = entity.safeUntil > snapshot!.now;
-        return `<article class="live-person ${entity.kind === 'player' ? 'is-player' : 'is-scav'} ${selectedId === entity.id ? 'selected' : ''}"><button class="live-person-select" data-live-button="select:${escape(entity.id)}"><i>${entity.kind === 'player' ? 'И' : 'Д'}</i><span><strong>${escape(entity.name)}</strong><small>${entity.kind === 'player' ? 'Игрок' : 'Дикий · NPC'} · ${range.toFixed(1)} кл. · ${entity.health > 0 ? `${Math.ceil(entity.health)} HP` : 'Ранен'}${protectedTarget ? ' · защита' : ''}</small></span></button><button class="live-attack" data-live-button="attack:${escape(entity.id)}" ${!canAct || entity.health <= 0 || range > 7 || protectedTarget ? 'disabled' : ''} aria-label="Атаковать ${escape(entity.name)}" title="Стрелять: до 7 клеток при прямой видимости">Огонь</button></article>`;
+        const disabled = !canAct || entity.health <= 0 || range > 7 || protectedTarget;
+        return `<article class="live-person ${entity.kind === 'player' ? 'is-player' : 'is-scav'} ${selectedId === entity.id ? 'selected' : ''}"><button class="live-person-select" data-live-button="select:${escape(entity.id)}"><i>${entity.kind === 'player' ? 'И' : 'Д'}</i><span><strong>${escape(entity.name)}</strong><small>${entity.kind === 'player' ? 'Игрок' : 'Дикий · NPC'} · ${range.toFixed(1)} кл. · ${entity.health > 0 ? `${Math.ceil(entity.health)}%` : 'Погиб'}${protectedTarget ? ' · защита' : ''}${entity.bleeding ? ' · кровь' : ''}${entity.limping ? ' · хромает' : ''}${entity.aimUntil && entity.aimUntil > snapshot!.now ? ' · прицеливается' : ''}</small></span></button><div class="live-target-fire"><button class="live-attack" data-live-button="attack:${escape(entity.id)}" ${disabled ? 'disabled' : ''} aria-label="Атаковать ${escape(entity.name)}" title="Быстрый выстрел: до 7 клеток при прямой видимости">Огонь</button><button class="live-attack live-aim" data-live-button="aim:${escape(entity.id)}" ${disabled ? 'disabled' : ''} title="Прицельный выстрел в голову: подготовка от 1,8 секунды, цель может укрыться">В голову</button></div></article>`;
       };
-      overlay.innerHTML = `<div class="live-field-hud"><span class="live-signal ${offline ? 'lost' : ''}"><i></i>${offline ? 'НЕТ СВЯЗИ' : 'LIVE · ОБЩИЙ МИР'}</span><strong>${escape(self.name)} <span>${downed ? 'РАНЕН' : `${Math.ceil(self.health)} HP`}</span></strong><p>${downed ? `Возвращение через ${remaining} сек.` : snapshot.self.patrol ? 'Автопатруль включён · приказы доступны' : 'Нажми на землю · WASD / стрелки'}</p></div><div class="live-field-legend"><span><i class="own"></i>Ты</span><span><i class="player"></i>Игрок</span><span><i class="scav"></i>Дикий</span><span><i class="extract"></i>Выход</span></div>`;
+      overlay.innerHTML = `<div class="live-field-hud"><span class="live-signal ${offline ? 'lost' : ''}"><i></i>${offline ? 'НЕТ СВЯЗИ' : 'LIVE · ОБЩИЙ МИР'}</span><strong>${escape(self.name)} <span>${downed ? 'ПОГИБ' : `${Math.ceil(self.health)}%`}</span></strong><p>${leavingLabel ? leavingLabel : downed ? `Возвращение через ${remaining} сек.` : treatment ? `${TREATMENT_LABELS[treatment.type]} · ${treatmentSeconds} сек.` : self.aimUntil && self.aimUntil > serverNow ? `Прицеливание · ${Math.ceil((self.aimUntil - serverNow) / 1000)} сек.` : snapshot.self.patrol ? 'Автопатруль включён · приказы доступны' : 'Нажми на землю · WASD / стрелки'}</p></div><div class="live-field-legend"><span><i class="own"></i>Ты</span><span><i class="player"></i>Игрок</span><span><i class="scav"></i>Дикий</span><span><i class="extract"></i>Выход</span></div>`;
       scene.setSelected(selectedId);
       const players = nearby.filter(entity => entity.kind === 'player'), scavs = nearby.filter(entity => entity.kind === 'scav' && distance(self, entity) <= 9).slice(0, 6);
       const drops = snapshot.drops.filter(drop => distance(self, drop) <= 1.5);
-      dock.innerHTML = `${header}<div class="live-dock-scroll">${notice}<section class="live-self"><div class="live-self-name"><span class="live-eyebrow">ТВОЙ БОЕЦ</span><strong>${escape(self.name)}</strong><small>${downed ? 'Тяжёлое ранение' : self.safeUntil > snapshot.now ? 'Защита после входа' : self.action === 'combat' ? 'В бою' : self.action === 'moving' ? 'В пути' : 'На позиции'} · ${self.x}, ${self.y}</small></div><div class="live-health" aria-label="Здоровье ${Math.ceil(self.health)} из 100"><i style="width:${self.health}%"></i><span>${Math.ceil(self.health)} / 100 HP</span></div><div class="live-player-kit"><span>Патроны<b>${integer(snapshot.self.ammo)}</b></span><span>Аптечки<b>${integer(snapshot.self.medkits)}</b></span><span>При себе<b>${integer(snapshot.self.cargo)} ₽</b></span><span>На складе<b>${integer(snapshot.self.stash)} ₽</b></span></div></section>${downed ? `<section class="live-downed"><strong>Боец ранен</strong><p>Добыча осталась на Периметре. Новый комплект готовится.</p><button class="button primary" data-live-button="respawn" ${remaining > 0 || actionBusy || offline ? 'disabled' : ''}>${remaining > 0 ? `Вернуться через ${remaining} сек.` : 'Вернуться на Периметр'}</button></section>` : `<section class="live-orders"><div class="live-actions"><button class="button" data-live-button="patrol" aria-pressed="${snapshot.self.patrol}" ${!canAct ? 'disabled' : ''}>${snapshot.self.patrol ? 'Патруль: вкл.' : 'Автопатруль'}</button><button class="button" data-live-button="heal" ${!canAct || snapshot.self.medkits < 1 || self.health >= 100 ? 'disabled' : ''}>Аптечка +45 HP</button></div><button class="button primary live-extract" data-live-button="extract" ${!canAct || !nearExtract ? 'disabled' : ''}>${nearExtract ? 'Сдать добычу и пополнить комплект' : 'Эвакуация · подойди к выходу'}</button><p class="live-controls-help">Выбери землю для маршрута. Приблизься к цели и нажми «Огонь». Здания перекрывают обзор.</p><div class="live-direction-pad" aria-label="Передвижение бойца"><button data-live-button="move:0:-1" aria-label="На север" ${!canAct ? 'disabled' : ''}>↑</button><button data-live-button="move:-1:0" aria-label="На запад" ${!canAct ? 'disabled' : ''}>←</button><span>ХОД</span><button data-live-button="move:1:0" aria-label="На восток" ${!canAct ? 'disabled' : ''}>→</button><button data-live-button="move:0:1" aria-label="На юг" ${!canAct ? 'disabled' : ''}>↓</button></div></section>`}${selected ? `<section class="live-target"><h3>Выбранная цель</h3>${targetRow(selected)}</section>` : ''}${drops.length ? `<section class="live-roster"><h3>Добыча рядом</h3>${drops.map(drop => `<button class="live-loot" data-live-button="loot:${escape(drop.id)}" ${!canAct ? 'disabled' : ''}><span>Подобрать груз</span><strong>${integer(drop.amount)} ₽</strong></button>`).join('')}</section>` : ''}<section class="live-roster"><h3>Другие игроки <span>${players.length}</span></h3>${players.length ? players.map(targetRow).join('') : '<p class="live-empty">Ты первый на Периметре. Новые игроки появятся в общей зоне.</p>'}</section><section class="live-roster"><h3>Дикие поблизости <span>${scavs.length}</span></h3>${scavs.length ? scavs.map(targetRow).join('') : '<p class="live-empty">Рядом тихо. Продолжай осматривать Периметр.</p>'}</section><details class="live-events"><summary>Эфир Периметра · ${snapshot.events.length}</summary><div>${snapshot.events.slice(-12).reverse().map(event => `<article class="${event.kind === 'combat' ? 'combat' : ''}"><time>${new Date(event.at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</time><span>${escape(event.text)}</span></article>`).join('')}</div></details><p class="live-stash-note">Онлайн склад: ${integer(snapshot.self.stash)} ₽ · Побед: ${integer(snapshot.self.kills)}<br>Вынеси груз через зелёный выход. Склад хранится на сервере.</p><button class="text-button live-back" data-live-button="exit">← Выйти с сервера в убежище</button></div>`;
+      dock.innerHTML = `${header}<div class="live-dock-scroll">${notice}${leavingNotice}<section class="live-self"><div class="live-self-name"><span class="live-eyebrow">ТВОЙ БОЕЦ</span><strong>${escape(self.name)}</strong><small>${downed ? 'Тяжёлое ранение' : self.safeUntil > snapshot.now ? 'Защита после входа' : self.action === 'combat' ? 'В бою' : self.action === 'moving' ? 'В пути' : 'На позиции'} · ${self.x}, ${self.y}</small></div><div class="live-health" aria-label="Состояние ${Math.ceil(self.health)} процентов"><i style="width:${self.health}%"></i><span>${Math.ceil(totalHP)} / ${Math.ceil(maxHP)} HP</span></div><div class="live-player-kit"><span>Патроны<b>${integer(snapshot.self.ammo)}</b></span><span>Аптечка<b>${integer(medicine.medkit)} HP</b></span><span>При себе<b>${integer(snapshot.self.cargo)} ₽</b></span><span>На складе<b>${integer(snapshot.self.stash)} ₽</b></span></div></section>${medicalPanel}${downed ? `<section class="live-downed"><strong>Боец ранен</strong><p>Добыча осталась на Периметре. Новый комплект готовится.</p><button class="button primary" data-live-button="respawn" ${remaining > 0 || actionBusy || offline ? 'disabled' : ''}>${remaining > 0 ? `Вернуться через ${remaining} сек.` : 'Вернуться на Периметр'}</button></section>` : `<section class="live-orders"><div class="live-actions"><button class="button" data-live-button="patrol" aria-pressed="${snapshot.self.patrol}" ${!canAct ? 'disabled' : ''}>${snapshot.self.patrol ? 'Патруль: вкл.' : 'Автопатруль'}</button></div><button class="button primary live-extract" data-live-button="extract" ${!canAct || !nearExtract ? 'disabled' : ''}>${nearExtract ? 'Сдать добычу и пополнить комплект' : 'Эвакуация · подойди к выходу'}</button><p class="live-controls-help">Выбери землю для маршрута. Приблизься к цели и нажми «Огонь». Здания перекрывают обзор.</p><div class="live-direction-pad" aria-label="Передвижение бойца"><button data-live-button="move:0:-1" aria-label="На север" ${!canAct ? 'disabled' : ''}>↑</button><button data-live-button="move:-1:0" aria-label="На запад" ${!canAct ? 'disabled' : ''}>←</button><span>ХОД</span><button data-live-button="move:1:0" aria-label="На восток" ${!canAct ? 'disabled' : ''}>→</button><button data-live-button="move:0:1" aria-label="На юг" ${!canAct ? 'disabled' : ''}>↓</button></div></section>`}${selected ? `<section class="live-target"><h3>Выбранная цель</h3>${targetRow(selected)}</section>` : ''}${drops.length ? `<section class="live-roster"><h3>Добыча рядом</h3>${drops.map(drop => `<button class="live-loot" data-live-button="loot:${escape(drop.id)}" ${!canAct ? 'disabled' : ''}><span>Подобрать груз</span><strong>${integer(drop.amount)} ₽</strong></button>`).join('')}</section>` : ''}<section class="live-roster"><h3>Другие игроки <span>${players.length}</span></h3>${players.length ? players.map(targetRow).join('') : '<p class="live-empty">Ты первый на Периметре. Новые игроки появятся в общей зоне.</p>'}</section><section class="live-roster"><h3>Дикие поблизости <span>${scavs.length}</span></h3>${scavs.length ? scavs.map(targetRow).join('') : '<p class="live-empty">Рядом тихо. Продолжай осматривать Периметр.</p>'}</section><details class="live-events"><summary>Эфир Периметра · ${snapshot.events.length}</summary><div>${snapshot.events.slice(-12).reverse().map(event => `<article class="${event.kind === 'combat' ? 'combat' : ''}"><time>${new Date(event.at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</time><span>${escape(event.text)}</span></article>`).join('')}</div></details><p class="live-stash-note">Онлайн склад: ${integer(snapshot.self.stash)} ₽ · Побед: ${integer(snapshot.self.kills)}<br>Вынеси груз через зелёный выход. Склад и ранения хранятся на сервере. Выход во время боя или кровотечения занимает 5 секунд; при потере связи боец остаётся в мире 30 секунд.</p><button class="text-button live-back" data-live-button="exit" ${actionBusy || exitIntent ? 'disabled' : ''}>${leavingLabel || '← Выйти с сервера в убежище'}</button></div>`;
     }
     const body = dock.querySelector<HTMLElement>('.live-dock-scroll'); if (body) body.scrollTop = scroll;
     const events = dock.querySelector<HTMLDetailsElement>('.live-events'); if (events) events.open = eventsOpen;
@@ -200,14 +251,17 @@ export function createLiveMode(options: LiveModeOptions) {
     const [action, ...arguments_] = (button.dataset.liveButton ?? '').split(':');
     const id = arguments_.join(':'), dy = arguments_[1];
     if (action === 'join') void join();
-    else if (action === 'exit') options.onExit();
+    else if (action === 'exit') void leave();
     else if (action === 'account') options.onAccount();
     else if (action === 'select' && id) { selectedId = id; scene.setSelected(id); render(); }
     else if (action === 'attack' && id) void send({ type: 'attack', targetId: id });
+    else if (action === 'aim' && id) void send({ type: 'attack', targetId: id, aimed: true });
+    else if (action === 'part' && BODY_PARTS.includes(id as BodyPart)) { selectedPart = id as BodyPart; render(); }
+    else if (action === 'treat' && arguments_[0] && arguments_[1]) void send({ type: 'treat', medicine: arguments_[0] as TreatmentType, part: arguments_[1] as BodyPart });
     else if (action === 'loot' && id) void send({ type: 'loot', id });
     else if (action === 'move') move(Number(arguments_[0]), Number(dy));
     else if (action === 'patrol' && snapshot) void send({ type: 'patrol', enabled: !snapshot.self.patrol });
-    else if (action === 'heal' || action === 'extract' || action === 'respawn') void send({ type: action });
+    else if (action === 'heal' || action === 'extract' || action === 'respawn' || action === 'cancelTreatment') void send({ type: action });
   };
   const keyboard = (event: KeyboardEvent): void => {
     if (!active || !snapshot || event.ctrlKey || event.metaKey || event.altKey || document.querySelector('#modal-root .modal, .account-dialog, [role="dialog"][aria-modal="true"]')) return;

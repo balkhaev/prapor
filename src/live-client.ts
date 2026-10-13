@@ -1,4 +1,5 @@
 import type { LiveCommand, LiveDrop, LiveEntity, LiveEvent, LivePlayer, LiveSnapshot, LiveStatus, LiveWorld } from './game/live';
+import { BODY_PARTS, parseHealth, parseMedicalInventory, type BodyPart, type TreatmentType } from './game/health';
 
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const number = (value: unknown, min = 0, max = Number.MAX_SAFE_INTEGER): value is number => typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max;
@@ -27,6 +28,9 @@ function liveErrorMessage(status: number, code: string): string {
   if (['downed', 'dead', 'player_downed', 'respawn_not_ready'].includes(code)) return 'Боец ранен. Дождись возвращения на Периметр.';
   if (code === 'no_ammo') return 'Патроны закончились. Доберись до выхода для пополнения комплекта.';
   if (code === 'no_medkits') return 'Аптечек больше нет. На выходе можно пополнить комплект.';
+  if (code === 'treatment_in_progress') return 'Лечение ещё идёт. Заверши его или отмени; движение и стрельба прервут лечение.';
+  if (code === 'aim_in_progress') return 'Боец готовит прицельный выстрел. Движение отменяет прицеливание.';
+  if (code.startsWith('medicine_')) return 'Средство закончилось или не подходит для этой зоны. Выбери нужное лечение по состоянию тела.';
   if (['target_missing', 'drop_missing', 'target_gone', 'target_unavailable', 'loot_unavailable'].includes(code)) return 'Цель уже исчезла. Сводка обновляется.';
   if (code === 'spawn_protection') return 'Эта цель пока под защитой после входа. Подожди несколько секунд.';
   if (code === 'cargo_full') return 'Груз заполнен. Доставь добычу к зелёному выходу.';
@@ -58,12 +62,17 @@ export function readLiveSnapshot(value: unknown): LiveSnapshot {
     return { x: obstacle.x, y: obstacle.y, width: obstacle.width, height: obstacle.height };
   }), extracts: source.extracts.map(extract => point(extract, bounds) ? { x: extract.x, y: extract.y } : invalid()) };
   const self = value.self;
-  if (self.id !== value.selfId || !['ammo', 'medkits', 'cargo', 'stash', 'kills', 'respawnAt'].every(key => number(self[key])) || typeof self.patrol !== 'boolean') return invalid();
-  const player: LivePlayer = { id: value.selfId, ammo: self.ammo as number, medkits: self.medkits as number, cargo: self.cargo as number, stash: self.stash as number, kills: self.kills as number, respawnAt: self.respawnAt as number, patrol: self.patrol };
+  if (self.id !== value.selfId || !['ammo', 'medkits', 'cargo', 'stash', 'kills', 'respawnAt', 'leaveAt'].every(key => number(self[key])) || typeof self.patrol !== 'boolean') return invalid();
+  let body: LivePlayer['body'], medicine: LivePlayer['medicine'];
+  try { body = parseHealth(self.body); medicine = parseMedicalInventory(self.medicine); } catch { return invalid(); }
+  const treatment = self.treatment;
+  if (treatment !== null && (!record(treatment) || !['medkit', 'bandage', 'tourniquet', 'splint', 'painkiller', 'surgery'].includes(treatment.type as string) || !BODY_PARTS.includes(treatment.part as BodyPart) || !number(treatment.startedAt) || !number(treatment.endsAt) || treatment.endsAt < treatment.startedAt)) return invalid();
+  const player: LivePlayer = { id: value.selfId, ammo: self.ammo as number, medkits: self.medkits as number, cargo: self.cargo as number, stash: self.stash as number, kills: self.kills as number, respawnAt: self.respawnAt as number, patrol: self.patrol, body, medicine, treatment: treatment === null ? null : { type: treatment.type as TreatmentType, part: treatment.part as BodyPart, startedAt: treatment.startedAt as number, endsAt: treatment.endsAt as number }, leaveAt: self.leaveAt as number };
   if (!Array.isArray(value.entities) || value.entities.length > 256 || !Array.isArray(value.drops) || value.drops.length > 512 || !Array.isArray(value.events) || value.events.length > 256) return invalid();
   const entities: LiveEntity[] = value.entities.map(entity => {
     if (!point(entity, bounds) || !record(entity) || !text(entity.id) || !text(entity.name, 80) || !['player', 'scav'].includes(entity.kind as string) || !number(entity.appearance, 0, 31) || !Number.isInteger(entity.appearance) || !number(entity.health, 0, 100) || !['idle', 'moving', 'combat', 'downed'].includes(entity.action as string) || !number(entity.safeUntil)) return invalid();
-    return { x: entity.x, y: entity.y, id: entity.id, name: entity.name, kind: entity.kind as LiveEntity['kind'], appearance: entity.appearance, health: entity.health, action: entity.action as LiveEntity['action'], safeUntil: entity.safeUntil };
+    if (!(entity.bleeding === undefined || typeof entity.bleeding === 'boolean') || !(entity.limping === undefined || typeof entity.limping === 'boolean') || !(entity.aimUntil === undefined || number(entity.aimUntil)) || !(entity.aimTargetId === undefined || text(entity.aimTargetId))) return invalid();
+    return { x: entity.x, y: entity.y, id: entity.id, name: entity.name, kind: entity.kind as LiveEntity['kind'], appearance: entity.appearance, health: entity.health, action: entity.action as LiveEntity['action'], safeUntil: entity.safeUntil, ...(entity.bleeding === undefined ? {} : { bleeding: entity.bleeding as boolean }), ...(entity.limping === undefined ? {} : { limping: entity.limping as boolean }), ...(entity.aimUntil === undefined ? {} : { aimUntil: entity.aimUntil as number }), ...(entity.aimTargetId === undefined ? {} : { aimTargetId: entity.aimTargetId as string }) };
   });
   if (new Set(entities.map(entity => entity.id)).size !== entities.length || !entities.some(entity => entity.id === value.selfId && entity.kind === 'player')) return invalid();
   const drops: LiveDrop[] = value.drops.map(drop => point(drop, bounds) && record(drop) && text(drop.id) && number(drop.amount, 1) ? { x: drop.x, y: drop.y, id: drop.id, amount: drop.amount } : invalid());

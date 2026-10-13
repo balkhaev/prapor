@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	advance, continueExpedition, createGame, dispatchRaid, dispatchSquadRaid,
-	extractRaid, getRaidPlan, getRaidQuote, getSectorIntel, getSquadRaidQuote,
+	extractRaid, getExpeditionChoices, getRaidPlan, getRaidQuote, getSectorIntel, getSquadRaidQuote,
 	parseSave, saveGame, setRaidPlan, type ActionResult, type GameState,
 } from "../src/game/engine";
 import { MAP_BY_ID } from "../src/game/data";
@@ -28,7 +28,7 @@ function checkpoint(partySize = 1, wanted: "success" | "failure" = "success") {
 			: dispatchSquadRaid(state, scavIds, "courtyard", NOW));
 		const departure = restore(state);
 		advance(state, state.raids[0]!.endsAt);
-		if (wanted === "success" && state.raids.length === partySize && state.raids.every((raid) => raid.expedition?.status === "choice"))
+		if (wanted === "success" && state.raids.length === partySize && state.raids.every((raid) => raid.expedition?.status === "choice") && getExpeditionChoices(state, state.raids[0]!, state.raids[0]!.expedition!.offers[0]).every(choice => !choice.reason))
 			return { state, departure, scavIds };
 		if (wanted === "failure" && !state.raids.length && state.history.some((report) => !report.success))
 			return { state, departure, scavIds };

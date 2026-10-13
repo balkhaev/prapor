@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import { LiveApiError, readLiveSnapshot, readLiveStatus, shouldRejoinLivePresence } from '../src/live-client';
 import type { LiveSnapshot } from '../src/game/live';
+import { createHealth, createMedicalInventory } from '../src/game/health';
 
-const fixture = (): LiveSnapshot => ({ server: { id: 'perimeter-1', name: 'Периметр 01', online: 1, capacity: 32, startedAt: 1000 }, now: 2000, world: { width: 32, height: 24, obstacles: [{ x: 5, y: 5, width: 2, height: 3 }], extracts: [{ x: 2, y: 2 }] }, selfId: 'player-1', self: { id: 'player-1', ammo: 30, medkits: 2, cargo: 0, stash: 12, kills: 0, respawnAt: 0, patrol: false }, entities: [{ id: 'player-1', kind: 'player', name: 'Гость 01', appearance: 31, x: 2, y: 2, health: 100, action: 'idle', safeUntil: 7000 }, { id: 'scav-1', kind: 'scav', name: 'Косой', appearance: 0, x: 4, y: 6, health: 75, action: 'moving', safeUntil: 0 }], drops: [{ id: 'drop-1', x: 3, y: 2, amount: 25 }], events: [{ id: 'event-1', at: 2000, kind: 'join', text: 'Гость 01 вошёл', actorId: 'player-1' }] });
+const fixture = (): LiveSnapshot => ({ server: { id: 'perimeter-1', name: 'Периметр 01', online: 1, capacity: 32, startedAt: 1000 }, now: 2000, world: { width: 32, height: 24, obstacles: [{ x: 5, y: 5, width: 2, height: 3 }], extracts: [{ x: 2, y: 2 }] }, selfId: 'player-1', self: { id: 'player-1', ammo: 30, medkits: 2, cargo: 0, stash: 12, kills: 0, respawnAt: 0, patrol: false, body: createHealth(), medicine: createMedicalInventory(), treatment: null, leaveAt: 0 }, entities: [{ id: 'player-1', kind: 'player', name: 'Гость 01', appearance: 31, x: 2, y: 2, health: 100, action: 'idle', safeUntil: 7000 }, { id: 'scav-1', kind: 'scav', name: 'Косой', appearance: 0, x: 4, y: 6, health: 75, action: 'moving', safeUntil: 0 }], drops: [{ id: 'drop-1', x: 3, y: 2, amount: 25 }], events: [{ id: 'event-1', at: 2000, kind: 'join', text: 'Гость 01 вошёл', actorId: 'player-1' }] });
 
 describe('live wire parser', () => {
   test('preserves server time, identity, kit and NPC distinction without advancing them', () => {

@@ -1,4 +1,5 @@
 /** Shared wire contract. The server owns every live position, clock and reward. */
+import type { BodyPart, HealthState, MedicalInventory, TreatmentType } from './health';
 export const LIVE_SERVER_ID = "perimeter-1";
 export const LIVE_SERVER_NAME = "Периметр 01";
 export const LIVE_CAPACITY = 32;
@@ -18,7 +19,13 @@ export interface LiveEntity extends LivePoint {
   health: number;
   action: "idle" | "moving" | "combat" | "downed";
   safeUntil: number;
+  /** Visible signs only; another player's body and medicines stay private. */
+  bleeding?: boolean;
+  limping?: boolean;
+  aimUntil?: number;
+  aimTargetId?: string;
 }
+export interface LiveTreatment { type: TreatmentType; part: BodyPart; startedAt: number; endsAt: number }
 export interface LivePlayer {
   id: string;
   ammo: number;
@@ -28,6 +35,10 @@ export interface LivePlayer {
   kills: number;
   respawnAt: number;
   patrol: boolean;
+  body: HealthState;
+  medicine: MedicalInventory;
+  treatment: LiveTreatment | null;
+  leaveAt: number;
 }
 export interface LiveDrop extends LivePoint { id: string; amount: number }
 export interface LiveEvent {
@@ -57,9 +68,11 @@ export interface LiveSnapshot {
 }
 export type LiveCommand =
   | { type: "move"; x: number; y: number }
-  | { type: "attack"; targetId: string }
+  | { type: "attack"; targetId: string; aimed?: boolean }
   | { type: "loot"; id: string }
   | { type: "heal" }
+  | { type: "treat"; medicine: TreatmentType; part: BodyPart }
+  | { type: "cancelTreatment" }
   | { type: "extract" }
   | { type: "respawn" }
   | { type: "patrol"; enabled: boolean };

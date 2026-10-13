@@ -212,6 +212,9 @@ describe("the Prapor game loop", () => {
 		expect(String(scav.status)).toBe("ready");
 		state.supplies.medicine = 10;
 		expect(healScav(state, scav.id).ok).toBe(true);
+		expect(scav.medicalTreatment).toBeDefined();
+		expect(scav.health).toBeLessThan(100);
+		advance(state, scav.medicalTreatment!.endsAt);
 		expect(scav.health).toBe(100);
 	});
 

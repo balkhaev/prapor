@@ -1,3 +1,4 @@
+import { withoutMedical } from './legacy-health-fixture';
 import { describe, expect, test } from "bun:test";
 import {
 	SAVE_VERSION, advance, assignWorker, continueExpedition, createGame, dispatchRaid, dispatchSquadRaid,
@@ -211,7 +212,9 @@ describe("expanded cartridges stay real through dispatch, settlement and saved e
 
 	test("released v13 active loads retain their exact paid snapshots, cargo, recon, strategy and offline settlement", () => {
 		for (const type of RELEASED_TYPES) {
-			const { state, raid } = checkpoint(type, 1, true), paid = structuredClone(raid), raw = JSON.parse(saveGame(state));
+			const { state, raid } = checkpoint(type, 1, true);
+			withoutMedical(state);
+			const paid = structuredClone(raid), raw = JSON.parse(saveGame(state));
 			raw.schemaVersion = 13;
 			const migrated = parseSave(JSON.stringify(raw));
 			expect(migrated).not.toBeNull();
@@ -236,7 +239,9 @@ describe("expanded cartridges stay real through dispatch, settlement and saved e
 
 	test("released v14 ammunition preserves paid field kits, reserve and queued production through migration and settlement", () => {
 		for (const type of RELEASED_TYPES) for (const kit of ["maintenance", "trauma"] as const) {
-			const { state, raid } = logisticsCheckpoint(type, kit), paid = structuredClone(raid), shelter = structuredClone(state.shelter);
+			const { state, raid } = logisticsCheckpoint(type, kit);
+			withoutMedical(state);
+			const paid = structuredClone(raid), shelter = structuredClone(state.shelter);
 			const raw = JSON.parse(saveGame(state)); raw.schemaVersion = 14;
 			const migrated = parseSave(JSON.stringify(raw));
 			expect(migrated).not.toBeNull();
@@ -265,7 +270,8 @@ describe("expanded cartridges stay real through dispatch, settlement and saved e
 	});
 
 	test("v13 and v14 cannot inject v15 choices into a free loadout, active paid load or historical squad member", () => {
-		const ready = JSON.parse(saveGame(funded())), { state, raid } = checkpoint("standard", 3);
+		const ready = withoutMedical(JSON.parse(saveGame(funded()))), { state, raid } = checkpoint("standard", 3);
+		withoutMedical(state);
 		const active = JSON.parse(saveGame(state));
 		expect(extractRaid(state, raid.id, state.lastUpdated).ok).toBe(true);
 		const history = JSON.parse(saveGame(state));

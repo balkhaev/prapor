@@ -1,3 +1,4 @@
+import { withoutMedical } from './legacy-health-fixture';
 import { describe, expect, test } from "bun:test";
 import {
 	SAVE_VERSION, advance, continueExpedition, createGame, dispatchRaid, dispatchSquadRaid,
@@ -229,6 +230,7 @@ describe("caliber ammunition changes real paid raids", () => {
 		}
 		expect(original).not.toBeNull();
 		const current = original!, paid = current.raids[0]!;
+		withoutMedical(current);
 		expect(paid.expedition!.reconCompleted).toBe(true);
 		delete paid.expedition!.ammunition;
 		const raw = JSON.parse(saveGame(current)); raw.schemaVersion = 12;
