@@ -83,24 +83,16 @@
         <label class="weapon-field">Основа оружия<select id="weapon"><option value="">Без оружия</option></select></label>
       </form>
       <div class="build-header"><p id="weapon-summary" role="status" aria-live="polite">Текущая сборка оружия</p><button id="reset-weapon" type="button">Штатная сборка</button></div>
-      <form class="controls build-controls" aria-label="Детали текущей сборки оружия" onsubmit="return false">
-        <label>Ствольная коробка<select id="receiver"></select></label>
-        <label>Ствол<select id="barrel"></select></label>
-        <label>Цевьё<select id="handguard"></select></label>
-        <label>Приклад<select id="stock"></select></label>
-        <label>Магазин<select id="magazine"></select></label>
-        <label>Прицел<select id="optic"></select></label>
-        <label>Дульная насадка<select id="muzzle"></select></label>
-        <label>Рукоять<select id="foregrip"></select></label>
-      </form>
+      <form id="build-controls" class="controls build-controls" aria-label="Детали текущей сборки оружия" onsubmit="return false"></form>
+      <p id="fit-status" class="note" role="status" aria-live="polite" hidden></p>
       <details class="weapon-inspection" id="weapon-inspection"><summary>Осмотреть сборку крупно</summary><div id="weapon-closeup"></div><ul class="build-parts" id="build-parts" aria-label="Установленные детали"></ul></details>
       <div class="gallery-heading"><p><strong>Состав · 32 бойца</strong></p><p id="load-status" role="status" aria-live="polite">Загружаем модели…</p></div>
       <section id="gallery" role="img" aria-label="Все 32 диких в выбранной экипировке и ракурсе"></section>
       <ol id="accessible-roster" class="sr-only" aria-label="Список бойцов"></ol>
-      <p class="note">Броня, шлем, рюкзак и детали оружия меняются независимо. Для прицела, рукояти и дульной насадки нужны подходящие крепления. Примерка не изменяет бойцов или снаряжение в убежище.</p>
+      <p class="note">Броня, шлем, рюкзак и детали оружия меняются независимо. Прицел, фонарь, лазер и рукоять занимают отдельные места; для них нужны подходящие планки и кронштейны. Примерка не изменяет бойцов или снаряжение в убежище.</p>
       <details class="weapon-inspection module-library" id="module-library">
         <summary>Каталог оружейных модулей · <span id="library-total"></span> моделей</summary>
-        <p class="library-help">Рассмотрите детали отдельно и примерьте их к текущей сборке. Цевьё с планками открывает прицелы и рукояти; дульное устройство требует подходящей резьбы.</p>
+        <p class="library-help">Все детали показаны в профиль, как на собранном оружии. Примерьте фонарь и лазер вместе; кронштейн или хомут открывает нужную планку, а дульное устройство требует подходящей резьбы.</p>
         <div class="library-controls">
           <label>Тип детали<select id="library-slot"><option value="all">Все детали</option></select></label>
           <label>Поиск по каталогу<input id="library-search" type="search" placeholder="Название, платформа или свойства"></label>

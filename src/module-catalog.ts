@@ -1,5 +1,5 @@
 import { RARITY_LABELS } from "./game/data";
-import { MODULE_SLOT_LABELS, RECEIVER_INFO, modulePlatformLabel, type ModuleModel, type ModuleSlot } from "./game/modules";
+import { MODULE_SLOTS, MODULE_SLOT_LABELS, RECEIVER_INFO, modulePlatformLabel, type ModuleModel, type ModuleSlot } from "./game/modules";
 
 export interface ModuleCatalogFilters {
 	slot: ModuleSlot | "all";
@@ -8,8 +8,32 @@ export interface ModuleCatalogFilters {
 	search: string;
 }
 
+const mountLabels: Record<string, string> = {
+	"rail-top": "Верхняя планка", "rail-bottom": "Нижняя планка цевья", "rail-side": "Боковая планка",
+	"barrel-clamp": "Хомут ствола", "barrel-clamp-wide": "Место для широкого хомута ствола", dovetail: "Боковой кронштейн",
+};
+
 export function moduleMountLabel(mount: string) {
-	return mount === "rail-top" ? "Верхняя планка" : mount === "rail-bottom" ? "Нижняя планка цевья" : mount === "dovetail" ? "Боковой кронштейн" : mount.startsWith("thread:") ? `Резьба ${mount.slice(7)}` : mount;
+	return Object.hasOwn(mountLabels, mount) ? mountLabels[mount]! : mount.startsWith("thread:") ? `Резьба ${mount.slice(7)}` : mount;
+}
+
+/** Save order stays stable; on the workbench a mounting bracket precedes its attachments. */
+export const MODULE_DISPLAY_SLOTS: readonly ModuleSlot[] = (() => {
+	const slots = [...MODULE_SLOTS];
+	const index = slots.indexOf("mount");
+	if (index !== -1) {
+		slots.splice(index, 1);
+		const optic = slots.indexOf("optic");
+		slots.splice(optic === -1 ? slots.length : optic, 0, "mount");
+	}
+	return slots;
+})();
+
+export function moduleSlotHint(slot: ModuleSlot) {
+	if (slot === "mount") return "Кронштейн открывает новые планки. Сначала установи подходящий ствол, цевьё или ствольную коробку. Перед снятием крепления нужно снять зависимые детали.";
+	if (slot === "flashlight") return "Фонарь ставится на боковую планку цевья или кронштейна. Его корпус виден на собранном оружии и в руках дикого.";
+	if (slot === "laser") return "Лазер ставится на боковую планку цевья или кронштейна. Лазер и фонарь можно установить одновременно; каждый занимает свой слот.";
+	return "Можно оставить слот свободным или настроить оружие.";
 }
 
 const normalize = (text: string) => text.toLocaleLowerCase("ru").replaceAll("ё", "е");
