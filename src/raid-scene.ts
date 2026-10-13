@@ -1,16 +1,18 @@
 import Phaser from "phaser";
-import { MODULE_BY_ID, type Raid, type RaidReport, type WeaponInstance } from "./game/engine";
-import { WEAPON_BY_ID } from "./game/data";
+import { type Raid, type RaidReport, type WeaponInstance } from "./game/engine";
 import { getRaidFieldFrame, getRaidFieldObjective, getRaidFieldPlan, projectRaidFieldPoint, readRaidFieldCamera, type RaidFieldCameraState } from "./raid-field";
 import { advanceScavAnimation, createScavAnimation, type ScavAnimationState } from "./shelter-animation";
-import { SCAV_ORIGIN, SCAV_POSES, SCAV_REFERENCE_HEIGHT, scavAppearance, scavAttachment, scavDirection, scavFrame, scavTexture, type ScavDirection } from "./scav-isometric";
+import { SCAV_ORIGIN, SCAV_POSES, SCAV_REFERENCE_HEIGHT, scavAppearance, scavAvailableAppearance, scavDirection, scavFrame, scavTexture, scavTorsoAnchor, type ScavDirection } from "./scav-isometric";
+import { SCAV_APPEARANCES } from "./game/scav-appearances";
+import { ScavEquipment } from "./scav-equipment";
+import { getHostileVisualLoadout, getRaidVisualLoadout } from "./scav-loadout";
 import type { ShelterCamera, ShelterViewport } from "./shelter-camera";
 
 type Point = { x: number; y: number };
 type Plan = ReturnType<typeof getRaidFieldPlan>;
 type Frame = ReturnType<typeof getRaidFieldFrame>;
-export interface RaidStreetSnapshot { raids: Raid[]; selectedRaidId?: string | null; history?: RaidReport[]; weapons?: WeaponInstance[]; scavs?: { id: string; personality?: string }[] }
-type Pawn = { root: Phaser.GameObjects.Container; body: Phaser.GameObjects.Container; poses: Phaser.GameObjects.Image[]; weapon: Phaser.GameObjects.Graphics; animation: ScavAnimationState; point: Point | null; appearance: number; direction: ScavDirection };
+export interface RaidStreetSnapshot { raids: Raid[]; selectedRaidId?: string | null; history?: RaidReport[]; weapons?: WeaponInstance[]; scavs?: { id: string; personality?: string; appearance?: number }[] }
+type Pawn = { root: Phaser.GameObjects.Container; body: Phaser.GameObjects.Container; poses: Phaser.GameObjects.Image[]; equipment: ScavEquipment; animation: ScavAnimationState; point: Point | null; appearance: number; direction: ScavDirection };
 type Occluder = { object: Phaser.GameObjects.Container; x: number; y: number; width: number; height: number };
 const clamp = Phaser.Math.Clamp;
 const color = (value: string | number, fallback = 0x596355) => typeof value === "number" ? value : Number.parseInt(value.replace(/^#/, ""), 16) || fallback;
@@ -48,11 +50,12 @@ export class RaidStreetRenderer {
 	private groundMinimap: Phaser.GameObjects.Graphics;
 	private report: RaidReport | null = null;
 	private carriedWeapon: WeaponInstance | null = null;
+	private visualLoadout: ReturnType<typeof getRaidVisualLoadout> | null = null;
+	private hostileLoadouts = new Map<number, ReturnType<typeof getHostileVisualLoadout>>();
 	private builtRaidId: string | null = null;
 	private planInput = "";
-	private weaponCache = new WeakMap<Phaser.GameObjects.Graphics, string>();
 
-	constructor(private scene: Phaser.Scene, viewport: ShelterViewport, private reducedMotion: boolean) {
+	constructor(private scene: Phaser.Scene, viewport: ShelterViewport, private reducedMotion: boolean, private requestScavAtlas: (appearance: number) => void = () => {}) {
 		this.viewport = { ...viewport };
 		this.world = scene.add.container(0, 0);
 		this.hud = scene.add.container(0, 0);
@@ -243,37 +246,24 @@ export class RaidStreetRenderer {
 	}
 
 	private makePawn(appearance: number, hostile: boolean): Pawn {
-		const body = this.scene.add.container(0, 0), shadow = this.scene.add.ellipse(0, 2, 23, 10, 0x071510, .62);
+		const body = this.scene.add.container(0, 0).setData("appearance", appearance), shadow = this.scene.add.ellipse(0, 2, 23, 10, 0x071510, .62);
 		const texture = scavTexture(appearance), metadata = this.scene.textures.get(texture).customData as { meta?: { characterHeight?: number } };
 		const height = Number(metadata.meta?.characterHeight) || SCAV_REFERENCE_HEIGHT;
 		const poses = SCAV_POSES.map((pose) => this.scene.add.image(0, 0, texture, scavFrame(pose, "se")).setOrigin(SCAV_ORIGIN.x, SCAV_ORIGIN.y).setScale(48 / height).setTint(hostile ? 0xaca08c : 0xffffff));
-		const weapon = this.scene.add.graphics(); body.add(poses); body.add(weapon);
+		body.add(poses);
+		const equipment = new ScavEquipment(this.scene, body);
 		const root = this.scene.add.container(0, 0, [shadow, body]); this.world.add(root);
-		return { root, body, poses, weapon, animation: createScavAnimation(appearance * .31), point: null, appearance, direction: "se" };
+		return { root, body, poses, equipment, animation: createScavAnimation(appearance * .31), point: null, appearance, direction: "se" };
 	}
-	private paintRifle(pawn: Pawn, aim: number | null, slung: boolean, hostile: boolean): void {
-		const g = pawn.weapon, attachment = scavAttachment(pawn.direction, slung);
-		const bearing = slung ? attachment.flipX ? -115 : -65 : aim ?? attachment.angle;
-		g.setPosition(slung ? attachment.x * .45 : attachment.x, attachment.y - (slung ? 6 : 0)).setScale(attachment.flipX ? -1 : 1, 1).setAngle(bearing - (attachment.flipX ? 180 : 0) - pawn.body.angle);
-		if (attachment.behind || slung) pawn.body.sendToBack(g); else pawn.body.bringToTop(g);
-		const signature = hostile ? "enemy" : `${this.carriedWeapon?.weaponId ?? "unknown"}:${this.carriedWeapon?.modules.optic?.modelId ?? "none"}:${this.carriedWeapon?.modules.muzzle?.modelId ?? "none"}`;
-		if (this.weaponCache.get(g) === signature) return;
-		this.weaponCache.set(g, signature); g.clear();
-		const model = !hostile && this.carriedWeapon ? WEAPON_BY_ID[this.carriedWeapon.weaponId] : null;
-		g.setData("muzzleLength", model?.category === "pistol" ? 13 : model?.category === "sniper" ? 38 : model?.category === "smg" ? 22 : 31);
-		if (model?.category === "pistol") {
-			g.fillStyle(0x303c35).fillRect(-2, -3, 15, 4); polygon(g, [{ x: -1, y: 1 }, { x: 6, y: 1 }, { x: 4, y: 9 }, { x: -1, y: 8 }], 0x5c5744); g.fillStyle(0xbdc1a6).fillRect(10, -2, 4, 1); return;
-		}
-		const length = model?.category === "sniper" ? 38 : model?.category === "smg" ? 22 : 31;
-		g.fillStyle(hostile ? 0x675a42 : 0x877044).fillRect(-9, -2, 9, 5);
-		g.fillStyle(0x1a2521).fillRect(-1, -2, 17, 4).fillRect(3, 2, 4, model?.category === "shotgun" ? 3 : 8); g.fillStyle(0xa0ac9b).fillRect(15, -1, length - 15, 2).fillRect(length - 2, -4, 2, 4);
-		if (model?.category === "shotgun") g.fillStyle(0x946b47).fillRect(10, 1, 13, 3);
-		if (!hostile && this.carriedWeapon?.modules.optic) g.fillStyle(0x566354).fillRect(2, -7, 10, 4).fillStyle(0xb6c3af).fillRect(10, -6, 2, 2);
-		const muzzle = !hostile && this.carriedWeapon?.modules.muzzle ? MODULE_BY_ID[this.carriedWeapon.modules.muzzle.modelId] : null;
-		if (muzzle?.appearance === "suppressor") { g.fillStyle(0x38483e).fillRect(length - 1, -2, 11, 4); g.setData("muzzleLength", length + 10); }
-		line(g, [{ x: 2, y: -3 }, { x: 10, y: -3 }], 0xafa990, 1);
+	private setPawnAppearance(pawn: Pawn, appearance: number): void {
+		if (pawn.appearance === appearance) return;
+		const texture = scavTexture(appearance), metadata = this.scene.textures.get(texture).customData as { meta?: { characterHeight?: number } };
+		const height = Number(metadata.meta?.characterHeight) || SCAV_REFERENCE_HEIGHT;
+		pawn.poses.forEach((image, index) => image.setTexture(texture, scavFrame(SCAV_POSES[index]!, pawn.direction)).setOrigin(SCAV_ORIGIN.x, SCAV_ORIGIN.y).setScale(48 / height));
+		pawn.appearance = appearance;
+		pawn.body.setData("appearance", appearance);
 	}
-	private animatePawn(pawn: Pawn, point: Point, frame: Frame, delta: number, hostile = false): void {
+	private animatePawn(pawn: Pawn, point: Point, frame: Frame, delta: number, hostile = false, visualAppearance = pawn.appearance): void {
 		const before = pawn.point, distance = before ? Math.hypot(point.x - before.x, point.y - before.y) : 0;
 		const searching = !hostile && frame.action === "search", fighting = frame.action === "skirmish" || frame.action === "cover", crouching = searching || fighting;
 		const target = hostile ? this.pawn?.point ?? null : frame.enemyPositions[0] ? this.project(frame.enemyPositions[0]) : null;
@@ -289,10 +279,13 @@ export class RaidStreetRenderer {
 		pawn.poses.forEach((image, index) => image.setFrame(scavFrame(SCAV_POSES[index]!, pawn.direction)).setAlpha(weights[index]!).setVisible(weights[index]! > .001));
 		pawn.body.setScale(1, crouching ? .94 : pose.scaleY).setAngle(pose.angle * facing);
 		const aim = target && fighting ? Math.atan2(target.y - point.y, target.x - point.x) * 180 / Math.PI : null;
-		this.paintRifle(pawn, aim, searching, hostile);
+		const torso = scavTorsoAnchor(pawn.poses.map((image) => ({ weight: image.visible ? image.alpha : 0, torso: (image.frame.customData as { custom?: { torso?: Point } }).custom?.torso })));
+		const loadout = hostile ? this.hostileLoadouts.get(visualAppearance) ?? getHostileVisualLoadout(visualAppearance) : this.visualLoadout ?? { armorModelId: null, packModelId: null, weapon: null };
+		if (hostile) this.hostileLoadouts.set(visualAppearance, loadout);
+		pawn.equipment.update(loadout, pawn.direction, { working: crouching, mode: searching ? "slung" : "held", aim, bodyAngle: pawn.body.angle, hostile, torso });
 	}
 	private gunMuzzle(pawn: Pawn): Point {
-		const point = pawn.weapon.getWorldTransformMatrix().transformPoint(Number(pawn.weapon.getData("muzzleLength")) || 31, 0);
+		const point = pawn.equipment.muzzlePoint();
 		return { x: point.x / this.camera.zoom + this.camera.x, y: point.y / this.camera.zoom + this.camera.y };
 	}
 
@@ -327,23 +320,32 @@ export class RaidStreetRenderer {
 		this.cachedRaid = raid;
 		this.report = activeRaid ? null : snapshot.history?.find((report) => report.raidId === id) ?? (this.report?.raidId === id ? this.report : null);
 		this.carriedWeapon = snapshot.weapons?.find((weapon) => weapon.id === raid.weaponInstanceId) ?? this.carriedWeapon;
+		this.visualLoadout = getRaidVisualLoadout(raid, this.carriedWeapon);
 		const input = `${raid.mapId}:${raid.seed}:${raid.expedition?.stage ?? 1}:${raid.expedition?.branch ?? "scavenge"}:${raid.tactic}`;
 		const plan = this.plan && this.planInput === input ? this.plan : getRaidFieldPlan(raid); this.planInput = input;
 		const scav = snapshot.scavs?.find((candidate) => candidate.id === raid.scavId);
 		const identity = [...raid.scavId].reduce((value, character) => Math.imul(value, 31) + character.charCodeAt(0) | 0, 0);
-		const appearance = scav ? scavAppearance(scav.personality, identity) : this.builtRaidId === raid.id && this.pawn ? this.pawn.appearance : scavAppearance(undefined, identity);
+		const requestedAppearance = scav ? scavAppearance(scav.personality, identity, scav.appearance) : scavAppearance(undefined, identity, this.report?.scavAppearance ?? raid.scavAppearance);
+		this.requestScavAtlas(requestedAppearance);
+		const appearance = scavAvailableAppearance(requestedAppearance, (texture) => this.scene.textures.exists(texture));
 		if (this.plan?.id !== plan.id || this.builtRaidId !== raid.id) this.build(plan, raid, appearance);
+		this.setPawnAppearance(this.pawn!, appearance);
 		const frame = getRaidFieldFrame(raid, this.report ? raid.endsAt : now, plan);
 		const objective = getRaidFieldObjective(raid, this.report ? raid.endsAt : now, plan);
 		const point = this.project(frame.position);
 		const firstFrame = !this.pawn!.point;
 		this.animatePawn(this.pawn!, point, frame, Math.min(100, Math.max(0, delta)));
 		this.pawn!.root.setVisible(!this.report?.lostScav);
-		this.pawn!.weapon.setVisible(!this.report?.lostWeapon);
+		if (this.report?.lostWeapon) this.pawn!.equipment.weapon.setVisible(false);
 		while (this.enemies.length > frame.enemyPositions.length) this.enemies.pop()!.root.destroy(true);
 		frame.enemyPositions.forEach((enemy, index) => {
-			const actor = this.enemies[index] ?? this.makePawn(index + 2, true); if (!this.enemies[index]) this.enemies[index] = actor;
-			this.animatePawn(actor, this.project(enemy), frame, Math.min(100, Math.max(0, delta)), true);
+			const requestedEnemy = SCAV_APPEARANCES[(Math.imul(plan.seed, 31) + Math.imul(index + 1, 7919) >>> 0) % SCAV_APPEARANCES.length]!.id;
+			this.requestScavAtlas(requestedEnemy);
+			const enemyAppearance = scavAvailableAppearance(requestedEnemy, (texture) => this.scene.textures.exists(texture));
+			const actor = this.enemies[index] ?? this.makePawn(enemyAppearance, true); if (!this.enemies[index]) this.enemies[index] = actor;
+			this.setPawnAppearance(actor, enemyAppearance);
+			actor.body.setData("appearance", requestedEnemy);
+			this.animatePawn(actor, this.project(enemy), frame, Math.min(100, Math.max(0, delta)), true, requestedEnemy);
 		});
 		for (const occluder of this.occluders) {
 			const behind = point.y < occluder.y && point.y > occluder.y - occluder.height && Math.abs(point.x - occluder.x) < occluder.width * .45;
@@ -389,5 +391,5 @@ export class RaidStreetRenderer {
 		this.title.setText(`${raid.scavName} · Этап ${raid.expedition?.stage ?? 1} · ${plan.theme.label}`); this.caption.setText(status);
 		this.progress.clear(); this.progress.fillStyle(0x0c1c16, .92).fillRoundedRect(0, 0, Math.min(350, this.viewport.width - 224), 10, 3).fillStyle(0xcbb580).fillRoundedRect(0, 0, Math.min(350, this.viewport.width - 224) * frame.progress, 10, 3);
 	}
-	destroy(): void { this.layer.destroy(true); this.loot.clear(); this.enemies = []; this.occluders = []; this.pawn = null; this.cachedRaid = null; }
+	destroy(): void { this.layer.destroy(true); this.loot.clear(); this.hostileLoadouts.clear(); this.enemies = []; this.occluders = []; this.pawn = null; this.cachedRaid = null; this.visualLoadout = null; }
 }

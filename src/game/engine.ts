@@ -21,6 +21,7 @@ export * from "./modules";
 import { initialShelter, ROOM_DEFINITIONS, RESOURCE_RECIPE_BY_ID, getShelterSites, getShelterFrontier, isShelterSiteCoordinate, MAX_SHELTER_SITES, SHELTER_COORDINATE_LIMIT, SHELTER_EXCAVATION, type ProductionJob, type RoomInstance, type ShelterCost, type ShelterRoomType, type ShelterSite, type ShelterExpansion, type ShelterState } from "./shelter";
 export * from "./shelter";
 import { getRaidFieldFrame, getRaidFieldOutcome, getRaidFieldPlan, type RaidFieldPlan } from "../raid-field";
+import { chooseScavAppearance, defaultScavAppearance, isScavAppearance } from "./scav-appearances";
 
 export const SAVE_KEY = "prapor.save.v1";
 export const SAVE_VERSION = 5;
@@ -39,6 +40,8 @@ export interface Scav {
 	id: string;
 	name: string;
 	personality: string;
+	/** Persistent visual identity; older callers may omit it. */
+	appearance?: number;
 	level: number;
 	xp: number;
 	health: number;
@@ -67,6 +70,7 @@ export interface Raid {
 	id: string;
 	scavId: string;
 	scavName: string;
+	scavAppearance?: number;
 	mapId: string;
 	weaponInstanceId: string;
 	startedAt: number;
@@ -85,6 +89,7 @@ export interface RaidReport {
 	id: string;
 	raidId: string;
 	scavName: string;
+	scavAppearance?: number;
 	mapId: string;
 	at: number;
 	success: boolean;
@@ -252,12 +257,15 @@ function createScav(
 	name: string,
 	personality: string,
 	combat: number,
-	scouting: number
+	scouting: number,
+	appearance?: number
 ): Scav {
+	const scavId = id(state, "scav");
 	const scav: Scav = {
-		id: id(state, "scav"),
+		id: scavId,
 		name,
 		personality,
+		appearance: appearance ?? chooseScavAppearance(personality, `${scavId}:${name}`, state.scavs.map((item) => item.appearance ?? defaultScavAppearance(item.personality))),
 		combat,
 		scouting,
 		level: 1,
@@ -316,9 +324,9 @@ export function createGame(now = Date.now()): GameState {
 		createWeapon(state, weaponId, now)
 	);
 	const scavs = [
-		createScav(state, "Борода", "veteran", 36, 31),
-		createScav(state, "Рыжий", "collector", 29, 42),
-		createScav(state, "Шустрый", "runner", 27, 35),
+		createScav(state, "Борода", "veteran", 36, 31, 0),
+		createScav(state, "Рыжий", "collector", 29, 42, 1),
+		createScav(state, "Шустрый", "runner", 27, 35, 2),
 	];
 	scavs.forEach((scav, index) => {
 		scav.weaponInstanceId = guns[index]!.id;
@@ -1070,6 +1078,7 @@ function startRaid(state: GameState, scav: Scav, map: RaidMap, now: number, isAu
 	const pack = state.gearItems.find((item) => item.id === scav.loadout.backpackItemId);
 	const raid: Raid = {
 		id: id(state, "raid"), scavId: scav.id, scavName: scav.name, mapId: map.id,
+		scavAppearance: scav.appearance ?? defaultScavAppearance(scav.personality),
 		weaponInstanceId: scav.weaponInstanceId!, startedAt: now,
 		endsAt: now + getRaidDuration(state, scav, map) * 1000,
 		chance: getRaidChance(state, scav, map),
@@ -1547,6 +1556,7 @@ function finishExpedition(state: GameState, raid: Raid, success: boolean, now: n
 	const scav = state.scavs.find((item) => item.id === raid.scavId)!;
 	const random = generator((raid.seed ^ Math.imul(expedition.stage, 0x6c078965)) >>> 0);
 	const report: RaidReport = { id: id(state, "report"), raidId: raid.id, scavName: raid.scavName, mapId: raid.mapId,
+		scavAppearance: raid.scavAppearance ?? scav.appearance ?? defaultScavAppearance(scav.personality),
 		at: now, success, lostScav: false, lostWeapon: false, money: 0, supplies: emptySupplies(), weaponId: null,
 		weaponAutoSold: false, description: "", isAuto: raid.isAuto, tactic: raid.tactic, events: [], depth: expedition.stage,
 		discoveries: [...expedition.discoveries], lostCargo: success ? null : structuredClone(expedition.cargo), moduleIds: [] };
@@ -1626,6 +1636,7 @@ function finishRaid(state: GameState, raid: Raid): RaidReport {
 		id: id(state, "report"),
 		raidId: raid.id,
 		scavName: raid.scavName,
+		scavAppearance: raid.scavAppearance ?? scav.appearance ?? defaultScavAppearance(scav.personality),
 		mapId: map.id,
 		at: raid.endsAt,
 		success,
@@ -1882,6 +1893,10 @@ function record(value: unknown): ObjectValue {
 function fields(source: ObjectValue, allowed: string[]) {
 	if (Object.keys(source).some((key) => !allowed.includes(key))) throw new Error("field");
 }
+function parseAppearance(value: unknown): number {
+	if (!isScavAppearance(value)) throw new Error("appearance");
+	return value;
+}
 function number(value: unknown, max = 1e15, min = 0, integer = false): number {
 	if (
 		typeof value !== "number" ||
@@ -2104,7 +2119,7 @@ function parseShelter(value: unknown): GameState["shelter"] {
 }
 function parseScav(value: unknown, version: number): Scav {
 	const source = record(value);
-	fields(source, ["id", "name", "personality", "level", "xp", "health", "combat", "scouting", "weaponInstanceId", "status", "raids", ...(version >= 2 ? ["tactic", "gear", "autoRaid"] : []), ...(version >= 3 ? ["loadout"] : []), ...(version === 5 ? ["assignment"] : [])]);
+	fields(source, ["id", "name", "personality", "appearance", "level", "xp", "health", "combat", "scouting", "weaponInstanceId", "status", "raids", ...(version >= 2 ? ["tactic", "gear", "autoRaid"] : []), ...(version >= 3 ? ["loadout"] : []), ...(version === 5 ? ["assignment"] : [])]);
 	if (!["ready", "raiding", "wounded"].includes(source.status as string))
 		throw new Error("status");
 	let gear: Scav["gear"] = { armor: 0, backpack: 0 };
@@ -2126,6 +2141,7 @@ function parseScav(value: unknown, version: number): Scav {
 		id: string(source.id),
 		name: string(source.name, 30),
 		personality: known(source.personality, PERSONALITY_BY_ID),
+		appearance: Object.hasOwn(source, "appearance") ? parseAppearance(source.appearance) : defaultScavAppearance(source.personality as string),
 		level: number(source.level, 15, 1, true),
 		xp: number(source.xp),
 		health: number(source.health, 100),
@@ -2144,7 +2160,7 @@ function parseScav(value: unknown, version: number): Scav {
 }
 function parseRaid(value: unknown, version: number): Raid {
 	const source = record(value);
-	fields(source, ["id", "scavId", "scavName", "mapId", "weaponInstanceId", "startedAt", "endsAt", "chance", "lootBonus", "seed", ...(version >= 2 ? ["isAuto", "tactic", "armorLevel", "backpackLevel"] : []), ...(version >= 3 ? ["expedition"] : [])]);
+	fields(source, ["id", "scavId", "scavName", "scavAppearance", "mapId", "weaponInstanceId", "startedAt", "endsAt", "chance", "lootBonus", "seed", ...(version >= 2 ? ["isAuto", "tactic", "armorLevel", "backpackLevel"] : []), ...(version >= 3 ? ["expedition"] : [])]);
 	const startedAt = number(source.startedAt);
 	const endsAt = number(source.endsAt);
 	const expedition = version >= 3 ? parseExpedition(source.expedition, version) : null;
@@ -2154,6 +2170,7 @@ function parseRaid(value: unknown, version: number): Raid {
 		id: string(source.id),
 		scavId: string(source.scavId),
 		scavName: string(source.scavName, 30),
+		...(Object.hasOwn(source, "scavAppearance") ? { scavAppearance: parseAppearance(source.scavAppearance) } : {}),
 		mapId: known(source.mapId, MAP_BY_ID),
 		weaponInstanceId: string(source.weaponInstanceId),
 		startedAt,
@@ -2170,11 +2187,12 @@ function parseRaid(value: unknown, version: number): Raid {
 }
 function parseReport(value: unknown, version: number): RaidReport {
 	const source = record(value);
-	fields(source, ["id", "raidId", "scavName", "mapId", "at", "success", "lostScav", "lostWeapon", "money", "supplies", "weaponId", "weaponAutoSold", "description", ...(version >= 2 ? ["isAuto", "tactic", "events"] : []), ...(version >= 3 ? ["depth", "discoveries", "lostCargo"] : []), ...(version >= 4 ? ["moduleIds"] : [])]);
+	fields(source, ["id", "raidId", "scavName", "scavAppearance", "mapId", "at", "success", "lostScav", "lostWeapon", "money", "supplies", "weaponId", "weaponAutoSold", "description", ...(version >= 2 ? ["isAuto", "tactic", "events"] : []), ...(version >= 3 ? ["depth", "discoveries", "lostCargo"] : []), ...(version >= 4 ? ["moduleIds"] : [])]);
 	return {
 		id: string(source.id),
 		raidId: string(source.raidId),
 		scavName: string(source.scavName, 30),
+		...(Object.hasOwn(source, "scavAppearance") ? { scavAppearance: parseAppearance(source.scavAppearance) } : {}),
 		mapId: known(source.mapId, MAP_BY_ID),
 		at: number(source.at),
 		success: bool(source.success),

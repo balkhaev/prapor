@@ -1,11 +1,14 @@
 import Phaser from "phaser";
 import { getRaidPhase, type Raid, type RaidReport, type RoomInstance, type WeaponInstance, getShelterSites, getShelterFrontier, type ShelterSite, type ShelterExpansion } from "./game/engine";
 import { type BaseRoom } from "./game/data";
+import type { GearItem, Loadout } from "./game/systems";
+import { ScavEquipment } from "./scav-equipment";
+import { getScavVisualLoadout } from "./scav-loadout";
 import { advanceShelterRoute, clientToShelterPoint } from "./shelter-motion";
 import { clampShelterCamera, getMinShelterZoom, shelterOverviewCamera, focusShelterRect, panShelterCamera, projectShelterRect, resizeShelterCamera, shelterViewportForSize, viewportToShelter, zoomShelterCamera, type ShelterCamera, type ShelterRect, type ShelterViewport, type ClientRect } from "./shelter-camera";
 import { getShelterLayoutCell, getShelterCorridorSegments, getShelterWalkingRoute, getShelterWorldBounds } from "./shelter-layout";
 import { advanceScavAnimation, createScavAnimation, type ScavAnimationState } from "./shelter-animation";
-import { SCAV_DIRECTIONS, SCAV_ORIGIN, SCAV_REFERENCE_HEIGHT, scavAppearance, scavAttachment, scavDirection, scavFrame, scavTexture, type ScavDirection, type ScavPose } from "./scav-isometric";
+import { SCAV_DIRECTIONS, SCAV_ORIGIN, SCAV_REFERENCE_HEIGHT, scavAppearance, scavAttachment, scavAvailableAppearance, scavDirection, scavFrame, scavPreloadAppearances, scavTexture, scavTorsoAnchor, type ScavDirection, type ScavPose } from "./scav-isometric";
 import { advanceShelterStationClock, getShelterProductionPresentation, type ProductionPresentation } from "./shelter-production";
 import { projectShelterPoint, unprojectShelterPoint, projectShelterBounds, shelterRoomPolygon, shelterRoomPosition } from "./shelter-isometric";
 import { paintIsometricRoom, paintIsometricProduction } from "./shelter-isometric-art";
@@ -17,6 +20,7 @@ export interface WorldSnapshot {
 	selectedRaidId?: string | null;
 	history?: RaidReport[];
 	weapons?: WeaponInstance[];
+	gearItems?: GearItem[];
 	maps: {
 		id: string;
 		name: string;
@@ -35,9 +39,12 @@ export interface WorldSnapshot {
 		id: string;
 		name?: string;
 		personality?: string;
+		appearance?: number;
 		status: "ready" | "raiding" | "wounded";
 		health: number;
 		gear?: { armor: number; backpack: number };
+		loadout?: Loadout;
+		weaponInstanceId?: string | null;
 		autoRaid?: { enabled: boolean; waitingReason: string | null };
 		assignment?: string | null;
 	}[];
@@ -58,7 +65,8 @@ type ScavActor = {
 	animation: ScavAnimationState;
 	appearance: number;
 	direction: ScavDirection;
-	gear: Phaser.GameObjects.Graphics;
+	equipment: ScavEquipment;
+	visualLoadout: ReturnType<typeof getScavVisualLoadout>;
 	tool: Phaser.GameObjects.Graphics;
 	label: Phaser.GameObjects.Text;
 	order: Phaser.GameObjects.Arc;
@@ -308,6 +316,7 @@ export function createWorld(
 		>();
 		private raidActors = new Map<string, RaidMarker>();
 		private scavs = new Map<string, ScavActor>();
+		private requestedScavAtlases = new Set<number>();
 		private lastSync = 0;
 		private lastSelection = "";
 		private hq: Point = { x: 110, y: 357 };
@@ -318,8 +327,26 @@ export function createWorld(
 
 		preload(): void {
 			this.load.spritesheet("shelter-room-atlas", "/art/shelter-rooms.png", { frameWidth: 768, frameHeight: 256 });
-			for (let appearance = 0; appearance < 4; appearance++) this.load.atlas(scavTexture(appearance), `/art/scav-isometric-${appearance}.png`, `/art/scav-isometric-${appearance}.json`);
+			for (const appearance of scavPreloadAppearances(snapshot().scavs)) this.queueScavAtlas(appearance);
 			this.load.atlas("raid-props", "/art/raid-props.png", "/art/raid-props.json");
+			this.load.atlas("scav-equipment", "/art/scav-equipment.png", "/art/scav-equipment.json");
+		}
+
+		private queueScavAtlas(appearance: number): void {
+			if (this.requestedScavAtlases.has(appearance) || this.textures.exists(scavTexture(appearance))) return;
+			this.requestedScavAtlases.add(appearance);
+			this.load.atlas(scavTexture(appearance), `/art/scav-isometric-${appearance}.png`, `/art/scav-isometric-${appearance}.json`);
+		}
+
+		private requestScavAtlas(appearance: number): void {
+			this.queueScavAtlas(appearance);
+			if (!this.load.isLoading() && this.load.list.size > 0) this.load.start();
+		}
+
+		private refreshScavAtlases(): void {
+			if (!this.presentationReady) return;
+			this.syncPeople(snapshot());
+			if (requestedView === "raid") this.raidStreet.update(snapshot(), Date.now(), 0);
 		}
 
 		create(): void {
@@ -329,7 +356,8 @@ export function createWorld(
 			this.mapLayer = this.add.container(0, 30);
 			this.paintBunker();
 			this.paintMap();
-			this.raidStreet = new RaidStreetRenderer(this, this.viewport, reducedMotion);
+			this.raidStreet = new RaidStreetRenderer(this, this.viewport, reducedMotion, (appearance) => this.requestScavAtlas(appearance));
+			this.load.on(Phaser.Loader.Events.COMPLETE, this.refreshScavAtlases, this);
 			this.raidStreet.selectRaid(requestedRaidId);
 			this.installDragListeners();
 			this.installViewportObserver();
@@ -345,6 +373,8 @@ export function createWorld(
 				this.viewportObserver?.disconnect();
 				if (this.viewportFrame) cancelAnimationFrame(this.viewportFrame);
 				this.nativeEvents.abort();
+				this.load.off(Phaser.Loader.Events.COMPLETE, this.refreshScavAtlases, this);
+				this.requestedScavAtlases.clear();
 				this.raidActors.clear();
 				this.places.clear();
 				this.cells.clear();
@@ -904,9 +934,10 @@ export function createWorld(
 			graphic.fillStyle(index % 2 ? 0x876e4e : 0x608b83).fillRoundedRect(-6, -43, 12, 6, 2);
 			graphic.fillStyle(index % 2 ? 0xc7ab77 : 0xb5cfb9).fillRect(-5, -42, 9, 1);
 			graphic.fillStyle(0x15252b).fillRect(1, -35, 2, 2).fillRect(0, -30, 3, 1);
-			const gear = this.add.graphics();
 			const tool = this.add.graphics().setPosition(6, -21);
-			const appearance = scavAppearance(snapshot().scavs?.find((scav) => scav.id === scavId)?.personality, index);
+			const scav = snapshot().scavs?.find((candidate) => candidate.id === scavId);
+			const requestedAppearance = scavAppearance(scav?.personality, index, scav?.appearance);
+			const appearance = scavAvailableAppearance(requestedAppearance, (texture) => this.textures.exists(texture));
 			const texture = scavTexture(appearance);
 			const atlasData = this.textures.get(texture).customData as { meta?: { characterHeight?: number } };
 			const characterHeight = Number(atlasData.meta?.characterHeight) || SCAV_REFERENCE_HEIGHT;
@@ -914,11 +945,14 @@ export function createWorld(
 			const poses = this.textures.exists(texture) ? { idle: makePose("idle"), walkA: makePose("walk-a").setVisible(false), walkB: makePose("walk-b").setVisible(false), work: makePose("work").setVisible(false) } : null;
 			const sprite = poses?.idle ?? null;
 			if (sprite) { legA.setVisible(false); legB.setVisible(false); graphic.setVisible(false); hand.setVisible(false); tool.setPosition(13, -21); }
-			body.add([legA, legB, graphic, ...(poses ? [poses.idle, poses.walkA, poses.walkB, poses.work] : []), gear, hand, tool]);
+			body.add([legA, legB, graphic, ...(poses ? [poses.idle, poses.walkA, poses.walkB, poses.work] : []), hand, tool]);
+			const equipment = new ScavEquipment(this, body);
+			const visualLoadout = getScavVisualLoadout(scav ?? {}, snapshot().gearItems ?? [], snapshot().weapons ?? []);
+			equipment.update(visualLoadout, "se", { mode: "slung" });
 			const label = this.text(0, -64, "", 16, "#ffedc7").setOrigin(.5).setFontFamily("Manrope, sans-serif").setFontStyle("bold").setLetterSpacing(0).setBackgroundColor("#0b1b20").setPadding(7, 4).setVisible(false);
 			const order = this.add.circle(-10, -34, 3.5, C.sage).setStrokeStyle(1, 0x10242b).setVisible(false);
 			const hit = this.add.zone(0, -21, 32, 46).setInteractive({ useHandCursor: true });
-			const slot: ScavActor = { actor, body, legA, legB, hand, sprite, poses, animation: createScavAnimation(index * .37), appearance, direction: "se", gear, tool, label, order, selection, hovered: false, gearSignature: "", position: { ...at }, anchor: { ...at }, route: [], goal: "", assignment: null, role: "idle", dwellUntil: this.time.now + 2000 + index * 800, visit: 0, facing: 1, climbing: false, status: "ready", health: 100, working: false, walking: false, walkSpan: 0, phase: index * 1.71 };
+			const slot: ScavActor = { actor, body, legA, legB, hand, sprite, poses, animation: createScavAnimation(index * .37), appearance, direction: "se", equipment, visualLoadout, tool, label, order, selection, hovered: false, gearSignature: "", position: { ...at }, anchor: { ...at }, route: [], goal: "", assignment: null, role: "idle", dwellUntil: this.time.now + 2000 + index * 800, visit: 0, facing: 1, climbing: false, status: "ready", health: 100, working: false, walking: false, walkSpan: 0, phase: index * 1.71 };
 			hit.on("pointerover", (pointer: Phaser.Input.Pointer) => { if (this.acceptsPointer(pointer, "base")) { slot.hovered = true; selection.setVisible(true); label.setVisible(true); actor.setDepth(1_000_001); } });
 			hit.on("pointerout", () => { slot.hovered = false; const selected = snapshot().selectedScavId === scavId; selection.setVisible(selected); label.setVisible(selected); actor.setDepth(actor.y); });
 			// Native pointer-up distinguishes a deliberate tap from a drag before opening the inspector.
@@ -926,6 +960,17 @@ export function createWorld(
 			this.baseLayer.add(actor);
 			this.scavs.set(scavId, slot);
 			return slot;
+		}
+
+		private setScavAppearance(slot: ScavActor, appearance: number): void {
+			if (slot.appearance === appearance || !slot.poses) return;
+			const texture = scavTexture(appearance);
+			const atlasData = this.textures.get(texture).customData as { meta?: { characterHeight?: number } };
+			const height = Number(atlasData.meta?.characterHeight) || SCAV_REFERENCE_HEIGHT;
+			for (const [key, pose] of [["idle", "idle"], ["walkA", "walk-a"], ["walkB", "walk-b"], ["work", "work"]] as const) {
+				slot.poses[key].setTexture(texture, scavFrame(pose, slot.direction)).setOrigin(SCAV_ORIGIN.x, SCAV_ORIGIN.y).setScale(48 / height);
+			}
+			slot.appearance = appearance;
 		}
 
 		private syncShelter(state: WorldSnapshot): void {
@@ -1011,6 +1056,8 @@ export function createWorld(
 			for (const [id, slot] of this.scavs) if (!alive.has(id)) { if (this.drag?.scavId === id) this.cancelScavDrag(); slot.actor.destroy(true); this.scavs.delete(id); }
 			const free = people.filter((scav) => scav.status !== "raiding" && !rooms.some((room) => room.id === scav.assignment && room.workerIds.includes(scav.id)));
 			people.forEach((scav, index) => {
+				const requestedAppearance = scavAppearance(scav.personality, index, scav.appearance);
+				this.requestScavAtlas(requestedAppearance);
 				const room = rooms.find((candidate) => candidate.id === scav.assignment && candidate.workerIds.includes(scav.id));
 				const production = room ? state.roomProduction?.[room.id] : undefined;
 				const presentation = room ? this.cells.get(`${room.column}:${room.row}`)?.production ?? null : null;
@@ -1018,6 +1065,10 @@ export function createWorld(
 				const station = room?.type === "workshop" && presentation?.active ? presentation.stage === "assembly" ? 104 : 51 : 86;
 				const at = roomPoint ? { x: roomPoint.x + station + rank * 24, y: roomPoint.y + 80 } : this.homePosition(Math.max(0, free.indexOf(scav)), free.length);
 				const slot = this.scavs.get(scav.id) ?? this.createScav(scav.id, index, at);
+				this.setScavAppearance(slot, scavAvailableAppearance(requestedAppearance, (texture) => this.textures.exists(texture)));
+				slot.visualLoadout = getScavVisualLoadout(scav, state.gearItems ?? [], state.weapons ?? []);
+				const torso = scavTorsoAnchor(Object.values(slot.poses ?? {}).map((image) => ({ weight: image.visible ? image.alpha : 0, torso: (image.frame.customData as { custom?: { torso?: Point } }).custom?.torso })));
+				slot.equipment.update(slot.visualLoadout, slot.direction, { working: slot.working, mode: "slung", bodyAngle: slot.body.angle, torso });
 				const previousStatus = slot.status, previousAssignment = slot.assignment;
 				slot.assignment = room?.id ?? null; slot.status = scav.status; slot.health = scav.health;
 				if (this.drag?.scavId === scav.id && (scav.status === "raiding" || scav.health < 25 || this.drag.shelter !== state.shelter || this.drag.scav !== scav)) this.cancelScavDrag();
@@ -1048,11 +1099,9 @@ export function createWorld(
 				const activity = slot.role === "rest" ? slot.route.length ? "ИДЁТ ОТДЫХАТЬ" : "ВОССТАНАВЛИВАЕТСЯ" : slot.route.length ? room ? `ИДЁТ: ${ROOM_STYLE[room.type]?.label ?? "КОМНАТА"}` : "ОСМАТРИВАЕТ БАЗУ" : slot.working ? room?.type === "workshop" ? presentation?.stageLabel.toLocaleUpperCase("ru-RU") ?? "РАБОТАЕТ" : activities[slot.role] ?? "РАБОТАЕТ" : room ? production?.reason?.toLocaleUpperCase("ru-RU").slice(0, 24) ?? "ЖДЁТ ЗАКАЗ" : "НА БАЗЕ";
 				slot.label.setText(`${scav.name?.toLocaleUpperCase("ru-RU") ?? ""}\n${activity}`).setVisible(selected || slot.hovered);
 				slot.order.setVisible(Boolean(scav.autoRaid?.enabled)).setFillStyle(scav.autoRaid?.waitingReason ? C.gold : C.sage);
-				const gearSignature = `${scav.gear?.armor ?? 0}:${scav.gear?.backpack ?? 0}:${slot.role}`;
+				const gearSignature = slot.role;
 				if (slot.gearSignature !== gearSignature) {
-					slot.gearSignature = gearSignature; slot.gear.clear(); slot.tool.clear();
-					if (!slot.sprite && !room && scav.gear?.backpack) slot.gear.fillStyle(0x8c7650).fillRect(-10, -26, 5, 16).lineStyle(1, 0xbca16b).strokeRect(-10, -26, 5, 16);
-					if (!slot.sprite && scav.gear?.armor) slot.gear.fillStyle(0x708060).fillRect(-4, -25, 8, 9).fillStyle(0xc4bc80).fillRect(-3, -23, 2, 2);
+					slot.gearSignature = gearSignature; slot.tool.clear();
 					if (slot.role === "workshop") { line(slot.tool, [{ x: 1, y: 1 }, { x: 10, y: 1 }], 0xc6cbb6, 2); slot.tool.lineStyle(1.3, 0xd4d5ba).strokeCircle(11, 1, 2.3); }
 					if (slot.role === "ammo") slot.tool.fillStyle(0xe7c577).fillRect(1, 0, 3, 8).fillStyle(0xffdfa0).fillRect(1, 0, 3, 1);
 					if (slot.role === "recycler") { line(slot.tool, [{ x: 1, y: 0 }, { x: 2, y: 9 }], 0xd5bb92, 2); slot.tool.fillStyle(0x9dac9b).fillRect(-2, 8, 8, 3); }
@@ -1115,6 +1164,8 @@ export function createWorld(
 				// All visual transforms pivot at the common feet baseline. Physics,
 				// hit zones and drag coordinates use the same projected feet position.
 				slot.body.setPosition(0, 0).setScale(slot.sprite ? 1 : pose.scaleX, pose.scaleY).setAngle(pose.angle * (slot.direction[1] === "e" ? 1 : -1));
+				const torso = scavTorsoAnchor(Object.values(slot.poses ?? {}).map((image) => ({ weight: image.visible ? image.alpha : 0, torso: (image.frame.customData as { custom?: { torso?: Point } }).custom?.torso })));
+				slot.equipment.update(slot.visualLoadout, slot.direction, { working: slot.working, mode: "slung", bodyAngle: slot.body.angle, torso });
 				const stride = (slot.animation.stride % 1) * Math.PI * 2;
 				slot.legA.setAngle(Math.sin(stride) * 9 * slot.animation.walkBlend);
 				slot.legB.setAngle(-Math.sin(stride) * 9 * slot.animation.walkBlend);
