@@ -148,7 +148,9 @@ export function paintShelterAtmosphereGround(g: Phaser.GameObjects.Graphics, fra
 
 export function paintShelterAtmosphereAir(g: Phaser.GameObjects.Graphics, frame: ShelterAtmosphereFrame): void {
 	g.clear();
-	for (const mist of frame.mist) g.fillStyle(0xd3dfce, mist.alpha).fillEllipse(mist.x, mist.y, mist.width, mist.height);
+	for (const mist of frame.mist) {
+		for (const [size, opacity] of [[1.3, .16], [1, .2], [.72, .22], [.44, .18]]) g.fillStyle(0xd3dfce, mist.alpha * opacity!).fillEllipse(mist.x, mist.y, mist.width * size!, mist.height * size!);
+	}
 	for (const puff of frame.smoke) {
 		g.fillStyle(puff.color, puff.alpha * .42).fillEllipse(puff.x, puff.y, puff.width * 1.3, puff.height * 1.3);
 		g.fillStyle(puff.color, puff.alpha * .7).fillEllipse(puff.x - 1, puff.y, puff.width, puff.height);

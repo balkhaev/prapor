@@ -1451,7 +1451,10 @@ export function createWorld(
 			this.lastAtmospherePaint = time;
 			const frame = sampleShelterAtmosphere({ timeMs: time, groundBounds: this.worldBounds, smokeEmitters: this.smokeEmitters, lights: this.atmosphereLights,
 				birdBounds: { x: this.worldBounds.x + 60, y: this.worldBounds.y + 25, width: Math.max(100, this.worldBounds.width - 120), height: 55 },
-				mistZones: [{ x: this.worldBounds.x + 12, y: this.worldBounds.y + this.worldBounds.height - 105, width: this.worldBounds.width - 24, height: 64 }], reducedMotion });
+				mistZones: this.windProps.filter(prop => prop.decoration.kind === "tree" && !prop.decoration.owned).slice(-3).map(prop => {
+					const at = projectShelterPoint(prop.decoration.point);
+					return { x: at.x - 48, y: at.y - 12, width: 96, height: 20 };
+				}), reducedMotion });
 			this.atmosphereGround.clear(); paintShelterAtmosphereGround(this.atmosphereGround, frame);
 			this.atmosphereAir.clear(); paintShelterAtmosphereAir(this.atmosphereAir, frame);
 			this.atmosphereGlows.clear(); paintShelterAtmosphereGlows(this.atmosphereGlows, frame);
