@@ -1,6 +1,7 @@
 import { ROOM_DEFINITIONS, getRoomFootprint, getRoomSites, getShelterSites, getShelterFrontier, getShelterRoomAt, type GameState, type RoomInstance, type ShelterRoomType } from "./game/engine";
 import { getLootRequirementQuote } from './game/loot-uses';
 import { lootRequirementsPanel } from './loot-materials-ui';
+import { roomMiniArt } from "./command-art";
 
 const escape = (value: unknown) => String(value).replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
 export interface BuildingPlacement { type: ShelterRoomType; roomId?: string; rotation: 0 | 1; site: { column: number; row: number } | null }
@@ -12,6 +13,13 @@ export function buildingCatalogueReason(state: GameState, type: ShelterRoomType)
 export function territorySummary(state: GameState): string {
 	const occupied = state.shelter.rooms.reduce((sum, room) => sum + getRoomSites(room).length, 0), total = getShelterSites(state.shelter).length;
 	return `<section class="territory-summary"><div><span class="eyebrow">Твоя территория</span><h2>База · ${total} участков</h2><p>Отдельные постройки внутри периметра. Планировку выбираешь ты.</p></div><div class="territory-space"><strong>${total - occupied}</strong><span>свободно из ${total}</span></div></section>`;
+}
+
+export function territoryBuildings(state: GameState, selectedId: string | null): string {
+	return `<div class="territory-building-list">${state.shelter.rooms.map(room => {
+		const info = ROOM_DEFINITIONS[room.type];
+		return `<button class="territory-building-card ${selectedId === room.id ? "active" : ""}" data-shelter-room="${escape(room.id)}" style="--room-color:${info.color}" aria-label="Управлять постройкой: ${escape(info.label)}"><span class="territory-building-art">${roomMiniArt(room.type, `yard-${room.id}`).replace('<svg ', '<svg aria-hidden="true" ')}</span><span class="territory-building-copy"><strong>${escape(info.label)}</strong><small>Уровень ${room.level || "—"} · ${info.production ? `${room.workerIds.length} работников` : "Без персонала"}</small><span data-room-status="${escape(room.id)}">${room.status === "ready" ? "На базе" : "Строительные работы"}</span></span><span class="territory-building-arrow" aria-hidden="true">↗</span></button>`;
+	}).join("")}</div>`;
 }
 
 /** This is a spatial, keyboard-accessible plan, not a sorted list of rooms. */

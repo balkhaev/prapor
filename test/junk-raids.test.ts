@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { advance, continueExpedition, createGame, dispatchRaid, extractRaid, getLootCapacity, getLootTraderPrice, parseSave, SAVE_VERSION, saveGame, setLoadoutOption, type GameState, type LootItem } from "../src/game/engine";
+import { advance, cancelProduction, continueExpedition, createGame, dispatchRaid, extractRaid, getLootCapacity, getLootTraderPrice, parseSave, queueModuleProduction, SAVE_VERSION, saveGame, setLoadoutOption, type GameState, type LootItem } from "../src/game/engine";
 
 const NOW = 1_792_000_000_000;
 const make = (state: GameState, modelId: string): LootItem => ({ id: `loot-${state.nextId++}`, modelId, foundAt: state.lastUpdated });
@@ -59,4 +59,45 @@ test("new garbage and legendary models cannot be injected into a pre-release sav
 		state.schemaVersion = SAVE_VERSION;
 		expect(parseSave(saveGame(state))).toEqual(state);
 	}
+});
+
+test("automatic junk receipts remain exact and reloadable at the wallet ceiling", () => {
+	for (const budget of [0, 4, 10]) {
+		const { state, raid } = checkpoint(), cash = raid.expedition!.cargo.money;
+		state.money = 1e15 - cash - budget; const before = state.money, earned = state.stats.moneyEarned;
+		expect(parseSave(saveGame(state))).not.toBeNull(); expect(extractRaid(state, raid.id, state.lastUpdated).ok).toBe(true);
+		const report = state.history[0]!;
+		expect(report.lootAutoSold!.map(sale => sale.money)).toEqual(budget === 0 ? [0, 0] : budget === 4 ? [1, 3] : [1, 9]);
+		expect(report.money).toBe(cash + budget); expect(state.money - before).toBe(report.money); expect(state.money).toBe(1e15);
+		expect(state.stats.moneyEarned - earned).toBe(report.money); expect(parseSave(saveGame(state))).toEqual(state);
+		if (budget < 10) expect(report.description).toContain("пределом кошелька");
+	}
+});
+
+test("earnings accounting also bounds the full actual raid payout without hiding an invalid save", () => {
+	const { state, raid } = checkpoint(), cash = raid.expedition!.cargo.money, money = state.money;
+	state.stats.moneyEarned = 1e15 - cash - 2;
+	expect(extractRaid(state, raid.id, state.lastUpdated).ok).toBe(true);
+	const report = state.history[0]!; expect(report.lootAutoSold!.map(sale => sale.money)).toEqual([1, 1]);
+	expect(state.stats.moneyEarned).toBe(1e15); expect(state.money - money).toBe(cash + 2); expect(report.money).toBe(cash + 2); expect(parseSave(saveGame(state))).toEqual(state);
+	const baseLimited = checkpoint(), before = baseLimited.state.money; baseLimited.state.stats.moneyEarned = 1e15 - 5;
+	expect(extractRaid(baseLimited.state, baseLimited.raid.id, baseLimited.state.lastUpdated).ok).toBe(true);
+	expect(baseLimited.state.history[0]!.money).toBe(5); expect(baseLimited.state.money - before).toBe(5);
+	expect(baseLimited.state.history[0]!.lootAutoSold!.every(sale => sale.money === 0)).toBe(true); expect(parseSave(saveGame(baseLimited.state))).toEqual(baseLimited.state);
+});
+
+test("bounded junk prices reject excess or fractional credits and never relax historic useful-item sale prices", () => {
+	const { state, raid } = checkpoint(); expect(extractRaid(state, raid.id, state.lastUpdated).ok).toBe(true);
+	for (const price of [2, .5, -1]) { const altered = structuredClone(state); altered.history[0]!.lootAutoSold![0]!.money = price; expect(parseSave(saveGame(altered))).toBeNull(); }
+	const historical = structuredClone(state), sale = historical.history[0]!.lootAutoSold![0]!;
+	sale.item.modelId = "duct-tape"; sale.money = getLootTraderPrice(sale.item); expect(parseSave(saveGame(historical))).not.toBeNull();
+	for (const price of [0, sale.money - 1, sale.money + 1]) { const altered = structuredClone(historical); altered.history[0]!.lootAutoSold![0]!.money = price; expect(parseSave(saveGame(altered))).toBeNull(); }
+});
+
+test("unstarted-order refunds respect the wallet ceiling without counting refunded cash as earnings", () => {
+	const state = createGame(NOW), workshop = state.shelter.rooms[0]!;
+	expect(queueModuleProduction(state, workshop.id, "factory-sks-stock", NOW).ok).toBe(true);
+	state.money = 1e15; state.stats.moneyEarned = 1e15;
+	expect(cancelProduction(state, workshop.id, workshop.queue[0]!.id, NOW).ok).toBe(true);
+	expect(state.money).toBe(1e15); expect(state.stats.moneyEarned).toBe(1e15); expect(parseSave(saveGame(state))).toEqual(state);
 });

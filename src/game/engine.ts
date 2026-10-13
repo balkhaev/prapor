@@ -361,8 +361,10 @@ function addXp(state: GameState, xp: number) {
 	state.level = Math.min(30, 1 + Math.floor(Math.sqrt(state.xp / 90)));
 }
 function addMoney(state: GameState, amount: number, earned = true) {
-	state.money += amount;
-	if (earned) state.stats.moneyEarned += amount;
+	const credited = Math.max(0, Math.min(amount, 1e15 - state.money, earned ? 1e15 - state.stats.moneyEarned : Number.POSITIVE_INFINITY));
+	state.money += credited;
+	if (earned) state.stats.moneyEarned += credited;
+	return credited;
 }
 /** Only verified market settlement calls this credit; rejects invalid or overflowing amounts. */
 export function creditMarketMoney(state: GameState, amount: number): ActionResult {
@@ -2285,7 +2287,8 @@ function finishExpedition(state: GameState, raid: Raid, success: boolean, now: n
 		}
 		for (const item of expedition.cargo.lootItems ?? []) {
 			if (getLootModel(item).autoSell) {
-				const money = getLootTraderPrice(item);
+				const available = Math.max(0, Math.floor(Math.min(1e15 - state.money, 1e15 - state.stats.moneyEarned) - report.money));
+				const money = Math.min(getLootTraderPrice(item), available);
 				(report.lootAutoSold ??= []).push({ item: structuredClone(item), money });
 				report.money += money;
 				continue;
@@ -2295,9 +2298,11 @@ function finishExpedition(state: GameState, raid: Raid, success: boolean, now: n
 			else report.lootPending!.push(structuredClone(item));
 		}
 		if (report.lootPending?.length) (state.pendingLoot ??= []).push({ id: id(state, "delivery"), raidId: raid.id, at: now, items: structuredClone(report.lootPending) });
-		addMoney(state, report.money);
+		const expectedMoney = report.money;
+		report.money = addMoney(state, report.money);
 		report.description = `Эвакуация после этапа ${expedition.stage}. Груз доставлен${report.weaponAutoSold ? "; лишний трофей продан" : ""}.`;
 		if (report.lootAutoSold?.length) report.description += ` Мусор продан автоматически: ${report.lootAutoSold.length} шт., +${report.lootAutoSold.reduce((sum, sale) => sum + sale.money, 0)} ₽.`;
+		if (report.money < expectedMoney || report.lootAutoSold?.some(sale => sale.money < getLootTraderPrice(sale.item))) report.description += " Выплата ограничена пределом кошелька или учёта заработка.";
 		if (report.lootPending?.length) report.description += ` Склад трофеев полон: ${report.lootPending.length} предметов ждут в посылке. Освободи место и забери их целыми.`;
 		const discarded = getCargoWeight({ money: 0, supplies: {
 			ammo: expedition.cargo.supplies.ammo - report.supplies.ammo, medicine: expedition.cargo.supplies.medicine - report.supplies.medicine,
@@ -3207,8 +3212,9 @@ function parseReport(value: unknown, version: number): RaidReport {
 		...(version >= 16 && Object.hasOwn(source, "lootItems") ? { lootItems: array(source.lootItems, 6, value => parseLootItemForVersion(value, version)) } : {}),
 		...(version >= 20 && Object.hasOwn(source, "lootPending") ? { lootPending: array(source.lootPending, 6, value => parseLootItemForVersion(value, version)) } : {}),
 		...(version >= 16 && Object.hasOwn(source, "lootAutoSold") ? { lootAutoSold: array(source.lootAutoSold, 6, value => {
-			const sale = record(value); fields(sale, ["item", "money"]); const item = parseLootItemForVersion(sale.item, version), money = number(sale.money, 10000, 1, true);
-			if (money !== getLootTraderPrice(item)) throw new Error("loot-sale-price"); return { item, money };
+			const sale = record(value); fields(sale, ["item", "money"]); const item = parseLootItemForVersion(sale.item, version), boundedJunk = version >= 21 && getLootModel(item).autoSell;
+			const money = number(sale.money, 10000, boundedJunk ? 0 : 1, true), price = getLootTraderPrice(item);
+			if (boundedJunk ? money > price : money !== price) throw new Error("loot-sale-price"); return { item, money };
 		}) } : {}),
 	};
 }
