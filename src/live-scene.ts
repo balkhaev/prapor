@@ -63,12 +63,15 @@ export class LiveScene {
 
   show(): void { if (this.active) return; this.active = true; this.resize(); this.animate(); }
   hide(): void { this.active = false; cancelAnimationFrame(this.frame); this.frame = 0; }
-  clear(): void { this.snapshot = null; this.motions.clear(); this.selected = null; this.routePoiIds = []; this.waypointTargets = []; this.effects = []; this.seenEvents.clear(); this.paint(); }
+  clear(): void { this.snapshot = null; this.motions.clear(); this.selected = null; this.routePoiIds = []; this.waypointTargets = []; this.hitTargets = []; this.effects = []; this.seenEvents.clear(); this.paint(); }
   setSelected(id: string | null): void { this.selected = id; }
-  setRoute(poiIds: readonly string[]): void { this.routePoiIds = [...poiIds]; }
+  setRoute(poiIds: readonly string[]): void {
+    if (poiIds.length === this.routePoiIds.length && poiIds.every((id, index) => id === this.routePoiIds[index])) return;
+    this.routePoiIds = [...poiIds]; this.waypointTargets = [];
+  }
   update(snapshot: LiveSnapshot): void {
     const at = performance.now();
-    if (this.snapshot?.worldVersion !== snapshot.worldVersion) { this.motions.clear(); this.effects = []; this.seenEvents.clear(); this.selected = null; this.following = true; this.overview = false; this.dragging = null; this.cacheTerrain(snapshot.world); }
+    if (this.snapshot?.worldVersion !== snapshot.worldVersion) { this.motions.clear(); this.effects = []; this.seenEvents.clear(); this.selected = null; this.routePoiIds = []; this.waypointTargets = []; this.hitTargets = []; this.following = true; this.overview = false; this.zoom = 1; this.dragging = null; this.canvas.classList.remove('is-dragging'); this.cacheTerrain(snapshot.world); }
     for (const entity of snapshot.entities) {
       const existing = this.motions.get(entity.id);
       const from = existing && Math.hypot(entity.x - existing.to.x, entity.y - existing.to.y) <= 4 ? this.interpolated(existing, at) : { x: entity.x, y: entity.y };
