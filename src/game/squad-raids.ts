@@ -8,6 +8,8 @@ import { defaultScavAppearance, isScavAppearance } from "./scav-appearances";
 import { getRaidQuote, getFieldKitStock, FIELD_KITS, type FieldKit, type GameState, type Raid, type RaidReport, type Expedition } from "./engine";
 import { getRaidFieldPlan } from "../raid-field";
 import { isAmmoType } from "./ammunition";
+import { BODY_PARTS, healthPercent, parseHealth, parseMedicalInventory } from "./health";
+import { resolveMedicalEncounter, type RaidMedicalStart } from "./raid-health";
 
 export type SquadRaidRole = "point" | "cover" | "medic";
 export const SQUAD_ROLE_LABELS: Record<SquadRaidRole, string> = { point: "Проводник", cover: "Прикрытие", medic: "Замыкающий" };
@@ -18,6 +20,8 @@ export interface SquadRaidMember {
 	outcomeSeed?: number;
 	traitId: string | null; tactic: RaidTactic; medkit: boolean;
 	baseChance: number; chance: number; baseDuration: number; loadout: Expedition["loadout"];
+	medical?: RaidMedicalStart;
+	medicalAt?: number;
 }
 export interface SquadRaidAction {
 	id: string; stage: number; kind: "cover" | "hesitation" | "rescue";
@@ -96,7 +100,8 @@ export function createSquadRaidSnapshot(state: GameState, raids: Raid[], routeSe
 			weaponModules: Object.fromEntries(Object.entries(weapon.modules).map(([slot, part]) => [slot, part.modelId])), role: index === 0 ? "point" : index === 1 ? "cover" : "medic", seed: raid.seed,
 			...(raid.outcomeSeed !== undefined ? { outcomeSeed: raid.outcomeSeed } : {}),
 			combat: scav.combat, scouting: scav.scouting, health: scav.health, traitId: scav.profile.traitId, tactic: raid.tactic, medkit: raid.expedition!.loadout.medkit,
-			baseChance: raid.expedition!.baseChance, chance: raid.chance, baseDuration: raid.expedition!.baseDuration, loadout: structuredClone(raid.expedition!.loadout) };
+			baseChance: raid.expedition!.baseChance, chance: raid.chance, baseDuration: raid.expedition!.baseDuration, loadout: structuredClone(raid.expedition!.loadout),
+			...(raid.expedition!.medical ? { medical: structuredClone(raid.expedition!.medical!.start), medicalAt: raid.endsAt } : {}) };
 	});
 	const bonds: SquadRaidSnapshot["bonds"] = [];
 	for (let i = 0; i < members.length; i++) for (let j = i + 1; j < members.length; j++) {
@@ -105,14 +110,16 @@ export function createSquadRaidSnapshot(state: GameState, raids: Raid[], routeSe
 	}
 	return { leaderRaidId: leader.id, routeSeed, stage: leader.expedition!.stage, branch: leader.expedition!.branch, members, bonds, actions: [], usedMedkits: [] };
 }
-export function getSquadRawOutcomes(snapshot: SquadRaidSnapshot, mapId: string): { member: SquadRaidMember; success: boolean; lostScav: boolean; lostWeapon: boolean }[] {
+export function getSquadRawOutcomes(snapshot: SquadRaidSnapshot, mapId: string) {
 	const map = MAP_BY_ID[mapId]!;
 	return snapshot.members.map((member) => {
-		const random = generator(((member.outcomeSeed ?? member.seed) ^ Math.imul(snapshot.stage, 0x45d9f3b)) >>> 0), success = random() < member.chance;
+		const random = generator(((member.outcomeSeed ?? member.seed) ^ Math.imul(snapshot.stage, 0x45d9f3b)) >>> 0), routeSuccess = random() < member.chance;
+		const medical = member.medical ? resolveMedicalEncounter({ ...member.medical, injuryMultiplier: member.medical.injuryMultiplier * squadInjuryMultiplier(snapshot, member.scavId) }, member.outcomeSeed ?? member.seed, snapshot.stage, map.danger, routeSuccess, member.medicalAt ?? 0) : null;
+		const success = routeSuccess && !medical?.dead;
 		const fatal = generator(((member.outcomeSeed ?? member.seed) ^ Math.imul(snapshot.stage, 0x6c078965)) >>> 0);
 		const lostWeapon = !success && fatal() < .2 + map.danger * .22 + (snapshot.stage - 1) * .08;
-		const lostScav = !success && fatal() < (map.danger * .08 + (snapshot.stage - 1) * .018) * TACTICS[member.tactic].fatalityMultiplier;
-		return { member, success, lostScav, lostWeapon: lostScav || lostWeapon };
+		const lostScav = medical ? medical.dead : !success && fatal() < (map.danger * .08 + (snapshot.stage - 1) * .018) * TACTICS[member.tactic].fatalityMultiplier;
+		return { member, success, routeSuccess, lostScav, lostWeapon: lostScav || lostWeapon, medical };
 	});
 }
 /** A frozen plan is also the settlement plan. It never draws game RNG or spends resources. */
@@ -129,10 +136,17 @@ export function planSquadRaidActions(raid: Raid): SquadRaidAction[] {
 		const score = scoreFor(squad, actor.scavId, target.scavId);
 		add(score <= -12 ? "hesitation" : "cover", actor, target, combatAt + Math.min(.012, actions.length * .004), score <= -12 ? `${actor.scavName} спорит с ${target.scavName} о позиции. Прикрытие запаздывает; риск ранения выше.` : score >= 16 ? `${actor.scavName} узнаёт сигнал ${target.scavName} и уверенно прикрывает его переход. Ранения легче.` : `${actor.scavName} держит угол, пока ${target.scavName} пересекает улицу. Ранения легче.`);
 	}
-	const raw = getSquadRawOutcomes(squad, raid.mapId), medicsUsed = new Set(squad.usedMedkits);
+	const raw = getSquadRawOutcomes({ ...squad, actions }, raid.mapId), medicsUsed = new Set(squad.usedMedkits);
 	for (const victim of raw.filter((result) => result.lostScav)) {
 		const random = generator((squad.routeSeed ^ (victim.member.outcomeSeed ?? victim.member.seed) ^ Math.imul(squad.stage, 0x51f15e5)) >>> 0);
-		const helpers = raw.filter((result) => result.success && result.member.medkit && !medicsUsed.has(result.member.scavId)).sort((a, b) => scoreFor(squad, b.member.scavId, victim.member.scavId) - scoreFor(squad, a.member.scavId, victim.member.scavId) || a.member.scavId.localeCompare(b.member.scavId));
+		const helpers = raw.filter((result) => {
+			if (!result.success || !result.member.medkit || medicsUsed.has(result.member.scavId)) return false;
+			if (!result.medical || !victim.medical) return true;
+			const inventory = result.medical.inventory;
+			const heavy = BODY_PARTS.filter((part) => victim.medical!.body.parts[part].bleeding === "heavy").length;
+			const light = BODY_PARTS.filter((part) => victim.medical!.body.parts[part].bleeding === "light").length;
+			return inventory.medkit >= 40 && inventory.tourniquet >= heavy && inventory.bandage >= light;
+		}).sort((a, b) => scoreFor(squad, b.member.scavId, victim.member.scavId) - scoreFor(squad, a.member.scavId, victim.member.scavId) || a.member.scavId.localeCompare(b.member.scavId));
 		const helper = helpers.find((result) => random() < (scoreFor(squad, result.member.scavId, victim.member.scavId) >= 16 ? .98 : scoreFor(squad, result.member.scavId, victim.member.scavId) <= -12 ? .3 : .72));
 		if (!helper) continue;
 		medicsUsed.add(helper.member.scavId);
@@ -143,6 +157,16 @@ export function planSquadRaidActions(raid: Raid): SquadRaidAction[] {
 export function squadInjuryMultiplier(squad: SquadRaidSnapshot, scavId: string): number {
 	const support = squad.actions.find((action) => action.targetId === scavId && (action.kind === "cover" || action.kind === "hesitation"));
 	return !support ? 1 : support.kind === "hesitation" ? 1.12 : scoreFor(squad, support.actorId, scavId) >= 16 ? .8 : .92;
+}
+
+/** One helper can rescue once; these are physical supplies left after their own care. */
+export function getSquadRescueCost(squad: SquadRaidSnapshot, mapId: string, actorId: string): { medkit: number; bandage: number; tourniquet: number } | null {
+	const rescue = squad.actions.find((action) => action.kind === "rescue" && action.actorId === actorId);
+	if (!rescue) return null;
+	const victim = getSquadRawOutcomes(squad, mapId).find((result) => result.member.scavId === rescue.targetId);
+	if (!victim?.medical) return null;
+	return { medkit: 40, bandage: BODY_PARTS.filter((part) => victim.medical!.body.parts[part].bleeding === "light").length,
+		tourniquet: BODY_PARTS.filter((part) => victim.medical!.body.parts[part].bleeding === "heavy").length };
 }
 
 // Explicit reconstruction rejects hidden fields and injected combat outcomes.
@@ -158,7 +182,8 @@ const bool = (value: unknown) => { if (typeof value !== "boolean") throw new Err
 const arr = <T>(value: unknown, max: number, parser: (entry: unknown) => T): T[] => { if (!Array.isArray(value) || value.length > max) throw new Error("squad-array"); return value.map(parser); };
 const known = <T>(value: unknown, values: Record<string, T>) => { const key = str(value); if (!Object.hasOwn(values, key)) throw new Error("squad-known"); return key; };
 function parseMember(value: unknown, version: number): SquadRaidMember {
-	const source = obj(value, ["raidId", "scavId", "scavName", "appearance", "weaponInstanceId", "weaponId", "weaponModules", "role", "seed", ...(value !== null && typeof value === "object" && Object.hasOwn(value, "outcomeSeed") ? ["outcomeSeed"] : []), "combat", "scouting", "health", "traitId", "tactic", "medkit", "baseChance", "chance", "baseDuration", "loadout"]);
+	const has = (key: string) => value !== null && typeof value === "object" && Object.hasOwn(value, key);
+	const source = obj(value, ["raidId", "scavId", "scavName", "appearance", "weaponInstanceId", "weaponId", "weaponModules", "role", "seed", ...(has("outcomeSeed") ? ["outcomeSeed"] : []), "combat", "scouting", "health", "traitId", "tactic", "medkit", "baseChance", "chance", "baseDuration", "loadout", ...(version >= 18 && has("medical") ? ["medical", "medicalAt"] : [])]);
 	if (!isScavAppearance(source.appearance) || !["point", "cover", "medic"].includes(source.role as string)) throw new Error("squad-appearance-role");
 	const modules = source.weaponModules;
 	if (!modules || typeof modules !== "object" || Array.isArray(modules) || Object.keys(modules).some((slot) => !MODULE_SLOTS.includes(slot as ModuleSlot))) throw new Error("squad-modules");
@@ -169,9 +194,15 @@ function parseMember(value: unknown, version: number): SquadRaidMember {
 	const model = (value: unknown, slot: "armor" | "helmet" | "backpack", empty: string | null) => { if (value === empty) return empty; const id = known(value, GEAR_MODEL_BY_ID); if (GEAR_MODEL_BY_ID[id]!.slot !== slot) throw new Error("squad-gear-slot"); return id; };
 	if (!isAmmoType(kit.ammoType) || (version < 15 && !["standard", "piercing", "expanding", "precision"].includes(kit.ammoType)) || (version < 13 && kit.ammoType !== "standard" && kit.ammoType !== "piercing")) throw new Error("squad-ammo");
 	const loadout: Expedition["loadout"] = { armorModelId: model(kit.armorModelId, "armor", "none")!, armorCondition: num(kit.armorCondition, 0, 100), helmetModelId: model(kit.helmetModelId, "helmet", null), helmetCondition: num(kit.helmetCondition, 0, 100), packModelId: model(kit.packModelId, "backpack", "none")!, packCondition: num(kit.packCondition, 0, 100), ammoType: kit.ammoType, medkit: bool(kit.medkit) };
+	let medical: RaidMedicalStart | undefined;
+	if (Object.hasOwn(source, "medical")) {
+		const start = obj(source.medical, ["body", "inventory", "injuryMultiplier", "armorProtection", "helmetProtection"]);
+		medical = { body: parseHealth(start.body), inventory: parseMedicalInventory(start.inventory), injuryMultiplier: num(start.injuryMultiplier, 0, 3), armorProtection: num(start.armorProtection, 0, .8), helmetProtection: num(start.helmetProtection, 0, .8) };
+	}
 	return { raidId: str(source.raidId), scavId: str(source.scavId), scavName: str(source.scavName, 30), appearance: source.appearance as number,
 		weaponInstanceId: str(source.weaponInstanceId), weaponId: known(source.weaponId, WEAPON_BY_ID), weaponModules, role: source.role as SquadRaidRole,
-		seed: num(source.seed, 1, 4294967295, true), ...(Object.hasOwn(source, "outcomeSeed") ? { outcomeSeed: num(source.outcomeSeed, 1, 4294967295, true) } : {}), combat: num(source.combat, 0, 100), scouting: num(source.scouting, 0, 100), health: num(source.health, 0, 100), traitId: source.traitId === null ? null : known(source.traitId, RECRUIT_TRAITS), tactic: known(source.tactic, TACTICS) as RaidTactic, medkit: bool(source.medkit), baseChance: num(source.baseChance, .15, .97), chance: num(source.chance, .15, .97), baseDuration: num(source.baseDuration, 20, 600), loadout };
+		seed: num(source.seed, 1, 4294967295, true), ...(Object.hasOwn(source, "outcomeSeed") ? { outcomeSeed: num(source.outcomeSeed, 1, 4294967295, true) } : {}), combat: num(source.combat, 0, 100), scouting: num(source.scouting, 0, 100), health: num(source.health, 0, 100), traitId: source.traitId === null ? null : known(source.traitId, RECRUIT_TRAITS), tactic: known(source.tactic, TACTICS) as RaidTactic, medkit: bool(source.medkit), baseChance: num(source.baseChance, .15, .97), chance: num(source.chance, .15, .97), baseDuration: num(source.baseDuration, 20, 600), loadout,
+		...(medical ? { medical, medicalAt: num(source.medicalAt, 0, Number.MAX_SAFE_INTEGER, true) } : {}) };
 }
 export function parseSquadRaidSnapshot(value: unknown, report = false, version = ARSENAL_WAVE_TWO_SAVE_VERSION): SquadRaidSnapshot | SquadRaidReport {
 	const source = obj(value, ["leaderRaidId", "routeSeed", "stage", "branch", "members", "bonds", "actions", "usedMedkits", ...(report ? ["outcomes"] : [])]);
@@ -185,6 +216,7 @@ function validateSnapshot(snapshot: SquadRaidSnapshot, mapId: string, nextId: nu
 	if (snapshot.members.length < 2 || new Set(snapshot.members.map((member) => member.scavId)).size !== snapshot.members.length || new Set(snapshot.members.map((member) => member.raidId)).size !== snapshot.members.length || new Set(snapshot.members.map((member) => member.weaponInstanceId)).size !== snapshot.members.length || snapshot.leaderRaidId !== snapshot.members[0]!.raidId || snapshot.routeSeed !== snapshot.members[0]!.seed) throw new Error("squad-members");
 	for (const [index, member] of snapshot.members.entries()) {
 		if (!/^raid-[1-9]\d*$/.test(member.raidId) || Number(member.raidId.slice(5)) >= nextId || !/^scav-[1-9]\d*$/.test(member.scavId) || Number(member.scavId.slice(5)) >= nextId || !/^gun-[1-9]\d*$/.test(member.weaponInstanceId) || Number(member.weaponInstanceId.slice(4)) >= nextId || member.role !== (index === 0 ? "point" : index === 1 ? "cover" : "medic") || member.medkit !== member.loadout.medkit || !member.weaponModules.receiver || MODULE_BY_ID[member.weaponModules.receiver]!.weaponId !== member.weaponId) throw new Error("squad-member-provenance");
+		if (member.medical && (Math.abs(member.health - healthPercent(member.medical.body)) > 1e-6 || member.medicalAt === undefined)) throw new Error("squad-medical-provenance");
 	}
 	const expectedBonds = snapshot.members.flatMap((member, index) => snapshot.members.slice(index + 1).map((peer) => [member.scavId, peer.scavId].sort().join("~"))).sort();
 	if (snapshot.bonds.map((bond) => bond.scavIds.join("~")).sort().join("|") !== expectedBonds.join("|")) throw new Error("squad-bonds");
@@ -210,6 +242,7 @@ export function validateSquadRaids(state: GameState, publicSnapshot = false) {
 			const peer = state.raids.find((other) => other.id === member.raidId), scav = state.scavs.find((person) => person.id === member.scavId);
 			if (!peer?.expedition || !scav || JSON.stringify(peer.squad) !== encoded || peer.scavId !== member.scavId || peer.scavName !== member.scavName || peer.scavAppearance !== member.appearance || peer.seed !== member.seed || peer.weaponInstanceId !== member.weaponInstanceId || peer.mapId !== raid.mapId || peer.startedAt !== raid.startedAt || peer.endsAt !== raid.endsAt || peer.expedition.status !== raid.expedition.status || peer.expedition.stage !== squad.stage || peer.expedition.branch !== squad.branch || JSON.stringify(peer.expedition.perks) !== JSON.stringify(raid.expedition.perks) || JSON.stringify(peer.expedition.offers) !== JSON.stringify(raid.expedition.offers) || peer.chance !== member.chance || peer.expedition.baseChance !== member.baseChance || peer.expedition.baseDuration !== member.baseDuration || scav.combat < member.combat || scav.scouting < member.scouting || scav.profile.traitId !== member.traitId || peer.tactic !== member.tactic || JSON.stringify(peer.expedition.loadout) !== JSON.stringify(member.loadout)) throw new Error("squad-owner-clock");
 			if (peer.outcomeSeed !== member.outcomeSeed) throw new Error("squad-private-seed");
+			if (Boolean(peer.expedition.medical) !== Boolean(member.medical) || member.medical && (JSON.stringify(peer.expedition.medical!.start) !== JSON.stringify(member.medical) || peer.expedition.status === "travel" && member.medicalAt !== peer.endsAt)) throw new Error("squad-medical-owner");
 			const weapon = state.weapons.find((gun) => gun.id === member.weaponInstanceId)!;
 			const actualModels = Object.fromEntries(Object.entries(weapon.modules).map(([slot, part]) => [slot, part.modelId]));
 			if (weapon.weaponId !== member.weaponId || Object.keys(actualModels).length !== Object.keys(member.weaponModules).length || MODULE_SLOTS.some((slot) => actualModels[slot] !== member.weaponModules[slot]) || member.health < 25 || peer.expedition.status === "travel" && member.health !== scav.health) throw new Error("squad-frozen-equipment");
@@ -228,6 +261,13 @@ export function validateSquadRaids(state: GameState, publicSnapshot = false) {
 			if (outcome.rescuedBy !== (rescue?.actorId ?? null) || rescue && (outcome.success || outcome.lostScav || outcome.lostWeapon)) throw new Error("squad-rescue-outcome");
 			const peer = state.history.find((other) => other.raidId === outcome.raidId);
 			if (peer && (JSON.stringify(peer.squad) !== JSON.stringify(squad) || peer.at !== report.at || peer.mapId !== report.mapId)) throw new Error("squad-report-group");
+			if (!publicSnapshot && peer?.medical && raw.member.medical) {
+				const actual = resolveMedicalEncounter({ ...raw.member.medical, injuryMultiplier: raw.member.medical.injuryMultiplier * squadInjuryMultiplier(squad, raw.member.scavId) }, raw.member.outcomeSeed ?? raw.member.seed, squad.stage, MAP_BY_ID[report.mapId]!.danger, raw.routeSuccess, raw.member.medicalAt ?? peer.at, Boolean(rescue));
+				const rescueCost = getSquadRescueCost(squad, report.mapId, raw.member.scavId);
+				if (rescueCost) for (const type of ["medkit", "bandage", "tourniquet"] as const) actual.inventory[type] -= rescueCost[type];
+				if (JSON.stringify(peer.medical.body) !== JSON.stringify(actual.body) || JSON.stringify(peer.medical.inventory) !== JSON.stringify(actual.inventory)
+					|| !outcome.lostScav && Math.abs(outcome.health - healthPercent(actual.body)) > 1e-6) throw new Error("squad-medical-outcome");
+			}
 		}
 	}
 }

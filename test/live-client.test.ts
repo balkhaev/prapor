@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { LiveApiError, liveRequest, readLiveSnapshot, readLiveStatus, shouldRejoinLivePresence } from '../src/live-client';
 import type { LiveSnapshot } from '../src/game/live';
+import { createHealth, createMedicalInventory } from '../src/game/health';
 
 const fixture = (): LiveSnapshot => ({
   server: { id: 'perimeter-1', name: 'Периметр 01', online: 1, capacity: 32, startedAt: 1000, maps: [
@@ -12,7 +13,7 @@ const fixture = (): LiveSnapshot => ({
     obstacles: [{ x: 5, y: 5, width: 2, height: 3, kind: 'building', label: 'Склад' }], extracts: [{ x: 2, y: 2 }],
     zones: [{ x: 0, y: 0, width: 32, height: 24, name: 'Двор', terrain: 'yard', danger: 1 }],
   }, selfId: 'player-1',
-  self: { id: 'player-1', ammo: 30, medkits: 2, cargo: 0, stash: 12, kills: 0, respawnAt: 0, patrol: false, targetId: null, travelReadyAt: 0 },
+  self: { id: 'player-1', ammo: 30, medkits: 3, cargo: 0, stash: 12, kills: 0, respawnAt: 0, patrol: false, targetId: null, travelReadyAt: 0, body: createHealth(), medicine: createMedicalInventory(), treatment: null, leaveAt: 0 },
   entities: [{ id: 'player-1', kind: 'player', name: 'Гость 01', appearance: 31, x: 2, y: 2, health: 100, action: 'idle', safeUntil: 7000 }, { id: 'scav-1', kind: 'scav', name: 'Косой', appearance: 0, x: 4, y: 6, health: 75, action: 'moving', safeUntil: 0, faction: 'raiders', role: 'guard' }],
   drops: [{ id: 'drop-1', x: 3, y: 2, amount: 25 }], events: [{ id: 'event-1', at: 2000, kind: 'join', text: 'Гость 01 вошёл', actorId: 'player-1' }],
 });

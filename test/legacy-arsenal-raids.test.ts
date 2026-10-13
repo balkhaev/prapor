@@ -7,6 +7,7 @@ import { ARSENAL_SAVE_VERSION } from "../src/game/catalog-releases";
 import { useWeaponPlatformFixture } from "./weapon-fixtures";
 import { withoutLoot } from "./legacy-loot-fixture";
 import { withoutArsenalLoot } from "./legacy-strategy-fixture";
+import { withoutMedical } from "./legacy-health-fixture";
 import type { AmmoType } from "../src/game/ammunition";
 
 // Generated with the released v15 engine at 7df999da336ea1c70797ed519ec8f35e1823e63e.
@@ -168,7 +169,7 @@ function canonical(value: unknown): string {
 }
 const fingerprint = (value: unknown) => new Bun.CryptoHasher("sha256").update(canonical(value)).digest("hex");
 function oldFormat(state: GameState) {
-	const raw = JSON.parse(saveGame(state)); raw.schemaVersion = 15;
+	const raw = withoutMedical(JSON.parse(saveGame(state))); raw.schemaVersion = 15;
 	const lootArrays = [raw.lootItems, ...raw.raids.map((raid: { expedition?: { cargo?: { lootItems?: unknown[] } } }) => raid.expedition?.cargo?.lootItems), ...raw.history.flatMap((report: { lootItems?: unknown[]; lootAutoSold?: unknown[]; lostCargo?: { lootItems?: unknown[] } }) => [report.lootItems, report.lootAutoSold, report.lostCargo?.lootItems])];
 	for (const items of lootArrays) expect(items?.length ?? 0).toBe(0);
 	withoutLoot(raw);
@@ -246,7 +247,7 @@ describe("paid v15 expeditions retain their original weapon and module loot cata
 		expect(state.raids[0]!.expedition!.lootCatalogVersion).toBe(SAVE_VERSION);
 		expect(state.raids[0]!.expedition!.lootCatalogVersion!).toBeGreaterThanOrEqual(ARSENAL_SAVE_VERSION);
 		expect(parseSave(saveGame(state))).toEqual(state);
-		const raw = JSON.parse(saveGame(state)); raw.schemaVersion = 15;
+		const raw = withoutMedical(JSON.parse(saveGame(state))); raw.schemaVersion = 15;
 		withoutLoot(raw);
 		expect(parseSave(JSON.stringify(raw))).toBeNull();
 		delete raw.raids[0].expedition.lootCatalogVersion;
@@ -306,7 +307,7 @@ const V16_FIXTURES = [
   }
 ] as const;
 function v16Fingerprint(state: GameState): string {
-	const raw = JSON.parse(saveGame(state)); raw.schemaVersion = 16;
+	const raw = withoutMedical(JSON.parse(saveGame(state))); raw.schemaVersion = 16;
 	for (const raid of raw.raids) if (raid.expedition) delete raid.expedition.lootCatalogVersion;
 	return fingerprint(raw);
 }

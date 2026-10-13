@@ -1,14 +1,15 @@
+import { withoutMedical } from './legacy-health-fixture';
 import { withoutLoot } from "./legacy-loot-fixture";
-
 /** A paid pre-arsenal sortie keeps the loot catalogue that existed on departure. */
 export function withoutArsenalLoot<T>(value: T): T {
+	withoutMedical(value);
 	const state = value as { raids?: { expedition?: { lootCatalogVersion?: unknown } | null }[] };
 	for (const raid of state.raids ?? []) if (raid.expedition) delete raid.expedition.lootCatalogVersion;
 	return value;
 }
-
 /** Remove fields unavailable in v1–11 when deriving an authentic old fixture. */
 export function withoutRaidStrategy<T>(value: T): T {
+	withoutMedical(value);
 	const state = value as {
 		sectorIntel?: unknown;
 		scavs?: { raidPlan?: unknown }[];
