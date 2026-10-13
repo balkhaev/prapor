@@ -38,6 +38,18 @@
 .account-error{border:1px solid #a16f52;border-left:3px solid #f0a594;border-radius:5px;background:#3c3025;color:#f0c2a8;padding:11px 13px;font-size:12px;line-height:1.75;margin:8px 0}
 .account-notice{border-left:3px solid #bdd299;background:#31422a;color:#d9e7be;padding:10px 13px;font-size:12px;line-height:1.75;margin:0 0 17px}
 .account-summary{border:1px solid #697c50;border-radius:8px;background:#24361f;padding:16px;margin:0 0 19px}
+.account-email-card{border:1px solid #647955;border-radius:8px;background:#203020;padding:16px;margin:0 0 19px}
+.account-email-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.account-email-badge{font:9px "IBM Plex Mono",monospace;color:#e6c58c;border:1px solid #8f7c51;border-radius:4px;padding:4px 6px;background:#3c3a26}
+.account-email-badge.is-verified{color:#d1e5b1;background:#2d4326;border-color:#7b965b}
+.account-email-address{display:block;font-size:14px;color:#e1e7cd;overflow-wrap:anywhere;line-height:1.7;margin-bottom:6px}
+.account-email-card>p{font-size:11px;color:#bfd0a9;line-height:1.8;margin:5px 0 9px}
+.account-email-card .account-email-pending{color:#e3cca2;border-left:2px solid #b59b62;padding-left:9px;margin:11px 0}
+.account-email-pending strong{font-weight:600;overflow-wrap:anywhere}
+.account-email-card .account-email-notice{color:#e2d3ac;border-top:1px solid #657651;padding-top:10px;margin-top:12px}
+.account-email-actions{display:flex;justify-content:space-between;gap:13px;align-items:center;flex-wrap:wrap;margin-top:9px}
+.account-email-actions .account-text-button{color:#dcc68f;font-size:11px}
+.account-form-footer{flex-wrap:wrap}
 .account-sync-status{font-size:13px;line-height:1.8;color:#d6e7bd;margin:8px 0 0}
 .account-sync-status[data-tone=warning]{color:#efcc8c}
 .account-actions{display:grid;gap:9px;margin-top:16px}
