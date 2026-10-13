@@ -89,7 +89,10 @@ describe("expanded physical weapon module geometry", () => {
 		expect(benchWidth!).toBeGreaterThan(factoryBench[2]!); expect(benchHeight!).toBeGreaterThan(factoryBench[3]!);
 		const [left, top] = viewport(actor.svg);
 		const factoryActor = weaponActorArt(factoryGun("rpk"));
-		expect(left!).toBeLessThan(viewport(factoryActor.svg)[0]!); expect(top!).toBeLessThan(viewport(factoryActor.svg)[1]!);
+		// A precision chassis may be shorter than the original wooden butt.
+		// Its heel still belongs inside the viewport; the optic expands upward.
+		const stockHeel = Number(outline(part(actor.svg, "stock"))!.match(/^M(-?[\d.]+)/)![1]);
+		expect(left!).toBeLessThan(stockHeel); expect(top!).toBeLessThan(viewport(factoryActor.svg)[1]!);
 		expect(actor.width).toBeGreaterThan(actor.referenceWidth); expect(actor.height).toBeGreaterThan(factoryActor.height);
 		expect(actor.muzzle.x + left!).toBeGreaterThan(benchLeft); expect(actor.muzzle.x + left!).toBeLessThan(benchLeft + benchWidth);
 		expect(actor.muzzle.y + top!).toBeGreaterThan(benchTop); expect(actor.muzzle.y + top!).toBeLessThan(benchTop + benchHeight);

@@ -1,7 +1,11 @@
 import type { WeaponCategory } from "./game/data";
 import { scavAttachment, type ScavDirection } from "./scav-isometric";
+import { CLASSIC_REFERENCE_GRIPS } from "./weapon-reference-classic-anchors";
+import { MODERN_REFERENCE_GRIPS } from "./weapon-reference-modern-anchors";
+import { COMPACT_REFERENCE_GRIPS } from "./weapon-reference-compact-anchors";
 
 export type WeaponAttachmentPoint = { x: number; y: number };
+const referenceGrips = { ...CLASSIC_REFERENCE_GRIPS, ...MODERN_REFERENCE_GRIPS, ...COMPACT_REFERENCE_GRIPS };
 
 /** Native side-profile coordinates, measured at each receiver's gripping surface. */
 const gripAnchors: Record<string, readonly [number, number]> = {
@@ -17,6 +21,12 @@ const gripAnchors: Record<string, readonly [number, number]> = {
 
 /** VAL-family furniture shares one front grip interface, including borrowed factory stocks. */
 export function weaponGripAnchor(weaponId: string, stockAppearance = "factory", _stockWeaponId?: string): WeaponAttachmentPoint {
+	const reference = Object.hasOwn(referenceGrips, weaponId) ? referenceGrips[weaponId] : undefined;
+	if (reference) {
+		const [x, y] = stockAppearance === "padded" ? reference.padded ?? reference.factory
+			: ["tactical", "light", "precision", "skeleton", "folding"].includes(stockAppearance) ? reference.upgrade ?? reference.factory : reference.factory;
+		return { x, y };
+	}
 	if (["sks", "mosin", "svd", "m870"].includes(weaponId)) {
 		if (["tactical", "light", "precision", "skeleton", "folding"].includes(stockAppearance)) return { x: 335, y: 194 };
 		if (stockAppearance === "padded") return { x: 305, y: 163 };
