@@ -1,7 +1,7 @@
 import type Phaser from "phaser";
 import type { ShelterRect } from "./shelter-camera";
-import { getShelterCorridorSegments, getShelterRoomDoor, getShelterTerritoryCell, getShelterWalkingRoute, type ShelterCorridorSegment, type ShelterLayoutBuilding, type ShelterLayoutSite } from "./shelter-layout";
-import { projectShelterPoint, shelterRoomPosition, shelterRoomRect, SHELTER_COLUMN_STRIDE, SHELTER_ROW_STRIDE } from "./shelter-isometric";
+import { getShelterBuildingRect, getShelterCorridorSegments, getShelterOpenGroundPoints, getShelterRoomDoor, getShelterTerritoryCell, getShelterWalkingRoute, type ShelterCorridorSegment, type ShelterLayoutBuilding, type ShelterLayoutSite } from "./shelter-layout";
+import { projectShelterPoint, shelterRoomPosition, SHELTER_COLUMN_STRIDE, SHELTER_ROW_STRIDE } from "./shelter-isometric";
 import type { ShelterPoint } from "./shelter-motion";
 
 export interface ShelterLandscapeEdge extends ShelterCorridorSegment { side: "north" | "south" | "east" | "west" }
@@ -81,8 +81,11 @@ function perimeterFor(sites: readonly ShelterLayoutSite[], owned: ReadonlySet<st
 /** Paths follow actual worker routes to doors and two clearings, rather than tracing every lot. */
 function pathsFor(sites: readonly ShelterLayoutSite[], buildings: readonly ShelterLayoutBuilding[]): ShelterCorridorSegment[] {
 	const destinations = buildings.map(getShelterRoomDoor);
-	const free = sites.filter((site) => !buildings.some((building) => intersects(shelterRoomPosition(site.column, site.row), 1, shelterRoomRect(building.column, building.row, building.width, building.height))));
-	for (const site of [free[0], free[Math.floor(free.length * .7)]]) if (site) {
+	const free = sites.filter((site) => !buildings.some((building) => intersects(shelterRoomPosition(site.column, site.row), 1, getShelterBuildingRect(building))));
+	if (buildings.some((building) => building.position)) {
+		const clearings = getShelterOpenGroundPoints(sites, buildings);
+		for (const point of [clearings[0], clearings[Math.floor(clearings.length * .7)]]) if (point) destinations.push(point);
+	} else for (const site of [free[0], free[Math.floor(free.length * .7)]]) if (site) {
 		const p = shelterRoomPosition(site.column, site.row); destinations.push({ x: p.x + 86, y: p.y + 65 });
 	}
 	const paths = new Map<string, ShelterCorridorSegment>();
@@ -104,17 +107,19 @@ export function getShelterLandscape(inputSites: readonly ShelterLayoutSite[], bu
 	const sites = [...new Map(inputSites.filter((site) => Number.isSafeInteger(site.column) && Number.isSafeInteger(site.row)).map((site) => [key(site), { ...site }])).values()].sort((a, b) => a.row - b.row || a.column - b.column);
 	const owned = new Set(sites.map(key)), lots = sites.map((site) => { const p = shelterRoomPosition(site.column, site.row); return { x: p.x - 10, y: p.y - 16, width: SHELTER_COLUMN_STRIDE, height: SHELTER_ROW_STRIDE }; });
 	const perimeter = perimeterFor(sites, owned), paths = pathsFor(sites, buildings), decorations: ShelterLandscapeDecoration[] = [];
-	const rects = buildings.map((building) => shelterRoomRect(building.column, building.row, building.width, building.height));
+	const rects = buildings.map(getShelterBuildingRect);
 	const reserved = reservedSites.map((site) => { const p = shelterRoomPosition(site.column, site.row); return { x: p.x - 10, y: p.y - 16, width: SHELTER_COLUMN_STRIDE, height: SHELTER_ROW_STRIDE }; });
-	const corridors = getShelterCorridorSegments(sites, buildings);
+	const freePlacement = buildings.some((building) => building.position);
+	const corridors = freePlacement ? [] : getShelterCorridorSegments(sites, buildings);
+	const clearings = freePlacement ? getShelterOpenGroundPoints(sites, buildings) : sites.map((site) => { const p = shelterRoomPosition(site.column, site.row); return { x: p.x + 83, y: p.y + 80 }; });
 	const canPlace = (point: ShelterPoint, radius: number, inside: boolean) => {
 		if (inside !== ownedAt(point, owned)) return false;
-		if ([{ x: point.x - radius, y: point.y - radius }, { x: point.x + radius, y: point.y + radius }].some((sample) => ownedAt(sample, owned) !== inside)) return false;
+		if ([-radius, radius].some((dx) => [-radius, radius].some((dy) => ownedAt({ x: point.x + dx, y: point.y + dy }, owned) !== inside))) return false;
 		if (rects.some((rect) => intersects(point, radius + 12, rect))) return false;
 		if (reserved.some((rect) => intersects(point, radius, rect))) return false;
 		if ([...corridors, ...paths].some((segment) => distanceToSegment(point, segment) < radius + 12)) return false;
 		// The unassigned squad gathers in the centre of free land and enters through its south side.
-		if (inside && sites.some((site) => { const p = shelterRoomPosition(site.column, site.row); return intersects(point, radius + 7, { x: p.x + 52, y: p.y + 50, width: 62, height: 60 }); })) return false;
+		if (inside && clearings.some((p) => intersects(point, radius + 7, { x: p.x - 31, y: p.y - 30, width: 62, height: 60 }))) return false;
 		return !decorations.some((d) => Math.hypot(d.point.x - point.x, d.point.y - point.y) < d.radius + radius + 8);
 	};
 	const add = (kind: ShelterLandscapeDecoration["kind"], point: ShelterPoint, radius: number, inside: boolean, seed: number) => {

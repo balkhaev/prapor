@@ -7,7 +7,7 @@ import type { ShelterPoint } from "./shelter-motion";
 
 /** Structural cells also accept room instances and the model's unopened frontier cells. */
 export interface ShelterLayoutSite { column: number; row: number }
-export interface ShelterLayoutBuilding extends ShelterLayoutSite { width: number; height: number }
+export interface ShelterLayoutBuilding extends ShelterLayoutSite { width: number; height: number; position?: ShelterPoint }
 export interface ShelterCorridorSegment { from: ShelterPoint; to: ShelterPoint }
 export const SHELTER_STREET_CORRIDOR_Y = 132;
 const EPSILON = .001;
@@ -32,17 +32,51 @@ export function getShelterTerritoryCell(point: ShelterPoint): ShelterLayoutSite 
 	return { column: Math.floor((point.x - 30) / SHELTER_COLUMN_STRIDE), row: Math.floor((point.y - 132) / SHELTER_ROW_STRIDE) };
 }
 
+type ShelterBuildingShape = ShelterLayoutSite & Partial<Pick<ShelterLayoutBuilding, "width" | "height" | "position">>;
+
+/** Ground origins are continuous; legacy lot coordinates are only a save-compatible fallback. */
+export function getShelterBuildingPosition(building: ShelterBuildingShape): ShelterPoint {
+	return building.position && finitePoint(building.position) ? { ...building.position } : shelterRoomPosition(building.column, building.row);
+}
+
+export function getShelterBuildingRect(building: ShelterBuildingShape): ShelterRect {
+	return { ...shelterRoomRect(building.column, building.row, building.width, building.height), ...getShelterBuildingPosition(building) };
+}
+
+export function getShelterTerritoryRects(sites: readonly ShelterLayoutSite[]): ShelterRect[] {
+	return validSites(sites).map((site) => { const p = shelterRoomPosition(site.column, site.row); return { x: p.x - 10, y: p.y - 16, width: SHELTER_COLUMN_STRIDE, height: SHELTER_ROW_STRIDE }; });
+}
+
+const inRect = (point: ShelterPoint, rect: ShelterRect) => point.x >= rect.x - EPSILON && point.x <= rect.x + rect.width + EPSILON && point.y >= rect.y - EPSILON && point.y <= rect.y + rect.height + EPSILON;
+const inRectInterior = (point: ShelterPoint, rect: ShelterRect) => point.x > rect.x + EPSILON && point.x < rect.x + rect.width - EPSILON && point.y > rect.y + EPSILON && point.y < rect.y + rect.height - EPSILON;
+
+export function isShelterPointInTerritory(point: ShelterPoint, sites: readonly ShelterLayoutSite[]): boolean {
+	return finitePoint(point) && getShelterTerritoryRects(sites).some((rect) => inRect(point, rect));
+}
+
+/** Gathering points adapt to moved buildings and remain on actual open ground. */
+export function getShelterOpenGroundPoints(sites: readonly ShelterLayoutSite[], buildings: readonly ShelterLayoutBuilding[] = []): ShelterPoint[] {
+	const rects = buildings.map(getShelterBuildingRect), points: ShelterPoint[] = [];
+	for (const lot of getShelterTerritoryRects(sites)) {
+		for (const [dx, dy] of [[96, 82], [48, 44], [144, 44], [48, 98], [144, 98]]) {
+			const point = { x: lot.x + dx!, y: lot.y + dy! };
+			if (!rects.some((rect) => inRect(point, { x: rect.x - 10, y: rect.y - 10, width: rect.width + 20, height: rect.height + 20 }))) { points.push(point); break; }
+		}
+	}
+	return points;
+}
+
 function insideBuilding(point: ShelterPoint, building: ShelterLayoutBuilding): boolean {
-	const rect = shelterRoomRect(building.column, building.row, building.width, building.height);
+	const rect = getShelterBuildingRect(building);
 	return point.x > rect.x - EPSILON && point.x < rect.x + rect.width + EPSILON && point.y > rect.y - EPSILON && point.y < rect.y + rect.height + EPSILON;
 }
 
-export function getShelterRoomDoor(site: ShelterLayoutSite & Partial<Pick<ShelterLayoutBuilding, "width" | "height">>): ShelterPoint {
-	const rect = shelterRoomRect(site.column, site.row, site.width, site.height);
+export function getShelterRoomDoor(site: ShelterBuildingShape): ShelterPoint {
+	const rect = getShelterBuildingRect(site);
 	return { x: rect.x + rect.width / 2, y: rect.y + rect.height };
 }
 
-export function getShelterCorridorPoint(site: ShelterLayoutSite & Partial<Pick<ShelterLayoutBuilding, "width" | "height">>): ShelterPoint {
+export function getShelterCorridorPoint(site: ShelterBuildingShape): ShelterPoint {
 	const door = getShelterRoomDoor(site);
 	return { x: door.x, y: door.y + (SHELTER_ROW_STRIDE - SHELTER_ROOM_HEIGHT) / 2 };
 }
@@ -109,6 +143,7 @@ function corridorAccess(point: ShelterPoint, sites: readonly ShelterLayoutSite[]
 /** BFS follows actual corridor edges and south doors, never the old lift or room-to-room diagonals. */
 export function getShelterWalkingRoute(from: ShelterPoint, to: ShelterPoint, sites: readonly ShelterLayoutSite[], buildings: readonly ShelterLayoutBuilding[] = []): ShelterPoint[] {
 	if (!finitePoint(from) || !finitePoint(to) || samePoint(from, to)) return [];
+	if (buildings.some((building) => building.position && finitePoint(building.position))) return freeWalkingRoute(from, to, sites, buildings);
 	const cells = validSites(sites), fromCell = getShelterLayoutCell(from), toCell = getShelterLayoutCell(to);
 	const fromBuilding = buildings.find((candidate) => insideBuilding(from, candidate));
 	const toBuilding = buildings.find((candidate) => insideBuilding(to, candidate));
@@ -149,6 +184,100 @@ export function getShelterWalkingRoute(from: ShelterPoint, to: ShelterPoint, sit
 	const candidates = [...start.lead, ...corridor, ...finish.lead.slice(0, -1).reverse(), to];
 	const result: ShelterPoint[] = [];
 	for (const candidate of candidates) if (!samePoint(result.at(-1) ?? from, candidate)) result.push({ ...candidate });
+	return result;
+}
+
+/** Exact segment intervals keep shortcuts inside an irregular union, including narrow gaps. */
+function segmentInRect(from: ShelterPoint, to: ShelterPoint, rect: ShelterRect): [number, number] | null {
+	let enter = 0, leave = 1;
+	for (const [start, delta, min, max] of [
+		[from.x, to.x - from.x, rect.x, rect.x + rect.width],
+		[from.y, to.y - from.y, rect.y, rect.y + rect.height],
+	]) {
+		if (Math.abs(delta!) < 1e-9) { if (start! < min! - 1e-9 || start! > max! + 1e-9) return null; }
+		else {
+			const a = (min! - start!) / delta!, b = (max! - start!) / delta!;
+			enter = Math.max(enter, Math.min(a, b)); leave = Math.min(leave, Math.max(a, b));
+			if (leave < enter - 1e-9) return null;
+		}
+	}
+	return [enter, leave];
+}
+
+function visibleOnGround(from: ShelterPoint, to: ShelterPoint, lots: readonly ShelterRect[], obstacles: readonly ShelterRect[]): boolean {
+	for (const rect of obstacles) {
+		// Tangency at a wall or corner is allowed; the open building interior is blocked.
+		const interval = segmentInRect(from, to, { x: rect.x + EPSILON, y: rect.y + EPSILON, width: rect.width - EPSILON * 2, height: rect.height - EPSILON * 2 });
+		if (interval && interval[1] - interval[0] > 1e-8) return false;
+	}
+	const intervals = lots.map((rect) => segmentInRect(from, to, rect)).filter((interval): interval is [number, number] => interval !== null).sort((a, b) => a[0] - b[0]);
+	let covered = 0;
+	for (const [start, end] of intervals) {
+		if (start > covered + 1e-8) return false;
+		covered = Math.max(covered, end);
+		if (covered >= 1 - 1e-8) return true;
+	}
+	return false;
+}
+
+/** Free placements use actual doors and rectangle corners, with no placement grid involved. */
+function freeWalkingRoute(from: ShelterPoint, to: ShelterPoint, sites: readonly ShelterLayoutSite[], buildings: readonly ShelterLayoutBuilding[]): ShelterPoint[] {
+	const lots = getShelterTerritoryRects(sites), obstacles = buildings.map(getShelterBuildingRect);
+	const fromBuilding = buildings.find((building) => insideBuilding(from, building));
+	const toBuilding = buildings.find((building) => insideBuilding(to, building));
+	if (fromBuilding && fromBuilding === toBuilding) {
+		const corner = { x: to.x, y: from.y };
+		return [corner, to].filter((point, index) => !samePoint(point, index ? corner : from)).map((point) => ({ ...point }));
+	}
+	const inGround = (point: ShelterPoint) => lots.some((rect) => inRect(point, rect));
+	const walkable = (point: ShelterPoint) => inGround(point) && !obstacles.some((rect) => inRectInterior(point, rect));
+	const gate = { x: 318, y: SHELTER_STREET_CORRIDOR_Y };
+	const access = (point: ShelterPoint, building: ShelterLayoutBuilding | undefined): CorridorAccess | null => {
+		if (building) {
+			const door = getShelterRoomDoor(building);
+			return walkable(door) ? { anchor: door, lead: [{ x: door.x, y: point.y }, door] } : null;
+		}
+		if (walkable(point)) return { anchor: { ...point }, lead: [] };
+		if (point.y <= SHELTER_STREET_CORRIDOR_Y && walkable(gate)) return { anchor: gate, lead: [{ x: gate.x, y: point.y }, gate] };
+		return null;
+	};
+	const start = access(from, fromBuilding), finish = access(to, toBuilding);
+	if (!start || !finish) return [];
+	const nodes = new Map<string, ShelterPoint>();
+	const add = (point: ShelterPoint) => { if (walkable(point)) nodes.set(pointKey(point), { ...point }); };
+	add(start.anchor); add(finish.anchor);
+	for (const rect of lots) for (const x of [rect.x, rect.x + rect.width]) for (const y of [rect.y, rect.y + rect.height]) add({ x, y });
+	for (const rect of obstacles) {
+		for (const inset of [0, 3]) for (const x of [rect.x - inset, rect.x + rect.width + inset]) for (const y of [rect.y - inset, rect.y + rect.height + inset]) add({ x, y });
+	}
+	for (const building of buildings) add(getShelterRoomDoor(building));
+	const points = [...nodes.values()], startIndex = points.findIndex((point) => samePoint(point, start.anchor)), finishIndex = points.findIndex((point) => samePoint(point, finish.anchor));
+	if (startIndex < 0 || finishIndex < 0) return [];
+	const graph: { to: number; distance: number }[][] = points.map(() => []);
+	for (let a = 0; a < points.length; a++) for (let b = a + 1; b < points.length; b++) {
+		if (!visibleOnGround(points[a]!, points[b]!, lots, obstacles)) continue;
+		const distance = Math.hypot(points[a]!.x - points[b]!.x, points[a]!.y - points[b]!.y);
+		graph[a]!.push({ to: b, distance }); graph[b]!.push({ to: a, distance });
+	}
+	const distances = points.map(() => Number.POSITIVE_INFINITY), previous = points.map(() => -1), visited = new Set<number>();
+	distances[startIndex] = 0;
+	for (let step = 0; step < points.length; step++) {
+		let current = -1;
+		for (let i = 0; i < points.length; i++) if (!visited.has(i) && (current < 0 || distances[i]! < distances[current]!)) current = i;
+		if (current < 0 || !Number.isFinite(distances[current]!)) break;
+		if (current === finishIndex) break;
+		visited.add(current);
+		for (const edge of graph[current]!) {
+			const distance = distances[current]! + edge.distance;
+			if (distance < distances[edge.to]!) { distances[edge.to] = distance; previous[edge.to] = current; }
+		}
+	}
+	if (!Number.isFinite(distances[finishIndex]!)) return [];
+	const ground: ShelterPoint[] = [];
+	for (let at = finishIndex; at >= 0; at = previous[at]!) ground.push(points[at]!);
+	const candidates = [...start.lead, ...ground.reverse(), ...finish.lead.slice(0, -1).reverse(), to];
+	const result: ShelterPoint[] = [];
+	for (const point of candidates) if (!samePoint(result.at(-1) ?? from, point)) result.push({ ...point });
 	return result;
 }
 

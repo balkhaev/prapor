@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createGameService, readGameCommand, type GameService } from "../server/game";
 import { readAuthoritativeAction, readAuthoritativeSnapshot } from "../src/authoritative-client";
-import { getRoomSites, getShelterRoomAt, parseSave, saveGame } from "../src/game/engine";
+import { getFreeBuildRoomQuote, getRoomPosition, getRoomSites, getShelterRoomAt, getShelterRoomAtPoint, parseSave, saveGame } from "../src/game/engine";
 import type { GameCommand, GameSnapshot } from "../src/game/commands";
 import { fundConstructionLoot } from "./loot-material-fixture";
 
@@ -42,6 +42,83 @@ async function poll(service: GameService, client: Client) {
 }
 
 describe("authoritative base placement commands", () => {
+	test("continuous commands accept bounded fractional intent and reject extra clocks, coordinates and geometry", async () => {
+		for (const command of [
+			{ type: "placeRoom", args: ["room-workshop", 89.375, 301.625] },
+			{ type: "placeRoom", args: ["room-workshop", 89.375, 301.625, 0] },
+			{ type: "constructRoom", args: ["ammo", 270.125, 290.75] },
+			{ type: "constructRoom", args: ["hangar", -152.5, 290.75, 1] },
+		] satisfies GameCommand[]) expect(readGameCommand(command)).toEqual(command);
+		const { service } = setup(), client = await connect(service), before = structuredClone(client.snapshot);
+		for (const command of [
+			{ type: "placeRoom", args: ["room-workshop", NaN, 301.625] },
+			{ type: "placeRoom", args: ["room-workshop", 89.375, Infinity] },
+			{ type: "placeRoom", args: ["room-workshop", 30_001, 301.625] },
+			{ type: "placeRoom", args: ["room-workshop", 89.375, -1] },
+			{ type: "placeRoom", args: ["room-workshop", 89.375, 301.625, NOW] },
+			{ type: "placeRoom", args: ["room-workshop", 89.375, 301.625, 0, NOW] },
+			{ type: "placeRoom", args: ["room-workshop", 89.375, 301.625, null] },
+			{ type: "constructRoom", args: ["ammo", 270.125, 290.75, .5] },
+			{ type: "constructRoom", args: ["forged", 270.125, 290.75] },
+			{ type: "constructRoom", args: ["ammo", 270.125, 290.75], footprint: { width: 1, height: 1 } },
+		]) {
+			expect(() => readGameCommand(command)).toThrow();
+			expect((await service.fetch(request("action", "POST", { revision: before.revision, command }, client)))!.status).toBe(400);
+		}
+		expect(await poll(service, client)).toEqual(before);
+	});
+
+	test("free movement and paid building retain exact positions, shared land lots and production across restart", async () => {
+		const folder = await mkdtemp(join(tmpdir(), "prapor-free-placement-")); folders.push(folder);
+		const path = join(folder, "game.sqlite"), first = setup(path), client = await connect(first.service);
+		const unfunded = structuredClone(client.snapshot.state);
+		expect((await action(first.service, client, { type: "constructRoom", args: ["ammo", 270.125, 290.75] })).result.ok).toBe(false);
+		expect(client.snapshot.state).toEqual(unfunded);
+		const db = new Database(path);
+		try { const stored = parseSave(db.query<{ state: string }, []>("SELECT state FROM authoritative_games LIMIT 1").get()!.state)!; fundConstructionLoot(stored); db.query("UPDATE authoritative_games SET state=?,revision=revision+1").run(saveGame(stored)); }
+		finally { db.close(); }
+		await poll(first.service, client);
+		const workerId = client.snapshot.state.scavs[0]!.id;
+		expect((await action(first.service, client, { type: "assignWorker", args: [workerId, "room-workshop"] })).result.ok).toBe(true);
+		expect((await action(first.service, client, { type: "queueModuleProduction", args: ["room-workshop", "factory-sks-stock"] })).result.ok).toBe(true);
+		first.setTime(NOW + 1000);
+		const original = structuredClone(client.snapshot.state), jobId = original.shelter.rooms[0]!.queue[0]!.id;
+		const moved = await action(first.service, client, { type: "placeRoom", args: ["room-workshop", 89.375, 301.625] });
+		expect(moved.result.ok).toBe(true); const workshop = moved.state.shelter.rooms[0]!;
+		expect(getRoomPosition(workshop)).toEqual({ x: 89.375, y: 301.625 });
+		expect(workshop.workerIds).toEqual([workerId]); expect(workshop.queue[0]!.id).toBe(jobId);
+		expect(workshop.queue[0]!.workDone).toBeGreaterThan(0);
+		expect(moved.state.money).toBe(original.money); expect(moved.state.supplies).toEqual(original.supplies);
+		const quote = getFreeBuildRoomQuote(moved.state, "ammo", 270.125, 290.75), physical = moved.state.lootItems!.filter(item => quote.lootItemIds.includes(item.id));
+		expect((await action(first.service, client, { type: "constructRoom", args: ["ammo", 270.125, 290.75] })).result.ok).toBe(true);
+		const ammo = getShelterRoomAtPoint(client.snapshot.state.shelter, 280, 350)!;
+		expect(getRoomPosition(ammo)).toEqual({ x: 270.125, y: 290.75 });
+		expect(ammo.construction!.paidLoot).toEqual(physical); expect(physical.length).toBeGreaterThan(0);
+		expect(client.snapshot.state.lootItems!.some(item => quote.lootItemIds.includes(item.id))).toBe(false);
+		expect(client.snapshot.state.money).toBe(moved.state.money - quote.money); expect(client.snapshot.state.supplies.scrap).toBe(moved.state.supplies.scrap - quote.scrap);
+		expect(getRoomSites(workshop)).toContainEqual({ column: 1, row: 1 });
+		expect(getRoomSites(ammo)).toContainEqual({ column: 1, row: 1 });
+		const before = structuredClone(client.snapshot.state);
+		for (const command of [
+			{ type: "placeRoom", args: ["room-workshop", 500, 130] },
+			{ type: "placeRoom", args: ["room-workshop", 280, 350] },
+			{ type: "placeRoom", args: [ammo.id, 500, 350] },
+			{ type: "constructRoom", args: ["ammo", 700.25, 300] },
+		] satisfies GameCommand[]) expect((await action(first.service, client, command)).result.ok).toBe(false);
+		expect(client.snapshot.state).toEqual(before);
+		const saved = structuredClone(readAuthoritativeSnapshot(client.snapshot));
+		services.splice(services.indexOf(first.service), 1); first.service.close();
+		const second = setup(path); second.setTime(NOW + 1000);
+		const rejoined = await connect(second.service, client.cookie); expect(rejoined.snapshot).toEqual(saved);
+		second.setTime(NOW + 600_000); const settled = await poll(second.service, rejoined);
+		expect(settled.state.modules).toHaveLength(original.modules.length + 1);
+		expect(settled.state.shelter.rooms[0]!.queue).toHaveLength(0);
+		expect(settled.state.shelter.rooms[0]!.cycles).toBe(1);
+		expect(getRoomPosition(settled.state.shelter.rooms[0]!)).toEqual({ x: 89.375, y: 301.625 });
+		expect(getShelterRoomAtPoint(settled.state.shelter, 280, 350)!.status).toBe("ready");
+		expect(await poll(second.service, rejoined)).toEqual(settled);
+	});
+
 	test("accepts legacy and rotated intent, rejects clocks, client footprints and malformed orientations", async () => {
 		for (const command of [
 			{ type: "buildRoom", args: ["hangar", 0, 1] }, { type: "buildRoom", args: ["hangar", 0, 1, 1] },

@@ -9,7 +9,7 @@ const part = (svg: string, slot: ModuleSlot) => svg.match(new RegExp(`<g data-mo
 const outline = (svg: string) => svg.match(/<path d="([^"]+)"/)![1]!;
 
 describe("mechanical weapon illustration", () => {
-	test("all twenty-five factory actions have individual physical cores, shared loose and installed", () => {
+	test("all factory actions have individual physical cores, shared loose and installed", () => {
 		const silhouettes = new Set<string>();
 		for (const definition of WEAPONS) {
 			const gun = factory(definition.id), model = MODULE_BY_ID[gun.modules.receiver!.modelId]!, actor = part(weaponActorArt(gun).svg, "receiver")!;
