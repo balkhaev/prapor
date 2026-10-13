@@ -645,9 +645,9 @@ export function createWorld(
 		}
 
 		private paintBunker(): void {
-			this.terrain = this.add.graphics().setDepth(-1000); this.baseLayer.add(this.terrain);
-			this.ambient = this.add.graphics().setDepth(800); this.baseLayer.add(this.ambient);
-			this.dragGhost = this.add.graphics().setDepth(1200); this.baseLayer.add(this.dragGhost);
+			this.terrain = this.add.graphics().setDepth(-1_000_000_000); this.baseLayer.add(this.terrain);
+			this.ambient = this.add.graphics().setDepth(1_000_000); this.baseLayer.add(this.ambient);
+			this.dragGhost = this.add.graphics().setDepth(100_000_000); this.baseLayer.add(this.dragGhost);
 			this.baseCaption = this.text(29, 27, "ЗДАНИЕ УБЕЖИЩА 07", 15, "#ded2ae").setVisible(false);
 			this.shelterCaption = this.text(29, 477, "КОМНАТЫ · ЛЮДИ · ПРОИЗВОДСТВО", 10, "#abb69c").setVisible(false);
 			this.baseLayer.add([this.baseCaption, this.shelterCaption]);
@@ -679,7 +679,7 @@ export function createWorld(
 				line(g, [{ x, y: 118 }, { x, y: 148 }].map(projectShelterPoint), 0x4b594d, .8, .45);
 			}
 			const street = projectShelterPoint({ x: 380, y: 54 });
-			const streetLabel = this.baseCaption; streetLabel.setPosition(street.x, street.y - 24).setOrigin(.5).setText("УЛИЦА · ВЫХОД В РЕЙД").setFontSize(10).setVisible(true).setDepth(900);
+			const streetLabel = this.baseCaption; streetLabel.setPosition(street.x, street.y - 24).setOrigin(.5).setText("УЛИЦА · ВЫХОД В РЕЙД").setFontSize(10).setVisible(true).setDepth(10_000_000);
 			for (const site of sites) {
 				const p = cellPosition(site.column, site.row);
 				polygon(g, quad(p.x - 10, p.y - 16, 192, 132).map((point) => ({ x: point.x + 5, y: point.y + 6 })), 0x06110c, .7);
@@ -734,8 +734,8 @@ export function createWorld(
 			zone.setInteractive(new Phaser.Geom.Polygon(corners.map((point) => ({ x: point.x - bounds.x, y: point.y - bounds.y }))), Phaser.Geom.Polygon.Contains);
 			zone.input!.cursor = "pointer";
 			const root = this.add.container(0, 0, [art, lamp, animation, frame, progress]).setDepth(at.y - 20);
-			const chrome = this.add.container(0, 0, [label, status, productLabel, feedback]).setDepth(950);
-			this.baseLayer.add([root, chrome, zone.setDepth(-800)]);
+			const chrome = this.add.container(0, 0, [label, status, productLabel, feedback]).setDepth(10_000_000);
+			this.baseLayer.add([root, chrome, zone.setDepth(-100_000_000)]);
 			const cell: ShelterCell = { root, chrome, open: false, expansion: null, art, frame, progress, animation, stationClock: 0, stationJob: null, production: null, productLabel, label, status, lamp, zone, signature: "", column, row, hovered: false, room: null, working: false, operational: "empty", feedback, lastCycles: null, completedAt: -10000 };
 			this.cells.set(`${column}:${row}`, cell);
 			zone.on("pointerover", (pointer: Phaser.Input.Pointer) => { if (this.acceptsPointer(pointer, "base")) { cell.hovered = true; this.paintCellFrame(cell); } });
@@ -787,7 +787,7 @@ export function createWorld(
 		}
 
 		private clickFeedback(at: Point, layer: Phaser.GameObjects.Container): void {
-			const ring = this.add.circle(at.x, at.y, 15).setStrokeStyle(2, C.light, .85).setDepth(1500);
+			const ring = this.add.circle(at.x, at.y, 15).setStrokeStyle(2, C.light, .85).setDepth(100_000_001);
 			layer.add(ring);
 			this.tweens.add({ targets: ring, scale: reducedMotion ? 1 : 2.2, alpha: 0, duration: reducedMotion ? 80 : 320, onComplete: () => ring.destroy() });
 		}
@@ -826,7 +826,7 @@ export function createWorld(
 			const order = this.add.circle(-10, -34, 3.5, C.sage).setStrokeStyle(1, 0x10242b).setVisible(false);
 			const hit = this.add.zone(0, -21, 32, 46).setInteractive({ useHandCursor: true });
 			const slot: ScavActor = { actor, body, legA, legB, hand, sprite, poses, animation: createScavAnimation(index * .37), appearance, gear, tool, label, order, selection, hovered: false, gearSignature: "", position: { ...at }, anchor: { ...at }, route: [], goal: "", assignment: null, role: "idle", dwellUntil: this.time.now + 2000 + index * 800, visit: 0, facing: 1, climbing: false, status: "ready", health: 100, working: false, walking: false, walkSpan: 0, phase: index * 1.71 };
-			hit.on("pointerover", (pointer: Phaser.Input.Pointer) => { if (this.acceptsPointer(pointer, "base")) { slot.hovered = true; selection.setVisible(true); label.setVisible(true); actor.setDepth(850); } });
+			hit.on("pointerover", (pointer: Phaser.Input.Pointer) => { if (this.acceptsPointer(pointer, "base")) { slot.hovered = true; selection.setVisible(true); label.setVisible(true); actor.setDepth(1_000_001); } });
 			hit.on("pointerout", () => { slot.hovered = false; const selected = snapshot().selectedScavId === scavId; selection.setVisible(selected); label.setVisible(selected); actor.setDepth(actor.y); });
 			// Native pointer-up distinguishes a deliberate tap from a drag before opening the inspector.
 			actor.add([shadow, selection, body, label, order, hit]);
@@ -901,7 +901,7 @@ export function createWorld(
 		private placeActor(slot: ScavActor, at: Point): void {
 			slot.position = { ...at };
 			const visual = projectShelterPoint(at);
-			slot.actor.setPosition(visual.x, visual.y).setDepth(slot.hovered ? 850 : visual.y);
+			slot.actor.setPosition(visual.x, visual.y).setDepth(slot.hovered ? 1_000_001 : visual.y);
 		}
 
 		private sendActor(slot: ScavActor, goal: string, at: Point): void {
