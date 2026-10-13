@@ -5,6 +5,7 @@ import { liveDropLabel, liveLootTotals } from './live-loot-ui';
 type AtlasFrame = { frame: { x: number; y: number; w: number; h: number }; spriteSourceSize: { x: number; y: number; w: number; h: number }; sourceSize: { w: number; h: number } };
 type Atlas = { image: HTMLImageElement; frames: Record<string, AtlasFrame> };
 type Motion = { from: LivePoint; to: LivePoint; at: number; direction: ScavDirection };
+type LabelBox = { x: number; y: number; width: number; height: number };
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
 /** A presentation only: interpolation ends at the last confirmed server position. */
@@ -12,6 +13,9 @@ export class LiveScene {
   private canvas = document.createElement('canvas');
   private context: CanvasRenderingContext2D;
   private observer: ResizeObserver;
+  private overlayObserver: MutationObserver;
+  private overlayBounds: LabelBox[] = [];
+  private overlayBoundsDirty = true;
   private snapshot: LiveSnapshot | null = null;
   private motions = new Map<string, Motion>();
   private atlases = new Map<number, Atlas | null>();
@@ -52,6 +56,8 @@ export class LiveScene {
     host.append(this.canvas, this.controls);
     this.observer = new ResizeObserver(() => this.resize());
     this.observer.observe(host);
+    this.overlayObserver = new MutationObserver(() => { this.overlayBoundsDirty = true; });
+    this.overlayObserver.observe(host, { childList: true, subtree: true, characterData: true });
     this.canvas.addEventListener('click', this.click);
     this.canvas.addEventListener('pointerdown', this.pointerDown);
     this.canvas.addEventListener('pointermove', this.pointerMove);
@@ -71,6 +77,7 @@ export class LiveScene {
   }
   update(snapshot: LiveSnapshot): void {
     const at = performance.now();
+    this.overlayBoundsDirty = true;
     if (this.snapshot?.worldVersion !== snapshot.worldVersion) { this.motions.clear(); this.effects = []; this.seenEvents.clear(); this.selected = null; this.routePoiIds = []; this.waypointTargets = []; this.hitTargets = []; this.following = true; this.overview = false; this.zoom = 1; this.dragging = null; this.canvas.classList.remove('is-dragging'); this.cacheTerrain(snapshot.world); }
     for (const entity of snapshot.entities) {
       const existing = this.motions.get(entity.id);
@@ -90,7 +97,7 @@ export class LiveScene {
     this.snapshot = snapshot;
     if (!this.active) this.paint();
   }
-  destroy(): void { this.hide(); this.observer.disconnect(); this.canvas.removeEventListener('click', this.click); this.canvas.removeEventListener('pointerdown', this.pointerDown); this.canvas.removeEventListener('pointermove', this.pointerMove); this.canvas.removeEventListener('pointerup', this.pointerUp); this.canvas.removeEventListener('pointercancel', this.pointerCancel); this.controls.removeEventListener('click', this.zoomClick); this.canvas.remove(); this.controls.remove(); }
+  destroy(): void { this.hide(); this.observer.disconnect(); this.overlayObserver.disconnect(); this.canvas.removeEventListener('click', this.click); this.canvas.removeEventListener('pointerdown', this.pointerDown); this.canvas.removeEventListener('pointermove', this.pointerMove); this.canvas.removeEventListener('pointerup', this.pointerUp); this.canvas.removeEventListener('pointercancel', this.pointerCancel); this.controls.removeEventListener('click', this.zoomClick); this.canvas.remove(); this.controls.remove(); }
 
   private resize(): void {
     const box = this.host.getBoundingClientRect();
@@ -99,6 +106,7 @@ export class LiveScene {
     const ratio = Math.min(window.devicePixelRatio || 1, 2);
     this.canvas.width = Math.round(this.width * ratio); this.canvas.height = Math.round(this.height * ratio);
     this.context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    this.overlayBoundsDirty = true;
     this.paint();
   }
   private zoomClick = (event: MouseEvent): void => {
@@ -384,19 +392,42 @@ export class LiveScene {
   }
   private paintLandmarks(world: LiveWorld): void {
     const c = this.context, small = this.overview || this.tile < 12;
-    const boxes: Array<{ x: number; y: number; width: number; height: number }> = [];
-    const placeLabel = (name: string, point: LivePoint, size: number, color: string): void => {
+    // UI rendering follows the snapshot update. Read its final layout on the next paint,
+    // then reuse these bounds until the overlay changes or the viewport is resized.
+    if (this.overlayBoundsDirty) {
+      const canvas = this.canvas.getBoundingClientRect();
+      this.overlayBounds = [...this.host.querySelectorAll<HTMLElement>('.live-field-hud, .live-field-legend, .live-camera')].flatMap(element => {
+        const rect = element.getBoundingClientRect();
+        if (rect.width < 1 || rect.height < 1) return [];
+        return [{ x: rect.left - canvas.left - 5, y: rect.top - canvas.top - 5, width: rect.width + 10, height: rect.height + 10 }];
+      });
+      this.overlayBoundsDirty = false;
+    }
+    const boxes: LabelBox[] = [...this.overlayBounds];
+    if (this.snapshot) {
+      const mini = this.minimapBounds(this.snapshot);
+      boxes.push({ x: mini.x - 12, y: mini.y - 12, width: mini.width + 24, height: mini.height + 37 });
+    }
+    for (const id of this.routePoiIds) {
+      const entrance = world.pois.find(poi => poi.id === id)?.entrances[0];
+      if (!entrance) continue;
+      const p = this.project(entrance), radius = (this.overview ? 9 : 11) + 4;
+      boxes.push({ x: p.x - radius, y: p.y - radius, width: radius * 2, height: radius * 2 });
+    }
+    const placeLabel = (name: string, point: LivePoint, size: number, color: string, district = false): boolean => {
       c.font = `600 ${size}px Manrope, sans-serif`;
       const width = c.measureText(name).width + 10, height = size + 8;
-      for (const offset of [0, -14, 15, -29, 30]) {
-        const box = { x: point.x - width / 2, y: point.y + offset - size - 4, width, height };
+      const offsets: readonly (readonly [number, number])[] = district ? [[0, 0], [0, -18], [0, 18], [0, -36], [0, 36], [0, -54], [0, 54], [-45, 0], [45, 0], [-45, -36], [45, -36], [-45, 36], [45, 36], [0, -72], [0, 72], [-72, 0], [72, 0]] : [[0, 0], [0, -14], [0, 15], [0, -29], [0, 30], [-45, 0], [45, 0]];
+      for (const [dx, dy] of offsets) {
+        const box = { x: point.x + dx - width / 2, y: point.y + dy - size - 4, width, height };
         if (box.x < 5 || box.x + width > this.width - 5 || box.y < 45 || box.y + height > this.height - 35 || boxes.some(other => box.x < other.x + other.width && box.x + width > other.x && box.y < other.y + other.height && box.y + height > other.y)) continue;
-        boxes.push(box); this.label(name, point.x, point.y + offset, color, size); return;
+        boxes.push(box); this.label(name, point.x + dx, point.y + dy, color, size); return true;
       }
+      return false;
     };
     if (small) for (const district of world.districts) {
       const p = this.project({ x: district.x + district.width / 2, y: district.y + district.height / 2 });
-      placeLabel(district.name.toUpperCase(), { x: p.x, y: p.y - 24 }, this.width < 480 ? 11 : 14, '#e5e8c2');
+      placeLabel(district.name.toUpperCase(), { x: p.x, y: p.y - 24 }, this.width < 480 ? 11 : 14, '#e5e8c2', true);
     }
     const pois = [...world.pois].sort((a, b) => Number(this.routePoiIds.includes(b.id)) - Number(this.routePoiIds.includes(a.id)) || b.danger - a.danger || b.width * b.height - a.width * a.height);
     let labelCount = 0;
@@ -405,7 +436,7 @@ export class LiveScene {
       if (p.x < -60 || p.x > this.width + 60 || p.y < -30 || p.y > this.height + 30) continue;
       if (small) {
         c.fillStyle = chosen ? '#f2d596' : poi.danger === 3 ? '#d6a17c' : '#c2ca95'; c.fillRect(p.x - 2, p.y - 2, 4, 4);
-        if (chosen || this.width >= 480 && labelCount < 12) { placeLabel(poi.name, { x: p.x, y: p.y + 13 }, chosen ? 10 : 8, chosen ? '#f2dfb1' : '#c5d3b0'); labelCount++; }
+        if ((chosen || this.width >= 480 && labelCount < 12) && placeLabel(poi.name, { x: p.x, y: p.y + 13 }, chosen ? 10 : 8, chosen ? '#f2dfb1' : '#c5d3b0')) labelCount++;
       } else if (this.tile > 30) placeLabel(poi.name, p, chosen ? 11 : 9, chosen ? '#f2dfb1' : '#d6d3ac');
     }
   }
