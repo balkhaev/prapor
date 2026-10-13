@@ -11,7 +11,7 @@ import { gearBenefits } from './flea-ui';
 
 const escape = (value: unknown) => String(value).replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!);
 const money = (value: number) => Math.floor(value).toLocaleString('ru-RU');
-const weight = (value: number) => value.toLocaleString('ru-RU', { maximumFractionDigits: 1 });
+const weight = (value: number) => value.toLocaleString('ru-RU', { maximumFractionDigits: value > 0 && value < 1 ? 2 : 1 });
 
 export function liveLootTotals(items: readonly EconomyLoot[]) {
   return items.reduce((total, item) => {

@@ -45,4 +45,17 @@ describe("mechanical weapon illustration", () => {
 		expect(selected).not.toContain("feDropShadow");
 		expect(JSON.stringify(val)).toBe(saved);
 	});
+
+	test("VAL stocks own the single physical grip when wood and folding furniture are exchanged", () => {
+		const val = factory("asval"), vss = factory("vss"), originalValStock = part(weaponActorArt(val).svg, "stock")!;
+		const originalVssStock = part(weaponActorArt(vss).svg, "stock")!;
+		const receiver = part(weaponActorArt(val).svg, "receiver")!;
+		expect(outline(receiver)).toEndWith("v39H323z");
+		expect(receiver).not.toContain('d="M341 171h29l-11 42h-26z"');
+		val.modules.stock = { ...vss.modules.stock!, id: "borrowed-vss-furniture" };
+		vss.modules.stock = { ...factory("asval").modules.stock!, id: "borrowed-val-furniture" };
+		expect(part(weaponActorArt(val).svg, "stock")).toBe(originalVssStock);
+		expect(part(weaponActorArt(vss).svg, "stock")).toBe(originalValStock);
+		expect(part(weaponActorArt(val).svg, "receiver")).toBe(receiver);
+	});
 });

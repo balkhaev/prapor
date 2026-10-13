@@ -17,8 +17,11 @@ const gripAnchors: Record<string, readonly [number, number]> = {
 
 /** A traditional wrist or thumbhole changes with its stock; receiver grips stay fixed. */
 export function weaponGripAnchor(weaponId: string, stockAppearance = "factory", stockWeaponId?: string): WeaponAttachmentPoint {
-	if (weaponId === "vss" && stockAppearance === "factory" && stockWeaponId === "asval") return { x: 335, y: 194 };
-	if (["sks", "mosin", "vss", "svd", "m870"].includes(weaponId)) {
+	if (["vss", "asval"].includes(weaponId) && stockAppearance === "factory") {
+		if (stockWeaponId === "asval") return { x: 351, y: 188 };
+		if (stockWeaponId === "vss") return { x: 261, y: 191 };
+	}
+	if (["sks", "mosin", "vss", "asval", "svd", "m870"].includes(weaponId)) {
 		if (["tactical", "light", "precision", "skeleton", "folding"].includes(stockAppearance)) return { x: 335, y: 194 };
 		if (stockAppearance === "padded") return { x: 305, y: 163 };
 	}
@@ -39,6 +42,7 @@ export interface WeaponCarryOptions {
 	mode?: "held" | "slung" | "none";
 	aim?: number | null;
 	bodyAngle?: number;
+	bodyScale?: WeaponAttachmentPoint;
 	torso?: WeaponAttachmentPoint;
 }
 
@@ -52,11 +56,17 @@ export function weaponCarryTransform(art: WeaponAttachmentArt, category: WeaponC
 	const muzzle = { x: art.muzzle.x - art.grip.x, y: art.muzzle.y - art.grip.y };
 	const localAngle = Math.atan2(muzzle.y * .75, muzzle.x * (right ? 1 : -1)) * 180 / Math.PI;
 	const bearing = slung ? right ? -80 : -100 : Number.isFinite(options.aim) ? options.aim! : hand.angle;
+	const bodyAngle = Number.isFinite(options.bodyAngle) ? options.bodyAngle! : 0;
+	const bodyScale = (value: number | undefined) => Number.isFinite(value) && Math.abs(value!) > 1e-6 ? value! : 1;
+	// The animated body can be compressed or mirrored. Transform the intended
+	// world-space bearing through its inverse rotation and scale before aiming.
+	const target = (bearing - bodyAngle) * Math.PI / 180;
+	const parentBearing = Math.atan2(Math.sin(target) / bodyScale(options.bodyScale?.y), Math.cos(target) / bodyScale(options.bodyScale?.x)) * 180 / Math.PI;
 	return {
 		origin: { x: art.grip.x / art.width, y: art.grip.y / art.height },
 		position: { x: slung ? torso.x + (right ? -1.5 : 1.5) : hand.x + torso.x, y: slung ? torso.y + 1 : hand.y + torso.y + 28 },
 		scale: { x: scale * (right ? 1 : -1), y: scale * .75 },
-		angle: bearing - localAngle - (Number.isFinite(options.bodyAngle) ? options.bodyAngle! : 0),
+		angle: parentBearing - localAngle,
 		muzzle,
 		behind: !slung && hand.behind,
 	};

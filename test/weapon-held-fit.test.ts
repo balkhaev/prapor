@@ -5,6 +5,9 @@ import type { WeaponInstance } from "../src/game/engine";
 import { FACTORY_KITS, MODULE_BY_ID, MODULE_MODELS, RECEIVER_INFO, type ModuleSlot } from "../src/game/modules";
 import { SCAV_DIRECTIONS, scavAttachment } from "../src/scav-isometric";
 import { weaponCarryTransform, weaponGripAnchor, type WeaponAttachmentPoint } from "../src/weapon-attachment";
+import type Phaser from "phaser";
+
+const TransformMatrix = require("phaser/src/gameobjects/components/TransformMatrix.js") as new () => Phaser.GameObjects.Components.TransformMatrix;
 
 const factory = (weaponId: string): WeaponInstance => ({ id: "held-fit", weaponId, durability: 100, foundAt: 0, attachments: { optic: 0, magazine: 0, stock: 0 }, modules: Object.fromEntries(Object.entries(FACTORY_KITS[weaponId]!).map(([slot, modelId]) => [slot, { id: slot, modelId, durability: 100, foundAt: 0 }])) });
 const install = (gun: WeaponInstance, modelId: string) => { const model = MODULE_BY_ID[modelId]!; gun.modules[model.slot] = { id: modelId, modelId, durability: 100, foundAt: 0 }; };
@@ -137,6 +140,26 @@ describe("weapon grip calibration and carried assembly", () => {
 		}
 	});
 
+	test("real Phaser parent matrices preserve aim while actors crouch, lean, stretch or mirror", () => {
+		for (const definition of WEAPONS) for (const direction of SCAV_DIRECTIONS) {
+			const art = weaponActorArt(factory(definition.id));
+			for (const bodyAngle of [-9, -.55, 0, .55, 17]) for (const bodyScale of [{ x: 1, y: .94 }, { x: 1, y: .991 }, { x: 1.2, y: .83 }, { x: -1, y: .94 }]) {
+				for (const aim of [-135, -63, -45, 0, 45, 63, 135, 180]) {
+					const placement = weaponCarryTransform(art, definition.category, direction, { working: true, aim, bodyAngle, bodyScale });
+					const child = new TransformMatrix().applyITRS(placement.position.x, placement.position.y, placement.angle * Math.PI / 180, placement.scale.x, placement.scale.y);
+					const parent = new TransformMatrix().applyITRS(7, -3, bodyAngle * Math.PI / 180, bodyScale.x, bodyScale.y), world = new TransformMatrix();
+					parent.multiply(child, world);
+					const hand = world.transformPoint(0, 0), muzzle = world.transformPoint(placement.muzzle.x, placement.muzzle.y);
+					const desired = aim * Math.PI / 180, dx = muzzle.x - hand.x, dy = muzzle.y - hand.y;
+					expect(dx * Math.cos(desired) + dy * Math.sin(desired)).toBeGreaterThan(0);
+					expect((dx * Math.sin(desired) - dy * Math.cos(desired)) / Math.hypot(dx, dy), `${definition.id}/${direction}`).toBeCloseTo(0, 5);
+					const bodyHand = parent.transformPoint(placement.position.x, placement.position.y);
+					expect(hand.x).toBeCloseTo(bodyHand.x, 4); expect(hand.y).toBeCloseTo(bodyHand.y, 4);
+				}
+			}
+		}
+	});
+
 	test("long barrels and suppressors extend away from the same hand without shrinking modules", () => {
 		for (const id of ["pm", "ak74", "m4a1", "p90", "mp7", "aug", "m870", "awm"]) {
 			const gun = factory(id), definition = WEAPONS.find((item) => item.id === id)!, info = RECEIVER_INFO[id]!;
@@ -154,6 +177,7 @@ describe("weapon grip calibration and carried assembly", () => {
 	test("invalid animation measurements retain a finite resting carry", () => {
 		const art = weaponActorArt(factory("mp7"));
 		expect(weaponCarryTransform(art, "smg", "ne", { aim: NaN, bodyAngle: Infinity, torso: { x: NaN, y: 0 } })).toEqual(weaponCarryTransform(art, "smg", "ne"));
+		expect(weaponCarryTransform(art, "smg", "ne", { bodyScale: { x: 0, y: NaN } })).toEqual(weaponCarryTransform(art, "smg", "ne"));
 		expect(weaponGripAnchor("toString")).toEqual({ x: 351, y: 188 });
 	});
 });

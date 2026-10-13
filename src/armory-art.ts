@@ -6,7 +6,7 @@ import { createArmorySurface, surfaceDetail, type ArmoryMaterial as Material, ty
 import { modularWeaponRasterDefs, modularWeaponRasterPart } from "./modular-weapon-art";
 import { weaponGripAnchor } from "./weapon-attachment";
 type Bounds = readonly [number, number, number, number];
-type Geometry = { outline: string; detail: string; material: Material; bounds: Bounds; fillRule?: "evenodd" | "nonzero"; muzzle?: { x: number; y: number }; offset?: { x: number; y: number } };
+type Geometry = { outline: string; detail: string; material: Material; bounds: Bounds; fillRule?: "evenodd" | "nonzero"; muzzle?: { x: number; y: number }; offset?: { x: number; y: number }; railFootY?: number };
 type Profile = {
 	id: string; category: WeaponCategory; wood: boolean; bolt: boolean;
 	integral: boolean; pump: boolean; compact: boolean; barrelEnd: number;
@@ -229,7 +229,7 @@ function modernMagazineGeometry(gun: Profile, appearance: string, paint: Paint):
 
 /** Traditional wrists and thumbholes need a real lower chassis when replaced. */
 function classicUpgradeStockGeometry(gun: Profile, appearance: string, paint: Paint): Geometry | undefined {
-	if (!["sks", "mosin", "svd", "vss", "m870"].includes(gun.id) || !["tactical", "light", "precision", "skeleton", "folding"].includes(appearance)) return undefined;
+	if (!["sks", "mosin", "svd", "vss", "asval", "m870"].includes(gun.id) || !["tactical", "light", "precision", "skeleton", "folding"].includes(appearance)) return undefined;
 	const precision = appearance === "precision", wire = appearance === "folding", skeleton = appearance === "skeleton";
 	const outline = wire ? "M116 147h196l15 10v14H139v48h-22zM139 166h169l-164 32v-7l144-26H139z"
 		: skeleton ? "M108 143h83l26-8h103v32H216l-25 58h-77zM133 161v43h40l21-43z"
@@ -294,11 +294,11 @@ function receiverGeometry(gun: Profile, paint: Paint): Geometry {
 	if (gun.integral) {
 		const val = gun.id === "asval";
 		return { material: "dark", bounds: [317, 103, 183, 119], outline: val
-			? "M323 124q10-15 25-15h109l34 16v39h-113l-14 54h-37l12-54h-16z"
+			? "M323 124q10-15 25-15h109l34 16v39H323z"
 			: "M322 124q10-17 29-17h102l38 18v37H337l-15-14z",
 			detail: `${seam("M348 111h106l33 17", true)}${port(402, 128, 63, 19)}<path data-mechanism="charging-handle" d="M448 136h41v7h-21l-9 6h-10z" fill="#70797d"/>
 			${seam("M328 150h73M330 158h158")}${triggerGuard(374, 166, 43, 23)}${selector(347, 149, 35)}${fastener(331, 135, 2.5)}${fastener(476, 154, 2.6)}
-			${val ? `<path d="M341 171h29l-11 42h-26z" fill="${paint.rubber}"/>${checkering(341, 181, 23, 25)}<path d="M319 130h10v24h-10z" fill="${paint.steel}"/>${fastener(324, 137, 3)}` : `<path data-mechanism="stock-tang" d="M324 151h30v9h-30z" fill="${paint.steel}"/>${fastener(343, 155, 2.4)}${seam("M335 112v36")}`}
+			${val ? `<path d="M319 130h10v24h-10z" fill="${paint.steel}"/>${fastener(324, 137, 3)}` : `<path data-mechanism="stock-tang" d="M324 151h30v9h-30z" fill="${paint.steel}"/>${fastener(343, 155, 2.4)}${seam("M335 112v36")}`}
 			<path data-mechanism="rear-sight" d="M477 114h15v10h-15z" fill="#252c31"/>` };
 	}
 	if (gun.id === "svd") return { material: "dark", bounds: [316, 104, 185, 112], outline: "M323 121l23-12h114l31 17v35H324z",
@@ -643,7 +643,7 @@ function fittedOpticProportions(shape: Geometry, appearance: string): Geometry {
 	});
 	const detail = shape.detail.replace(/\bd="([^"]+)"/g, (_, source: string) => `d="${path(source)}"`).replace(/\b(x|y|cx|cy|width|height|r|stroke-width)="(-?[\d.]+)"/g, (_, attribute: string, value: string) => `${attribute}="${["x", "cx"].includes(attribute) ? coordinate(Number(value), "x") : ["y", "cy"].includes(attribute) ? coordinate(Number(value), "y") : Number((Number(value) * scale).toFixed(3))}"`);
 	const [x, y, width, height] = shape.bounds;
-	return { ...shape, outline: path(shape.outline), detail, bounds: [coordinate(x, "x"), coordinate(y, "y"), width * scale, height * scale] };
+	return { ...shape, outline: path(shape.outline), detail, bounds: [coordinate(x, "x"), coordinate(y, "y"), width * scale, height * scale], railFootY: coordinate(appearance === "reflex" ? 108 : appearance === "scope" ? 111 : 110, "y") };
 }
 
 function geometry(slot: ModuleSlot, appearance: string, gun: Profile, paint: Paint): Geometry {
@@ -653,7 +653,7 @@ function geometry(slot: ModuleSlot, appearance: string, gun: Profile, paint: Pai
 	if (slot === "stock" && gun.id === "asval" && appearance === "factory") {
 		shape.outline += "M339 164h39l-14 54h-37l12-54z";
 		shape.bounds = [109, 142, 273, 85];
-		shape.detail += `<path data-hardware="val-folding-stock-grip" d="M341 171h29l-11 42h-26z" fill="${paint.rubber}"/>${checkering(341, 181, 23, 25)}`;
+		shape.detail += `<path data-hardware="val-folding-stock-grip" d="M339 164h39l-14 54h-37l12-54z" fill="${paint.dark}"/><path d="M341 171h29l-11 42h-26z" fill="${paint.rubber}"/>${checkering(341, 181, 23, 25)}`;
 	}
 	const detailed = { ...shape, detail: shape.detail + fittedHardware(slot, appearance, gun, paint) };
 	return slot === "optic" ? fittedOpticProportions(detailed, appearance) : detailed;
@@ -703,7 +703,9 @@ function installedGeometry(slot: ModuleSlot, model: ModuleModel | undefined, gun
 	}
 	if (slot === "optic" && model?.requiresMount === "rail-top" && mount?.appearance.startsWith("dovetail-")) {
 		const top: Record<string, number> = { "dovetail-low": 95, "dovetail-high": 77, "dovetail-qd": 91, "dovetail-bridge": 85 };
-		return positioned(shape, mount.appearance === "dovetail-bridge" ? 35 : 0, (top[mount.appearance] ?? 108) - 110);
+		// Both optical rings must sit inside the adapter's actual rail. The
+		// short adapters begin at x412, beyond the receiver's ordinary optic foot.
+		return positioned(shape, mount.appearance === "dovetail-bridge" ? 35 : 33, (top[mount.appearance] ?? 108) - (shape.railFootY ?? 110));
 	}
 	if (slot === "optic" && gun.id === "p90") return positioned(shape, 130, 0);
 	if (slot === "optic" && gun.id === "ash12") return positioned(shape, 0, -25);
