@@ -53,6 +53,7 @@ describe('loot value, scarcity and purposeful searches', () => {
 			}
 		}
 		expect(getLootHuntOptions('__proto__')).toEqual([]); expect(getLootDecisionProfile('__proto__')).toBeNull();
+		expect(getLootHuntOptions('military-cpu', 26)).toEqual([]);
 	});
 	test('value comparisons use exact fees and the complete barter bundle, not one ingredient', () => {
 		const cpu = getLootDecisionProfile('military-cpu')!;

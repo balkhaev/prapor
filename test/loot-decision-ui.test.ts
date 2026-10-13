@@ -28,6 +28,12 @@ test('hunt options are exact conditional checkpoint chances and lock inaccessibl
   for(const option of options.slice(0,3)){expect(html).toContain(chanceLabel(option.checkpointChance));expect(html).toContain(chanceLabel(option.pickChance));expect(html).toContain(`data-hunt-map="${option.mapId}"`);}
   expect(html).toContain('успешно пройденном этапе');expect(html).toContain('это не шанс возвращения с трофеем');expect(rendered.every(button=>button.includes('disabled'))).toBe(true);
   state.level=10;expect(lootDecisionPanel(state,modelId).match(/data-action="flea-hunt"[^>]*>/g)!.every(button=>!button.includes('disabled'))).toBe(true);
+  state.level=1;state.money=10_000;
+  const early=lootDecisionPanel(state,'duct-tape').match(/data-action="flea-hunt"[^>]*>/g)!;
+  expect(early[0]).toContain('data-hunt-map="courtyard"');expect(early[0]).not.toContain('disabled');
+  state.level=3;
+  const gemstone=lootDecisionPanel(state,'gemstone').match(/data-action="flea-hunt"[^>]*>/g)!;
+  expect(gemstone[0]).toContain('data-hunt-map="forest"');expect(gemstone[0]).not.toContain('disabled');expect(gemstone.some(button=>button.includes('disabled'))).toBe(true);
 });
 test('hunt selection accepts only actual reachable named-loot routes and never changes paid game state',()=>{
   const state=createGame(NOW),modelId='pliers',route=getLootHuntOptions(modelId).find(route=>route.depth===1)!,selection={modelId,mapId:route.mapId,branch:route.branch,depth:route.depth},before=saveGame(state);

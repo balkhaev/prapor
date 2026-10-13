@@ -13,7 +13,7 @@ export interface LootHuntOption {
 }
 const hunts = new Map<string, readonly LootHuntOption[]>();
 export function getLootHuntOptions(modelId: string, catalogVersion = LOOT_BALANCE_VERSION): readonly LootHuntOption[] {
-	if (!Object.hasOwn(LOOT_MODEL_BY_ID, modelId) || !Number.isInteger(catalogVersion) || catalogVersion < 16) return [];
+	if (!Object.hasOwn(LOOT_MODEL_BY_ID, modelId) || !Number.isInteger(catalogVersion) || catalogVersion < 16 || catalogVersion > LOOT_BALANCE_VERSION) return [];
 	const key = `${catalogVersion}:${modelId}`, cached = hunts.get(key); if (cached) return cached;
 	const options: LootHuntOption[] = [];
 	for (const map of MAPS) for (const depth of [1, 2, 3]) for (const branch of ['scavenge', 'combat', 'recon'] as const) {
