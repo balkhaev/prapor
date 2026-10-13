@@ -7,7 +7,7 @@ export type WeaponAttachmentPoint = { x: number; y: number };
 const gripAnchors: Record<string, readonly [number, number]> = {
 	pm: [367, 185], tt: [367, 185], toz: [336, 177], mp133: [348, 188], pp91: [349, 188],
 	sks: [305, 163], ak74: [351, 188], saiga: [351, 188], vityaz: [351, 188], mosin: [305, 163],
-	akm: [351, 188], vss: [261, 191], rpk: [351, 188], svd: [261, 191], asval: [351, 188], pkp: [351, 188],
+	akm: [351, 188], vss: [325, 192], rpk: [351, 188], svd: [261, 191], asval: [325, 192], pkp: [351, 188],
 	m4a1: [349, 189], hk416: [349, 189], p90: [376, 190], mp7: [356, 187], ump45: [349, 189],
 	m1911: [369, 190], mcx: [349, 189], scarh: [349, 189], trg42: [349, 188],
 	g36: [350, 188], aug: [442, 213], fal: [350, 189], sr25: [350, 190], vector: [349, 190],
@@ -15,13 +15,9 @@ const gripAnchors: Record<string, readonly [number, number]> = {
 	vpo209: [352, 190], svdk: [353, 189], awm: [350, 190], m870: [306, 161],
 };
 
-/** A traditional wrist or thumbhole changes with its stock; receiver grips stay fixed. */
-export function weaponGripAnchor(weaponId: string, stockAppearance = "factory", stockWeaponId?: string): WeaponAttachmentPoint {
-	if (["vss", "asval"].includes(weaponId) && stockAppearance === "factory") {
-		if (stockWeaponId === "asval") return { x: 351, y: 188 };
-		if (stockWeaponId === "vss") return { x: 261, y: 191 };
-	}
-	if (["sks", "mosin", "vss", "asval", "svd", "m870"].includes(weaponId)) {
+/** VAL-family furniture shares one front grip interface, including borrowed factory stocks. */
+export function weaponGripAnchor(weaponId: string, stockAppearance = "factory", _stockWeaponId?: string): WeaponAttachmentPoint {
+	if (["sks", "mosin", "svd", "m870"].includes(weaponId)) {
 		if (["tactical", "light", "precision", "skeleton", "folding"].includes(stockAppearance)) return { x: 335, y: 194 };
 		if (stockAppearance === "padded") return { x: 305, y: 163 };
 	}

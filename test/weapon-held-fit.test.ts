@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { weaponActorArt } from "../src/armory-art";
 import { WEAPONS } from "../src/game/data";
-import type { WeaponInstance } from "../src/game/engine";
+import { getWeaponBuildIssues, type WeaponInstance } from "../src/game/engine";
 import { FACTORY_KITS, MODULE_BY_ID, MODULE_MODELS, RECEIVER_INFO, type ModuleSlot } from "../src/game/modules";
 import { SCAV_DIRECTIONS, scavAttachment } from "../src/scav-isometric";
 import { weaponCarryTransform, weaponGripAnchor, type WeaponAttachmentPoint } from "../src/weapon-attachment";
@@ -111,6 +111,28 @@ describe("weapon grip calibration and carried assembly", () => {
 			}
 		}
 		expect(outside).toEqual([]);
+	});
+
+	test("VSS and VAL hold the stock furniture's shared front grip across every factory donor and upgrade", () => {
+		const stocks = MODULE_MODELS.filter(model => model.slot === "stock" && model.platforms.includes("val") && (model.calibers.includes("*") || model.calibers.includes("9x39")));
+		expect(stocks.some(model => model.id === "factory-vss-stock")).toBe(true);
+		expect(stocks.some(model => model.id === "factory-asval-stock")).toBe(true);
+		for (const weaponId of ["vss", "asval"]) for (const stock of stocks) {
+			const reference = weaponActorArt(factory(weaponId));
+			const gun = factory(weaponId); install(gun, stock.id);
+			expect(getWeaponBuildIssues(gun), `${weaponId}/${stock.id}`).toEqual([]);
+			const art = weaponActorArt(gun), [left, top] = art.svg.match(/viewBox="([^"]+)"/)![1]!.split(" ").map(Number);
+			const grip = { x: art.grip.x + left!, y: art.grip.y + top! };
+			expect(grip, `${weaponId}/${stock.id}`).toEqual({ x: 325, y: 192 });
+			// The receiver carries no substitute grip. The hand contacts the real
+			// fitted furniture, ahead of the buttstock's openings and behind the guard.
+			expect(onFilledSurface(part(art.svg, "stock"), grip), `${weaponId}/${stock.id}`).toBe(true);
+			expect(art.muzzle.x - art.grip.x).toBeGreaterThan(0);
+			// A longer butt or another donor stock grows behind the hand; it must
+			// neither shrink the receiver nor displace the fitted suppressor.
+			expect(art.referenceWidth).toBe(reference.referenceWidth);
+			expect({ x: art.muzzle.x - art.grip.x, y: art.muzzle.y - art.grip.y }).toEqual({ x: reference.muzzle.x - reference.grip.x, y: reference.muzzle.y - reference.grip.y });
+		}
 	});
 
 	test("hands, mirrored barrels and aim bearings stay aligned in every facing and pose", () => {
