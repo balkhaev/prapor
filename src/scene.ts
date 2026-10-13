@@ -1,5 +1,6 @@
 import Phaser from "phaser";
 import { getRaidPhase, type Raid, type RaidReport, type RoomInstance, type WeaponInstance, getShelterSites, getShelterFrontier, type ShelterSite, type ShelterExpansion, ROOM_DEFINITIONS, getRoomWorkerCapacity } from "./game/engine";
+import { getRoomFootprint, getShelterRoomAt } from "./game/shelter";
 import { type BaseRoom } from "./game/data";
 import type { GearItem, Loadout } from "./game/systems";
 import { ScavEquipment } from "./scav-equipment";
@@ -7,12 +8,12 @@ import { SCAV_EQUIPMENT_ATLASES } from "./scav-gear-art";
 import { getScavVisualLoadout } from "./scav-loadout";
 import { advanceShelterRoute, clientToShelterPoint } from "./shelter-motion";
 import { clampShelterCamera, getMinShelterZoom, shelterOverviewCamera, focusShelterRect, panShelterCamera, projectShelterRect, resizeShelterCamera, shelterViewportForSize, viewportToShelter, zoomShelterCamera, type ShelterCamera, type ShelterRect, type ShelterViewport, type ClientRect } from "./shelter-camera";
-import { getShelterLayoutCell, getShelterCorridorSegments, getShelterWalkingRoute, getShelterWorldBounds } from "./shelter-layout";
+import { getShelterLayoutCell, getShelterTerritoryCell, getShelterCorridorSegments, getShelterWalkingRoute, getShelterWorldBounds, type ShelterLayoutBuilding } from "./shelter-layout";
 import { advanceScavAnimation, createScavAnimation, type ScavAnimationState } from "./shelter-animation";
 import { SCAV_DIRECTIONS, SCAV_ORIGIN, SCAV_REFERENCE_HEIGHT, scavAppearance, scavAttachment, scavAvailableAppearance, scavDirection, scavFrame, scavPreloadAppearances, scavTexture, scavTorsoAnchor, scavHeadAnchor, type ScavDirection, type ScavPose } from "./scav-isometric";
 import { advanceShelterStationClock, getShelterProductionPresentation, type ProductionPresentation } from "./shelter-production";
-import { projectShelterPoint, unprojectShelterPoint, projectShelterBounds, shelterRoomPolygon, shelterRoomPosition } from "./shelter-isometric";
-import { paintIsometricRoom, paintIsometricProduction } from "./shelter-isometric-art";
+import { projectShelterPoint, unprojectShelterPoint, projectShelterBounds, shelterRoomPolygon, shelterRoomPosition, shelterRoomRect } from "./shelter-isometric";
+import { paintIsometricRoom, paintIsometricLand, paintIsometricProduction } from "./shelter-isometric-art";
 import { RaidStreetRenderer } from "./raid-scene";
 
 export interface WorldSnapshot {
@@ -107,6 +108,15 @@ export interface WorldInteractions {
 	onShelterSite?: (column: number, row: number) => void;
 }
 export interface WorldCameraState extends ShelterCamera { panMode: boolean; view: WorldView; following?: boolean; minZoom?: number; maxZoom?: number }
+export interface BuildingPlacement {
+	type?: string;
+	roomId?: string;
+	rotation: 0 | 1;
+	width: number;
+	height: number;
+	column?: number;
+	row?: number;
+}
 export interface WorldController {
 	game: Phaser.Game;
 	setView: (view: View) => void;
@@ -126,6 +136,7 @@ export interface WorldController {
 	setPanMode: (enabled: boolean) => void;
 	focusRoom: (id: string) => boolean;
 	focusBase: () => void;
+	setBuildingPlacement: (selection: BuildingPlacement | null) => void;
 	projectShelterRect: (rect: ShelterRect) => (ClientRect & { visible: boolean }) | null;
 }
 type ShelterCell = {
@@ -167,9 +178,11 @@ type RaidMarker = {
 };
 const WIDTH = 840;
 const HEIGHT = 520;
-const ROOM_WIDTH = 172;
-const ROOM_HEIGHT = 100;
 const cellPosition = shelterRoomPosition;
+const roomRect = (room: RoomInstance) => { const footprint = getRoomFootprint(room); return shelterRoomRect(room.column, room.row, footprint.width, footprint.height); };
+const roomBuildings = (rooms: readonly RoomInstance[]): ShelterLayoutBuilding[] => rooms.map((room) => ({ column: room.column, row: room.row, ...getRoomFootprint(room) }));
+const isRoomOrigin = (cell: ShelterCell) => !cell.room || cell.room.column === cell.column && cell.room.row === cell.row;
+const cellPolygon = (cell: ShelterCell) => cell.room ? shelterRoomPolygon(cell.room.column, cell.room.row, getRoomFootprint(cell.room).width, getRoomFootprint(cell.room).height) : shelterRoomPolygon(cell.column, cell.row);
 const ROOM_STYLE: Record<string, { label: string; color: number; light: number; wall: number }> = {
 	workshop: { label: "МАСТЕРСКАЯ", color: 0xd7a368, light: 0xffcc88, wall: 0x594438 },
 	ammo: { label: "ПАТРОНЫ", color: 0xd4d889, light: 0xf1e4a5, wall: 0x515038 },
@@ -178,6 +191,7 @@ const ROOM_STYLE: Record<string, { label: string; color: number; light: number; 
 	radio: { label: "РАДИО", color: 0x8cd4d5, light: 0xace9d7, wall: 0x294b50 },
 	storage: { label: "СКЛАД", color: 0xb6c694, light: 0xe6e9b3, wall: 0x465546 },
 	dormitory: { label: "ЖИЛЬЁ", color: 0xd0b8ea, light: 0xf1d9f4, wall: 0x55495b },
+	hangar: { label: "АНГАР", color: 0x87a0ad, light: 0xb0cfda, wall: 0x405961 },
 };
 const blend = (a: number, b: number, amount: number): number => {
 	const channel = (shift: number) => Math.round(((a >> shift) & 255) * (1 - amount) + ((b >> shift) & 255) * amount);
@@ -284,6 +298,9 @@ export function createWorld(
 		private shelterCaption!: Phaser.GameObjects.Text;
 		private ambient!: Phaser.GameObjects.Graphics;
 		private dragGhost!: Phaser.GameObjects.Graphics;
+		private placementGhost!: Phaser.GameObjects.Graphics;
+		private buildingPlacement: BuildingPlacement | null = null;
+		private placementHover: ShelterSite | null = null;
 		private drag: DragSession | null = null;
 		private gesture: CanvasGesture | null = null;
 		private nativeEvents = new AbortController();
@@ -460,10 +477,10 @@ export function createWorld(
 					: goal.startsWith("idle-home:") || goal.startsWith("visit:") && state.shelter?.rooms.some((room) => goal === `visit:${saved.visit}:${room.id}`);
 				if (!allowed) continue;
 				const destination = slot.assignment ? slot.anchor : anchor;
-				const route = getShelterWalkingRoute(at, destination, sites);
+				const route = getShelterWalkingRoute(at, destination, sites, roomBuildings(state.shelter?.rooms ?? []));
 				if (!route.length && Math.hypot(at.x - destination.x, at.y - destination.y) > .01) continue;
 				const cell = getShelterLayoutCell(at), onFloor = cell && sites.some((p) => p.column === cell.column && p.row === cell.row);
-				const onCorridor = getShelterCorridorSegments(sites).some(({from,to}) => Math.abs(from.x - to.x) < .001 ? Math.abs(at.x - from.x) < .001 && at.y >= Math.min(from.y,to.y) && at.y <= Math.max(from.y,to.y) : Math.abs(at.y - from.y) < .001 && at.x >= Math.min(from.x,to.x) && at.x <= Math.max(from.x,to.x));
+				const onCorridor = getShelterCorridorSegments(sites, roomBuildings(state.shelter?.rooms ?? [])).some(({from,to}) => Math.abs(from.x - to.x) < .001 ? Math.abs(at.x - from.x) < .001 && at.y >= Math.min(from.y,to.y) && at.y <= Math.max(from.y,to.y) : Math.abs(at.y - from.y) < .001 && at.x >= Math.min(from.x,to.x) && at.x <= Math.max(from.x,to.x));
 				const onStreet = at.y >= 38 && at.y <= 132 && at.x >= Math.min(...sites.map((p) => cellPosition(p.column,p.row).x)) - 40 && at.x <= Math.max(...sites.map((p) => cellPosition(p.column,p.row).x)) + 212;
 				const onDoor = sites.some((p) => { const origin = cellPosition(p.column, p.row); return Math.abs(at.x - origin.x - 86) < .001 && at.y >= origin.y + 100 && at.y <= origin.y + 116; });
 				if (!onFloor && !onCorridor && !onStreet && !onDoor) continue;
@@ -537,12 +554,12 @@ export function createWorld(
 		setPanMode(enabled: boolean): void { this.panMode = Boolean(enabled); this.cancelPan(); if (enabled) this.cancelScavDrag(); this.applyCamera(); }
 		focusBase(): void {
 			if (!this.cameraAllowed() || requestedView !== "base") return;
-			const rooms = snapshot().shelter?.rooms ?? [];
-			if (!rooms.length) { this.resetCamera(); return; }
-			const bounds = rooms.map((room) => projectShelterBounds({ ...cellPosition(room.column, room.row), width: ROOM_WIDTH, height: ROOM_HEIGHT }));
+			const sites = getShelterSites(snapshot().shelter ?? { rooms: [] });
+			if (!sites.length) { this.resetCamera(); return; }
+			const bounds = sites.map((site) => projectShelterBounds(shelterRoomRect(site.column, site.row)));
 			const left = Math.min(...bounds.map((p) => p.x)), top = Math.min(...bounds.map((p) => p.y)) - 42;
 			const width = Math.max(...bounds.map((p) => p.x + p.width)) - left, height = Math.max(...bounds.map((p) => p.y + p.height)) - top;
-			const zoom = Math.min(2, Math.max(1.15, Math.min(this.viewport.width / (width + 96), this.viewport.height / (height + 100))));
+			const zoom = Math.min(2, this.viewport.width / (width + 96), this.viewport.height / (height + 100));
 			this.viewCamera = focusShelterRect(this.viewCamera, { x: left, y: top, width, height }, zoom, this.viewport, this.worldBounds);
 			this.panMode = false; this.applyCamera();
 		}
@@ -551,9 +568,9 @@ export function createWorld(
 			if (!this.baseLayer || requestedView !== "base" || document.hidden) return false;
 			const room = snapshot().shelter?.rooms.find((candidate) => candidate.id === id);
 			if (!room) return false;
-			const p = cellPosition(room.column, room.row);
-			const bounds = projectShelterBounds({ ...p, width: ROOM_WIDTH, height: ROOM_HEIGHT });
-			this.viewCamera = focusShelterRect(this.viewCamera, { ...bounds, y: bounds.y - 24, height: bounds.height + 24 }, 2.5, this.viewport, this.worldBounds);
+			const bounds = projectShelterBounds(roomRect(room));
+			const zoom = Math.min(2.5, this.viewport.width / (bounds.width + 80), this.viewport.height / (bounds.height + 80));
+			this.viewCamera = focusShelterRect(this.viewCamera, { ...bounds, y: bounds.y - 24, height: bounds.height + 24 }, zoom, this.viewport, this.worldBounds);
 			if (this.drag) {
 				this.drag.point = null; this.drag.roomId = null; this.drag.cellKey = null;
 				this.dragGhost.clear();
@@ -564,6 +581,37 @@ export function createWorld(
 
 		projectShelterRect(rect: ShelterRect): (ClientRect & { visible: boolean }) | null {
 			return this.baseLayer && requestedView === "base" ? projectShelterRect(projectShelterBounds(rect), this.viewCamera, this.game.canvas.getBoundingClientRect(), this.viewport, this.worldBounds) : null;
+		}
+
+		setBuildingPlacement(selection: BuildingPlacement | null): void {
+			this.buildingPlacement = selection ? { ...selection } : null;
+			if (!selection) this.placementHover = null;
+			this.paintBuildingPlacement();
+		}
+
+		private paintBuildingPlacement(): void {
+			if (!this.placementGhost) return;
+			this.placementGhost.clear();
+			const placement = this.buildingPlacement;
+			if (!placement || requestedView !== "base") return;
+			const state = snapshot(), shelter = state.shelter ?? { rooms: [] }, sites = getShelterSites(shelter);
+			const paint = (site: ShelterSite, pinned: boolean) => {
+				let valid = true;
+				for (let column = site.column; column < site.column + placement.width; column++) for (let row = site.row; row < site.row + placement.height; row++) {
+					const occupant = getShelterRoomAt(shelter, column, row);
+					if (!sites.some((owned) => owned.column === column && owned.row === row) || occupant && occupant.id !== placement.roomId) valid = false;
+				}
+				const corners = shelterRoomPolygon(site.column, site.row, placement.width, placement.height), tint = valid ? 0xb6eaa0 : 0xed997e;
+				polygon(this.placementGhost, corners, tint, pinned ? .15 : .22);
+				line(this.placementGhost, [...corners, corners[0]!], tint, pinned ? 2 : 3, pinned ? .6 : 1);
+				if (!pinned) {
+					const elevated = corners.map((point) => ({ x: point.x, y: point.y - 20 }));
+					line(this.placementGhost, [...elevated, elevated[0]!], tint, 1, .65);
+					for (let i = 0; i < corners.length; i++) line(this.placementGhost, [corners[i]!, elevated[i]!], tint, 1, .6);
+				}
+			};
+			if (placement.column !== undefined && placement.row !== undefined) paint({ column: placement.column, row: placement.row }, true);
+			if (this.placementHover && (this.placementHover.column !== placement.column || this.placementHover.row !== placement.row)) paint(this.placementHover, false);
 		}
 
 		private clientWorld(clientX: number, clientY: number): Point | null {
@@ -611,7 +659,7 @@ export function createWorld(
 			if (scav.status === "raiding" || scav.health < 25) return scav.status === "raiding" ? "Боец в рейде" : "Сначала вылечи бойца";
 			if (!room) return "Комната недоступна";
 			if (room.status !== "ready") return "Дождись окончания работ";
-			if (room.type === "storage" || room.type === "dormitory") return "Здесь нет рабочих мест";
+			if (!ROOM_DEFINITIONS[room.type].production) return "Здесь нет рабочих мест";
 			return "Назначение недоступно";
 		}
 
@@ -632,8 +680,8 @@ export function createWorld(
 			const state = snapshot();
 			if (requestedView !== "base" || document.hidden || interactions.canDrag?.() === false || state.shelter !== drag.shelter || state.scavs?.find((scav) => scav.id === drag.scavId) !== drag.scav || drag.scav.status === "raiding" || drag.scav.health < 25) { this.cancelScavDrag(); return; }
 			const point = this.clientWorld(clientX, clientY);
-			const site = point ? getShelterLayoutCell(point) : null;
-			const room = site ? state.shelter?.rooms.find((candidate) => candidate.column === site.column && candidate.row === site.row) : undefined;
+			const site = point ? getShelterTerritoryCell(point) : null;
+			const room = site ? getShelterRoomAt(state.shelter ?? { rooms: [] }, site.column, site.row) : undefined;
 			const roomId = room?.id ?? null;
 			const reason = roomId ? this.assignmentReason(drag.scavId, roomId) : site ? "Сначала построй комнату" : point ? "Перенеси бойца в производственную комнату" : "Отпусти над комнатой убежища";
 			const changed = drag.roomId !== roomId || drag.reason !== reason;
@@ -654,8 +702,8 @@ export function createWorld(
 			const drag = this.drag;
 			if (!drag) { this.clearGesture(); return; }
 			const state = snapshot();
-			const site = drag.point ? getShelterLayoutCell(drag.point) : null;
-			const room = site ? state.shelter?.rooms.find((candidate) => candidate.column === site.column && candidate.row === site.row) : undefined;
+			const site = drag.point ? getShelterTerritoryCell(drag.point) : null;
+			const room = site ? getShelterRoomAt(state.shelter ?? { rooms: [] }, site.column, site.row) : undefined;
 			const allowed = requestedView === "base" && !document.hidden && interactions.canDrag?.() !== false && state.shelter === drag.shelter && state.scavs?.find((scav) => scav.id === drag.scavId) === drag.scav && room?.id === drag.roomId && this.assignmentReason(drag.scavId, room.id) === null;
 			this.cancelScavDrag();
 			if (allowed && room) interactions.onAssignScav?.(drag.scavId, room.id);
@@ -703,6 +751,11 @@ export function createWorld(
 				if (event.button !== 0 || this.gesture || this.drag || interactions.canInteract?.() === false) return;
 				const point = this.clientWorld(event.clientX, event.clientY);
 				if (!point) return;
+				if (this.buildingPlacement) {
+					const site = getShelterTerritoryCell(point);
+					if (site) { event.preventDefault(); if (interactions.onBuildSite) interactions.onBuildSite(site); else interactions.onShelterSite?.(site.column, site.row); }
+					return;
+				}
 				const visual = projectShelterPoint(point);
 				const hit = [...this.scavs].filter(([, slot]) => slot.actor.visible && Math.abs(slot.actor.x - visual.x) <= 16 * slot.actor.scaleX && visual.y >= slot.actor.y - 44 * slot.actor.scaleY && visual.y <= slot.actor.y + 2).sort((a, b) => Math.hypot(a[1].actor.x - visual.x, a[1].actor.y - 21 - visual.y) - Math.hypot(b[1].actor.x - visual.x, b[1].actor.y - 21 - visual.y))[0];
 				if (!hit) return;
@@ -710,6 +763,11 @@ export function createWorld(
 				canvas.setPointerCapture(event.pointerId);
 			}, options);
 			canvas.addEventListener("pointermove", (event) => {
+				if (this.buildingPlacement && requestedView === "base") {
+					const point = this.clientWorld(event.clientX, event.clientY);
+					this.placementHover = point ? getShelterTerritoryCell(point) : null;
+					this.paintBuildingPlacement();
+				}
 				if (this.cameraTouches.has(event.pointerId)) this.cameraTouches.set(event.pointerId, { x: event.clientX, y: event.clientY });
 				const pinch = this.pinchGesture;
 				if (pinch && pinch.ids.includes(event.pointerId)) {
@@ -751,10 +809,12 @@ export function createWorld(
 				if (tapped && requestedView === "base" && interactions.canInteract?.() !== false && this.clientWorld(event.clientX, event.clientY)) interactions.onScav?.(gesture.scavId);
 			}, options);
 			canvas.addEventListener("pointercancel", () => { this.cancelScavDrag(); this.cancelCameraGesture(); }, options);
+			canvas.addEventListener("pointerleave", () => { this.placementHover = null; this.paintBuildingPlacement(); }, options);
 			canvas.addEventListener("lostpointercapture", () => { if (this.gesture) this.cancelScavDrag(); if (this.panGesture) this.cancelCameraGesture(); }, options);
 			canvas.addEventListener("dblclick", (event) => {
 				if (requestedView !== "base" || !this.cameraAllowed()) return;
-				const point = this.clientWorld(event.clientX, event.clientY), site = point ? getShelterLayoutCell(point) : null;
+				if (this.buildingPlacement) return;
+				const point = this.clientWorld(event.clientX, event.clientY), site = point ? getShelterTerritoryCell(point) : null;
 				const room = site ? this.cells.get(`${site.column}:${site.row}`)?.room : null;
 				if (room) { event.preventDefault(); this.focusRoom(room.id); }
 			}, options);
@@ -792,8 +852,9 @@ export function createWorld(
 			this.terrain = this.add.graphics().setDepth(-1_000_000_000); this.baseLayer.add(this.terrain);
 			this.ambient = this.add.graphics().setDepth(1_000_000); this.baseLayer.add(this.ambient);
 			this.dragGhost = this.add.graphics().setDepth(100_000_000); this.baseLayer.add(this.dragGhost);
-			this.baseCaption = this.text(29, 27, "ЗДАНИЕ УБЕЖИЩА 07", 15, "#ded2ae").setVisible(false);
-			this.shelterCaption = this.text(29, 477, "КОМНАТЫ · ЛЮДИ · ПРОИЗВОДСТВО", 10, "#abb69c").setVisible(false);
+			this.placementGhost = this.add.graphics().setDepth(100_000_002); this.baseLayer.add(this.placementGhost);
+			this.baseCaption = this.text(29, 27, "ТЕРРИТОРИЯ БАЗЫ 07", 15, "#ded2ae").setVisible(false);
+			this.shelterCaption = this.text(29, 477, "ПОСТРОЙКИ · ДВОР · ПРОИЗВОДСТВО", 10, "#abb69c").setVisible(false);
 			this.baseLayer.add([this.baseCaption, this.shelterCaption]);
 			this.syncShelterLayout(snapshot());
 		}
@@ -802,7 +863,8 @@ export function createWorld(
 			const shelter = state.shelter ?? { rooms: [] }, sites = getShelterSites(shelter);
 			const frontier = getShelterFrontier(shelter), expansions = shelter.expansions ?? [];
 			const all = [...sites, ...frontier, ...expansions];
-			const signature = `${sites.map((p) => `${p.column}:${p.row}`).join(";")}|${expansions.map((p) => `${p.column}:${p.row}`).join(";")}`;
+			const buildings = roomBuildings(shelter.rooms);
+			const signature = `${sites.map((p) => `${p.column}:${p.row}`).join(";")}|${expansions.map((p) => `${p.column}:${p.row}`).join(";")}|${shelter.rooms.map((room) => `${room.id}:${room.column}:${room.row}:${room.rotation ?? 0}`).join(";")}`;
 			if (signature === this.layoutSignature) return;
 			const first = !this.layoutSignature; this.layoutSignature = signature;
 			this.worldBounds = getShelterWorldBounds(sites, [...frontier, ...expansions]);
@@ -815,7 +877,7 @@ export function createWorld(
 			g.fillStyle(0x1b2d23).fillRect(this.worldBounds.x, this.worldBounds.y, this.worldBounds.width, this.worldBounds.height);
 			const left = Math.min(...sites.map((p) => cellPosition(p.column, p.row).x)) - 40;
 			const right = Math.max(...sites.map((p) => cellPosition(p.column, p.row).x)) + 212;
-			// The front is a real street. The building expands into the yard on its other sides.
+			// A street and gate lead into an outdoor compound; adjoining land grows the yard.
 			polygon(g, quad(left, 38, right - left, 79), 0x343c39);
 			polygon(g, quad(left, 117, right - left, 31), 0x7b8172);
 			for (let x = left; x < right; x += 38) {
@@ -826,29 +888,33 @@ export function createWorld(
 			const streetLabel = this.baseCaption; streetLabel.setPosition(street.x, street.y - 24).setOrigin(.5).setText("УЛИЦА · ВЫХОД В РЕЙД").setFontSize(10).setVisible(true).setDepth(10_000_000);
 			for (const site of sites) {
 				const p = cellPosition(site.column, site.row);
-				polygon(g, quad(p.x - 10, p.y - 16, 192, 132).map((point) => ({ x: point.x + 5, y: point.y + 6 })), 0x06110c, .7);
-				polygon(g, quad(p.x - 10, p.y - 16, 192, 132), 0x4b5549);
+				polygon(g, quad(p.x - 10, p.y - 16, 192, 132), (site.column + site.row) % 2 ? 0x506347 : 0x4b5e42);
 			}
-			for (const segment of getShelterCorridorSegments(sites)) {
-				line(g, [segment.from, segment.to].map(projectShelterPoint), 0x85917a, 9, .8);
-				line(g, [segment.from, segment.to].map(projectShelterPoint), 0xa9b395, .7, .45);
+			for (const segment of getShelterCorridorSegments(sites, buildings)) {
+				line(g, [segment.from, segment.to].map(projectShelterPoint), 0x8c8d72, 7, .68);
+				line(g, [segment.from, segment.to].map(projectShelterPoint), 0xbbb696, .5, .32);
 			}
 			const has = (column: number, row: number) => sites.some((p) => p.column === column && p.row === row);
 			for (const site of sites) {
 				const p = cellPosition(site.column, site.row);
-				const edge = (a: Point, b: Point, entrance = false) => {
-					const aa = projectShelterPoint(a), bb = projectShelterPoint(b), height = 22;
-					polygon(g, [aa, bb, { x: bb.x, y: bb.y - height }, { x: aa.x, y: aa.y - height }], entrance ? 0x647261 : 0x606a55);
-					line(g, [{ x: aa.x, y: aa.y - height }, { x: bb.x, y: bb.y - height }], 0xafb399, 2, .8);
+				const edge = (a: Point, b: Point) => {
+					const aa = projectShelterPoint(a), bb = projectShelterPoint(b), height = 16;
+					polygon(g, [aa, bb, { x: bb.x, y: bb.y - height }, { x: aa.x, y: aa.y - height }], 0x9baa85, .13);
+					for (const lift of [2, height]) line(g, [{ x: aa.x, y: aa.y - lift }, { x: bb.x, y: bb.y - lift }], 0xb0b696, 1.2, .8);
 					for (let step = 0; step <= 1; step += .125) {
 						const at = { x: aa.x + (bb.x - aa.x) * step, y: aa.y + (bb.y - aa.y) * step };
-						line(g, [{ x: at.x, y: at.y - 2 }, { x: at.x, y: at.y - height + 1 }], 0x384737, .6, .7);
+						line(g, [{ x: at.x, y: at.y - 1 }, { x: at.x, y: at.y - height + 2 }], 0x7f916e, .6, .8);
 					}
 				};
-				if (!has(site.column - 1, site.row)) edge({ x: p.x - 20, y: p.y - 16 }, { x: p.x - 20, y: p.y + 132 });
-				if (!has(site.column + 1, site.row)) edge({ x: p.x + 192, y: p.y - 16 }, { x: p.x + 192, y: p.y + 132 });
-				if (!has(site.column, site.row + 1)) edge({ x: p.x - 20, y: p.y + 132 }, { x: p.x + 192, y: p.y + 132 });
-				if (site.row === 0) edge({ x: p.x, y: 148 }, { x: p.x + 172, y: 148 }, true);
+				if (!has(site.column - 1, site.row)) edge({ x: p.x - 10, y: p.y - 16 }, { x: p.x - 10, y: p.y + 116 });
+				if (!has(site.column + 1, site.row)) edge({ x: p.x + 182, y: p.y - 16 }, { x: p.x + 182, y: p.y + 116 });
+				if (!has(site.column, site.row + 1)) edge({ x: p.x - 10, y: p.y + 116 }, { x: p.x + 182, y: p.y + 116 });
+				if (!has(site.column, site.row - 1)) {
+					if (site.row === 0 && site.column === 1) {
+						edge({ x: p.x - 10, y: p.y - 16 }, { x: p.x + 56, y: p.y - 16 });
+						edge({ x: p.x + 116, y: p.y - 16 }, { x: p.x + 182, y: p.y - 16 });
+					} else edge({ x: p.x - 10, y: p.y - 16 }, { x: p.x + 182, y: p.y - 16 });
+				}
 			}
 			for (const prop of this.exteriorProps) prop.destroy(); this.exteriorProps = [];
 			if (this.textures.exists("raid-props")) for (const prop of [{ x: 114, y: 74, frame: "car", width: 60 }, { x: 753, y: 119, frame: "crates", width: 27 }]) {
@@ -861,10 +927,13 @@ export function createWorld(
 				g.fillStyle(0xe0d19e).fillEllipse(at.x + 8, at.y - 36, 8, 3);
 			}
 			this.applyCamera();
+			this.paintBuildingPlacement();
 		}
 
 		private createCell(column: number, row: number): void {
-			const p = cellPosition(column, row), corners = shelterRoomPolygon(column, row);
+			const p = cellPosition(column, row);
+			const lot = { x: p.x - 10, y: p.y - 16, width: 192, height: 132 };
+			const corners = [{ x: lot.x, y: lot.y }, { x: lot.x + lot.width, y: lot.y }, { x: lot.x + lot.width, y: lot.y + lot.height }, { x: lot.x, y: lot.y + lot.height }].map(projectShelterPoint);
 			const at = projectShelterPoint({ x: p.x + 86, y: p.y + 18 });
 			const front = projectShelterPoint({ x: p.x + 86, y: p.y + 93 });
 			const art = this.add.graphics(), frame = this.add.graphics(), progress = this.add.graphics(), animation = this.add.graphics();
@@ -873,7 +942,7 @@ export function createWorld(
 			const productLabel = this.text(at.x, at.y - 39, "", 9, "#f4e4bb").setOrigin(.5).setLetterSpacing(0).setBackgroundColor("#10231e").setPadding(4, 2).setVisible(false);
 			const feedback = this.text(front.x, front.y - 23, "", 12, "#e6ffce").setOrigin(.5).setLetterSpacing(0).setBackgroundColor("#163023").setPadding(5, 3).setVisible(false);
 			const lamp = this.add.image(at.x, at.y + 5, "prapor-light").setScale(.30, .18).setAlpha(.08).setBlendMode(Phaser.BlendModes.ADD);
-			const bounds = projectShelterBounds({ ...p, width: ROOM_WIDTH, height: ROOM_HEIGHT });
+			const bounds = projectShelterBounds(lot);
 			const zone = this.add.zone(bounds.x, bounds.y, bounds.width, bounds.height).setOrigin(0);
 			zone.setInteractive(new Phaser.Geom.Polygon(corners.map((point) => ({ x: point.x - bounds.x, y: point.y - bounds.y }))), Phaser.Geom.Polygon.Contains);
 			zone.input!.cursor = "pointer";
@@ -882,10 +951,10 @@ export function createWorld(
 			this.baseLayer.add([root, chrome, zone.setDepth(-100_000_000)]);
 			const cell: ShelterCell = { root, chrome, open: false, expansion: null, art, frame, progress, animation, stationClock: 0, stationJob: null, production: null, productLabel, label, status, lamp, zone, signature: "", column, row, hovered: false, room: null, working: false, operational: "empty", feedback, lastCycles: null, completedAt: -10000 };
 			this.cells.set(`${column}:${row}`, cell);
-			zone.on("pointerover", (pointer: Phaser.Input.Pointer) => { if (this.acceptsPointer(pointer, "base")) { cell.hovered = true; this.paintCellFrame(cell); this.describeCell(cell); } });
-			zone.on("pointerout", () => { cell.hovered = false; this.paintCellFrame(cell); interactions.onHover?.(null); });
+			zone.on("pointerover", (pointer: Phaser.Input.Pointer) => { if (this.acceptsPointer(pointer, "base")) { cell.hovered = true; for (const candidate of this.cells.values()) if (candidate === cell || candidate.room?.id === cell.room?.id) this.paintCellFrame(candidate); if (!this.buildingPlacement) this.describeCell(cell); } });
+			zone.on("pointerout", () => { cell.hovered = false; for (const candidate of this.cells.values()) if (candidate === cell || candidate.room?.id === cell.room?.id) this.paintCellFrame(candidate); interactions.onHover?.(null); });
 			zone.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
-				if (!this.acceptsPointer(pointer, "base")) return;
+				if (!this.acceptsPointer(pointer, "base") || this.buildingPlacement) return;
 				this.clickFeedback(projectShelterPoint({ x: p.x + 86, y: p.y + 50 }), this.baseLayer);
 				if (cell.room) {
 					if (interactions.onShelterRoom) interactions.onShelterRoom(cell.room.id);
@@ -902,32 +971,36 @@ export function createWorld(
 				interactions.onHover?.({ title: `${ROOM_DEFINITIONS[room.type].label} · ур. ${room.level || 1}`,
 					detail: `${room.workerIds.length}/${getRoomWorkerCapacity(room)} работников · ${production?.reason ?? production?.status ?? "На базе"}${eta}` });
 			} else if (cell.expansion) {
-				interactions.onHover?.({ title: "Расширяем здание", detail: `${Math.ceil((cell.expansion.workRequired - cell.expansion.workDone) / 1_000_000)} с до новой площадки` });
-			} else interactions.onHover?.(cell.open ? { title: "Свободная площадка", detail: "Нажми, чтобы выбрать новую комнату" } : { title: "Наружная стена", detail: "Пробить: 60 ₽ и 2 детали · новая площадка за 20 с" });
+				interactions.onHover?.({ title: "Расширяем территорию", detail: `${Math.ceil((cell.expansion.workRequired - cell.expansion.workDone) / 1_000_000)} с до нового участка` });
+			} else interactions.onHover?.(cell.open ? { title: "Свободная земля", detail: "Выбери место для новой постройки или переноса" } : { title: "Земля за оградой", detail: "Присоединить: 60 ₽ и 2 детали · новый участок за 20 с" });
 		}
 
 		private paintCellFrame(cell: ShelterCell): void {
-			const state = snapshot(), corners = shelterRoomPolygon(cell.column, cell.row);
+			cell.frame.clear();
+			if (!isRoomOrigin(cell)) return;
+			const state = snapshot(), corners = cellPolygon(cell);
+			const hovered = cell.hovered || Boolean(cell.room && [...this.cells.values()].some((candidate) => candidate.room?.id === cell.room?.id && candidate.hovered));
 			const selected = Boolean(cell.room ? state.selectedRoomId === cell.room.id : state.selectedSite?.column === cell.column && state.selectedSite.row === cell.row);
 			const building = cell.room && cell.room.status !== "ready";
-			let tint = selected || cell.hovered ? C.light : building ? C.gold : cell.room ? ROOM_STYLE[cell.room.type]?.color ?? 0x899a7c : 0x788b71;
-			cell.label.setAlpha(cell.room || selected || cell.hovered ? 1 : .6);
-			cell.status.setAlpha(cell.room || selected || cell.hovered ? 1 : .5);
-			cell.frame.clear();
+			let tint = selected || hovered ? C.light : building ? C.gold : cell.room ? ROOM_STYLE[cell.room.type]?.color ?? 0x899a7c : 0x788b71;
+			cell.label.setAlpha(cell.room || selected || hovered ? 1 : .6).setVisible(Boolean(cell.room || selected || hovered || cell.expansion));
+			cell.status.setAlpha(cell.room || selected || hovered ? 1 : .5);
 			if (this.drag) {
 				const reason = cell.room ? this.assignmentReason(this.drag.scavId, cell.room.id) : "Сначала построй комнату";
-				const target = this.drag.cellKey === `${cell.column}:${cell.row}`; tint = reason ? 0xcc7f6d : 0xa6d193;
+				const target = cell.room ? this.drag.roomId === cell.room.id : this.drag.cellKey === `${cell.column}:${cell.row}`; tint = reason ? 0xcc7f6d : 0xa6d193;
 				polygon(cell.frame, corners, tint, target ? .23 : .07);
 				line(cell.frame, [...corners, corners[0]!], tint, target ? 3 : 1.3, target ? 1 : .65); return;
 			}
-			if (selected || cell.hovered) polygon(cell.frame, corners, tint, selected ? .12 : .05);
-			line(cell.frame, [...corners, corners[0]!], tint, selected ? 2.5 : 1, selected || cell.hovered ? 1 : .36);
+			if (selected || hovered) polygon(cell.frame, corners, tint, selected ? .12 : .05);
+			line(cell.frame, [...corners, corners[0]!], tint, selected ? 2.5 : 1, selected || hovered ? 1 : cell.room ? .3 : .12);
 		}
 
 		private paintRoom(cell: ShelterCell): void {
 			cell.art.clear();
+			if (!isRoomOrigin(cell)) return;
 			if (cell.open) paintIsometricRoom(cell.art, cell.column, cell.row, cell.room);
 			else {
+				paintIsometricLand(cell.art, cell.column, cell.row, false);
 				const corners = shelterRoomPolygon(cell.column, cell.row);
 				polygon(cell.art, corners, 0x8b9274, cell.expansion ? .28 : .09);
 				line(cell.art, [...corners, corners[0]!], 0xb5b994, 1, .35);
@@ -936,9 +1009,18 @@ export function createWorld(
 				line(cell.art, [{ x: at.x - 2, y: at.y - 8 }, { x: at.x + 11, y: at.y - 1 }], 0xb7c3a2, 3);
 			}
 			const style = ROOM_STYLE[cell.room?.type ?? "workshop"]!;
-			cell.label.setText(cell.room ? `${style.label} · ${cell.room.level || ""}` : cell.open ? "ПЛОЩАДКА" : cell.expansion ? "РАСШИРЕНИЕ" : "СТЕНА").setFontSize(cell.room ? 11 : 9).setColor(cell.room ? "#fff1dc" : "#afc0a4");
-			cell.status.setText(cell.room ? "" : cell.open ? "+ ПОСТРОИТЬ" : cell.expansion ? "ИДУТ РАБОТЫ" : "ПРОБИТЬ →");
+			cell.label.setText(cell.room ? `${style.label} · ${cell.room.level || ""}` : cell.open ? "СВОБОДНАЯ ЗЕМЛЯ" : cell.expansion ? "РАСШИРЕНИЕ" : "ЗА ОГРАДОЙ").setFontSize(cell.room ? 11 : 9).setColor(cell.room ? "#fff1dc" : "#afc0a4");
+			cell.status.setText(cell.room ? "" : cell.open ? "+ ПОСТРОИТЬ" : cell.expansion ? "ИДУТ РАБОТЫ" : "ПРИСОЕДИНИТЬ →");
 			cell.lamp.setVisible(Boolean(cell.room)).setTint(style.light);
+		}
+
+		private positionCellChrome(cell: ShelterCell): void {
+			const rect = cell.room ? roomRect(cell.room) : shelterRoomRect(cell.column, cell.row);
+			const at = projectShelterPoint({ x: rect.x + rect.width / 2, y: rect.y + 18 });
+			const front = projectShelterPoint({ x: rect.x + rect.width / 2, y: rect.y + rect.height - 7 });
+			cell.label.setPosition(at.x, at.y - 23); cell.status.setPosition(front.x, front.y - 4);
+			cell.productLabel.setPosition(at.x, at.y - 39); cell.feedback.setPosition(front.x, front.y - 23);
+			cell.lamp.setPosition(at.x, at.y + 5); cell.root.setDepth(at.y - 20);
 		}
 
 		private clickFeedback(at: Point, layer: Phaser.GameObjects.Container): void {
@@ -1010,7 +1092,7 @@ export function createWorld(
 
 		private syncShelter(state: WorldSnapshot): void {
 			if (this.viewState && state.shelter !== this.viewState.shelter) {
-				this.cancelScavDrag(); this.cancelCameraGesture(); this.layoutSignature = "";
+				this.cancelScavDrag(); this.cancelCameraGesture();
 				this.raidStreet?.reset();
 				for (const slot of this.scavs.values()) slot.actor.destroy(true);
 				this.scavs.clear();
@@ -1021,55 +1103,65 @@ export function createWorld(
 			const rooms = state.shelter?.rooms ?? [];
 			let workingRooms = 0;
 			for (const cell of this.cells.values()) {
-				const room = rooms.find((candidate) => candidate.column === cell.column && candidate.row === cell.row) ?? null;
+				const room = getShelterRoomAt(state.shelter ?? { rooms: [] }, cell.column, cell.row) ?? null;
 				if (cell.room?.id !== room?.id) { cell.lastCycles = null; cell.completedAt = -10000; cell.feedback.setVisible(false); }
 				cell.room = room;
+				const origin = isRoomOrigin(cell);
+				cell.root.setVisible(origin); cell.chrome.setVisible(origin);
 				cell.open = getShelterSites(state.shelter ?? { rooms: [] }).some((p) => p.column === cell.column && p.row === cell.row);
 				cell.expansion = state.shelter?.expansions?.find((p) => p.column === cell.column && p.row === cell.row) ?? null;
 				const production = room ? state.roomProduction?.[room.id] : undefined;
-				cell.production = room ? getShelterProductionPresentation(room, production ?? null) : null;
+				cell.production = room && origin ? getShelterProductionPresentation(room, production ?? null) : null;
 				if (cell.stationJob !== cell.production?.jobId) { cell.stationClock = 0; cell.stationJob = cell.production?.jobId ?? null; }
 				const productName = cell.production?.jobId ? cell.production.productName : "";
 				cell.productLabel.setText(productName.length > 29 ? `${productName.slice(0, 28)}…` : productName);
 				cell.working = Boolean(room?.status === "ready" && room.queue.length && room.workerIds.length && production?.rate && !production.reason);
-				cell.operational = !room ? "empty" : room.status !== "ready" ? "building" : room.type === "storage" || room.type === "dormitory" ? "passive" : cell.working ? "working" : production?.reason || room.queue.length ? "blocked" : "idle";
-				if (cell.working) workingRooms++;
-				const signature = room ? `${room.id}:${room.type}:${room.level}:${room.status}` : `${cell.open}:${Boolean(cell.expansion)}`;
-				if (cell.signature !== signature) { cell.signature = signature; this.paintRoom(cell); }
+				cell.operational = !room ? "empty" : room.status !== "ready" ? "building" : !ROOM_DEFINITIONS[room.type].production ? "passive" : cell.working ? "working" : production?.reason || room.queue.length ? "blocked" : "idle";
+				if (cell.working && origin) workingRooms++;
+				const signature = room ? `${room.id}:${room.column}:${room.row}:${room.rotation ?? 0}:${room.type}:${room.level}:${room.status}` : `${cell.open}:${Boolean(cell.expansion)}`;
+				if (cell.signature !== signature) { cell.signature = signature; this.positionCellChrome(cell); this.paintRoom(cell); }
 				this.paintCellFrame(cell);
 				if (cell.hovered) this.describeCell(cell);
 				cell.progress.clear();
+				if (!origin) continue;
 				if (room) {
 					if (cell.lastCycles !== null && room.cycles > cell.lastCycles) {
 						cell.completedAt = this.time.now;
-						cell.feedback.setText(`+${room.cycles - cell.lastCycles} ПАРТИЯ`).setVisible(true).setAlpha(1).setY(projectShelterPoint({ ...cellPosition(cell.column, cell.row), x: cellPosition(cell.column, cell.row).x + 86, y: cellPosition(cell.column, cell.row).y + 93 }).y - 23);
+						cell.feedback.setText(`+${room.cycles - cell.lastCycles} ПАРТИЯ`).setVisible(true).setAlpha(1);
 					}
 					cell.lastCycles = room.cycles;
 					const construction = room.construction;
 					const progress = construction ? construction.workDone / Math.max(1, construction.workRequired) : production?.progress ?? 0;
 					const color = construction ? 0xf6c58b : cell.operational === "blocked" ? 0xe9ad7f : 0xb2d692;
-					const p = cellPosition(cell.column, cell.row), badge = projectShelterPoint({ x: p.x + 86, y: p.y + 93 });
+					const rect = roomRect(room), badge = projectShelterPoint({ x: rect.x + rect.width / 2, y: rect.y + rect.height - 7 });
 					cell.progress.fillStyle(0x071710).fillRect(badge.x - 35, badge.y + 4, 70, 3);
 					cell.progress.fillStyle(color, .95).fillRect(badge.x - 35, badge.y + 4, Phaser.Math.Clamp(progress, 0, 1) * 70, 3);
 					const reason = production?.reason?.toLocaleLowerCase("ru-RU") ?? "";
 					const briefReason = reason.includes("склад") || reason.includes("мест") ? "СКЛАД ПОЛОН" : reason.includes("рабоч") ? "НУЖЕН РАБОЧИЙ" : reason.includes("нужно") ? "НУЖНЫ РЕСУРСЫ" : production?.reason ?? "";
-					const status = construction ? `СТРОЙКА ${Math.floor(progress * 100)}%` : room.type === "storage" ? "ЗАПАСЫ" : room.type === "dormitory" ? "МЕСТА ОТРЯДА" : cell.working ? `${Math.floor((cell.production?.progress ?? 0) * 100)}% · ${cell.production?.stageLabel ?? "Сборка"}` : production?.reason ? briefReason : !room.workerIds.length ? "НУЖЕН РАБОЧИЙ" : production?.status === "Нет заказа" ? "БЕЗ ЗАКАЗА" : "ЖДЁТ ПАРТИЮ";
+					const status = construction ? `СТРОЙКА ${Math.floor(progress * 100)}%` : room.type === "storage" ? "ЗАПАСЫ" : room.type === "dormitory" ? "МЕСТА ОТРЯДА" : room.type === "hangar" ? "БОЛЬШИЕ ЗАПАСЫ" : cell.working ? `${Math.floor((cell.production?.progress ?? 0) * 100)}% · ${cell.production?.stageLabel ?? "Сборка"}` : production?.reason ? briefReason : !room.workerIds.length ? "НУЖЕН РАБОЧИЙ" : production?.status === "Нет заказа" ? "БЕЗ ЗАКАЗА" : "ЖДЁТ ПАРТИЮ";
 					const clippedStatus = `${status.toLocaleUpperCase("ru-RU").slice(0, 17)}${status.length > 17 ? "…" : ""}`;
 					cell.status.setText(clippedStatus).setColor(construction ? "#ffd399" : cell.working ? "#d1efb0" : cell.operational === "blocked" ? "#edc294" : "#c1cbbc");
 					cell.lamp.setAlpha(construction ? .1 : cell.working ? .18 : .06);
 				}
 			}
 			this.baseCaption.setText("УЛИЦА · ВЫХОД В РЕЙД");
-			this.shelterCaption.setText(`${rooms.length} КОМНАТ · ${workingRooms} ПРОИЗВОДЯТ · ${rooms.filter((room) => room.status !== "ready").length} СТРОЯТСЯ`);
+			this.shelterCaption.setText(`${rooms.length} ПОСТРОЕК · ${workingRooms} ПРОИЗВОДЯТ · ${rooms.filter((room) => room.status !== "ready").length} СТРОЯТСЯ`);
+			this.paintBuildingPlacement();
 			this.syncPeople(state);
 			this.baseLayer.sort("depth");
 		}
 
 		private homePosition(rank: number, count: number): Point {
-			const left = Math.min(4, count), onLeft = rank < left;
-			const total = onLeft ? left : Math.max(1, count - left);
-			const start = onLeft ? 282 : 465, span = onLeft ? 95 : 306;
-			return { x: start + (total > 1 ? (onLeft ? rank : rank - left) * span / (total - 1) : span / 2), y: 132 };
+			const shelter = this.viewState?.shelter ?? { rooms: [] }, sites = getShelterSites(shelter);
+			const free = sites.filter((site) => !getShelterRoomAt(shelter, site.column, site.row));
+			if (free.length) {
+				const site = free[rank % free.length]!, origin = cellPosition(site.column, site.row);
+				return { x: origin.x + 58 + rank % 3 * 23, y: origin.y + 58 + Math.floor(rank / free.length) % 2 * 16 };
+			}
+			const paths = getShelterCorridorSegments(sites, roomBuildings(shelter.rooms)).filter(({ from, to }) => from.y > 132 && to.y > 132);
+			const segment = paths[rank % Math.max(1, paths.length)];
+			if (segment) { const ratio = (rank + 1) / (count + 1); return { x: segment.from.x + (segment.to.x - segment.from.x) * ratio, y: segment.from.y + (segment.to.y - segment.from.y) * ratio }; }
+			return { x: 318, y: 132 };
 		}
 
 		private placeActor(slot: ScavActor, at: Point): void {
@@ -1081,7 +1173,7 @@ export function createWorld(
 		private sendActor(slot: ScavActor, goal: string, at: Point): void {
 			if (slot.goal === goal && Math.hypot(slot.anchor.x - at.x, slot.anchor.y - at.y) < 1) return;
 			slot.goal = goal; slot.anchor = { ...at };
-			slot.route = reducedMotion ? [] : getShelterWalkingRoute(slot.position, at, getShelterSites(this.viewState?.shelter ?? { rooms: [] }));
+			slot.route = reducedMotion ? [] : getShelterWalkingRoute(slot.position, at, getShelterSites(this.viewState?.shelter ?? { rooms: [] }), roomBuildings(this.viewState?.shelter?.rooms ?? []));
 			if (reducedMotion) this.placeActor(slot, at);
 			slot.working = false;
 		}
@@ -1124,7 +1216,7 @@ export function createWorld(
 				} else if (room) {
 					// Workshop stages use real bench/lathe positions. Changing stage is
 					// a short floor walk; pausing keeps the last station and route.
-					if (presentation?.active || previousAssignment !== room.id || !slot.goal.startsWith(`work:${room.id}:`)) this.sendActor(slot, `work:${room.id}:${rank}:${presentation?.active ? presentation.stage : "idle"}`, at);
+					if (presentation?.active || previousAssignment !== room.id || !slot.goal.startsWith(`work:${room.id}:`) || Math.hypot(slot.anchor.x - at.x, slot.anchor.y - at.y) > 1) this.sendActor(slot, `work:${room.id}:${rank}:${presentation?.active ? presentation.stage : "idle"}`, at);
 					slot.role = room.type;
 				} else if (!slot.goal || previousAssignment !== null || previousStatus !== "ready") {
 					this.sendActor(slot, `idle-home:${index}`, at); slot.role = "idle";
@@ -1232,8 +1324,10 @@ export function createWorld(
 			for (const cell of this.cells.values()) {
 				const g = cell.animation;
 				g.clear();
+				if (!isRoomOrigin(cell)) continue;
 				const selected = cell.room ? this.viewState?.selectedRoomId === cell.room.id : this.viewState?.selectedSite?.column === cell.column && this.viewState.selectedSite.row === cell.row;
-				cell.status.setVisible(this.viewCamera.zoom >= 1.4 || cell.hovered || Boolean(selected) || Boolean(cell.expansion));
+				const hovered = cell.hovered || Boolean(cell.room && [...this.cells.values()].some((candidate) => candidate.room?.id === cell.room?.id && candidate.hovered));
+				cell.status.setVisible(Boolean(cell.room) && this.viewCamera.zoom >= 1.4 || hovered || Boolean(selected) || Boolean(cell.expansion));
 				const labelScale = 1 / Math.max(1, this.viewCamera.zoom / 1.8);
 				cell.label.setScale(labelScale); cell.status.setScale(labelScale);
 				cell.productLabel.setVisible(Boolean(cell.production?.jobId) && (this.viewCamera.zoom >= 1.6 || cell.hovered || this.viewState?.selectedRoomId === cell.room?.id));
@@ -1241,13 +1335,13 @@ export function createWorld(
 					if (cell.expansion) {
 						const p = cellPosition(cell.column, cell.row), at = projectShelterPoint({ x: p.x + 86, y: p.y + 60 });
 						const progress = cell.expansion.workDone / cell.expansion.workRequired;
-						cell.status.setText(`ПРОБИВАЕМ ${Math.floor(progress * 100)}%`);
+						cell.status.setText(`РАСЧИЩАЕМ ${Math.floor(progress * 100)}%`);
 						g.fillStyle(0xd8bd87).fillRect(at.x - 28, at.y + 12, 56 * progress, 3);
 					}
 					continue;
 				}
-				const elapsed = time - cell.completedAt, p = cellPosition(cell.column, cell.row);
-				const badge = projectShelterPoint({ x: p.x + 86, y: p.y + 93 });
+				const elapsed = time - cell.completedAt, rect = roomRect(cell.room);
+				const badge = projectShelterPoint({ x: rect.x + rect.width / 2, y: rect.y + rect.height - 7 });
 				cell.feedback.setVisible(elapsed >= 0 && elapsed < 1800).setAlpha(reducedMotion ? 1 : Phaser.Math.Clamp(1 - elapsed / 1800, 0, 1)).setY(badge.y - 23 - (reducedMotion ? 0 : Math.max(0, elapsed) / 120));
 				if (cell.working) cell.lamp.setAlpha(reducedMotion ? .18 : .16 + (Math.sin(time / 1300 + cell.column + cell.row) + 1) * .025);
 				if (cell.production) cell.stationClock = advanceShelterStationClock(cell.stationClock, delta, cell.production, reducedMotion);
@@ -1737,6 +1831,7 @@ export function createWorld(
 		setPanMode: (enabled) => scene.setPanMode(enabled),
 		focusRoom: (id) => scene.focusRoom(id),
 		focusBase: () => scene.focusBase(),
+		setBuildingPlacement: (selection) => scene.setBuildingPlacement(selection),
 		projectShelterRect: (rect) => scene.projectShelterRect(rect),
 	};
 }

@@ -185,6 +185,11 @@ function roomContent(type: ShelterRoomType, id: string): string {
 			return `<path d="M33 38v61M92 38v61M33 47h59M33 81h59" stroke="#8f9b80" stroke-width="3"/><path d="M36 40h53v7H36M36 74h53v7H36" fill="#aaa88a"/><path d="M48 41h41v7H48M48 75h41v7H48" fill="#697d66"/><path d="M97 40v57M108 40v57M97 49h11M97 61h11M97 73h11M97 85h11" stroke="#8d9a7c" stroke-width="2"/>
 				<path d="M156 39v60M215 39v60M156 47h59M156 81h59" stroke="#8f9b80" stroke-width="3"/><path d="M159 40h53v7h-53M159 74h53v7h-53" fill="#aaa88a"/><path d="M172 41h40v7h-40M172 75h40v7h-40" fill="#75826a"/>
 				<rect x="119" y="59" width="25" height="34" fill="#5b7054" stroke="#9aaa87"/><path d="M131 62v29" stroke="#314e35"/><circle cx="128" cy="77" r="1.3" fill="#c7c8a4"/><circle cx="135" cy="77" r="1.3" fill="#c7c8a4"/><path d="M126 50h12v8h-12" fill="#c3b37a"/><ellipse cx="132" cy="48" rx="22" ry="17" fill="url(#${id}-light)"/>`;
+		case "hangar":
+			return `<path d="M25 95V48q0-26 95-26t95 26v47" fill="#2c403b" stroke="#8b9d98" stroke-width="3"/><path d="M32 47q0-18 88-18t88 18M52 36v54M88 30v60M125 29v61M162 32v58M198 39v51" fill="none" stroke="#667f77" stroke-width="2"/>
+				<path d="M37 49v42M93 49v42M37 52h56M37 71h56M37 91h56M153 49v42M208 49v42M153 52h55M153 71h55M153 91h55" stroke="#9aab91" stroke-width="3"/>
+				${crate(42, 56, 20, 12)}${crate(67, 56, 20, 12, "#8b8060")}${crate(42, 76, 44, 12)}${crate(158, 56, 20, 12, "#8b8060")}${crate(183, 56, 19, 12)}${crate(158, 76, 43, 12, "#74765b")}
+				<path d="M101 89h34v12h-34zM130 77h5v25h-5M134 99h16v3h-16" fill="#b5a16b" stroke="#3d4c3e"/><path d="M104 87V72h18v17M104 73h18" fill="none" stroke="#7e9484" stroke-width="2"/><circle cx="107" cy="101" r="4" fill="#17281f"/><circle cx="130" cy="101" r="4" fill="#17281f"/><path d="M100 108h51" stroke="#d5bd7e" stroke-width="2" stroke-dasharray="6 4"/>`;
 	}
 }
 
@@ -196,6 +201,7 @@ const ROOM_ART: Record<ShelterRoomType, { label: string; tint: string }> = {
 	radio: { label: "Радиорубка: радиостанция, зелёный монитор и карта", tint: "#82aaa4" },
 	storage: { label: "Склад: металлические стеллажи и ящики с припасами", tint: "#9ca678" },
 	dormitory: { label: "Жилой блок: двухъярусные кровати и шкафчики", tint: "#b4a88b" },
+	hangar: { label: "Ангар: просторные складские ряды и погрузчик", tint: "#87a0ad" },
 };
 
 export function roomMiniArt(type: ShelterRoomType, idPrefix = `room-${type}`): string {

@@ -6,7 +6,8 @@ export interface GameCommandArguments {
   listMarketItem: [TradeRef, number]; buyMarketListing: [string];
   cancelMarketListing: [string]; claimMarketSale: [string];
   sellLootItem: [string]; recycleLootItem: [string];
-  excavateShelter: [number, number]; buildRoom: [string, number, number]; upgradeRoom: [string];
+  excavateShelter: [number, number]; buildRoom: [string, number, number, (0 | 1)?]; upgradeRoom: [string];
+  moveRoom: [string, number, number, (0 | 1)?]; rotateRoom: [string];
   assignWorker: [string, string | null]; queueModuleProduction: [string, string];
   setRoomRecipe: [string, string | null, boolean]; cancelProduction: [string, string];
   setProductionReserve: [ShelterCost]; setRoomStockTarget: [string, number | null];
