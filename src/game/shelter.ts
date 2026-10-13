@@ -13,8 +13,36 @@ export interface RoomInstance {
 	construction: { workDone: number; workRequired: number; targetLevel: number; cost: { money: number; scrap: number } } | null;
 	workerIds: string[]; queue: ProductionJob[]; recipeId: string | null; repeat: boolean; pending: boolean; cycles: number;
 }
+export interface ShelterSite { column: number; row: number }
+export interface ShelterExpansion extends ShelterSite {
+	workDone: number; workRequired: number; cost: { money: number; scrap: number };
+}
+export interface ShelterState { rooms: RoomInstance[]; sites: ShelterSite[]; expansions: ShelterExpansion[] }
 export const SHELTER_COLUMNS = 4;
 export const SHELTER_ROWS = 3;
+export const SHELTER_COORDINATE_LIMIT = 128;
+export const MAX_SHELTER_SITES = 256;
+export const SHELTER_EXCAVATION = { money: 60, scrap: 2, duration: 20 } as const;
+type ShelterLayout = { rooms?: readonly RoomInstance[]; sites?: readonly ShelterSite[]; expansions?: readonly ShelterExpansion[] };
+const initialSites = (): ShelterSite[] => Array.from({ length: SHELTER_ROWS }, (_, row) =>
+	Array.from({ length: SHELTER_COLUMNS }, (_, column) => ({ column, row }))).flat();
+export function isShelterSiteCoordinate(column: number, row: number): boolean {
+	return Number.isInteger(column) && Number.isInteger(row) && Math.abs(column) <= SHELTER_COORDINATE_LIMIT && row >= 0 && row <= SHELTER_COORDINATE_LIMIT;
+}
+/** Old saves and presentation snapshots without layout data keep the original foundation. */
+export function getShelterSites(shelter: ShelterLayout): readonly ShelterSite[] { return shelter.sites ?? initialSites(); }
+/** Only an outer wall adjoining an already open floor can be excavated; the entrance street is never a candidate. */
+export function getShelterFrontier(shelter: ShelterLayout): ShelterSite[] {
+	const sites = getShelterSites(shelter);
+	const reserved = new Set([...sites, ...(shelter.expansions ?? [])].map((site) => `${site.column}:${site.row}`));
+	const frontier = new Map<string, ShelterSite>();
+	for (const site of sites) for (const [column, row] of [[site.column - 1, site.row], [site.column + 1, site.row], [site.column, site.row - 1], [site.column, site.row + 1]]) {
+		if (!isShelterSiteCoordinate(column!, row!)) continue;
+		const key = `${column}:${row}`;
+		if (!reserved.has(key)) frontier.set(key, { column: column!, row: row! });
+	}
+	return [...frontier.values()].sort((a, b) => a.row - b.row || a.column - b.column);
+}
 export const ROOM_DEFINITIONS: Record<ShelterRoomType, {
 	label: string; description: string; color: string; cost: { money: number; scrap: number };
 	buildSeconds: number; workerSkill: "combat" | "scouting" | "balanced"; production: boolean;
@@ -35,7 +63,7 @@ export const RESOURCE_RECIPES: { id: string; roomType: ShelterRoomType; label: s
 	{ id: "intel-batch", roomType: "radio", label: "Сводка разведки", description: "3 разведданных за 25 ₽.", durationSeconds: 65, cost: { money: 25, supplies: supplies() }, output: supplies({ intel: 3 }) },
 ];
 export const RESOURCE_RECIPE_BY_ID = Object.fromEntries(RESOURCE_RECIPES.map((recipe) => [recipe.id, recipe])) as Record<string, typeof RESOURCE_RECIPES[number]>;
-export function initialShelter(base: Record<string, number>): { rooms: RoomInstance[] } {
-	return { rooms: ["workshop", "medbay", "radio", "storage"].map((type, column) => ({ id: `room-${type}`, type: type as ShelterRoomType, column, row: 0,
+export function initialShelter(base: Record<string, number>): ShelterState {
+	return { sites: initialSites(), expansions: [], rooms: ["workshop", "medbay", "radio", "storage"].map((type, column) => ({ id: `room-${type}`, type: type as ShelterRoomType, column, row: 0,
 		level: base[type] ?? 1, status: "ready", construction: null, workerIds: [], queue: [], recipeId: null, repeat: false, pending: false, cycles: 0 })) };
 }

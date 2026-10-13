@@ -1,5 +1,5 @@
 import { MAPS, RARITY_COLORS, type WeaponCategory } from './game/data';
-import { RUN_PERKS, type GameState, type RunPerk } from './game/engine';
+import { RUN_PERKS, getShelterSites, getShelterFrontier, isShelterSiteCoordinate, type GameState, type RunPerk } from './game/engine';
 import { MODULE_SLOTS, type ModuleSlot } from './game/modules';
 
 export type SessionPage = 'home'|'raids'|'arsenal'|'base'|'contracts'|'journal';
@@ -45,7 +45,9 @@ export function readGameSession(value:unknown,state:GameState):GameSession {
 	const journal=Array.isArray(valid.journal)?valid.journal.filter((item):item is string=>typeof item==='string'&&state.history.some(report=>report.id===item)).slice(0,30):[];
 	if(view==='raid'&&!raidId){view='base';if(report){page='journal';if(!journal.includes(report.id))journal.push(report.id);}}
 	const siteSource=object(valid.site);
-	const site=Number.isInteger(siteSource.column)&&Number.isInteger(siteSource.row)&&Number(siteSource.column)>=0&&Number(siteSource.column)<4&&Number(siteSource.row)>=0&&Number(siteSource.row)<3&&!state.shelter.rooms.some(room=>room.column===siteSource.column&&room.row===siteSource.row)?{column:Number(siteSource.column),row:Number(siteSource.row)}:null;
+	const column=siteSource.column,row=siteSource.row;
+	const selectableSites=[...getShelterSites(state.shelter),...getShelterFrontier(state.shelter),...state.shelter.expansions];
+	const site=typeof column==='number'&&typeof row==='number'&&isShelterSiteCoordinate(column,row)&&selectableSites.some(site=>site.column===column&&site.row===row)&&!state.shelter.rooms.some(room=>room.column===column&&room.row===row)?{column,row}:null;
 	let context=choose(valid.context,['overview','room','build'] as const,'overview');
 	if(view!=='base'||context==='room'&&!roomId||context==='build'&&!site)context='overview';
 	const perks:GameSession['perks']=[];

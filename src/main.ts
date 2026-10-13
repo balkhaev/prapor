@@ -90,6 +90,10 @@ import {
 	RESOURCE_RECIPES,
 	getBuildRoomQuote,
 	buildRoom,
+	getShelterSites,
+	getShelterFrontier,
+	getExcavationQuote,
+	excavateShelter,
 	getRoomUpgradeQuote,
 	upgradeRoom,
 	assignWorker,
@@ -325,7 +329,7 @@ function updateCameraControls() {
 	controls.querySelector<HTMLButtonElement>('[data-camera="pan"]')?.classList.toggle("active", cameraView.panMode);
 	document.querySelector(".world-card")?.classList.toggle("camera-hand-mode", cameraView.panMode);
 	document.querySelector("#camera-scale")!.textContent = `${Math.round(cameraView.zoom * 100)}%`;
-	document.querySelector("#scene-hint")!.textContent = worldView === "raid" ? cameraView.panMode ? "Осмотри улицу · За бойцом — вернуть камеру" : "Живой маршрут · Рука — осмотр улицы" : worldView === "map" ? "Нажми на сектор, чтобы выбрать маршрут" : cameraView.panMode ? "Перетаскивай вид · Обзор — вся база" : cameraView.zoom > 1.05 ? "Осмотр · Рука — сдвиг · Обзор — вся база" : "Нажми на комнату или бойца · + приблизить";
+	document.querySelector("#scene-hint")!.textContent = worldView === "raid" ? cameraView.panMode ? "Осмотри улицу · За бойцом — вернуть камеру" : "Живой маршрут · Рука — осмотр улицы" : worldView === "map" ? "Нажми на сектор, чтобы выбрать маршрут" : cameraView.panMode ? "Перетаскивай вид · Обзор — вся база" : cameraView.zoom > 1.05 ? "Осмотр · Рука — сдвиг · Обзор — вся база" : "Комната — управление · наружная стена — расширить";
 	document.querySelector('.world-card')?.classList.toggle('raid-view', worldView === "raid");
 	document.querySelector('.command-main')?.classList.toggle('raid-watching', worldView === "raid");
 	const raidTab = document.querySelector<HTMLButtonElement>('[data-view="raid"]'); if (raidTab) raidTab.disabled = !state.raids.length && !lastWatchedRaid;
@@ -947,6 +951,10 @@ function hud() {
 		const quote = getRoomUpgradeQuote(state, node.dataset.id ?? ""); node.disabled = Boolean(quote.reason);
 		const note = document.querySelector<HTMLElement>(`[data-room-upgrade-note="${node.dataset.id}"]`); if (note) note.textContent = quote.reason ?? "Затраты будут списаны при начале улучшения";
 	});
+	document.querySelectorAll<HTMLButtonElement>('[data-action="excavate-wall"]').forEach((node) => {
+		const quote = getExcavationQuote(state, Number(node.dataset.column), Number(node.dataset.row)); node.disabled = Boolean(quote.reason);
+		const note = node.parentElement?.querySelector<HTMLElement>(".quote-note"); if (note) note.textContent = quote.reason ?? "Материалы списываются один раз при начале работ.";
+	});
 	document.querySelectorAll<HTMLButtonElement>('[data-action="build-room"]').forEach((node) => {
 		const quote = getBuildRoomQuote(state, node.dataset.roomType as ShelterRoomType, Number(node.dataset.column), Number(node.dataset.row)); node.disabled = Boolean(quote.reason);
 		const note = document.querySelector<HTMLElement>(`[data-build-room-note="${node.dataset.roomType}"]`); if (note) note.textContent = quote.reason ?? "Оплата при начале; стройка идёт и офлайн";
@@ -1247,17 +1255,25 @@ function renderShelter() {
 	const recipeScroll = panel.querySelector<HTMLElement>(".room-module-recipes")?.scrollTop ?? 0;
 	if (!selectedShelterSite && !state.shelter.rooms.some((room) => room.id === selectedRoomId)) selectedRoomId = state.shelter.rooms[0]?.id ?? null;
 	const rooms = state.shelter.rooms;
-	const grid = [0, 1, 2].map((row) => `<div class="shelter-floor"><div class="shelter-floor-label">СЕКТОР 0${row + 1}</div><div class="shelter-floor-grid">${[0, 1, 2, 3].map((column) => {
+	const sites = getShelterSites(state.shelter), frontier = getShelterFrontier(state.shelter);
+	const grid = `<div class="shelter-floor-grid">${sites.map(({ column, row }) => {
 		const room = rooms.find((item) => item.column === column && item.row === row);
-		if (!room) return `<button class="shelter-site ${selectedShelterSite?.column === column && selectedShelterSite.row === row ? "active" : ""}" data-shelter-column="${column}" data-shelter-row="${row}" aria-label="Построить комнату: сектор ${row + 1}, ячейка ${column + 1}">${icon("base", 27)}<strong>Новая комната</strong><span>Свободная ячейка</span><small>Выбрать помещение +</small></button>`;
+		if (!room) return `<button class="shelter-site ${selectedShelterSite?.column === column && selectedShelterSite.row === row ? "active" : ""}" data-shelter-column="${column}" data-shelter-row="${row}" aria-label="Построить комнату: участок ${column}, ${row}">${icon("base", 27)}<strong>Новая комната</strong><span>Участок ${column}, ${row}</span><small>Свободная площадка +</small></button>`;
 		const info = ROOM_DEFINITIONS[room.type], production = getRoomProductionState(state, room);
 		return `<button class="shelter-site built ${room.status !== "ready" ? "building" : ""} ${production.reason ? "blocked" : ""} ${selectedRoomId === room.id ? "active" : ""}" data-shelter-room="${room.id}" data-focus-key="room-${room.id}" aria-pressed="${selectedRoomId === room.id}" style="--room-color:${info.color}">${icon(roomIcon(room.type), 27)}<strong>${e(info.label)}</strong><span>Ур. ${room.level || "—"} · ${room.workerIds.length} / ${getRoomWorkerCapacity(room)} работников</span><small data-room-status="${room.id}">${e(production.status)}</small><span class="progress"><i data-room-progress="${room.id}" style="width:${Math.round(production.progress * 100)}%"></i></span></button>`;
-	}).join("")}</div></div>`).join("");
+	}).join("")}</div><div class="section-head"><h2>Наружные стены</h2><span class="muted">Со стороны улицы — вход</span></div><div class="shelter-floor-grid">${[...frontier, ...state.shelter.expansions].map(({column,row}) => `<button class="shelter-site" data-shelter-column="${column}" data-shelter-row="${row}">${icon("scrap",24)}<strong>${state.shelter.expansions.some((p) => p.column === column && p.row === row) ? "Идут работы" : "Пробить стену"}</strong><span>Участок ${column}, ${row}</span><small>Расширить здание →</small></button>`).join("")}</div>`;
 	panel.innerHTML = `${shelterOverview()}<section class="shelter-sites command-room-index"><div class="shelter-sites-head"><h2>Комнаты и свободные ячейки</h2><span class="eyebrow">ВЫБЕРИ ОБЪЕКТ</span></div>${grid}<p class="field-hint">Управление выбранной комнатой откроется рядом со схемой убежища.</p></section>${discoveriesSection()}`;
 	const recipes = panel.querySelector<HTMLElement>(".room-module-recipes"); if (recipes) recipes.scrollTop = recipeScroll;
 }
 function buildSitePanel(column: number, row: number) {
-	return `<div class="room-management-head"><span class="eyebrow">Сектор ${row + 1} · ячейка ${column + 1}</span><h2>Расширить убежище</h2><p>Построй помещение, дождись окончания стройки, затем назначь рабочих. Склад и жилой блок работают без персонала.</p></div><div class="room-management-body"><div class="shelter-build-options">${(Object.keys(ROOM_DEFINITIONS) as ShelterRoomType[]).map((type) => {
+	const open = getShelterSites(state.shelter).some((p) => p.column === column && p.row === row);
+	if (!open) {
+		const expansion = state.shelter.expansions.find((p) => p.column === column && p.row === row);
+		const quote = getExcavationQuote(state, column, row);
+		const progress = expansion ? expansion.workDone / expansion.workRequired : 0;
+		return `<div class="room-management-head"><span class="eyebrow">Наружная стена · участок ${column}, ${row}</span><h2>${expansion ? "Пробиваем стену" : "Расширить здание"}</h2><p>За стеной будет новая площадка с проходом. После работ здесь можно построить любую комнату. Сторона улицы остаётся входом в убежище.</p></div><div class="room-management-body">${expansion ? `<div class="production-readout"><strong>Работы ${Math.floor(progress * 100)}%</strong><span class="progress"><i style="width:${progress * 100}%"></i></span><p>${seconds((expansion.workRequired - expansion.workDone) / 1_000_000)} до новой площадки. Работы продолжаются офлайн.</p></div>` : `<div class="loadout-stats"><span>Работы ${seconds(quote.duration)}</span><span>Новый участок здания</span></div><button class="button secondary" data-action="excavate-wall" data-column="${column}" data-row="${row}" ${quote.reason ? "disabled" : ""}>Пробить стену · ${costLabel(quote)}</button><p class="quote-note">${e(quote.reason ?? "Материалы списываются один раз при начале работ.")}</p>`}</div>`;
+	}
+	return `<div class="room-management-head"><span class="eyebrow">Участок ${column}, ${row}</span><h2>Расширить убежище</h2><p>Построй помещение, дождись окончания стройки, затем назначь рабочих. Склад и жилой блок работают без персонала.</p></div><div class="room-management-body"><div class="shelter-build-options">${(Object.keys(ROOM_DEFINITIONS) as ShelterRoomType[]).map((type) => {
 		const info = ROOM_DEFINITIONS[type], quote = getBuildRoomQuote(state, type, column, row);
 		return `<article class="shelter-build-option"><h3>${icon(roomIcon(type), 24)} ${e(info.label)}</h3><p>${e(info.description)}</p><div class="loadout-stats"><span>Стройка ${seconds(quote.duration)}</span><span>${info.production ? "Нужны работники" : "Без работников"}</span></div><button class="button secondary" data-action="build-room" data-room-type="${type}" data-column="${column}" data-row="${row}" ${quote.reason ? "disabled" : ""}>Построить · ${costLabel(quote)}</button><small class="quote-note" data-build-room-note="${type}">${e(quote.reason ?? "Оплата при начале; стройка идёт и офлайн")}</small></article>`;
 	}).join("")}</div></div>`;
@@ -1769,6 +1785,10 @@ document.addEventListener("click", (event) => {
 		case "close-context": closeCommandContext(); break;
 		case "open-market":
 			toolOrigin = target; page = "arsenal"; arsenalTab = "market"; render(); document.querySelector<HTMLButtonElement>('[data-action="close-tools"]')?.focus(); break;
+		case "excavate-wall": {
+			const result = excavateShelter(state, Number(target.dataset.column), Number(target.dataset.row));
+			act(result); return;
+		}
 		case "build-room": {
 			const column = Number(target.dataset.column), row = Number(target.dataset.row);
 			const result = buildRoom(state, target.dataset.roomType as ShelterRoomType, column, row);
@@ -2322,7 +2342,7 @@ const readyContracts = () =>
 			getContractProgress(state, contract) >= contract.target
 	).length;
 const rosterStatus = () => `${state.scavs.map((scav) => `${scav.id}:${scav.status}:${scav.autoRaid.enabled}:${scav.assignment}`).join(";")}|${state.raids.map((raid) => `${raid.id}:${raid.expedition?.stage}:${raid.expedition?.status}`).join(";")}`;
-const shelterStatus = () => state.shelter.rooms.map((room) => `${room.id}:${room.status}:${room.level}:${room.queue.map((job) => job.id).join(",")}:${room.workerIds.join(",")}:${room.recipeId}:${room.repeat}:${room.pending}:${room.cycles}`).join(";");
+const shelterStatus = () => `${state.shelter.sites.map((p) => `${p.column}:${p.row}`).join(";")}|${state.shelter.expansions.map((p) => `${p.column}:${p.row}:${Math.floor(p.workDone / p.workRequired * 100)}`).join(";")}|` + state.shelter.rooms.map((room) => `${room.id}:${room.status}:${room.level}:${room.queue.map((job) => job.id).join(",")}:${room.workerIds.join(",")}:${room.recipeId}:${room.repeat}:${room.pending}:${room.cycles}`).join(";");
 function interacting() {
 	return Boolean(workerPlacement || crewPointer) || (document.activeElement?.tagName === "SELECT" && !document.activeElement.hasAttribute("data-live-raid-select")) || document.activeElement?.tagName === "INPUT" || Boolean(document.querySelector("#modal-root .modal"));
 }

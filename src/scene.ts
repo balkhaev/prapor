@@ -1,9 +1,9 @@
 import Phaser from "phaser";
-import { getRaidPhase, type Raid, type RaidReport, type RoomInstance, type WeaponInstance } from "./game/engine";
+import { getRaidPhase, type Raid, type RaidReport, type RoomInstance, type WeaponInstance, getShelterSites, getShelterFrontier, type ShelterSite, type ShelterExpansion } from "./game/engine";
 import { type BaseRoom } from "./game/data";
-import { advanceShelterRoute, clientToShelterPoint, getShelterCell, planShelterRoute, SHELTER_SHAFT_X, SHELTER_FLOOR_Y } from "./shelter-motion";
-import { clampShelterCamera, focusShelterRect, panShelterCamera, projectShelterRect, resizeShelterCamera, shelterViewportForSize, viewportToShelter, zoomShelterCamera, type ShelterCamera, type ShelterRect, type ShelterViewport, type ClientRect } from "./shelter-camera";
-import { advanceShelterLift, createShelterLift, restoreShelterLift, type LiftRequest } from "./shelter-lift";
+import { advanceShelterRoute, clientToShelterPoint } from "./shelter-motion";
+import { clampShelterCamera, getMinShelterZoom, shelterOverviewCamera, focusShelterRect, panShelterCamera, projectShelterRect, resizeShelterCamera, shelterViewportForSize, viewportToShelter, zoomShelterCamera, type ShelterCamera, type ShelterRect, type ShelterViewport, type ClientRect } from "./shelter-camera";
+import { getShelterLayoutCell, getShelterCorridorSegments, getShelterWalkingRoute, getShelterWorldBounds } from "./shelter-layout";
 import { advanceScavAnimation, createScavAnimation, type ScavAnimationState } from "./shelter-animation";
 import { advanceShelterStationClock, getShelterProductionPresentation, type ProductionPresentation } from "./shelter-production";
 import { projectShelterPoint, unprojectShelterPoint, projectShelterBounds, shelterRoomPolygon, shelterRoomPosition } from "./shelter-isometric";
@@ -28,7 +28,7 @@ export interface WorldSnapshot {
 	selectedMapId?: string | null;
 	selectedRoomId?: string | null;
 	selectedSite?: { column: number; row: number } | null;
-	shelter?: { rooms: RoomInstance[] };
+	shelter?: { rooms: RoomInstance[]; sites?: ShelterSite[]; expansions?: ShelterExpansion[] };
 	roomProduction?: Record<string, { progress: number; remainingSeconds: number | null; rate: number; status: string; reason: string | null }>;
 	scavs?: {
 		id: string;
@@ -78,8 +78,6 @@ type ScavActor = {
 	walking: boolean;
 	walkSpan: number;
 	phase: number;
-	liftSide: -1 | 1;
-	inLift: boolean;
 };
 export interface WorldInteractions {
 	canInteract?: () => boolean;
@@ -101,14 +99,14 @@ export interface WorldController {
 	setView: (view: View) => void;
 	selectRaid: (id: string | null) => void;
 	setRaidFollow: (enabled: boolean) => void;
+	getPresentationState: () => unknown;
+	restorePresentationState: (value: unknown) => void;
 	beginScavDrag: (id: string) => boolean;
 	moveScavDrag: (clientX: number, clientY: number) => void;
 	endScavDrag: () => void;
 	cancelScavDrag: () => void;
 	cancelCameraGesture: () => void;
 	getCameraState: () => WorldCameraState;
-	getPresentationState: () => unknown;
-	restorePresentationState: (value: unknown) => void;
 	zoomBy: (factor: number, clientX?: number, clientY?: number) => void;
 	panBy: (dx: number, dy: number) => void;
 	resetCamera: () => void;
@@ -118,6 +116,9 @@ export interface WorldController {
 }
 type ShelterCell = {
 	root: Phaser.GameObjects.Container;
+	chrome: Phaser.GameObjects.Container;
+	open: boolean;
+	expansion: ShelterExpansion | null;
 	art: Phaser.GameObjects.Graphics;
 	frame: Phaser.GameObjects.Graphics;
 	progress: Phaser.GameObjects.Graphics;
@@ -266,7 +267,6 @@ export function createWorld(
 		private operationsCaption!: Phaser.GameObjects.Text;
 		private selectedRoute!: Phaser.GameObjects.Graphics;
 		private cells = new Map<string, ShelterCell>();
-		private elevator!: Phaser.GameObjects.Container;
 		private shelterCaption!: Phaser.GameObjects.Text;
 		private ambient!: Phaser.GameObjects.Graphics;
 		private dragGhost!: Phaser.GameObjects.Graphics;
@@ -274,11 +274,10 @@ export function createWorld(
 		private gesture: CanvasGesture | null = null;
 		private nativeEvents = new AbortController();
 		private viewState: WorldSnapshot | null = null;
-		private liftModel = createShelterLift();
-		private liftDoors!: Phaser.GameObjects.Graphics;
-		private liftDisplay!: Phaser.GameObjects.Text;
-		private liftDoorAmount = 0;
-		private liftDisplaySignature = "";
+		private terrain!: Phaser.GameObjects.Graphics;
+		private exteriorProps: Phaser.GameObjects.Image[] = [];
+		private layoutSignature = "";
+		private worldBounds: ShelterRect = { x: 0, y: 0, width: WIDTH, height: HEIGHT };
 		private pendingPresentation: unknown = null;
 		private presentationReady = false;
 		private viewCamera: ShelterCamera = { zoom: 1, x: 0, y: 0 };
@@ -331,8 +330,8 @@ export function createWorld(
 			this.installViewportObserver();
 			this.syncSnapshot();
 			this.presentationReady = true;
-			if (this.pendingPresentation) { const saved = this.pendingPresentation; this.pendingPresentation = null; this.restorePresentationState(saved); }
 			this.show(requestedView);
+			if (this.pendingPresentation) { const saved = this.pendingPresentation; this.pendingPresentation = null; this.restorePresentationState(saved); }
 			this.game.canvas.setAttribute("aria-hidden", "true");
 			this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
 				this.cancelScavDrag();
@@ -364,106 +363,72 @@ export function createWorld(
 			this.applyCamera();
 		}
 
-		getCameraState(): WorldCameraState { return { ...(requestedView === "raid" && this.raidStreet ? this.raidStreet.getCameraState() : this.viewCamera), panMode: this.panMode, view: requestedView, minZoom: requestedView === "raid" ? .7 : 1, maxZoom: 4 }; }
-
+		getCameraState(): WorldCameraState { return { ...(requestedView === "raid" && this.raidStreet ? this.raidStreet.getCameraState() : this.viewCamera), panMode: this.panMode, view: requestedView, minZoom: requestedView === "raid" ? .7 : getMinShelterZoom(this.viewport, this.worldBounds), maxZoom: 4 }; }
 		getPresentationState(): unknown {
 			if (!this.presentationReady) return this.pendingPresentation;
 			const actual = snapshot();
-			// Actions save immediately, before the next visual sync. Never export a
-			// stale base presence after dispatch, removal, reassignment or import.
 			const actors = [...this.scavs].filter(([id, slot]) => {
 				if (actual.shelter !== this.viewState?.shelter || !slot.actor.visible) return false;
 				const scav = actual.scavs?.find((candidate) => candidate.id === id);
 				const assignment = actual.shelter?.rooms.find((room) => room.id === scav?.assignment && room.workerIds.includes(id))?.id ?? null;
 				return Boolean(scav && scav.status !== "raiding" && assignment === slot.assignment);
 			});
-			const eligible = new Set(actors.map(([id]) => id));
-			const lift = structuredClone(this.liftModel);
-			if (lift.passengerId && (!eligible.has(lift.passengerId) || !this.scavs.get(lift.passengerId)?.inLift)
-				|| lift.trip && !eligible.has(lift.trip.id)) {
-				lift.passengerId = null; lift.trip = null; lift.phase = "pickup"; lift.cancelledTrip = false; lift.doorOpen = false;
-				lift.targetY = SHELTER_FLOOR_Y.reduce<number>((y, floor) => Math.abs(floor - lift.y) < Math.abs(y - lift.y) ? floor : y, 228);
-			}
-			lift.queue = lift.queue.filter((ticket) => eligible.has(ticket.id));
-			lift.completed = lift.completed.filter((ticket) => eligible.has(ticket.id));
-			return { version: 1, camera: { ...this.viewCamera }, viewport: { ...this.viewport }, panMode: this.panMode,
-				raidId: requestedRaidId, raidCamera: this.raidStreet?.getCameraState(), lift,
-				actors: actors.map(([id, slot]) => ({ id,
-					x: slot.position.x, y: slot.position.y, assignment: slot.assignment, role: slot.role, goal: slot.goal,
-					anchor: { ...slot.anchor }, route: slot.route.map((point) => ({ ...point })), liftSide: slot.liftSide,
+			return { version: 1, layout: "surface", camera: { ...this.viewCamera }, viewport: { ...this.viewport }, panMode: this.panMode,
+				raidId: requestedRaidId, raidCamera: this.raidStreet?.getCameraState(),
+				actors: actors.map(([id, slot]) => ({ id, x: slot.position.x, y: slot.position.y,
+					assignment: slot.assignment, role: slot.role, goal: slot.goal, anchor: { ...slot.anchor },
 					visit: slot.visit, facing: slot.facing, dwellMs: Math.max(0, slot.dwellUntil - this.time.now), animation: { ...slot.animation } })) };
 		}
 
 		restorePresentationState(value: unknown): void {
 			if (!value || typeof value !== "object") return;
 			if (!this.presentationReady) { this.pendingPresentation = value; return; }
-			const data = value as Record<string, unknown>;
-			if (data.version !== 1) return;
+			const data = value as Record<string, unknown>; if (data.version !== 1) return;
 			this.cancelScavDrag(); this.cancelCameraGesture();
-			// Imports replace model identity. Synchronize that reset before applying
-			// positions so the following regular sync cannot wipe restored motion.
 			if (snapshot().shelter !== this.viewState?.shelter) this.syncSnapshot();
 			const object = (v: unknown): Record<string, unknown> | null => v && typeof v === "object" ? v as Record<string, unknown> : null;
 			const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 			const camera = object(data.camera), savedViewport = object(data.viewport);
-			if (camera && finite(camera.zoom) && finite(camera.x) && finite(camera.y) && camera.zoom >= 1 && camera.zoom <= 4) {
-				const priorViewport = savedViewport && finite(savedViewport.width) && finite(savedViewport.height) && savedViewport.width > 0 && savedViewport.height > 0 ? { width: savedViewport.width, height: savedViewport.height } : this.viewport;
-				this.viewCamera = resizeShelterCamera({ zoom: camera.zoom, x: camera.x, y: camera.y }, priorViewport, this.viewport);
+			if (camera && finite(camera.zoom) && finite(camera.x) && finite(camera.y) && camera.zoom > 0 && camera.zoom <= 4) {
+				const prior = savedViewport && finite(savedViewport.width) && finite(savedViewport.height) && savedViewport.width > 0 && savedViewport.height > 0 ? { width: savedViewport.width, height: savedViewport.height } : this.viewport;
+				this.viewCamera = resizeShelterCamera({ zoom: camera.zoom, x: camera.x, y: camera.y }, prior, this.viewport, this.worldBounds);
 			}
 			if (typeof data.panMode === "boolean") this.panMode = data.panMode;
-			const state = snapshot(), restored = new Set<string>(), lift = Array.isArray(data.actors) ? restoreShelterLift(data.lift) : null;
-			const point = (v: unknown, inCabin = false): Point | null => {
-				const p = object(v);
-				if (!p || !finite(p.x) || !finite(p.y)) return null;
-				const x = p.x, y = p.y;
-				if (x < 32 || x > 808) return null;
-				const floor = SHELTER_FLOOR_Y.find((floor) => Math.abs(floor - y) < .01);
-				if (floor !== undefined) return { x, y: floor };
-				return inCabin && Math.abs(x - SHELTER_SHAFT_X) < .01 && y >= 129 && y <= 450 ? { x, y } : null;
-			};
-			if (lift && Array.isArray(data.actors)) for (const slot of this.scavs.values()) slot.inLift = false;
-			if (lift && Array.isArray(data.actors)) for (const raw of data.actors.slice(0, 32)) {
+			const state = snapshot(), sites = getShelterSites(state.shelter ?? { rooms: [] });
+			const point = (v: unknown): Point | null => { const p = object(v); return p && finite(p.x) && finite(p.y) && Math.abs(p.x) < 100_000 && Math.abs(p.y) < 100_000 ? { x: p.x, y: p.y } : null; };
+			// Old underground positions are discarded; current surface paths are regenerated
+			// through actual doors and carved corridors, so stale routes cannot cross new walls.
+			if (data.layout === "surface" && Array.isArray(data.actors)) for (const raw of data.actors.slice(0, 32)) {
 				const saved = object(raw); if (!saved || typeof saved.id !== "string") continue;
 				const slot = this.scavs.get(saved.id), scav = state.scavs?.find((candidate) => candidate.id === saved.id);
 				if (!slot || !scav || scav.status === "raiding" || saved.assignment !== slot.assignment || saved.role !== slot.role) continue;
-				const at = point(saved, lift?.passengerId === saved.id), anchor = point(saved.anchor);
+				const at = point(saved), anchor = point(saved.anchor);
 				if (!at || !anchor || typeof saved.goal !== "string" || saved.goal.length > 180) continue;
-				const allowedGoal = slot.assignment ? saved.goal.startsWith(`work:${slot.assignment}:`) : slot.role === "rest" ? saved.goal === slot.goal
-					: saved.goal.startsWith("idle-home:") || saved.goal.startsWith("visit:") && state.shelter?.rooms.some((room) => saved.goal === `visit:${saved.visit}:${room.id}`);
-				if (!allowedGoal || !Array.isArray(saved.route) || saved.route.length > 8) continue;
-				const unchangedGoal = !slot.assignment || saved.goal === slot.goal;
-				const route = saved.route.map((p) => point(p));
-				if (route.some((p) => !p)) continue;
-				const legs = [at, ...route as Point[]];
-				if (legs.some((to, index) => index > 0 && Math.abs(to.y - legs[index - 1]!.y) > .01 && Math.abs(to.x - SHELTER_SHAFT_X) > .01)
-					|| Math.hypot((route.length ? route[route.length - 1]!.x : at.x) - anchor.x, (route.length ? route[route.length - 1]!.y : at.y) - anchor.y) > 1) continue;
-				// A changed real production phase keeps its current destination. The
-				// saved feet position is useful, but old work never overrides the game.
-				this.placeActor(slot, at); slot.liftSide = saved.liftSide === -1 ? -1 : 1;
-				if (unchangedGoal) { slot.anchor = anchor; slot.goal = saved.goal; slot.route = route as Point[]; }
-				else slot.route = this.actorRoute(slot, slot.anchor);
+				const goal = saved.goal;
+				const allowed = slot.assignment ? goal.startsWith(`work:${slot.assignment}:`) : slot.role === "rest" ? goal === slot.goal
+					: goal.startsWith("idle-home:") || goal.startsWith("visit:") && state.shelter?.rooms.some((room) => goal === `visit:${saved.visit}:${room.id}`);
+				if (!allowed) continue;
+				const destination = slot.assignment ? slot.anchor : anchor;
+				const route = getShelterWalkingRoute(at, destination, sites);
+				if (!route.length && Math.hypot(at.x - destination.x, at.y - destination.y) > .01) continue;
+				const cell = getShelterLayoutCell(at), onFloor = cell && sites.some((p) => p.column === cell.column && p.row === cell.row);
+				const onCorridor = getShelterCorridorSegments(sites).some(({from,to}) => Math.abs(from.x - to.x) < .001 ? Math.abs(at.x - from.x) < .001 && at.y >= Math.min(from.y,to.y) && at.y <= Math.max(from.y,to.y) : Math.abs(at.y - from.y) < .001 && at.x >= Math.min(from.x,to.x) && at.x <= Math.max(from.x,to.x));
+				const onStreet = at.y >= 38 && at.y <= 132 && at.x >= Math.min(...sites.map((p) => cellPosition(p.column,p.row).x)) - 40 && at.x <= Math.max(...sites.map((p) => cellPosition(p.column,p.row).x)) + 212;
+				const onDoor = sites.some((p) => { const origin = cellPosition(p.column, p.row); return Math.abs(at.x - origin.x - 86) < .001 && at.y >= origin.y + 100 && at.y <= origin.y + 116; });
+				if (!onFloor && !onCorridor && !onStreet && !onDoor) continue;
+				this.placeActor(slot, at); slot.route = reducedMotion ? [] : route; slot.anchor = { ...destination };
+				if (!slot.assignment || goal === slot.goal) slot.goal = goal;
+				if (reducedMotion) this.placeActor(slot, destination);
 				if (finite(saved.visit)) slot.visit = Math.max(0, Math.min(1_000_000, Math.floor(saved.visit)));
 				if (finite(saved.dwellMs)) slot.dwellUntil = this.time.now + Math.max(0, Math.min(60_000, saved.dwellMs));
 				slot.facing = saved.facing === -1 ? -1 : 1;
 				const animation = object(saved.animation);
-				if (animation) { const next = { ...slot.animation }; for (const key of Object.keys(next) as (keyof ScavAnimationState)[]) if (key !== "observedJob" && finite(animation[key])) (next as unknown as Record<string, unknown>)[key] = animation[key]; next.observedJob = typeof animation.observedJob === "string" ? animation.observedJob : null; slot.animation = next; }
-				restored.add(saved.id);
-			}
-			if (lift) {
-				if (lift.passengerId && !restored.has(lift.passengerId)) {
-					// A removed/reassigned passenger is never pulled out of a real room
-					// into an old cabin. Park the empty cabin physically at a nearby floor.
-					lift.passengerId = null; lift.trip = null; lift.phase = "pickup"; lift.cancelledTrip = false;
-					lift.targetY = SHELTER_FLOOR_Y.reduce<number>((y, floor) => Math.abs(floor - lift.y) < Math.abs(y - lift.y) ? floor : y, 228);
-					lift.doorOpen = false;
-				}
-				lift.queue = lift.queue.filter((ticket) => restored.has(ticket.id)); this.liftModel = lift;
-				this.liftDoorAmount = lift.doorOpen ? 1 : 0;
-				if (lift.passengerId) { const rider = this.scavs.get(lift.passengerId); if (rider) { rider.inLift = true; this.placeActor(rider, { x: SHELTER_SHAFT_X, y: lift.y }); } }
+				if (animation) { const next = { ...slot.animation }; for (const key of Object.keys(next) as (keyof ScavAnimationState)[]) if (key !== "observedJob" && finite(animation[key]) && Math.abs(animation[key]) < 1e7) (next as unknown as Record<string, unknown>)[key] = animation[key]; next.observedJob = typeof animation.observedJob === "string" ? animation.observedJob : null; slot.animation = next; }
 			}
 			if (typeof data.raidId === "string" && data.raidId === requestedRaidId && (state.raids.some((raid) => raid.id === data.raidId) || state.history?.some((report) => report.raidId === data.raidId))) { this.selectRaid(data.raidId); this.raidStreet.restoreCamera(data.raidCamera); }
-			this.paintLift(0); this.applyCamera();
+			this.applyCamera();
 		}
+
 		selectRaid(id: string | null): void { requestedRaidId = id; this.raidStreet?.selectRaid(id); if (requestedView === "raid" && this.raidStreet) this.raidStreet.update(snapshot(), Date.now(), 0); this.applyCamera(); }
 		setRaidFollow(enabled: boolean): void { this.raidStreet?.setFollow(enabled); this.applyCamera(); }
 
@@ -472,7 +437,7 @@ export function createWorld(
 		}
 
 		private applyCamera(): void {
-			this.viewCamera = clampShelterCamera(this.viewCamera, this.viewport);
+			this.viewCamera = clampShelterCamera(this.viewCamera, this.viewport, this.worldBounds);
 			this.baseLayer?.setScale(this.viewCamera.zoom).setPosition(-this.viewCamera.x * this.viewCamera.zoom, -this.viewCamera.y * this.viewCamera.zoom);
 			this.mapLayer?.setPosition((this.viewport.width - WIDTH) / 2, (this.viewport.height - HEIGHT) / 2 + 30);
 			this.input?.setDefaultCursor(this.panMode || this.spacePressed || requestedView === "raid" ? "grab" : "default");
@@ -493,7 +458,7 @@ export function createWorld(
 			this.stageSize = { width: rect.width, height: rect.height };
 			this.cancelScavDrag(); this.cancelPan(); this.spacePressed = false;
 			const next = shelterViewportForSize(rect.width, rect.height);
-			this.viewCamera = resizeShelterCamera(this.viewCamera, this.viewport, next);
+			this.viewCamera = resizeShelterCamera(this.viewCamera, this.viewport, next, this.worldBounds);
 			const changed = Math.abs(next.width - this.viewport.width) > .001 || Math.abs(next.height - this.viewport.height) > .001;
 			this.viewport = next;
 			this.raidStreet?.resize(next);
@@ -510,11 +475,11 @@ export function createWorld(
 			const anchor = clientX !== undefined && clientY !== undefined ? clientToShelterPoint(clientX, clientY, this.game.canvas.getBoundingClientRect(), this.viewport.width, this.viewport.height) : { x: this.viewport.width / 2, y: this.viewport.height / 2 };
 			if (!anchor) return;
 			if (requestedView === "raid") { this.raidStreet.zoomBy(factor, clientX !== undefined && clientY !== undefined ? anchor : undefined); this.applyCamera(); return; }
-			this.viewCamera = zoomShelterCamera(this.viewCamera, this.viewCamera.zoom * factor, anchor, this.viewport); this.applyCamera();
+			this.viewCamera = zoomShelterCamera(this.viewCamera, this.viewCamera.zoom * factor, anchor, this.viewport, this.worldBounds); this.applyCamera();
 		}
 
-		panBy(dx: number, dy: number): void { if (this.cameraAllowed()) { if (requestedView === "raid") this.raidStreet.panBy(dx, dy); else this.viewCamera = panShelterCamera(this.viewCamera, dx, dy, this.viewport); this.applyCamera(); } }
-		resetCamera(): void { if (this.cameraAllowed()) { if (requestedView === "raid") this.raidStreet.resetCamera(); else this.viewCamera = { zoom: 1, x: 0, y: 0 }; this.applyCamera(); } }
+		panBy(dx: number, dy: number): void { if (this.cameraAllowed()) { if (requestedView === "raid") this.raidStreet.panBy(dx, dy); else this.viewCamera = panShelterCamera(this.viewCamera, dx, dy, this.viewport, this.worldBounds); this.applyCamera(); } }
+		resetCamera(): void { if (this.cameraAllowed()) { if (requestedView === "raid") this.raidStreet.resetCamera(); else this.viewCamera = shelterOverviewCamera(this.viewport, this.worldBounds); this.applyCamera(); } }
 		setPanMode(enabled: boolean): void { this.panMode = Boolean(enabled); this.cancelPan(); if (enabled) this.cancelScavDrag(); this.applyCamera(); }
 		focusRoom(id: string): boolean {
 			if (!this.baseLayer || requestedView !== "base" || document.hidden) return false;
@@ -522,7 +487,7 @@ export function createWorld(
 			if (!room) return false;
 			const p = cellPosition(room.column, room.row);
 			const bounds = projectShelterBounds({ ...p, width: ROOM_WIDTH, height: ROOM_HEIGHT });
-			this.viewCamera = focusShelterRect(this.viewCamera, { ...bounds, y: bounds.y - 24, height: bounds.height + 24 }, 2.5, this.viewport);
+			this.viewCamera = focusShelterRect(this.viewCamera, { ...bounds, y: bounds.y - 24, height: bounds.height + 24 }, 2.5, this.viewport, this.worldBounds);
 			if (this.drag) {
 				this.drag.point = null; this.drag.roomId = null; this.drag.cellKey = null;
 				this.dragGhost.clear();
@@ -532,12 +497,12 @@ export function createWorld(
 		}
 
 		projectShelterRect(rect: ShelterRect): (ClientRect & { visible: boolean }) | null {
-			return this.baseLayer && requestedView === "base" ? projectShelterRect(projectShelterBounds(rect), this.viewCamera, this.game.canvas.getBoundingClientRect(), this.viewport) : null;
+			return this.baseLayer && requestedView === "base" ? projectShelterRect(projectShelterBounds(rect), this.viewCamera, this.game.canvas.getBoundingClientRect(), this.viewport, this.worldBounds) : null;
 		}
 
 		private clientWorld(clientX: number, clientY: number): Point | null {
 			const viewport = clientToShelterPoint(clientX, clientY, this.game.canvas.getBoundingClientRect(), this.viewport.width, this.viewport.height);
-			return viewport ? unprojectShelterPoint(viewportToShelter(viewport, this.viewCamera, this.viewport)) : null;
+			return viewport ? unprojectShelterPoint(viewportToShelter(viewport, this.viewCamera, this.viewport, this.worldBounds)) : null;
 		}
 
 		private cancelPan(): void {
@@ -601,7 +566,7 @@ export function createWorld(
 			const state = snapshot();
 			if (requestedView !== "base" || document.hidden || interactions.canDrag?.() === false || state.shelter !== drag.shelter || state.scavs?.find((scav) => scav.id === drag.scavId) !== drag.scav || drag.scav.status === "raiding" || drag.scav.health < 25) { this.cancelScavDrag(); return; }
 			const point = this.clientWorld(clientX, clientY);
-			const site = point ? getShelterCell(point) : null;
+			const site = point ? getShelterLayoutCell(point) : null;
 			const room = site ? state.shelter?.rooms.find((candidate) => candidate.column === site.column && candidate.row === site.row) : undefined;
 			const roomId = room?.id ?? null;
 			const reason = roomId ? this.assignmentReason(drag.scavId, roomId) : site ? "Сначала построй комнату" : point ? "Перенеси бойца в производственную комнату" : "Отпусти над комнатой убежища";
@@ -623,7 +588,7 @@ export function createWorld(
 			const drag = this.drag;
 			if (!drag) { this.clearGesture(); return; }
 			const state = snapshot();
-			const site = drag.point ? getShelterCell(drag.point) : null;
+			const site = drag.point ? getShelterLayoutCell(drag.point) : null;
 			const room = site ? state.shelter?.rooms.find((candidate) => candidate.column === site.column && candidate.row === site.row) : undefined;
 			const allowed = requestedView === "base" && !document.hidden && interactions.canDrag?.() !== false && state.shelter === drag.shelter && state.scavs?.find((scav) => scav.id === drag.scavId) === drag.scav && room?.id === drag.roomId && this.assignmentReason(drag.scavId, room.id) === null;
 			this.cancelScavDrag();
@@ -688,7 +653,7 @@ export function createWorld(
 					const distance = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), midpoint = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
 					const anchor = { x: (pinch.midpoint.x - rect.left) * this.viewport.width / rect.width, y: (pinch.midpoint.y - rect.top) * this.viewport.height / rect.height };
 					if (requestedView === "raid") { this.raidStreet.zoomBy(distance / pinch.distance, anchor); this.raidStreet.panBy((pinch.midpoint.x - midpoint.x) * this.viewport.width / rect.width, (pinch.midpoint.y - midpoint.y) * this.viewport.height / rect.height); }
-					else { this.viewCamera = zoomShelterCamera(this.viewCamera, this.viewCamera.zoom * distance / pinch.distance, anchor, this.viewport); this.viewCamera = panShelterCamera(this.viewCamera, (pinch.midpoint.x - midpoint.x) * this.viewport.width / rect.width, (pinch.midpoint.y - midpoint.y) * this.viewport.height / rect.height, this.viewport); }
+					else { this.viewCamera = zoomShelterCamera(this.viewCamera, this.viewCamera.zoom * distance / pinch.distance, anchor, this.viewport, this.worldBounds); this.viewCamera = panShelterCamera(this.viewCamera, (pinch.midpoint.x - midpoint.x) * this.viewport.width / rect.width, (pinch.midpoint.y - midpoint.y) * this.viewport.height / rect.height, this.viewport, this.worldBounds); }
 					pinch.distance = distance; pinch.midpoint = midpoint; event.preventDefault(); this.applyCamera(); return;
 				}
 				const pan = this.panGesture;
@@ -752,54 +717,78 @@ export function createWorld(
 		}
 
 		private paintBunker(): void {
-			const g = this.add.graphics().setDepth(-1000);
-			this.baseLayer.add(g);
-			g.fillStyle(0x14221d).fillRect(0, 0, WIDTH, HEIGHT);
-			const quad = (x: number, y: number, width: number, height: number) => [
-				{ x, y }, { x: x + width, y }, { x: x + width, y: y + height }, { x, y: y + height },
-			].map(projectShelterPoint);
-			const footprint = quad(20, 75, 800, 410);
-			polygon(g, footprint.map((p) => ({ x: p.x + 12, y: p.y + 16 })), 0x060f0c, .7);
-			polygon(g, [footprint[1]!, footprint[2]!, { ...footprint[2]!, y: footprint[2]!.y + 14 }, { ...footprint[1]!, y: footprint[1]!.y + 14 }], 0x344238);
-			polygon(g, [footprint[3]!, footprint[2]!, { ...footprint[2]!, y: footprint[2]!.y + 14 }, { ...footprint[3]!, y: footprint[3]!.y + 14 }], 0x23362d);
-			polygon(g, footprint, 0x465044);
-			line(g, [...footprint, footprint[0]!], 0x8d9680, 2, .6);
-			const rng = random(90312);
-			for (let x = 20; x < 820; x += 20) for (let y = 75; y < 485; y += 20) {
-				polygon(g, quad(x, y, 19, 19), blend(0x50594b, 0x1c3027, rng() * .35), .8);
-				const p = projectShelterPoint({ x: x + rng() * 20, y: y + rng() * 20 });
-				g.fillStyle(0xb1b296, .1).fillEllipse(p.x, p.y, 2 + rng() * 3, 1);
-			}
-			// The same route spine and room addresses are retained in the simulation.
-			for (const y of [129, 228, 339, 450]) {
-				line(g, [{ x: 30, y }, { x: 810, y }].map(projectShelterPoint), 0xb6b18b, 2, .28);
-			}
-			for (const x of [400, 440]) line(g, [{ x, y: 100 }, { x, y: 465 }].map(projectShelterPoint), 0xc0bb92, 1, .5);
-			for (let y = 105; y < 465; y += 14) line(g, [{ x: 407, y }, { x: 433, y }].map(projectShelterPoint), 0x202e26, 2, .7);
-			for (let row = 0; row < 3; row++) for (let column = 0; column < 4; column++) this.createCell(column, row);
-			// Supply crates and a perimeter light ground the open-roof bunker in the raid's visual world.
-			for (const [x, y] of [[76, 108], [205, 106], [740, 105]]) {
-				const p = projectShelterPoint({ x: x!, y: y! });
-				if (this.textures.exists("raid-props") && this.textures.get("raid-props").has("crates")) {
-					const crate = this.add.image(p.x, p.y, "raid-props", "crates").setOrigin(.5, 1).setDepth(p.y);
-					crate.setScale(34 / crate.width); this.baseLayer.add(crate);
-				}
-			}
-			const lift = this.add.graphics();
-			polygon(lift, [{ x: -15, y: -5 }, { x: 0, y: -12 }, { x: 15, y: -5 }, { x: 0, y: 3 }], 0x84907a);
-			polygon(lift, [{ x: -15, y: -5 }, { x: 0, y: 3 }, { x: 0, y: 7 }, { x: -15, y: -1 }], 0x43594a);
-			polygon(lift, [{ x: 15, y: -5 }, { x: 0, y: 3 }, { x: 0, y: 7 }, { x: 15, y: -1 }], 0x2a4135);
-			for (const x of [-13, 13]) line(lift, [{ x, y: -3 }, { x, y: -21 }], 0xa8ac8b, 1.4);
-			this.elevator = this.add.container(0, 0, [lift]); this.baseLayer.add(this.elevator);
-			this.liftDoors = this.add.graphics();
-			this.liftDisplay = this.text(0, 0, "ЛИФТ", 8, "#dde2c7").setOrigin(.5).setBackgroundColor("#10242a").setPadding(3, 2);
-			this.baseLayer.add([this.liftDoors, this.liftDisplay]);
-			this.ambient = this.add.graphics().setDepth(800); this.baseLayer.add(this.ambient);
-			this.dragGhost = this.add.graphics().setDepth(1200); this.baseLayer.add(this.dragGhost);
-			this.baseCaption = this.text(29, 27, "УБЕЖИЩЕ 07", 15, "#ded2ae").setVisible(false);
-			this.shelterCaption = this.text(29, 477, "КОМНАТЫ · ЛЮДИ · ПРОИЗВОДСТВО", 10, "#abb69c");
+			this.terrain = this.add.graphics().setDepth(-1_000_000_000); this.baseLayer.add(this.terrain);
+			this.ambient = this.add.graphics().setDepth(1_000_000); this.baseLayer.add(this.ambient);
+			this.dragGhost = this.add.graphics().setDepth(100_000_000); this.baseLayer.add(this.dragGhost);
+			this.baseCaption = this.text(29, 27, "ЗДАНИЕ УБЕЖИЩА 07", 15, "#ded2ae").setVisible(false);
+			this.shelterCaption = this.text(29, 477, "КОМНАТЫ · ЛЮДИ · ПРОИЗВОДСТВО", 10, "#abb69c").setVisible(false);
 			this.baseLayer.add([this.baseCaption, this.shelterCaption]);
-			this.shelterCaption.setDepth(900); this.baseLayer.sort("depth");
+			this.syncShelterLayout(snapshot());
+		}
+
+		private syncShelterLayout(state: WorldSnapshot): void {
+			const shelter = state.shelter ?? { rooms: [] }, sites = getShelterSites(shelter);
+			const frontier = getShelterFrontier(shelter), expansions = shelter.expansions ?? [];
+			const all = [...sites, ...frontier, ...expansions];
+			const signature = `${sites.map((p) => `${p.column}:${p.row}`).join(";")}|${expansions.map((p) => `${p.column}:${p.row}`).join(";")}`;
+			if (signature === this.layoutSignature) return;
+			const first = !this.layoutSignature; this.layoutSignature = signature;
+			this.worldBounds = getShelterWorldBounds(sites, [...frontier, ...expansions]);
+			this.viewCamera = first ? shelterOverviewCamera(this.viewport, this.worldBounds) : clampShelterCamera(this.viewCamera, this.viewport, this.worldBounds);
+			const keys = new Set(all.map((p) => `${p.column}:${p.row}`));
+			for (const [key, cell] of this.cells) if (!keys.has(key)) { cell.root.destroy(true); cell.chrome.destroy(true); cell.zone.destroy(); this.cells.delete(key); }
+			for (const p of all) if (!this.cells.has(`${p.column}:${p.row}`)) this.createCell(p.column, p.row);
+			const g = this.terrain; g.clear();
+			const quad = (x: number, y: number, width: number, height: number) => [{ x, y }, { x: x + width, y }, { x: x + width, y: y + height }, { x, y: y + height }].map(projectShelterPoint);
+			g.fillStyle(0x1b2d23).fillRect(this.worldBounds.x, this.worldBounds.y, this.worldBounds.width, this.worldBounds.height);
+			const left = Math.min(...sites.map((p) => cellPosition(p.column, p.row).x)) - 40;
+			const right = Math.max(...sites.map((p) => cellPosition(p.column, p.row).x)) + 212;
+			// The front is a real street. The building expands into the yard on its other sides.
+			polygon(g, quad(left, 38, right - left, 79), 0x343c39);
+			polygon(g, quad(left, 117, right - left, 31), 0x7b8172);
+			for (let x = left; x < right; x += 38) {
+				line(g, [{ x, y: 78 }, { x: x + 19, y: 78 }].map(projectShelterPoint), 0xc9c19a, 2, .6);
+				line(g, [{ x, y: 118 }, { x, y: 148 }].map(projectShelterPoint), 0x4b594d, .8, .45);
+			}
+			const street = projectShelterPoint({ x: 380, y: 54 });
+			const streetLabel = this.baseCaption; streetLabel.setPosition(street.x, street.y - 24).setOrigin(.5).setText("УЛИЦА · ВЫХОД В РЕЙД").setFontSize(10).setVisible(true).setDepth(10_000_000);
+			for (const site of sites) {
+				const p = cellPosition(site.column, site.row);
+				polygon(g, quad(p.x - 10, p.y - 16, 192, 132).map((point) => ({ x: point.x + 5, y: point.y + 6 })), 0x06110c, .7);
+				polygon(g, quad(p.x - 10, p.y - 16, 192, 132), 0x4b5549);
+			}
+			for (const segment of getShelterCorridorSegments(sites)) {
+				line(g, [segment.from, segment.to].map(projectShelterPoint), 0x85917a, 9, .8);
+				line(g, [segment.from, segment.to].map(projectShelterPoint), 0xa9b395, .7, .45);
+			}
+			const has = (column: number, row: number) => sites.some((p) => p.column === column && p.row === row);
+			for (const site of sites) {
+				const p = cellPosition(site.column, site.row);
+				const edge = (a: Point, b: Point, entrance = false) => {
+					const aa = projectShelterPoint(a), bb = projectShelterPoint(b), height = 22;
+					polygon(g, [aa, bb, { x: bb.x, y: bb.y - height }, { x: aa.x, y: aa.y - height }], entrance ? 0x647261 : 0x606a55);
+					line(g, [{ x: aa.x, y: aa.y - height }, { x: bb.x, y: bb.y - height }], 0xafb399, 2, .8);
+					for (let step = 0; step <= 1; step += .125) {
+						const at = { x: aa.x + (bb.x - aa.x) * step, y: aa.y + (bb.y - aa.y) * step };
+						line(g, [{ x: at.x, y: at.y - 2 }, { x: at.x, y: at.y - height + 1 }], 0x384737, .6, .7);
+					}
+				};
+				if (!has(site.column - 1, site.row)) edge({ x: p.x - 20, y: p.y - 16 }, { x: p.x - 20, y: p.y + 132 });
+				if (!has(site.column + 1, site.row)) edge({ x: p.x + 192, y: p.y - 16 }, { x: p.x + 192, y: p.y + 132 });
+				if (!has(site.column, site.row + 1)) edge({ x: p.x - 20, y: p.y + 132 }, { x: p.x + 192, y: p.y + 132 });
+				if (site.row === 0) edge({ x: p.x, y: 148 }, { x: p.x + 172, y: 148 }, true);
+			}
+			for (const prop of this.exteriorProps) prop.destroy(); this.exteriorProps = [];
+			if (this.textures.exists("raid-props")) for (const prop of [{ x: 114, y: 74, frame: "car", width: 60 }, { x: 753, y: 119, frame: "crates", width: 27 }]) {
+				const at = projectShelterPoint(prop), image = this.add.image(at.x, at.y, "raid-props", prop.frame).setOrigin(.5, 1).setDepth(at.y);
+				image.setScale(prop.width / image.width); this.baseLayer.add(image); this.exteriorProps.push(image);
+			}
+			for (const x of [56, 790]) {
+				const at = projectShelterPoint({ x, y: 126 });
+				line(g, [{ x: at.x, y: at.y }, { x: at.x, y: at.y - 37 }, { x: at.x + 8, y: at.y - 37 }], 0x798a70, 2);
+				g.fillStyle(0xe0d19e).fillEllipse(at.x + 8, at.y - 36, 8, 3);
+			}
+			this.applyCamera();
 		}
 
 		private createCell(column: number, row: number): void {
@@ -817,9 +806,9 @@ export function createWorld(
 			zone.setInteractive(new Phaser.Geom.Polygon(corners.map((point) => ({ x: point.x - bounds.x, y: point.y - bounds.y }))), Phaser.Geom.Polygon.Contains);
 			zone.input!.cursor = "pointer";
 			const root = this.add.container(0, 0, [art, lamp, animation, frame, progress]).setDepth(at.y - 20);
-			const chrome = this.add.container(0, 0, [label, status, productLabel, feedback]).setDepth(950);
-			this.baseLayer.add([root, chrome, zone.setDepth(-800)]);
-			const cell: ShelterCell = { root, art, frame, progress, animation, stationClock: 0, stationJob: null, production: null, productLabel, label, status, lamp, zone, signature: "", column, row, hovered: false, room: null, working: false, operational: "empty", feedback, lastCycles: null, completedAt: -10000 };
+			const chrome = this.add.container(0, 0, [label, status, productLabel, feedback]).setDepth(10_000_000);
+			this.baseLayer.add([root, chrome, zone.setDepth(-100_000_000)]);
+			const cell: ShelterCell = { root, chrome, open: false, expansion: null, art, frame, progress, animation, stationClock: 0, stationJob: null, production: null, productLabel, label, status, lamp, zone, signature: "", column, row, hovered: false, room: null, working: false, operational: "empty", feedback, lastCycles: null, completedAt: -10000 };
 			this.cells.set(`${column}:${row}`, cell);
 			zone.on("pointerover", (pointer: Phaser.Input.Pointer) => { if (this.acceptsPointer(pointer, "base")) { cell.hovered = true; this.paintCellFrame(cell); } });
 			zone.on("pointerout", () => { cell.hovered = false; this.paintCellFrame(cell); });
@@ -853,15 +842,24 @@ export function createWorld(
 		}
 
 		private paintRoom(cell: ShelterCell): void {
-			cell.art.clear(); paintIsometricRoom(cell.art, cell.column, cell.row, cell.room);
+			cell.art.clear();
+			if (cell.open) paintIsometricRoom(cell.art, cell.column, cell.row, cell.room);
+			else {
+				const corners = shelterRoomPolygon(cell.column, cell.row);
+				polygon(cell.art, corners, 0x8b9274, cell.expansion ? .28 : .09);
+				line(cell.art, [...corners, corners[0]!], 0xb5b994, 1, .35);
+				const p = cellPosition(cell.column, cell.row), at = projectShelterPoint({ x: p.x + 86, y: p.y + 50 });
+				line(cell.art, [{ x: at.x - 7, y: at.y + 6 }, { x: at.x + 5, y: at.y - 8 }], 0xd8bd87, 2);
+				line(cell.art, [{ x: at.x - 2, y: at.y - 8 }, { x: at.x + 11, y: at.y - 1 }], 0xb7c3a2, 3);
+			}
 			const style = ROOM_STYLE[cell.room?.type ?? "workshop"]!;
-			cell.label.setText(cell.room ? `${style.label} · ${cell.room.level || ""}` : "СВОБОДНО").setColor(cell.room ? "#fff1dc" : "#afc0a4");
-			cell.status.setText(cell.room ? "" : "+ ПОСТРОИТЬ");
+			cell.label.setText(cell.room ? `${style.label} · ${cell.room.level || ""}` : cell.open ? "СВОБОДНАЯ ПЛОЩАДКА" : cell.expansion ? "РАСШИРЕНИЕ" : "НАРУЖНАЯ СТЕНА").setFontSize(cell.room ? 11 : 9).setColor(cell.room ? "#fff1dc" : "#afc0a4");
+			cell.status.setText(cell.room ? "" : cell.open ? "+ ПОСТРОИТЬ" : cell.expansion ? "ИДУТ РАБОТЫ" : "ПРОБИТЬ →");
 			cell.lamp.setVisible(Boolean(cell.room)).setTint(style.light);
 		}
 
 		private clickFeedback(at: Point, layer: Phaser.GameObjects.Container): void {
-			const ring = this.add.circle(at.x, at.y, 15).setStrokeStyle(2, C.light, .85).setDepth(1500);
+			const ring = this.add.circle(at.x, at.y, 15).setStrokeStyle(2, C.light, .85).setDepth(100_000_001);
 			layer.add(ring);
 			this.tweens.add({ targets: ring, scale: reducedMotion ? 1 : 2.2, alpha: 0, duration: reducedMotion ? 80 : 320, onComplete: () => ring.destroy() });
 		}
@@ -899,8 +897,8 @@ export function createWorld(
 			const label = this.text(0, -64, "", 16, "#ffedc7").setOrigin(.5).setFontFamily("Manrope, sans-serif").setFontStyle("bold").setLetterSpacing(0).setBackgroundColor("#0b1b20").setPadding(7, 4).setVisible(false);
 			const order = this.add.circle(-10, -34, 3.5, C.sage).setStrokeStyle(1, 0x10242b).setVisible(false);
 			const hit = this.add.zone(0, -21, 32, 46).setInteractive({ useHandCursor: true });
-			const slot: ScavActor = { actor, body, legA, legB, hand, sprite, poses, animation: createScavAnimation(index * .37), appearance, gear, tool, label, order, selection, hovered: false, gearSignature: "", position: { ...at }, anchor: { ...at }, route: [], goal: "", assignment: null, role: "idle", dwellUntil: this.time.now + 2000 + index * 800, visit: 0, facing: 1, climbing: false, status: "ready", health: 100, working: false, walking: false, walkSpan: 0, phase: index * 1.71, liftSide: at.x < SHELTER_SHAFT_X ? -1 : 1, inLift: false };
-			hit.on("pointerover", (pointer: Phaser.Input.Pointer) => { if (this.acceptsPointer(pointer, "base")) { slot.hovered = true; selection.setVisible(true); label.setVisible(true); actor.setDepth(850); } });
+			const slot: ScavActor = { actor, body, legA, legB, hand, sprite, poses, animation: createScavAnimation(index * .37), appearance, gear, tool, label, order, selection, hovered: false, gearSignature: "", position: { ...at }, anchor: { ...at }, route: [], goal: "", assignment: null, role: "idle", dwellUntil: this.time.now + 2000 + index * 800, visit: 0, facing: 1, climbing: false, status: "ready", health: 100, working: false, walking: false, walkSpan: 0, phase: index * 1.71 };
+			hit.on("pointerover", (pointer: Phaser.Input.Pointer) => { if (this.acceptsPointer(pointer, "base")) { slot.hovered = true; selection.setVisible(true); label.setVisible(true); actor.setDepth(1_000_001); } });
 			hit.on("pointerout", () => { slot.hovered = false; const selected = snapshot().selectedScavId === scavId; selection.setVisible(selected); label.setVisible(selected); actor.setDepth(actor.y); });
 			// Native pointer-up distinguishes a deliberate tap from a drag before opening the inspector.
 			actor.add([shadow, selection, body, label, order, hit]);
@@ -911,19 +909,22 @@ export function createWorld(
 
 		private syncShelter(state: WorldSnapshot): void {
 			if (this.viewState && state.shelter !== this.viewState.shelter) {
-				this.cancelScavDrag(); this.cancelCameraGesture(); this.liftModel = createShelterLift();
+				this.cancelScavDrag(); this.cancelCameraGesture(); this.layoutSignature = "";
 				this.raidStreet?.reset();
 				for (const slot of this.scavs.values()) slot.actor.destroy(true);
 				this.scavs.clear();
 				for (const cell of this.cells.values()) { cell.lastCycles = null; cell.completedAt = -10000; cell.feedback.setVisible(false); }
 			}
 			this.viewState = state;
+			this.syncShelterLayout(state);
 			const rooms = state.shelter?.rooms ?? [];
 			let workingRooms = 0;
 			for (const cell of this.cells.values()) {
 				const room = rooms.find((candidate) => candidate.column === cell.column && candidate.row === cell.row) ?? null;
 				if (cell.room?.id !== room?.id) { cell.lastCycles = null; cell.completedAt = -10000; cell.feedback.setVisible(false); }
 				cell.room = room;
+				cell.open = getShelterSites(state.shelter ?? { rooms: [] }).some((p) => p.column === cell.column && p.row === cell.row);
+				cell.expansion = state.shelter?.expansions?.find((p) => p.column === cell.column && p.row === cell.row) ?? null;
 				const production = room ? state.roomProduction?.[room.id] : undefined;
 				cell.production = room ? getShelterProductionPresentation(room, production ?? null) : null;
 				if (cell.stationJob !== cell.production?.jobId) { cell.stationClock = 0; cell.stationJob = cell.production?.jobId ?? null; }
@@ -932,7 +933,7 @@ export function createWorld(
 				cell.working = Boolean(room?.status === "ready" && room.queue.length && room.workerIds.length && production?.rate && !production.reason);
 				cell.operational = !room ? "empty" : room.status !== "ready" ? "building" : room.type === "storage" || room.type === "dormitory" ? "passive" : cell.working ? "working" : production?.reason || room.queue.length ? "blocked" : "idle";
 				if (cell.working) workingRooms++;
-				const signature = room ? `${room.id}:${room.type}:${room.level}:${room.status}` : "empty";
+				const signature = room ? `${room.id}:${room.type}:${room.level}:${room.status}` : `${cell.open}:${Boolean(cell.expansion)}`;
 				if (cell.signature !== signature) { cell.signature = signature; this.paintRoom(cell); }
 				this.paintCellFrame(cell);
 				cell.progress.clear();
@@ -956,7 +957,7 @@ export function createWorld(
 					cell.lamp.setAlpha(construction ? .1 : cell.working ? .18 : .06);
 				}
 			}
-			this.baseCaption.setText(`УБЕЖИЩЕ · УРОВЕНЬ ${state.level}`);
+			this.baseCaption.setText("УЛИЦА · ВЫХОД В РЕЙД");
 			this.shelterCaption.setText(`${rooms.length} КОМНАТ · ${workingRooms} ПРОИЗВОДЯТ · ${rooms.filter((room) => room.status !== "ready").length} СТРОЯТСЯ`);
 			this.syncPeople(state);
 			this.baseLayer.sort("depth");
@@ -966,32 +967,21 @@ export function createWorld(
 			const left = Math.min(4, count), onLeft = rank < left;
 			const total = onLeft ? left : Math.max(1, count - left);
 			const start = onLeft ? 282 : 465, span = onLeft ? 95 : 306;
-			return { x: start + (total > 1 ? (onLeft ? rank : rank - left) * span / (total - 1) : span / 2), y: 129 };
+			return { x: start + (total > 1 ? (onLeft ? rank : rank - left) * span / (total - 1) : span / 2), y: 132 };
 		}
 
 		private placeActor(slot: ScavActor, at: Point): void {
 			slot.position = { ...at };
 			const visual = projectShelterPoint(at);
-			slot.actor.setPosition(visual.x, visual.y).setDepth(slot.hovered ? 850 : visual.y);
+			slot.actor.setPosition(visual.x, visual.y).setDepth(slot.hovered ? 1_000_001 : visual.y);
 		}
 
 		private sendActor(slot: ScavActor, goal: string, at: Point): void {
 			if (slot.goal === goal && Math.hypot(slot.anchor.x - at.x, slot.anchor.y - at.y) < 1) return;
 			slot.goal = goal; slot.anchor = { ...at };
-			const instant = reducedMotion && !slot.inLift;
-			slot.route = instant ? [] : this.actorRoute(slot, at);
-			if (instant) this.placeActor(slot, at);
+			slot.route = reducedMotion ? [] : getShelterWalkingRoute(slot.position, at, getShelterSites(this.viewState?.shelter ?? { rooms: [] }));
+			if (reducedMotion) this.placeActor(slot, at);
 			slot.working = false;
-		}
-
-		private actorRoute(slot: ScavActor, at: Point): Point[] {
-			const from = { ...slot.position }, route = planShelterRoute(from, at);
-			if (Math.abs(from.y - at.y) > .01 && SHELTER_FLOOR_Y.some((floor) => Math.abs(from.y - floor) < .01) && !slot.inLift) {
-				slot.liftSide = from.x < SHELTER_SHAFT_X ? -1 : from.x > SHELTER_SHAFT_X ? 1 : at.x < SHELTER_SHAFT_X ? -1 : 1;
-				const waiting = { x: SHELTER_SHAFT_X + slot.liftSide * 26, y: from.y };
-				if (route[0]?.y === from.y) route[0] = waiting; else route.unshift(waiting);
-			}
-			return route;
 		}
 
 		private syncPeople(state: WorldSnapshot): void {
@@ -1010,8 +1000,12 @@ export function createWorld(
 				const previousStatus = slot.status, previousAssignment = slot.assignment;
 				slot.assignment = room?.id ?? null; slot.status = scav.status; slot.health = scav.health;
 				if (this.drag?.scavId === scav.id && (scav.status === "raiding" || scav.health < 25 || this.drag.shelter !== state.shelter || this.drag.scav !== scav)) this.cancelScavDrag();
-				if (scav.status === "raiding") { slot.actor.setVisible(false); slot.route = []; slot.goal = "raiding"; slot.working = false; slot.inLift = false; return; }
-				if (previousStatus === "raiding") this.placeActor(slot, { x: 112, y: 129 });
+				if (scav.status === "raiding") {
+					if (previousStatus !== "raiding") { this.sendActor(slot, "depart", { x: 318, y: 102 }); slot.actor.setVisible(!reducedMotion); }
+					if (!slot.route.length) slot.actor.setVisible(false);
+					slot.working = false; slot.role = "depart"; return;
+				}
+				if (previousStatus === "raiding") this.placeActor(slot, { x: 318, y: 102 });
 				slot.actor.setVisible(true).setScale(.78).setAlpha(this.drag?.scavId === scav.id ? .45 : scav.status === "wounded" ? .78 : 1);
 				if (scav.status === "wounded" && (!room || scav.health < 25)) {
 					const rest = rooms.find((candidate) => candidate.type === "medbay" && candidate.status === "ready") ?? rooms.find((candidate) => candidate.type === "dormitory" && candidate.status === "ready");
@@ -1062,60 +1056,23 @@ export function createWorld(
 
 		private animateShelter(time: number, delta: number): void {
 			const step = Math.min(Math.max(delta, 0), 100) / 1000;
-			// The shared platform owns travel along the central passage. Walking
-			// actors wait for pickup; one delta advances its gate and passenger.
-			const liftRequests: LiftRequest[] = [];
-			for (const [id, slot] of this.scavs) {
-				const next = slot.route[0];
-				const passenger = this.liftModel.passengerId === id && slot.inLift;
-				// A returned scav has a new entrance presence. An old, cancelled
-				// cabin ticket must finish parking before this identity can call again.
-				if (this.liftModel.passengerId === id && !slot.inLift) continue;
-				if (slot.actor.visible && next && (passenger || Math.abs(next.y - slot.position.y) > .01) && (this.drag?.scavId !== id || passenger)) liftRequests.push({ id, from: slot.position.y, to: next.y, ready: Math.abs(slot.position.x - SHELTER_SHAFT_X) < .01 });
-			}
-			const lift = advanceShelterLift(this.liftModel, liftRequests, step * 1000);
-			this.liftModel = lift.state;
-			for (const id of lift.boarded) { const rider = this.scavs.get(id); if (rider?.actor.visible) rider.inLift = true; }
-			if (lift.state.passengerId) { const rider = this.scavs.get(lift.state.passengerId); if (rider?.inLift && rider.actor.visible) this.placeActor(rider, { x: SHELTER_SHAFT_X, y: lift.state.y }); }
-			for (const drop of lift.dropped) {
-				const slot = this.scavs.get(drop.id);
-				if (!slot?.inLift || !slot.actor.visible) continue;
-				slot.inLift = false;
-				this.placeActor(slot, { x: SHELTER_SHAFT_X, y: drop.to });
-				slot.route = this.actorRoute(slot, slot.anchor);
-			}
 			this.ambient.clear();
 			for (const [id, slot] of this.scavs) {
 				let walkedDistance = 0;
 				if (slot.actor.visible && this.drag?.scavId !== id) {
 					this.patrolActor(slot, id, time);
 					const speed = slot.status === "wounded" ? 27 : 58;
-					const passenger = this.liftModel.passengerId === id && slot.inLift;
-					const next = slot.route[0], vertical = passenger || Boolean(next && Math.abs(next.y - slot.position.y) > .01);
+					const next = slot.route[0];
 					const hadRoute = slot.route.length > 0;
-					if (vertical && !passenger) {
-						const entering = this.liftModel.phase === "boarding" && this.liftModel.trip?.id === id;
-						const ahead = this.liftModel.queue.slice(0, Math.max(0, this.liftModel.queue.findIndex((ticket) => ticket.id === id))).filter((ticket) => ticket.from === slot.position.y && this.scavs.get(ticket.id)?.liftSide === slot.liftSide).length;
-						const waitingX = SHELTER_SHAFT_X + slot.liftSide * (26 + ahead * 24);
-						const targetX = entering ? SHELTER_SHAFT_X : waitingX;
-						const dx = targetX - slot.position.x, advance = Math.sign(dx) * Math.min(Math.abs(dx), speed * step);
-						this.placeActor(slot, { x: slot.position.x + advance, y: slot.position.y }); walkedDistance = Math.abs(advance);
-						slot.walking = walkedDistance > .001; slot.climbing = false;
-						if (slot.walking) slot.facing = dx < 0 ? -1 : 1;
-						if (slot.hovered || this.viewState?.selectedScavId === id) {
-							const name = this.viewState?.scavs?.find((scav) => scav.id === id)?.name?.toLocaleUpperCase("ru-RU") ?? "";
-							slot.label.setText(`${name}\n${entering ? "ВХОДИТ В ЛИФТ" : "ЖДЁТ ЛИФТ"}`);
-						}
-					} else {
-						const distance = next ? Math.hypot(next.x - slot.position.x, next.y - slot.position.y) : 0;
-						const motion = advanceShelterRoute(slot.position, slot.route, vertical ? 0 : Math.min(speed * step, distance));
-						if (!vertical) walkedDistance = Math.abs(motion.point.x - slot.position.x);
-						slot.route = motion.route;
-						if (hadRoute) this.placeActor(slot, motion.point);
-						slot.walking = hadRoute && !vertical; slot.climbing = passenger;
-						if (slot.walking && !vertical) slot.facing = motion.facing;
-						if (hadRoute && motion.arrived) { slot.dwellUntil = time + 6500 + (slot.phase % 4) * 1700; slot.walking = false; slot.climbing = false; }
-					}
+					const distance = next ? Math.hypot(next.x - slot.position.x, next.y - slot.position.y) : 0;
+					const before = slot.position;
+					const motion = advanceShelterRoute(slot.position, slot.route, Math.min(speed * step, distance));
+					walkedDistance = Math.hypot(motion.point.x - slot.position.x, motion.point.y - slot.position.y);
+					slot.route = motion.route;
+					if (hadRoute) this.placeActor(slot, motion.point);
+					slot.walking = hadRoute; slot.climbing = false;
+					if (slot.walking && Math.abs(motion.point.x - before.x) > .001) slot.facing = motion.facing;
+					if (hadRoute && motion.arrived) { slot.dwellUntil = time + 6500 + (slot.phase % 4) * 1700; slot.walking = false; slot.climbing = false; if (slot.status === "raiding") slot.actor.setVisible(false); }
 				} else { slot.walking = false; slot.climbing = false; }
 				const room = this.viewState?.shelter?.rooms.find((candidate) => candidate.id === slot.assignment);
 				const production = room ? this.viewState?.roomProduction?.[room.id] : undefined;
@@ -1127,7 +1084,7 @@ export function createWorld(
 				const pose = animation.pose;
 				if (slot.poses) for (const key of ["idle", "walkA", "walkB", "work"] as const) slot.poses[key].setVisible(pose.weights[key] > .001).setAlpha(pose.weights[key]);
 				// All visual transforms pivot at the common feet baseline. Physics,
-				// hit zones, lift attachment and drag coordinates remain unchanged.
+				// hit zones and drag coordinates use the same projected feet position.
 				slot.body.setPosition(0, 0).setScale(pose.scaleX, pose.scaleY).setAngle(pose.angle * pose.scaleX);
 				const stride = (slot.animation.stride % 1) * Math.PI * 2;
 				slot.legA.setAngle(Math.sin(stride) * 9 * slot.animation.walkBlend);
@@ -1150,41 +1107,25 @@ export function createWorld(
 					}
 				}
 			}
-			this.paintLift(step * 1000);
 			for (const cell of this.cells.values()) {
 				const g = cell.animation;
 				g.clear();
 				cell.productLabel.setVisible(Boolean(cell.production?.jobId) && (this.viewCamera.zoom >= 1.6 || cell.hovered || this.viewState?.selectedRoomId === cell.room?.id));
-				if (!cell.room) continue;
+				if (!cell.room) {
+					if (cell.expansion) {
+						const p = cellPosition(cell.column, cell.row), at = projectShelterPoint({ x: p.x + 86, y: p.y + 60 });
+						const progress = cell.expansion.workDone / cell.expansion.workRequired;
+						cell.status.setText(`ПРОБИВАЕМ ${Math.floor(progress * 100)}%`);
+						g.fillStyle(0xd8bd87).fillRect(at.x - 28, at.y + 12, 56 * progress, 3);
+					}
+					continue;
+				}
 				const elapsed = time - cell.completedAt, p = cellPosition(cell.column, cell.row);
 				const badge = projectShelterPoint({ x: p.x + 86, y: p.y + 93 });
 				cell.feedback.setVisible(elapsed >= 0 && elapsed < 1800).setAlpha(reducedMotion ? 1 : Phaser.Math.Clamp(1 - elapsed / 1800, 0, 1)).setY(badge.y - 23 - (reducedMotion ? 0 : Math.max(0, elapsed) / 120));
 				if (cell.production) cell.stationClock = advanceShelterStationClock(cell.stationClock, delta, cell.production, reducedMotion);
 				paintIsometricProduction(g, cell.column, cell.row, cell.room, cell.production, cell.stationClock, reducedMotion);
 			}
-		}
-
-		private paintLift(elapsedMs: number): void {
-			const lift = this.liftModel, at = projectShelterPoint({ x: SHELTER_SHAFT_X, y: lift.y });
-			this.elevator.setPosition(at.x, at.y).setDepth(at.y - 1);
-			const target = lift.doorOpen ? 1 : 0;
-			this.liftDoorAmount = reducedMotion ? target : target + (this.liftDoorAmount - target) * Math.exp(-elapsedMs / 70);
-			const openness = this.liftDoorAmount, door = this.liftDoors;
-			door.setPosition(at.x, at.y).setDepth(at.y + 1).clear();
-			// The projected platform keeps its front gate above its passenger in
-			// depth order. The gate slides; world-space pickup and travel stay exact.
-			door.fillStyle(0x597279, .3).fillRect(-13, -21, 13 * (1 - openness), 17).fillRect(13 * openness, -21, 13 * (1 - openness), 17);
-			line(door, [{ x: -13, y: -21 }, { x: -13 * openness, y: -21 }], 0xc1c9b6, 1.6, .85);
-			line(door, [{ x: 13 * openness, y: -21 }, { x: 13, y: -21 }], 0xc1c9b6, 1.6, .85);
-			for (const x of [-13, 13]) line(door, [{ x, y: -21 }, { x, y: -4 }], 0x768b78, 1.5, .85);
-			door.fillStyle(lift.phase === "travel" || lift.phase === "pickup" ? 0xe6c581 : lift.doorOpen ? 0xb7d998 : 0x8fa99d).fillCircle(13, -22, 2);
-			const floor = SHELTER_FLOOR_Y.indexOf(lift.targetY as typeof SHELTER_FLOOR_Y[number]);
-			const direction = Math.abs(lift.targetY - lift.y) < .01 ? "" : lift.targetY > lift.y ? "↓ " : "↑ ";
-			const place = floor === 0 ? "ВХОД" : `−${Math.max(1, floor)}`;
-			const phase = lift.phase === "boarding" ? "ПОСАДКА" : lift.phase === "alighting" ? "ВЫХОД" : lift.phase === "pickup" ? "ПОДАЧА" : lift.phase === "travel" ? "В ПУТИ" : "СТОЯНКА";
-			const signature = `${direction}${place}\n${phase}${lift.queue.length ? ` · ${lift.queue.length}` : ""}`;
-			if (signature !== this.liftDisplaySignature) { this.liftDisplaySignature = signature; this.liftDisplay.setText(signature); }
-			this.liftDisplay.setPosition(at.x, at.y - 40).setDepth(899).setVisible(this.viewCamera.zoom >= 1.6 || lift.phase !== "idle");
 		}
 		private paintMap(): void {
 			const g = this.add.graphics();
@@ -1655,14 +1596,14 @@ export function createWorld(
 		game, setView: (view) => scene.show(view),
 		selectRaid: (id) => scene.selectRaid(id),
 		setRaidFollow: (enabled) => scene.setRaidFollow(enabled),
+		getPresentationState: () => scene.getPresentationState(),
+		restorePresentationState: (value) => scene.restorePresentationState(value),
 		beginScavDrag: (id) => scene.beginScavDrag(id),
 		moveScavDrag: (clientX, clientY) => scene.moveScavDrag(clientX, clientY),
 		endScavDrag: () => scene.endScavDrag(),
 		cancelScavDrag: () => scene.cancelScavDrag(),
 		cancelCameraGesture: () => scene.cancelCameraGesture(),
 		getCameraState: () => scene.getCameraState(),
-		getPresentationState: () => scene.getPresentationState(),
-		restorePresentationState: (value) => scene.restorePresentationState(value),
 		zoomBy: (factor, clientX, clientY) => scene.zoomBy(factor, clientX, clientY),
 		panBy: (dx, dy) => scene.panBy(dx, dy),
 		resetCamera: () => scene.resetCamera(),

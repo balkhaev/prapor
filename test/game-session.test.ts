@@ -1,5 +1,5 @@
 import {expect,test} from 'bun:test';
-import {advance,createGame,dispatchRaid,saveGame} from '../src/game/engine';
+import {advance,buildRoom,createGame,dispatchRaid,excavateShelter,saveGame} from '../src/game/engine';
 import {readGameSession} from '../src/game-session';
 
 test('restoring a session validates references without changing paid gameplay',()=>{
@@ -36,4 +36,46 @@ test('unbounded search text and broken presentation data cannot break restoratio
 	expect(readGameSession({version:1,filters:{weaponSearch:'a'.repeat(1000)},presentation:{text:'x'.repeat(48_001)}},state).presentation).toBeNull();
 	expect(readGameSession({version:1,presentation:circular},state).presentation).toBeNull();
 	expect(readGameSession({version:1,filters:{weaponSearch:'a'.repeat(1000)}},state).filters.weaponSearch).toHaveLength(160);
+});
+
+test('build context restores signed perimeter walls on the left, right and deeper side without advancing gameplay',()=>{
+	const state=createGame(10_000),before=saveGame(state);
+	for(const site of [{column:-1,row:1},{column:4,row:2},{column:2,row:3}]){
+		const restored=readGameSession({version:1,page:'base',view:'base',context:'build',site,roomTab:'upgrade'},state);
+		expect(restored.site).toEqual(site);expect(restored.context).toBe('build');expect(restored.page).toBe('base');expect(restored.roomTab).toBe('upgrade');
+	}
+	expect(saveGame(state)).toBe(before);
+});
+
+test('a selected expanded site survives pending work and completion but is cleared when a room occupies it',()=>{
+	const state=createGame(10_000);state.money=2_000;state.supplies.scrap=30;
+	const sites=[{column:-1,row:1},{column:4,row:2},{column:2,row:3}];
+	for(const site of sites)expect(excavateShelter(state,site.column,site.row,state.lastUpdated).ok).toBe(true);
+	advance(state,17_319);
+	let before=saveGame(state);
+	for(const site of sites){
+		const restored=readGameSession({version:1,view:'base',context:'build',site},state);
+		expect(restored.site).toEqual(site);expect(restored.context).toBe('build');
+	}
+	expect(saveGame(state)).toBe(before);
+	advance(state,30_000);
+	before=saveGame(state);
+	for(const site of [...sites,{column:-2,row:1},{column:5,row:2},{column:2,row:4}]){
+		const restored=readGameSession({version:1,view:'base',context:'build',site},state);
+		expect(restored.site).toEqual(site);expect(restored.context).toBe('build');
+	}
+	expect(saveGame(state)).toBe(before);
+	expect(buildRoom(state,'ammo',-1,1,state.lastUpdated).ok).toBe(true);
+	before=saveGame(state);
+	const occupied=readGameSession({version:1,view:'base',context:'build',site:sites[0]},state);
+	expect(occupied.site).toBeNull();expect(occupied.context).toBe('overview');expect(saveGame(state)).toBe(before);
+});
+
+test('session restoration rejects street coordinates, disconnected rock and malformed expanded sites',()=>{
+	const state=createGame(10_000),before=saveGame(state);
+	for(const site of [{column:0,row:-1},{column:-1,row:-1},{column:-2,row:1},{column:5,row:2},{column:8,row:8},{column:0,row:4},{column:-129,row:0},{column:0,row:129},{column:-.5,row:1},{column:'-1',row:1},{column:4,row:NaN}]){
+		const restored=readGameSession({version:1,view:'base',context:'build',site},state);
+		expect(restored.site).toBeNull();expect(restored.context).toBe('overview');
+	}
+	expect(saveGame(state)).toBe(before);
 });
