@@ -1,8 +1,11 @@
 export type RaidTactic = "cautious" | "balanced" | "bold";
 export type GearSlot = "armor" | "backpack";
+/** Physical items have independent slots; legacy permanent upgrades stay armor/backpack. */
+export type GearEquipmentSlot = GearSlot | "helmet";
 
 export const MAX_GEAR_LEVEL = 3;
 export const GEAR_LABELS: Record<GearSlot, string> = { armor: "Броня", backpack: "Рюкзак" };
+export const GEAR_EQUIPMENT_LABELS: Record<GearEquipmentSlot, string> = { armor: "Броня", helmet: "Шлем", backpack: "Рюкзак" };
 export const TACTICS: Record<RaidTactic, {
 	label: string; description: string; durationMultiplier: number;
 	chanceBonus: number; lootBonus: number; ammoMultiplier: number;

@@ -1,5 +1,6 @@
 import { MAPS, type Attachment, type Supplies, type WeaponCategory } from "./data";
 import type { ModuleInstance } from "./modules";
+import type { GearEquipmentSlot } from "./operations";
 
 export type ExpeditionBranch = "scavenge" | "combat" | "recon";
 export type RunPerk = "careful" | "haggler" | "pathfinder" | "fieldMedic" | "gunsmith";
@@ -8,10 +9,12 @@ export interface Cargo { money: number; supplies: Supplies; weaponIds: string[];
 export interface GearItem { id: string; modelId: string; durability: number }
 export interface Loadout {
 	armorItemId: string | null; backpackItemId: string | null;
+	/** Omitted by older saves/callers; absence means no physical helmet. */
+	helmetItemId?: string | null;
 	ammoType: AmmoType; medkit: boolean;
 }
 export interface GearModel {
-	id: string; slot: "armor" | "backpack"; label: string; description: string;
+	id: string; slot: GearEquipmentSlot; label: string; description: string;
 	money: number; scrap: number; weight: number; protection: number;
 	capacity: number; blueprint: string | null;
 }
@@ -21,13 +24,25 @@ export const GEAR_MODELS: GearModel[] = [
 	{ id: "plate_armor", slot: "armor", label: "Плитник «Заслон»", description: "Защита +12% и меньше ранений. Тяжёлый: путь дольше, боеприпасов нужно больше.", money: 440, scrap: 16, weight: 7, protection: 0.12, capacity: 0, blueprint: "plate_armor" },
 	{ id: "scout_pack", slot: "backpack", label: "Рюкзак разведчика", description: "18 единиц груза. Лёгкий вариант для коротких выходов.", money: 120, scrap: 4, weight: 1, protection: 0, capacity: 18, blueprint: "scout_pack" },
 	{ id: "cargo_pack", slot: "backpack", label: "Грузовая рама", description: "32 единицы груза. Добыча вместится, но скорость и расход ухудшатся.", money: 370, scrap: 12, weight: 5, protection: 0, capacity: 32, blueprint: "cargo_pack" },
+	{ id: "padded_vest", slot: "armor", label: "Стёганый жилет", description: "Защита +3%. Дешёвый лёгкий жилет для первых выходов.", money: 85, scrap: 3, weight: 1.5, protection: 0.03, capacity: 0, blueprint: "light_vest" },
+	{ id: "patrol_armor", slot: "armor", label: "Патрульная броня", description: "Защита +7%. Закрывает торс и бока, тяжелее разгрузки.", money: 230, scrap: 8, weight: 3.8, protection: 0.07, capacity: 0, blueprint: "light_vest" },
+	{ id: "assault_armor", slot: "armor", label: "Штурмовая броня", description: "Защита +10%. Плотный комплект с плечевыми секциями для боевых маршрутов.", money: 360, scrap: 13, weight: 5.7, protection: 0.10, capacity: 0, blueprint: "plate_armor" },
+	{ id: "heavy_armor", slot: "armor", label: "Тяжёлая броня «Бастион»", description: "Защита +15%. Максимальная защита торса ценой веса, времени и расхода патронов.", money: 650, scrap: 22, weight: 9.5, protection: 0.15, capacity: 0, blueprint: "plate_armor" },
+	{ id: "steel_helmet", slot: "helmet", label: "Стальная каска", description: "Защита +2%. Простая оливковая каска; надевается отдельно от брони.", money: 80, scrap: 3, weight: 1.2, protection: 0.02, capacity: 0, blueprint: "light_vest" },
+	{ id: "kevlar_helmet", slot: "helmet", label: "Кевларовый шлем", description: "Защита +4%. Лёгкая закрытая каска с мягкой подвеской.", money: 180, scrap: 6, weight: 1.6, protection: 0.04, capacity: 0, blueprint: "light_vest" },
+	{ id: "tactical_helmet", slot: "helmet", label: "Тактический шлем", description: "Защита +5%. Шлем с боковыми направляющими для снаряжения.", money: 295, scrap: 10, weight: 2.1, protection: 0.05, capacity: 0, blueprint: "plate_armor" },
+	{ id: "visor_helmet", slot: "helmet", label: "Шлем с забралом", description: "Защита +7%. Защищает голову и лицо; самый тяжёлый шлем.", money: 430, scrap: 15, weight: 3.5, protection: 0.07, capacity: 0, blueprint: "plate_armor" },
+	{ id: "canvas_pack", slot: "backpack", label: "Холщовый вещмешок", description: "14 единиц груза. Доступный компактный мешок для первых рейдов.", money: 65, scrap: 2, weight: 0.7, protection: 0, capacity: 14, blueprint: "scout_pack" },
+	{ id: "patrol_pack", slot: "backpack", label: "Патрульный рюкзак", description: "22 единицы груза. Средний рюкзак с наружными подсумками.", money: 205, scrap: 7, weight: 2.4, protection: 0, capacity: 22, blueprint: "scout_pack" },
+	{ id: "expedition_pack", slot: "backpack", label: "Экспедиционный рюкзак", description: "26 единиц груза. Большой походный рюкзак с верхним клапаном.", money: 280, scrap: 9, weight: 3.6, protection: 0, capacity: 26, blueprint: "cargo_pack" },
+	{ id: "frame_pack", slot: "backpack", label: "Рамный рюкзак «Носильщик»", description: "36 единиц груза. Самый вместительный комплект, но заметно замедляет путь.", money: 485, scrap: 16, weight: 6.5, protection: 0, capacity: 36, blueprint: "cargo_pack" },
 ];
 export const GEAR_MODEL_BY_ID: Record<string, GearModel> = Object.fromEntries(GEAR_MODELS.map((item) => [item.id, item]));
 export const BLUEPRINTS: Record<string, { label: string; description: string }> = {
-	light_vest: { label: "Лёгкая броня", description: "Мастерская умеет собирать кевларовые разгрузки." },
-	scout_pack: { label: "Рюкзак разведчика", description: "Базовое производство лёгких рюкзаков." },
-	plate_armor: { label: "Плитник «Заслон»", description: "Найди чертёж на втором этапе боевого маршрута. Сохраняется после потерь." },
-	cargo_pack: { label: "Грузовая рама", description: "Найди чертёж на втором этапе поиска тайников. Сохраняется после потерь." },
+	light_vest: { label: "Лёгкая броня", description: "Разгрузки, стёганые жилеты, патрульная броня, стальные и кевларовые шлемы." },
+	scout_pack: { label: "Рюкзак разведчика", description: "Вещмешки, лёгкие и патрульные рюкзаки." },
+	plate_armor: { label: "Плитник «Заслон»", description: "Тяжёлая броня и боевые шлемы. Найди чертёж на втором этапе боевого маршрута. Сохраняется после потерь." },
+	cargo_pack: { label: "Грузовая рама", description: "Грузовые и экспедиционные рюкзаки. Найди чертёж на втором этапе поиска тайников. Сохраняется после потерь." },
 	...Object.fromEntries(MAPS.map((map) => [`route:${map.id}`, { label: `Маршруты: ${map.name}`, description: "+2% к шансу будущих выходов в этом секторе. Память отряда сохраняется после потерь." }])),
 };
 export const EXPEDITION_BRANCHES: Record<ExpeditionBranch, { label: string; description: string; chanceBonus: number; lootBonus: number; ammoMultiplier: number; durationMultiplier: number }> = {

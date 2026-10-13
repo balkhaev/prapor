@@ -3,12 +3,13 @@ import { getRaidPhase, type Raid, type RaidReport, type RoomInstance, type Weapo
 import { type BaseRoom } from "./game/data";
 import type { GearItem, Loadout } from "./game/systems";
 import { ScavEquipment } from "./scav-equipment";
+import { SCAV_EQUIPMENT_ATLASES } from "./scav-gear-art";
 import { getScavVisualLoadout } from "./scav-loadout";
 import { advanceShelterRoute, clientToShelterPoint } from "./shelter-motion";
 import { clampShelterCamera, getMinShelterZoom, shelterOverviewCamera, focusShelterRect, panShelterCamera, projectShelterRect, resizeShelterCamera, shelterViewportForSize, viewportToShelter, zoomShelterCamera, type ShelterCamera, type ShelterRect, type ShelterViewport, type ClientRect } from "./shelter-camera";
 import { getShelterLayoutCell, getShelterCorridorSegments, getShelterWalkingRoute, getShelterWorldBounds } from "./shelter-layout";
 import { advanceScavAnimation, createScavAnimation, type ScavAnimationState } from "./shelter-animation";
-import { SCAV_DIRECTIONS, SCAV_ORIGIN, SCAV_REFERENCE_HEIGHT, scavAppearance, scavAttachment, scavAvailableAppearance, scavDirection, scavFrame, scavPreloadAppearances, scavTexture, scavTorsoAnchor, type ScavDirection, type ScavPose } from "./scav-isometric";
+import { SCAV_DIRECTIONS, SCAV_ORIGIN, SCAV_REFERENCE_HEIGHT, scavAppearance, scavAttachment, scavAvailableAppearance, scavDirection, scavFrame, scavPreloadAppearances, scavTexture, scavTorsoAnchor, scavHeadAnchor, type ScavDirection, type ScavPose } from "./scav-isometric";
 import { advanceShelterStationClock, getShelterProductionPresentation, type ProductionPresentation } from "./shelter-production";
 import { projectShelterPoint, unprojectShelterPoint, projectShelterBounds, shelterRoomPolygon, shelterRoomPosition } from "./shelter-isometric";
 import { paintIsometricRoom, paintIsometricProduction } from "./shelter-isometric-art";
@@ -331,7 +332,7 @@ export function createWorld(
 			this.load.spritesheet("shelter-room-atlas", "/art/shelter-rooms.png", { frameWidth: 768, frameHeight: 256 });
 			for (const appearance of scavPreloadAppearances(snapshot().scavs)) this.queueScavAtlas(appearance);
 			this.load.atlas("raid-props", "/art/raid-props.png", "/art/raid-props.json");
-			this.load.atlas("scav-equipment", "/art/scav-equipment.png", "/art/scav-equipment.json");
+			for (const atlas of SCAV_EQUIPMENT_ATLASES) this.load.atlas(atlas.key, `/art/${atlas.basename}.png`, `/art/${atlas.basename}.json`);
 		}
 
 		private queueScavAtlas(appearance: number): void {
@@ -1103,7 +1104,8 @@ export function createWorld(
 				this.setScavAppearance(slot, scavAvailableAppearance(requestedAppearance, (texture) => this.textures.exists(texture)));
 				slot.visualLoadout = getScavVisualLoadout(scav, state.gearItems ?? [], state.weapons ?? []);
 				const torso = scavTorsoAnchor(Object.values(slot.poses ?? {}).map((image) => ({ weight: image.visible ? image.alpha : 0, torso: (image.frame.customData as { custom?: { torso?: Point } }).custom?.torso })));
-				slot.equipment.update(slot.visualLoadout, slot.direction, { working: slot.working, mode: "slung", bodyAngle: slot.body.angle, torso });
+				const head = scavHeadAnchor(Object.values(slot.poses ?? {}).map((image) => ({ weight: image.visible ? image.alpha : 0, head: (image.frame.customData as { custom?: { head?: Point } }).custom?.head })));
+				slot.equipment.update(slot.visualLoadout, slot.direction, { working: slot.working, mode: "slung", bodyAngle: slot.body.angle, torso, head });
 				const previousStatus = slot.status, previousAssignment = slot.assignment;
 				slot.assignment = room?.id ?? null; slot.status = scav.status; slot.health = scav.health;
 				if (this.drag?.scavId === scav.id && (scav.status === "raiding" || scav.health < 25 || this.drag.shelter !== state.shelter || this.drag.scav !== scav)) this.cancelScavDrag();
@@ -1200,7 +1202,8 @@ export function createWorld(
 				// hit zones and drag coordinates use the same projected feet position.
 				slot.body.setPosition(0, 0).setScale(slot.sprite ? 1 : pose.scaleX, pose.scaleY).setAngle(pose.angle * (slot.direction[1] === "e" ? 1 : -1));
 				const torso = scavTorsoAnchor(Object.values(slot.poses ?? {}).map((image) => ({ weight: image.visible ? image.alpha : 0, torso: (image.frame.customData as { custom?: { torso?: Point } }).custom?.torso })));
-				slot.equipment.update(slot.visualLoadout, slot.direction, { working: slot.working, mode: "slung", bodyAngle: slot.body.angle, torso });
+				const head = scavHeadAnchor(Object.values(slot.poses ?? {}).map((image) => ({ weight: image.visible ? image.alpha : 0, head: (image.frame.customData as { custom?: { head?: Point } }).custom?.head })));
+				slot.equipment.update(slot.visualLoadout, slot.direction, { working: slot.working, mode: "slung", bodyAngle: slot.body.angle, torso, head });
 				const stride = (slot.animation.stride % 1) * Math.PI * 2;
 				slot.legA.setAngle(Math.sin(stride) * 9 * slot.animation.walkBlend);
 				slot.legB.setAngle(-Math.sin(stride) * 9 * slot.animation.walkBlend);

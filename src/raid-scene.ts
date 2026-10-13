@@ -3,7 +3,7 @@ import { type Raid, type RaidReport, type WeaponInstance } from "./game/engine";
 import { getRaidFieldFrame, getRaidFieldObjective, getRaidFieldPlan, projectRaidFieldPoint, readRaidFieldCamera, type RaidFieldCameraState } from "./raid-field";
 import { advanceRaidFeedback, followRaidCamera, getRaidActionLabel, getRaidRoutePreview, type RaidFeedbackState, type RaidShotCue } from "./raid-feedback";
 import { advanceScavAnimation, createScavAnimation, type ScavAnimationState } from "./shelter-animation";
-import { SCAV_ORIGIN, SCAV_POSES, SCAV_REFERENCE_HEIGHT, scavAppearance, scavAvailableAppearance, scavDirection, scavFrame, scavTexture, scavTorsoAnchor, type ScavDirection } from "./scav-isometric";
+import { SCAV_ORIGIN, SCAV_POSES, SCAV_REFERENCE_HEIGHT, scavAppearance, scavAvailableAppearance, scavDirection, scavFrame, scavTexture, scavTorsoAnchor, scavHeadAnchor, type ScavDirection } from "./scav-isometric";
 import { SCAV_APPEARANCES } from "./game/scav-appearances";
 import { ScavEquipment } from "./scav-equipment";
 import { getHostileVisualLoadout, getRaidVisualLoadout } from "./scav-loadout";
@@ -330,9 +330,10 @@ export class RaidStreetRenderer {
 		pawn.body.setScale(1, crouching ? .94 : pose.scaleY).setAngle(pose.angle * facing);
 		const aim = target && fighting ? Math.atan2(target.y - point.y, target.x - point.x) * 180 / Math.PI : null;
 		const torso = scavTorsoAnchor(pawn.poses.map((image) => ({ weight: image.visible ? image.alpha : 0, torso: (image.frame.customData as { custom?: { torso?: Point } }).custom?.torso })));
+		const head = scavHeadAnchor(pawn.poses.map((image) => ({ weight: image.visible ? image.alpha : 0, head: (image.frame.customData as { custom?: { head?: Point } }).custom?.head })));
 		const loadout = hostile ? this.hostileLoadouts.get(visualAppearance) ?? getHostileVisualLoadout(visualAppearance) : this.visualLoadout ?? { armorModelId: null, packModelId: null, weapon: null };
 		if (hostile) this.hostileLoadouts.set(visualAppearance, loadout);
-		pawn.equipment.update(loadout, pawn.direction, { working: crouching, mode: searching ? "slung" : "held", aim, bodyAngle: pawn.body.angle, hostile, torso });
+		pawn.equipment.update(loadout, pawn.direction, { working: crouching, mode: searching ? "slung" : "held", aim, bodyAngle: pawn.body.angle, hostile, torso, head });
 	}
 	private gunMuzzle(pawn: Pawn): Point {
 		const point = pawn.equipment.muzzlePoint();

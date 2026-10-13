@@ -42,6 +42,11 @@ export function scavTorsoAnchor(poses: readonly { weight: number; torso?: { x: n
 	return total > 0 ? { x: x / total, y: y / total } : undefined;
 }
 
+/** Helmets follow the same head pivot while idle, walking and leaning to work. */
+export function scavHeadAnchor(poses: readonly { weight: number; head?: { x: number; y: number } }[]): { x: number; y: number } | undefined {
+	return scavTorsoAnchor(poses.map(({ weight, head }) => ({ weight, torso: head })));
+}
+
 export function scavFrame(pose: ScavPose, direction: ScavDirection): string {
 	return `${pose}-${direction}`;
 }

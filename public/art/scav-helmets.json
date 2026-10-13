@@ -1,0 +1,348 @@
+{
+  "frames": {
+    "steel_helmet-se": {
+      "frame": {
+        "x": 56,
+        "y": 81,
+        "w": 228,
+        "h": 190
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 142,
+        "y": 161,
+        "w": 228,
+        "h": 190
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "steel_helmet-sw": {
+      "frame": {
+        "x": 358,
+        "y": 80,
+        "w": 230,
+        "h": 191
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 141,
+        "y": 160,
+        "w": 230,
+        "h": 191
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "steel_helmet-ne": {
+      "frame": {
+        "x": 664,
+        "y": 78,
+        "w": 233,
+        "h": 204
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 140,
+        "y": 154,
+        "w": 233,
+        "h": 204
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "steel_helmet-nw": {
+      "frame": {
+        "x": 977,
+        "y": 78,
+        "w": 230,
+        "h": 208
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 141,
+        "y": 152,
+        "w": 230,
+        "h": 208
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "kevlar_helmet-se": {
+      "frame": {
+        "x": 51,
+        "y": 334,
+        "w": 232,
+        "h": 247
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 140,
+        "y": 132,
+        "w": 232,
+        "h": 247
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "kevlar_helmet-sw": {
+      "frame": {
+        "x": 355,
+        "y": 333,
+        "w": 236,
+        "h": 248
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 138,
+        "y": 132,
+        "w": 236,
+        "h": 248
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "kevlar_helmet-ne": {
+      "frame": {
+        "x": 666,
+        "y": 331,
+        "w": 234,
+        "h": 244
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 139,
+        "y": 134,
+        "w": 234,
+        "h": 244
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "kevlar_helmet-nw": {
+      "frame": {
+        "x": 980,
+        "y": 332,
+        "w": 232,
+        "h": 245
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 140,
+        "y": 134,
+        "w": 232,
+        "h": 245
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "tactical_helmet-se": {
+      "frame": {
+        "x": 50,
+        "y": 640,
+        "w": 230,
+        "h": 238
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 141,
+        "y": 137,
+        "w": 230,
+        "h": 238
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "tactical_helmet-sw": {
+      "frame": {
+        "x": 357,
+        "y": 640,
+        "w": 236,
+        "h": 237
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 138,
+        "y": 138,
+        "w": 236,
+        "h": 237
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "tactical_helmet-ne": {
+      "frame": {
+        "x": 671,
+        "y": 638,
+        "w": 225,
+        "h": 229
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 144,
+        "y": 142,
+        "w": 225,
+        "h": 229
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "tactical_helmet-nw": {
+      "frame": {
+        "x": 981,
+        "y": 638,
+        "w": 227,
+        "h": 228
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 142,
+        "y": 142,
+        "w": 227,
+        "h": 228
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "visor_helmet-se": {
+      "frame": {
+        "x": 55,
+        "y": 908,
+        "w": 249,
+        "h": 243
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 132,
+        "y": 134,
+        "w": 249,
+        "h": 243
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "visor_helmet-sw": {
+      "frame": {
+        "x": 343,
+        "y": 906,
+        "w": 252,
+        "h": 244
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 130,
+        "y": 134,
+        "w": 252,
+        "h": 244
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "visor_helmet-ne": {
+      "frame": {
+        "x": 657,
+        "y": 908,
+        "w": 248,
+        "h": 243
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 132,
+        "y": 134,
+        "w": 248,
+        "h": 243
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "visor_helmet-nw": {
+      "frame": {
+        "x": 958,
+        "y": 908,
+        "w": 253,
+        "h": 243
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 130,
+        "y": 134,
+        "w": 253,
+        "h": 243
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    }
+  },
+  "meta": {
+    "image": "scav-helmets.png",
+    "size": {
+      "w": 1254,
+      "h": 1254
+    },
+    "scale": "1",
+    "directions": [
+      "se",
+      "sw",
+      "ne",
+      "nw"
+    ],
+    "equipmentHeightByModel": {
+      "steel_helmet": 197.5,
+      "kevlar_helmet": 246.0,
+      "tactical_helmet": 233.0,
+      "visor_helmet": 243.0
+    },
+    "origin": {
+      "x": 256,
+      "y": 256
+    }
+  }
+}
