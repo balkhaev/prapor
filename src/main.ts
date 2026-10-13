@@ -1937,6 +1937,7 @@ function render() {
 	const panelFocus = document.activeElement instanceof HTMLElement && panel.contains(document.activeElement) ? document.activeElement.dataset.focusKey : undefined;
 	const inputSelection=document.activeElement instanceof HTMLInputElement&&panel.contains(document.activeElement)?[document.activeElement.selectionStart,document.activeElement.selectionEnd] as const:null;
 	const bossRosterOpen=panel.querySelector<HTMLDetailsElement>('.boss-roster')?.open??false;
+	const expandedBossPrizes=[...panel.querySelectorAll<HTMLDetailsElement>('[data-boss-card] .boss-prize[open]')].map(node=>node.closest<HTMLElement>('[data-boss-card]')!.dataset.bossCard);
     const bossScavSelections=[...panel.querySelectorAll<HTMLSelectElement>('[data-boss-scav]')].map(node=>[node.dataset.bossScav!,node.value] as const);
     const expandedLootDecisions = [...panel.querySelectorAll<HTMLDetailsElement>('details[data-loot-decision][open]')].map(node=>node.dataset.lootDecision);
 	const expandedReports = [...resumedJournal, ...Array.from(panel.querySelectorAll<HTMLDetailsElement>("details[data-report][open]")).map((node) => node.dataset.report)];
@@ -2026,6 +2027,7 @@ function render() {
 			? `<div class="section-head"><h2>Последние отчёты · ${state.history.length}</h2><span class="muted">Всего: ${n(state.stats.raidsCompleted)} · нажми отчёт, чтобы открыть маршрут</span></div>${state.history.map(journalCard).join("")}`
 			: '<div class="empty">Радио пока молчит.<br>Отправь дикого в первый рейд — здесь появится его отчёт.</div>') + scavMemorialPanel(state);
 	const bossRosterNode=panel.querySelector<HTMLDetailsElement>('.boss-roster');if(bossRosterNode)bossRosterNode.open=bossRosterOpen;
+	for(const node of panel.querySelectorAll<HTMLDetailsElement>('[data-boss-card] .boss-prize'))node.open=expandedBossPrizes.includes(node.closest<HTMLElement>('[data-boss-card]')!.dataset.bossCard);
     for(const [bossId,scavId] of bossScavSelections){const control=panel.querySelector<HTMLSelectElement>(`[data-boss-scav="${CSS.escape(bossId)}"]`);if(control&&[...control.options].some(option=>option.value===scavId))control.value=scavId;}
     panel.querySelectorAll<HTMLDetailsElement>("details[data-report]").forEach((node) => { node.open = expandedReports.includes(node.dataset.report); });
 	panel.querySelectorAll<HTMLDetailsElement>('details[data-social-detail-key]').forEach(node => { node.open = expandedSocial.includes(node.dataset.socialDetailKey); });
