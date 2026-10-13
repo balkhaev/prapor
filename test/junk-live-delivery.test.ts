@@ -63,11 +63,11 @@ describe('private multiplayer junk delivery', () => {
     seed(path, player, fullShelf); await state(service, player); const before = structuredClone(player.snapshot);
     const delivery = parcel(service, player, JUNK_MODELS.map(model => model.id)), receipt = service.liveEconomy.deliver(delivery);
     expect(receipt.ok).toBe(true); const after = await state(service, player);
-    expect(after.state.money).toBe(before.state.money + 19); expect(after.state.stats.moneyEarned).toBe(before.state.stats.moneyEarned + 19);
+    expect(after.state.money).toBe(before.state.money + 44); expect(after.state.stats.moneyEarned).toBe(before.state.stats.moneyEarned + 44);
     expect(after.state.lootItems).toEqual(before.state.lootItems); expect(after.state.nextId).toBe(before.state.nextId); expect(after.revision).toBe(before.revision + 1);
-    expect(receipt.message).toContain('0 полезных трофеев'); expect(receipt.message).toContain('за 19 ₽');
+    expect(receipt.message).toContain('0 полезных трофеев'); expect(receipt.message).toContain('за 44 ₽');
     for (const model of JUNK_MODELS) expect(receipt.message).toContain(`${model.label} — ${getLootTraderPrice({ id: 'loot-1', modelId: model.id, foundAt: NOW })} ₽`);
-    expect(ledger(path)).toEqual({ deliveries: 1, items: 6 }); expect(service.liveEconomy.deliver(structuredClone(delivery))).toEqual(receipt);
+    expect(ledger(path)).toEqual({ deliveries: 1, items: 12 }); expect(service.liveEconomy.deliver(structuredClone(delivery))).toEqual(receipt);
     expect(await state(service, player)).toEqual(after);
     service.close(); const restored = setup(path);
     expect(restored.liveEconomy.deliver(delivery)).toEqual(receipt); expect(await state(restored, player)).toEqual(after);

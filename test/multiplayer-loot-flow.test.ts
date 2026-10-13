@@ -6,12 +6,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createGameService, type GameService } from "../server/game";
 import { createLiveService, type LiveService } from "../server/live";
-import type { LiveEconomy } from "../server/live-economy";
+import type { EconomyLoot, LiveEconomy } from "../server/live-economy";
 import type { GameActionSnapshot, GameCommand, GameSnapshot } from "../src/game/commands";
 import type { LiveCommand, LivePoint, LiveSnapshot } from "../src/game/live";
 import { getLiveMap } from "../src/game/live-maps";
 import { readMarketSnapshot, type MarketSnapshot } from "../src/game/flea";
 import { createHealth, createMedicalInventory } from "../src/game/health";
+import { readLiveSnapshot } from '../src/live-client';
+import { getLiveLootDefinition } from '../src/game/live-loot';
 
 const ORIGIN = "http://multiplayer.test", NOW = 1_792_000_000_000;
 const fixtures: Array<{ folder: string; game: GameService; live: LiveService }> = [];
@@ -60,7 +62,7 @@ async function fixture() {
   async function market(player: Player): Promise<MarketSnapshot> {
     const reply = (await game.fetch(request("game/market", player)))!; expect(reply.status).toBe(200); return readMarketSnapshot(await reply.json());
   }
-  async function editLive(players: Player[], items: Array<{ id: string; modelId: string; foundAt: number }> = [], ammo?: number, medkits?: number, position?: LivePoint) {
+  async function editLive(players: Player[], items: EconomyLoot[] = [], ammo?: number, medkits?: number, position?: LivePoint) {
     value.live.close();
     const db = new Database(livePath);
     try {
@@ -103,7 +105,40 @@ async function fixture() {
 }
 
 describe("real multiplayer loot, shared market and headquarters supplies", () => {
-  test("a generated jacket hides named contents until server search and two real headquarters can extract its loot only once", async () => {
+  test('two real headquarters contend for physical armor and a compatible module; extraction equips and installs their exact condition once', async () => {
+    const f = await fixture(), first = await f.enter(), second = await f.enter();
+    const items: EconomyLoot[] = [
+      { id: randomUUID(), kind: 'gear', modelId: 'padded_vest', durability: 65, foundAt: NOW - 1000 },
+      { id: randomUUID(), kind: 'module', modelId: 'factory-sks-stock', durability: 77, foundAt: NOW - 500 },
+      { id: randomUUID(), modelId: 'perfume', foundAt: NOW - 100 },
+    ];
+    await f.editLive([first, second], items);
+    const drop = first.live.drops.find(drop => drop.items?.some(item => item.id === items[0]!.id))!;
+    expect(drop).toBeDefined(); expect(readLiveSnapshot(first.live).drops.find(item => item.id === drop.id)!.items).toEqual(items);
+    await f.liveAction(first, { type: 'loot', id: drop.id });
+    expect(readLiveSnapshot(first.live).self.lootItems).toEqual(items);
+    await f.liveAction(second, { type: 'loot', id: drop.id }, 409);
+    await f.liveAction(first, { type: 'extract' });
+    const delivered = await f.gameState(first), gear = delivered.state.gearItems.find(item => item.modelId === 'padded_vest')!;
+    const module = delivered.state.modules.find(item => item.modelId === 'factory-sks-stock' && item.foundAt === NOW - 500)!;
+    expect(gear).toBeDefined(); expect(gear.durability).toBe(65); expect(gear.id).toMatch(/^gear-\d+$/);
+    expect(module).toBeDefined(); expect(module.durability).toBe(77); expect(module.id).toMatch(/^module-\d+$/);
+    expect(delivered.state.lootItems!.map(item => item.modelId)).toEqual(['perfume']);
+    const scav = delivered.state.scavs[0]!, gun = delivered.state.weapons.find(item => item.weaponId === 'sks')!;
+    await f.gameAction(first, { type: 'equipGear', args: [scav.id, 'armor', gear.id] });
+    await f.gameAction(first, { type: 'installModule', args: [gun.id, module.id] });
+    expect(first.game.state.scavs[0]!.loadout.armorItemId).toBe(gear.id);
+    expect(first.game.state.weapons.find(item => item.id === gun.id)!.modules.stock).toEqual(module);
+    expect(first.game.state.modules.some(item => item.id === module.id)).toBe(false);
+    const before = structuredClone(first.game);
+    await f.restart([first, second]);
+    const restored = await f.gameState(first); expect(restored.state.gearItems).toEqual(before.state.gearItems);
+    expect(restored.state.weapons.find(item => item.id === gun.id)!.modules.stock).toEqual(module);
+    expect(restored.state.lootItems).toEqual(before.state.lootItems); expect(restored.revision).toBe(before.revision);
+    const other = await f.gameState(second); expect(other.state.gearItems).toHaveLength(0); expect(other.state.lootItems ?? []).toHaveLength(0);
+  });
+
+  test("a generated jacket hides physical contents until server search and two real headquarters can extract its loot only once", async () => {
     const f = await fixture(), first = await f.enter(), second = await f.enter();
     const anchor = getLiveMap("perimeter").containers.find(anchor => anchor.kind === "jacket")!;
     await f.editLive([first, second], [], undefined, undefined, anchor);
@@ -123,13 +158,17 @@ describe("real multiplayer loot, shared market and headquarters supplies", () =>
     await f.advance(250, [first, second]);
     const winner = first.live.self.lootItems!.length ? first : second, loser = winner === first ? second : first;
     expect(winner.live.self.lootItems).toEqual(revealed.items); expect(loser.live.self.lootItems).toEqual([]);
-    await f.editLive([winner]); await f.liveAction(winner, { type: "extract" });
-    const credited = await f.gameState(winner), models = revealed.items!.map(item => item.modelId).sort();
-    expect(credited.state.lootItems!.map(item => item.modelId).sort()).toEqual(models);
-    const ids = credited.state.lootItems!.map(item => item.id), revision = credited.revision;
+    await f.editLive([winner]);
+    const existing = new Set([...winner.game.state.modules, ...winner.game.state.gearItems, ...(winner.game.state.lootItems ?? [])].map(item => item.id));
+    await f.liveAction(winner, { type: "extract" });
+    const credited = await f.gameState(winner), models = revealed.items!.filter(item => !getLiveLootDefinition(item).autoSell).map(item => item.modelId).sort();
+    const received = [...credited.state.modules, ...credited.state.gearItems, ...(credited.state.lootItems ?? [])].filter(item => !existing.has(item.id));
+    expect(received.map(item => item.modelId).sort()).toEqual(models);
+    const ids = received.map(item => item.id), revision = credited.revision;
     await f.liveAction(winner, { type: "extract" }); await f.restart([winner, loser]);
-    expect((await f.gameState(winner)).state.lootItems!.map(item => item.id)).toEqual(ids); expect(winner.game.revision).toBe(revision);
-    expect((await f.gameState(loser)).state.lootItems ?? []).toEqual([]);
+    const restored = (await f.gameState(winner)).state;
+    expect([...restored.modules, ...restored.gearItems, ...(restored.lootItems ?? [])].filter(item => !existing.has(item.id)).map(item => item.id)).toEqual(ids); expect(winner.game.revision).toBe(revision);
+    expect((await f.gameState(loser)).state.lootItems ?? []).toEqual([]); expect(loser.game.state.gearItems).toEqual([]);
   });
   test("two guests compete for one physical find, extract it to headquarters, trade it and use bought supplies online", async () => {
     const f = await fixture(), first = await f.enter(), second = await f.enter();

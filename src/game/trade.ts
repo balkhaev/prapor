@@ -101,9 +101,9 @@ export function takeTradeAsset(state: GameState, ref: TradeRef): ActionResult & 
 	return { ...success(`${quote.label} передан на барахолку.`), asset };
 }
 function allPhysicalIds(state: GameState): Set<string> {
-	return new Set([...state.weapons.flatMap(gun => [gun.id, ...Object.values(gun.modules).map(part => part.id)]), ...state.modules.map(item => item.id), ...state.gearItems.map(item => item.id), ...(state.lootItems ?? []).map(item => item.id), ...(state.pendingLoot ?? []).flatMap(delivery => delivery.items.map(item => item.id)),
+	return new Set([...state.weapons.flatMap(gun => [gun.id, ...Object.values(gun.modules).map(part => part.id)]), ...state.modules.map(item => item.id), ...state.gearItems.map(item => item.id), ...(state.lootItems ?? []).map(item => item.id), ...(state.pendingLoot ?? []).flatMap(delivery => [...delivery.items.map(item => item.id), ...(delivery.gearItems ?? []).map(item => item.id)]),
 		...state.shelter.rooms.flatMap(room => [...(room.construction?.paidLoot ?? []), ...room.queue.flatMap(job => job.paidLoot ?? [])].map(item => item.id)),
-		...state.raids.flatMap(raid => [...(raid.expedition?.cargo.modules.map(item => item.id) ?? []), ...(raid.expedition?.cargo.lootItems?.map(item => item.id) ?? [])])]);
+		...state.raids.flatMap(raid => [...(raid.expedition?.cargo.modules.map(item => item.id) ?? []), ...(raid.expedition?.cargo.lootItems?.map(item => item.id) ?? []), ...(raid.expedition?.cargo.gearItems?.map(item => item.id) ?? [])])]);
 }
 /** Atomic delivery: validate the whole parcel and capacity before changing either inventory or identifiers. */
 export function receiveTradeAsset(state: GameState, input: TradeAsset, now = state.lastUpdated, rekey = true): ActionResult {
