@@ -138,7 +138,7 @@ describe("street encounters remain real checkpoint settlements", () => {
 		const raw = await Bun.file(new URL("./fixtures/legacy-v3-expedition.json", import.meta.url)).text();
 		const state = parseSave(raw)!;
 		expect(state).not.toBeNull();
-		expect(SAVE_VERSION).toBe(5);
+		expect(state.schemaVersion).toBe(SAVE_VERSION);
 		const raid = state.raids[0]!, control = clone(state), before = saveGame(state);
 		expect(raid.expedition!.legacyLoot).toBe(true);
 		for (let i = 0; i < 50; i++) {

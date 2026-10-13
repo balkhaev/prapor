@@ -398,7 +398,8 @@ describe("shelter save integrity and migration", () => {
 		const legacy = JSON.parse(saveGame(original));
 		legacy.schemaVersion = 4;
 		delete legacy.shelter;
-		for (const scav of legacy.scavs) delete scav.assignment;
+		delete legacy.recruitment;
+		for (const scav of legacy.scavs) { delete scav.assignment; delete scav.profile; }
 		const migrated = parseSave(JSON.stringify(legacy))!;
 		expect(migrated).not.toBeNull();
 		expect(migrated.shelter.rooms).toHaveLength(4);

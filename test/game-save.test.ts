@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { advance, assignWorker, createGame, dispatchRaid, loadGameWithSummary, queueModuleProduction, saveGame, SAVE_KEY } from "../src/game/engine";
+import { advance, assignWorker, createGame, dispatchRaid, loadGameWithSummary, queueModuleProduction, saveGame, SAVE_KEY, SAVE_VERSION } from "../src/game/engine";
 import { createGameSaveStore, exportGameSave, parseGameSave, PREVIOUS_SAVE_KEY, type SaveStorage } from "../src/game-save";
 
 const NOW = 1_792_000_000_000;
@@ -96,7 +96,7 @@ describe("validated local progress and current-screen persistence", () => {
 	});
 
 	test("future and unknown formats, malformed primary and an empty stored record stay protected", () => {
-		for (const raw of [JSON.stringify({ ...createGame(NOW), schemaVersion: 6 }), '{"format":"prapor.local-save","version":2}', '{"format":"another-game","version":1}', '{"money":9000}', ""]) {
+		for (const raw of [JSON.stringify({ ...createGame(NOW), schemaVersion: SAVE_VERSION + 1 }), '{"format":"prapor.local-save","version":2}', '{"format":"another-game","version":1}', '{"money":9000}', ""]) {
 			const storage = new MemoryStorage(); storage.items.set(SAVE_KEY, raw); storage.items.set(PREVIOUS_SAVE_KEY, exportGameSave(createGame(NOW)));
 			const store = createGameSaveStore(storage, { writerId: "tab-a", isExclusiveHeld: () => true }), opened = store.open(NOW);
 			expect(opened.protectedRaw).toBe(raw); expect(opened.reason).not.toBeNull();
