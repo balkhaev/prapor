@@ -6,7 +6,7 @@ import type { ShelterPoint } from "./shelter-motion";
 
 export interface ShelterLandscapeEdge extends ShelterCorridorSegment { side: "north" | "south" | "east" | "west" }
 export interface ShelterLandscapeDecoration {
-	kind: "tree" | "bush" | "rock" | "camp" | "bench" | "barrels" | "lamp" | "gate";
+	kind: "tree" | "bush" | "fern" | "rock" | "stump" | "logs" | "woodpile" | "puddle" | "camp" | "bench" | "barrels" | "lamp" | "gate";
 	point: ShelterPoint;
 	seed: number;
 	radius: number;
@@ -25,6 +25,7 @@ const ENTRANCE = { x: 318, y: 132 };
 const C = {
 	forest: 0x203e31, forestLight: 0x345140, grass: 0x617454, grassLight: 0x7d8c5d,
 	grassDark: 0x4c654b, soil: 0x928467, gravel: 0xb1a18a, pale: 0xdfd2ae,
+	damp: 0x596b55, litter: 0x9b8053, water: 0x7b9690,
 	ink: 0x223d32, bark: 0x82694a, wood: 0xb79768, steel: 0x748979,
 };
 const key = (site: ShelterLayoutSite) => `${site.column}:${site.row}`;
@@ -156,6 +157,11 @@ export function getShelterLandscape(inputSites: readonly ShelterLayoutSite[], bu
 			if (decorations.filter((d) => d.kind === kind).length < limit) add(kind, { x: p.x + (kind === "camp" ? 24 : 25 + seed % 4), y: p.y + 29 + seed % 7 }, kind === "camp" ? 20 : 17, true, seed);
 			add("bush", { x: p.x + 133 + seed % 17, y: p.y + 21 + seed % 13 }, 13, true, seed + 1);
 			add("rock", { x: p.x + 130 + seed % 21, y: p.y + 72 + seed % 13 }, 9, true, seed + 2);
+			if (decorations.filter((d) => d.kind === "woodpile").length < 1) add("woodpile", { x: p.x + 150, y: p.y + 25 }, 17, true, seed + 3);
+			if (decorations.filter((d) => d.kind === "stump" && d.owned).length < 2) add("stump", { x: p.x + 35 + seed % 18, y: p.y + 24 }, 8, true, seed + 4);
+			// Low wet hollows stay out of the entrances and the walked gravel, just like upright props.
+			if (decorations.filter((d) => d.kind === "puddle" && d.owned).length < 3) add("puddle", { x: p.x + 157 + seed % 8, y: p.y + 99 }, 12 + seed % 6, true, seed + 5);
+			add("fern", { x: p.x + 19 + seed % 10, y: p.y + 97 }, 8, true, seed + 6);
 		}
 	}
 	const frontier = new Map<string, ShelterLayoutSite>();
@@ -168,6 +174,11 @@ export function getShelterLandscape(inputSites: readonly ShelterLayoutSite[], bu
 		add("tree", { x: p.x + 34 + seed % 31, y: p.y + 27 + seed % 19 }, 19, false, seed);
 		add(seed % 2 ? "bush" : "tree", { x: p.x + 123 + seed % 23, y: p.y + 73 }, 17, false, seed + 1);
 		add("rock", { x: p.x + 101, y: p.y + 31 }, 9, false, seed + 2);
+		add("fern", { x: p.x + 19, y: p.y + 90 + seed % 11 }, 8, false, seed + 3);
+		add("bush", { x: p.x + 87, y: p.y + 103 }, 12, false, seed + 4);
+		if (seed % 3 === 0) add("logs", { x: p.x + 146, y: p.y + 30 }, 15, false, seed + 5);
+		else add("stump", { x: p.x + 149, y: p.y + 27 }, 8, false, seed + 5);
+		if (seed % 4 === 0) add("puddle", { x: p.x + 89, y: p.y + 77 }, 18, false, seed + 6);
 	}
 	return { sites, lots, perimeter, paths, aprons, decorations };
 }
@@ -199,9 +210,39 @@ export function paintShelterLandscape(g: Phaser.GameObjects.Graphics, landscape:
 			const at = { x: p.x + r() * 190 - 10, y: p.y + r() * 130 - 16 }, points = blob(at, 27 + r() * 53, 15 + r() * 33, seed + i);
 			if (points.every((point) => ownedAt(point, owned))) a.face(points, i % 3 ? C.grassLight : C.grassDark, i % 3 ? .13 : .22);
 		}
+		// Grass thins to soft earth in uneven hollows; the small patches never trace a lot edge.
+		for (let i = 0; i < 4; i++) {
+			const centre = { x: p.x + 8 + r() * 155, y: p.y + 8 + r() * 94 }, radius = 14 + r() * 24;
+			const points = blob(centre, radius, radius * .58, seed + 41 + i, 15);
+			if (points.every((point) => ownedAt(point, owned))) {
+				a.face(points, i % 2 ? C.soil : C.damp, i % 2 ? .2 : .14);
+				for (let pebble = 0; pebble < 9; pebble++) {
+					const angle = r() * Math.PI * 2, distance = Math.sqrt(r()) * radius * .68;
+					const at = a.point({ x: centre.x + Math.cos(angle) * distance, y: centre.y + Math.sin(angle) * distance * .58 });
+					g.fillStyle(pebble % 3 ? 0xbab293 : 0x6c7158, .24).fillEllipse(at.x, at.y, 1.3 + r(), .65);
+				}
+			}
+		}
 		for (let i = 0; i < 31; i++) {
 			const at = { x: p.x - 7 + r() * 185, y: p.y - 13 + r() * 126 };
-			a.line([at, { x: at.x + 3 + r() * 4, y: at.y - 2 }], i % 3 ? 0x9da174 : 0x46654a, .6, .34);
+			const screen = a.point(at), blade = 2 + r() * 3;
+			g.lineStyle(.65, i % 3 ? 0x9da174 : 0x46654a, .42);
+			g.lineBetween(screen.x, screen.y, screen.x - 1.5, screen.y - blade);
+			if (i % 3 === 0) {
+				g.lineBetween(screen.x, screen.y, screen.x + 2, screen.y - blade * .8);
+				g.lineBetween(screen.x, screen.y, screen.x, screen.y - blade * 1.15);
+			}
+		}
+	}
+	// Forest floor and fall leaves collect beneath plants, rather than tinting every square equally.
+	for (const decoration of landscape.decorations) if (["tree", "bush", "stump", "logs"].includes(decoration.kind)) {
+		const r = random(decoration.seed + 73), points = blob(decoration.point, decoration.radius + 11, decoration.radius + 7, decoration.seed + 74, 16);
+		if (points.every((point) => ownedAt(point, owned) === decoration.owned)) a.face(points, decoration.owned ? C.soil : 0x364b34, decoration.owned ? .17 : .5);
+		for (let i = 0; i < 13; i++) {
+			const point = { x: decoration.point.x + (r() - .5) * decoration.radius * 2.2, y: decoration.point.y + (r() - .5) * decoration.radius * 1.7 };
+			if (ownedAt(point, owned) !== decoration.owned) continue;
+			const at = a.point(point);
+			g.fillStyle(i % 4 ? C.litter : 0x748255, .32).fillEllipse(at.x, at.y, 2.6 + r() * 1.5, .8 + r());
 		}
 	}
 	// Compressed gravel and exposed earth at entrances make circulation read as use of the yard.
@@ -252,41 +293,109 @@ export function paintShelterLandscape(g: Phaser.GameObjects.Graphics, landscape:
 }
 
 /** Upright silhouettes are separate depth-sorted objects; all positions still use the shared projection. */
-export function paintShelterDecoration(g: Phaser.GameObjects.Graphics, decoration: ShelterLandscapeDecoration): void {
-	const a = new LandscapePainter(g), p = decoration.point, seed = decoration.seed, r = random(seed), at = a.point(p);
-	a.ellipse({ x: p.x + 8, y: p.y + 8 }, decoration.kind === "tree" ? 28 : 19, decoration.kind === "tree" ? 17 : 11, 0x173d2e, .25);
+export function paintShelterDecoration(g: Phaser.GameObjects.Graphics, decoration: ShelterLandscapeDecoration, wind = 0): void {
+	const a = new LandscapePainter(g), p = decoration.point, seed = decoration.seed, r = random(seed), at = a.point(p), sway = Math.max(-1.6, Math.min(1.6, wind));
+	if (decoration.kind !== "puddle" && decoration.kind !== "camp") {
+		const tree = decoration.kind === "tree", upright = tree || decoration.kind === "lamp" || decoration.kind === "gate";
+		a.ellipse({ x: p.x + (upright ? 13 : 5), y: p.y + (upright ? 16 : 6) }, tree ? 26 : decoration.radius * .95 + 2, tree ? 16 : decoration.radius * .5 + 1, 0x173d2e, tree ? .24 : .18);
+	}
 	switch (decoration.kind) {
 		case "tree": {
-			const height = 35 + seed % 12;
-			g.lineStyle(3.6, 0x6a5943).lineBetween(at.x, at.y, at.x - 1, at.y - height + 12);
-			g.lineStyle(1, 0xba9e70, .55).lineBetween(at.x - 1, at.y - 3, at.x - 2, at.y - 18);
-			g.lineStyle(1.8, 0x6a5943).lineBetween(at.x - 1, at.y - 15, at.x - 10, at.y - 26);
-			g.lineStyle(1.5, 0x6a5943).lineBetween(at.x - 1, at.y - 20, at.x + 10, at.y - 30);
-			for (const [dx, dy, radius] of [[-10, 23, 13], [10, 27, 12], [0, height - 5, 14], [-3, 26, 15]]) {
-				g.fillStyle(0x3c6547).fillCircle(at.x + dx!, at.y - dy!, radius!);
-				g.fillStyle(0x5b7b4f).fillCircle(at.x + dx! - 3, at.y - dy! - 3, radius! * .73);
+			const height = 43 + seed % 12, birch = seed % 3 === 1, pine = seed % 3 === 0;
+			for (const [dx, dy] of [[-7, 2], [6, 2], [1, 7]]) a.line([p, { x: p.x + dx!, y: p.y + dy! }], birch ? 0xada689 : 0x5d5b40, 1.4, .75);
+			g.lineStyle(birch ? 3 : 4, birch ? 0xc1c1a3 : 0x6a5943).lineBetween(at.x, at.y, at.x - 1, at.y - height + 10);
+			g.lineStyle(1, birch ? 0xe0dcca : 0xa58a60, .65).lineBetween(at.x - 1, at.y - 3, at.x - 2, at.y - 26);
+			if (birch) for (let z = 5; z < height - 10; z += 7) g.lineStyle(1.1, 0x5a6151, .8).lineBetween(at.x - 1.5, at.y - z, at.x + .8, at.y - z + .7);
+			g.lineStyle(1.8, birch ? 0x999c7e : 0x6a5943).lineBetween(at.x - 1, at.y - 17, at.x - 11 + sway * .4, at.y - 30);
+			g.lineStyle(1.5, birch ? 0xaaa88d : 0x6a5943).lineBetween(at.x - 1, at.y - 22, at.x + 11 + sway * .4, at.y - 35);
+			if (pine) {
+				// Long tiered boughs make a ragged spruce silhouette, with clear sky between the tiers.
+				for (const [z, width] of [[20, 19], [31, 16], [41, 12]]) {
+					const tip = at.y - Math.min(height, z! + 15), base = at.y - z! + 7, cx = at.x + sway * z! / height;
+					const points = [{ x: cx, y: tip }, { x: cx - width! * .45, y: base - 7 }, { x: cx - width!, y: base }, { x: cx - width! * .7, y: base + 1 }, { x: cx - 4, y: base - 1 }, { x: cx + 4, y: base + 2 }, { x: cx + width! * .85, y: base + 1 }, { x: cx + width!, y: base - 1 }, { x: cx + width! * .45, y: base - 9 }];
+					g.fillStyle(0x294d3c).fillPoints(points, true);
+					g.fillStyle(0x547250, .82).fillPoints([points[0]!, points[1]!, { x: cx - width! * .7, y: base - 1 }, { x: cx - 1, y: base - 5 }], true);
+					g.lineStyle(.7, 0x779065, .5).lineBetween(cx - 3, base - 8, cx - width! * .55, base - 3);
+				}
+			} else {
+				const centre = { x: at.x + sway, y: at.y - height + 20 }, width = birch ? 16 : 22, depth = birch ? 19 : 17;
+				const crown = Array.from({ length: 23 }, (_, i) => { const angle = i / 23 * Math.PI * 2, wobble = .8 + r() * .25; return { x: centre.x + Math.cos(angle) * width * wobble, y: centre.y + Math.sin(angle) * depth * wobble }; });
+				g.fillStyle(birch ? 0x456443 : 0x355b43).fillPoints(crown, true);
+				g.fillStyle(birch ? 0x7f9259 : 0x628052, .82).fillPoints(crown.map((point) => ({ x: centre.x - 3 + (point.x - centre.x) * .79, y: centre.y - 3 + (point.y - centre.y) * .76 })), true);
+				for (let i = 0; i < 16; i++) {
+					const angle = r() * Math.PI * 2, radius = Math.sqrt(r()) * .82;
+					g.fillStyle(i % 4 ? 0x829363 : 0xa2a871, .55).fillEllipse(centre.x - 2 + Math.cos(angle) * width * radius, centre.y - 2 + Math.sin(angle) * depth * radius, 2.5 + r() * 2, 1.2 + r());
+				}
 			}
-			for (let i = 0; i < 11; i++) g.fillStyle(i % 4 ? 0x80905b : 0xa4a86f, .65).fillCircle(at.x + r() * 29 - 17, at.y - 18 - r() * 25, 1.4 + r() * 2.1);
 			break;
 		}
 		case "bush":
 			for (let i = 0; i < 5; i++) {
 				const dx = Math.cos(i * 2.7) * 7, dy = Math.sin(i * 2.7) * 3;
-				g.fillStyle(0x3a6649).fillEllipse(at.x + dx, at.y - 5 + dy, 15, 12);
-				g.fillStyle(0x82925c, .65).fillEllipse(at.x + dx - 2, at.y - 8 + dy, 9, 5);
+				g.fillStyle(0x3a6649).fillEllipse(at.x + dx + sway * .35, at.y - 5 + dy, 15, 12);
+				g.fillStyle(0x82925c, .65).fillEllipse(at.x + dx - 2 + sway * .55, at.y - 8 + dy, 9, 5);
 			}
-			for (let i = 0; i < 6; i++) g.fillStyle(seed % 2 ? 0xd7b787 : 0xb6bc89, .85).fillCircle(at.x + r() * 22 - 11, at.y - 4 - r() * 8, .8);
+			for (let i = 0; i < 6; i++) g.fillStyle(seed % 2 ? 0xd7b787 : 0xb6bc89, .85).fillCircle(at.x + r() * 22 - 11 + sway * .55, at.y - 4 - r() * 8, .8);
 			break;
+		case "fern": {
+			for (let i = 0; i < 7; i++) {
+				const spread = (i - 3) * 2.6, tip = { x: at.x + spread + sway * .65, y: at.y - 7 - Math.sin(i / 6 * Math.PI) * 6 };
+				g.lineStyle(.7, 0x71894f, .95).lineBetween(at.x, at.y, tip.x, tip.y);
+				for (let leaf = 1; leaf <= 4; leaf++) {
+					const t = leaf / 5, cx = at.x + (tip.x - at.x) * t, cy = at.y + (tip.y - at.y) * t, width = (1 - t) * 3.4;
+					g.lineStyle(1, leaf % 2 ? 0x628051 : 0x91a366, .85);
+					g.lineBetween(cx, cy, cx - width, cy - .8);
+					g.lineBetween(cx, cy, cx + width, cy - 1.2);
+				}
+			}
+			break;
+		}
 		case "rock":
 			a.face([{ x: p.x - 9, y: p.y + 1 }, { x: p.x - 7, y: p.y - 7 }, { x: p.x + 3, y: p.y - 10 }, { x: p.x + 10, y: p.y - 3 }, { x: p.x + 8, y: p.y + 6 }, { x: p.x - 3, y: p.y + 7 }], 0x768674, 1, 3);
 			a.face([{ x: p.x - 7, y: p.y - 7 }, { x: p.x + 3, y: p.y - 10 }, { x: p.x + 5, y: p.y - 2 }, { x: p.x - 3, y: p.y + 2 }], 0xa0a58a, 1, 3);
 			a.line([{ x: p.x - 5, y: p.y }, { x: p.x + 5, y: p.y + 3 }], 0x4d6955, 1, .55, 3);
 			break;
+		case "puddle": {
+			const rx = decoration.radius, ry = decoration.radius * .58, edge = blob(p, rx, ry, seed, 17), water = blob({ x: p.x - 1, y: p.y - 1 }, rx * .82, ry * .78, seed + 1, 17);
+			a.face(edge, 0x3e5546, .42);
+			a.face(water, C.water, .57);
+			a.line([{ x: p.x - rx * .5, y: p.y - ry * .22 }, { x: p.x + rx * .25, y: p.y - ry * .22 }], 0xc3cdb6, .8, .55);
+			a.line([{ x: p.x - rx * .16, y: p.y + ry * .18 }, { x: p.x + rx * .38, y: p.y + ry * .18 }], 0xb1bfaa, .6, .3);
+			break;
+		}
+		case "stump": {
+			a.box(p.x - 5, p.y - 5, 10, 10, 7, 0xa88f63, 0x6b6243, 0x4f5840);
+			a.ellipse(p, 6.5, 6, 0xbb9e6c, 1, 7);
+			a.ellipse(p, 3.7, 3.5, 0x887348, .65, 7.1);
+			a.ellipse(p, 2.5, 2.2, 0xc1a873, 1, 7.2);
+			a.line([{ x: p.x - 5, y: p.y + 1 }, { x: p.x - 1, y: p.y + 1 }], 0x695b3e, .8, .7, 7.3);
+			for (const [dx, dy] of [[-9, 2], [7, 5], [0, -8]]) a.line([p, { x: p.x + dx!, y: p.y + dy! }], 0x6d6343, 2, .8);
+			break;
+		}
+		case "logs":
+		case "woodpile": {
+			const stacked = decoration.kind === "woodpile";
+			if (stacked) {
+				for (const dx of [-12, 8]) a.box(p.x + dx, p.y - 10, 3, 20, 2, C.wood, 0x756a45, 0x5e5b3f);
+			}
+			const logs = stacked ? [[-10, -7, 2], [-10, 0, 2], [-10, 7, 2], [-9, -3, 7], [-9, 4, 7], [-8, 1, 12]] : [[-12, -5, 0], [-7, 4, 0], [-8, -1, 5]];
+			for (const [dx, dy, z] of logs) {
+				const length = stacked ? 23 : 19 + seed % 5;
+				a.box(p.x + dx!, p.y + dy!, length, 5, 4.5, 0x93805a, 0x665b3e, 0x534f38, z!);
+				a.line([{ x: p.x + dx! + 1, y: p.y + dy! + 2 }, { x: p.x + dx! + length - 1, y: p.y + dy! + 2 }], 0xb29a6b, .65, .55, z! + 4.6);
+				const end = a.point({ x: p.x + dx! + length, y: p.y + dy! + 2.5 }, z! + 2.6);
+				g.fillStyle(0xc5ab78).fillEllipse(end.x, end.y, 3.8, 4.2);
+				g.lineStyle(.6, 0x826d46, .8).strokeEllipse(end.x, end.y, 2, 2.4);
+			}
+			break;
+		}
 		case "bench": {
 			for (const dx of [-13, 10]) a.box(p.x + dx, p.y - 3, 3, 10, 8, C.steel, 0x4b6654, 0x354f43);
 			for (const dy of [-5, 0, 5]) a.box(p.x - 16, p.y + dy, 33, 3.5, 2, C.wood, 0x846945, 0x645638, 8);
 			for (const dx of [-12, 10]) a.box(p.x + dx, p.y - 5, 2, 3, 19, C.steel, 0x4b6654, 0x354f43);
 			a.box(p.x - 16, p.y - 6, 33, 2, 6, C.wood, 0x927449, 0x645638, 15);
+			a.line([{ x: p.x - 8, y: p.y }, { x: p.x - 2, y: p.y }], 0xd6bf88, .7, .55, 10.2);
+			a.line([{ x: p.x + 6, y: p.y + 5 }, { x: p.x + 13, y: p.y + 5 }], 0x68573b, .6, .65, 10.2);
 			break;
 		}
 		case "barrels":
@@ -295,6 +404,8 @@ export function paintShelterDecoration(g: Phaser.GameObjects.Graphics, decoratio
 				g.fillStyle(color!).fillRoundedRect(b.x - 4, b.y - 13, 8, 12, 2);
 				g.fillStyle(0xa2a886).fillEllipse(b.x, b.y - 13, 8, 3);
 				for (const z of [4, 10]) g.lineStyle(.8, 0x3c5a48).lineBetween(b.x - 4, b.y - z, b.x + 4, b.y - z);
+				g.fillStyle(0x956c46, .65).fillEllipse(b.x + 1, b.y - 7, 2.4, 3.5);
+				g.fillStyle(0x3f5547, .7).fillCircle(b.x + 1, b.y - 13, .65);
 			}
 			a.box(p.x - 15, p.y + 5, 18, 9, 7, 0xb99b69, 0x92754e, 0x695f40);
 			break;
@@ -306,8 +417,8 @@ export function paintShelterDecoration(g: Phaser.GameObjects.Graphics, decoratio
 			}
 			a.line([{ x: p.x - 6, y: p.y - 3 }, { x: p.x + 6, y: p.y + 3 }], 0x765c3e, 3, 1, 2);
 			a.line([{ x: p.x - 6, y: p.y + 3 }, { x: p.x + 5, y: p.y - 4 }], 0x9f7c48, 3, 1, 3);
-			g.fillStyle(0xe9ab58, .65).fillTriangle(at.x - 3, at.y - 3, at.x, at.y - 11, at.x + 3, at.y - 2);
-			g.fillStyle(0xf2d188, .8).fillTriangle(at.x - 1, at.y - 2, at.x + 1, at.y - 8, at.x + 2, at.y - 2);
+			g.fillStyle(0xb66e36, .8).fillEllipse(at.x, at.y - 3, 7, 2.5);
+			g.fillStyle(0xe6af5e, .8).fillEllipse(at.x - 1, at.y - 3.5, 2.8, 1.2);
 			a.box(p.x - 20, p.y + 4, 11, 11, 8, C.wood, 0x856d47, 0x5d5c3d);
 			break;
 		case "lamp":

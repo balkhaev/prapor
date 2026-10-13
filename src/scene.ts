@@ -13,9 +13,11 @@ import { advanceScavAnimation, createScavAnimation, type ScavAnimationState } fr
 import { SCAV_DIRECTIONS, SCAV_ORIGIN, SCAV_REFERENCE_HEIGHT, scavAppearance, scavAttachment, scavAvailableAppearance, scavDirection, scavFrame, scavPreloadAppearances, scavTexture, scavTorsoAnchor, scavHeadAnchor, type ScavDirection, type ScavPose } from "./scav-isometric";
 import { advanceShelterStationClock, getShelterProductionPresentation, type ProductionPresentation } from "./shelter-production";
 import { projectShelterPoint, unprojectShelterPoint, projectShelterBounds, shelterBuildingDepth, shelterBuildingHitPolygon, shelterRectPolygon, shelterRoomPolygon, shelterRoomPosition, shelterRoomRect } from "./shelter-isometric";
-import { paintIsometricRoom, paintIsometricProduction } from "./shelter-isometric-art";
+import { paintIsometricRoom, paintIsometricProduction, getShelterChimney, getShelterPorchLamp } from "./shelter-isometric-art";
 import { RaidStreetRenderer } from "./raid-scene";
-import { getShelterLandscape, paintShelterLandscape, paintShelterDecoration } from "./shelter-landscape";
+import { getShelterLandscape, paintShelterLandscape, paintShelterDecoration, type ShelterLandscape, type ShelterLandscapeDecoration } from "./shelter-landscape";
+import { sampleShelterAtmosphere, sampleShelterWind, paintShelterAtmosphereGround, paintShelterAtmosphereAir, paintShelterAtmosphereGlows, type ShelterSmokeEmitter, type ShelterAtmosphereLight } from "./shelter-atmosphere";
+import { getShelterRoutine, restoreShelterRoutine, type ShelterRoutine } from "./shelter-routines";
 
 export interface WorldSnapshot {
 	identityKey?: string;
@@ -77,6 +79,7 @@ type ScavActor = {
 	selection: Phaser.GameObjects.Ellipse;
 	hovered: boolean;
 	gearSignature: string;
+	routine: ShelterRoutine | null;
 	position: Point;
 	anchor: Point;
 	route: Point[];
@@ -314,6 +317,15 @@ export function createWorld(
 		private cells = new Map<string, ShelterCell>();
 		private shelterCaption!: Phaser.GameObjects.Text;
 		private ambient!: Phaser.GameObjects.Graphics;
+		private atmosphereGround!: Phaser.GameObjects.Graphics;
+		private atmosphereAir!: Phaser.GameObjects.Graphics;
+		private atmosphereGlows!: Phaser.GameObjects.Graphics;
+		private landscape: ShelterLandscape | null = null;
+		private smokeEmitters: ShelterSmokeEmitter[] = [];
+		private atmosphereLights: ShelterAtmosphereLight[] = [];
+		private windProps: { art: Phaser.GameObjects.Graphics; decoration: ShelterLandscapeDecoration }[] = [];
+		private lastAtmospherePaint = -1000;
+		private lastWindPaint = -1000;
 		private dragGhost!: Phaser.GameObjects.Graphics;
 		private placementGhost!: Phaser.GameObjects.Graphics;
 		private buildingGhost!: Phaser.GameObjects.Graphics;
@@ -462,6 +474,7 @@ export function createWorld(
 				raidId: requestedRaidId, raidCamera: this.raidStreet?.getCameraState(),
 				actors: actors.map(([id, slot]) => ({ id, x: slot.position.x, y: slot.position.y,
 					assignment: slot.assignment, role: slot.role, goal: slot.goal, anchor: { ...slot.anchor },
+					routine: slot.routine ? { point: { ...slot.routine.point }, activity: slot.routine.activity } : null,
 					visit: slot.visit, facing: slot.facing, direction: slot.direction, dwellMs: Math.max(0, slot.dwellUntil - this.time.now), animation: { ...slot.animation } })) };
 		}
 
@@ -494,8 +507,16 @@ export function createWorld(
 				const at = point(saved), anchor = point(saved.anchor);
 				if (!at || !anchor || typeof saved.goal !== "string" || saved.goal.length > 180) continue;
 				const goal = saved.goal;
+				const visit = finite(saved.visit) ? Math.max(0, Math.min(1_000_000, Math.floor(saved.visit))) : 0;
+				const restoredRoutine = !slot.assignment && slot.role === "idle" && goal.startsWith("routine:") ? restoreShelterRoutine({ scavId: scav.id, personality: scav.personality,
+					visit, from: at, sites, buildings: roomBuildings(state.shelter?.rooms ?? []), decorations: this.landscape?.decorations ?? [],
+					reservedTargets: data.actors.slice(0, 32).flatMap(otherRaw => {
+						const other = object(otherRaw), person = state.scavs?.find(item => item.id === other?.id), target = other && point(other.anchor);
+						return target && person && person.id !== scav.id && person.status === "ready" && !person.assignment ? [target] : [];
+					}) }, saved.routine) : null;
+				if (goal.startsWith("routine:") && (!restoredRoutine || goal !== `routine:${visit}:${restoredRoutine.activity}` || Math.hypot(anchor.x - restoredRoutine.point.x, anchor.y - restoredRoutine.point.y) > .01)) continue;
 				const allowed = slot.assignment ? goal.startsWith(`work:${slot.assignment}:`) : slot.role === "rest" ? goal === slot.goal
-					: goal.startsWith("idle-home:") || goal.startsWith("visit:") && state.shelter?.rooms.some((room) => goal === `visit:${saved.visit}:${room.id}`);
+					: Boolean(restoredRoutine) || goal.startsWith("idle-home:") || goal.startsWith("visit:") && state.shelter?.rooms.some((room) => goal === `visit:${saved.visit}:${room.id}`);
 				if (!allowed) continue;
 				const destination = slot.assignment ? slot.anchor : anchor;
 				const route = getShelterWalkingRoute(at, destination, sites, roomBuildings(state.shelter?.rooms ?? []));
@@ -506,6 +527,7 @@ export function createWorld(
 				const onDoor = sites.some((p) => { const origin = cellPosition(p.column, p.row); return Math.abs(at.x - origin.x - 86) < .001 && at.y >= origin.y + 100 && at.y <= origin.y + 116; });
 				if (!onFloor && !onCorridor && !onStreet && !onDoor) continue;
 				this.placeActor(slot, at); slot.route = reducedMotion ? [] : route; slot.anchor = { ...destination };
+				slot.routine = restoredRoutine;
 				if (!slot.assignment || goal === slot.goal) slot.goal = goal;
 				if (reducedMotion) this.placeActor(slot, destination);
 				if (finite(saved.visit)) slot.visit = Math.max(0, Math.min(1_000_000, Math.floor(saved.visit)));
@@ -994,6 +1016,10 @@ export function createWorld(
 
 		private paintBunker(): void {
 			this.terrain = this.add.graphics().setDepth(-1_000_000_000); this.baseLayer.add(this.terrain);
+			this.atmosphereGround = this.add.graphics().setDepth(-999_999_998);
+			this.atmosphereGlows = this.add.graphics().setDepth(999_999).setBlendMode(Phaser.BlendModes.ADD);
+			this.atmosphereAir = this.add.graphics().setDepth(1_000_002);
+			this.baseLayer.add([this.atmosphereGround, this.atmosphereGlows, this.atmosphereAir]);
 			this.ambient = this.add.graphics().setDepth(1_000_000); this.baseLayer.add(this.ambient);
 			this.dragGhost = this.add.graphics().setDepth(100_000_000); this.baseLayer.add(this.dragGhost);
 			this.placementGhost = this.add.graphics().setDepth(100_000_002); this.baseLayer.add(this.placementGhost);
@@ -1009,7 +1035,7 @@ export function createWorld(
 			const frontier = getShelterFrontier(shelter), expansions = shelter.expansions ?? [];
 			const all = [...sites, ...frontier, ...expansions];
 			const buildings = roomBuildings(shelter.rooms);
-			const signature = `${sites.map((p) => `${p.column}:${p.row}`).join(";")}|${expansions.map((p) => `${p.column}:${p.row}`).join(";")}|${shelter.rooms.map((room) => `${room.id}:${room.type}:${getRoomPosition(room).x}:${getRoomPosition(room).y}:${room.rotation ?? 0}:${getRoomFacing(room)}`).join(";")}`;
+			const signature = `${sites.map((p) => `${p.column}:${p.row}`).join(";")}|${expansions.map((p) => `${p.column}:${p.row}`).join(";")}|${shelter.rooms.map((room) => `${room.id}:${room.type}:${room.status}:${getRoomPosition(room).x}:${getRoomPosition(room).y}:${room.rotation ?? 0}:${getRoomFacing(room)}`).join(";")}`;
 			if (signature === this.layoutSignature) return;
 			const first = !this.layoutSignature; this.layoutSignature = signature;
 			this.worldBounds = getShelterWorldBounds(sites, [...frontier, ...expansions]);
@@ -1020,6 +1046,15 @@ export function createWorld(
 			for (const p of all) if (!this.cells.has(`${p.column}:${p.row}`)) this.createCell(p.column, p.row);
 			for (const room of shelter.rooms) if (!this.cells.has(roomCellKey(room.id))) this.createCell(room.column, room.row, room);
 			const landscape = getShelterLandscape(sites, buildings, expansions);
+			this.landscape = landscape; this.lastAtmospherePaint = -1000; this.lastWindPaint = -1000;
+			this.smokeEmitters = []; this.atmosphereLights = []; this.windProps = [];
+			for (const room of shelter.rooms) if (room.status === "ready") {
+				const chimney = getShelterChimney(room);
+				if (chimney && ["workshop", "medbay", "dormitory"].includes(room.type)) this.smokeEmitters.push({ ...projectShelterPoint(chimney.point), height: chimney.height, kind: "chimney", strength: .65 });
+				const light = getShelterPorchLamp(room);
+				this.atmosphereLights.push({ ...projectShelterPoint(light.point), kind: "lamp", height: light.height });
+			}
+			for (const slot of this.scavs.values()) if (!slot.assignment) { slot.routine = null; slot.goal = ""; slot.route = []; slot.dwellUntil = 0; }
 			const g = this.terrain; g.clear();
 			paintShelterLandscape(g, landscape, this.worldBounds);
 			for (const prop of this.exteriorProps) prop.destroy(); this.exteriorProps = [];
@@ -1027,6 +1062,12 @@ export function createWorld(
 				const art = this.add.graphics().setDepth(projectShelterPoint(decoration.point).y);
 				paintShelterDecoration(art, decoration);
 				this.baseLayer.add(art); this.exteriorProps.push(art);
+				if (["tree", "bush", "fern"].includes(decoration.kind)) this.windProps.push({ art, decoration });
+				const point = projectShelterPoint(decoration.point);
+				if (decoration.kind === "camp") {
+					this.smokeEmitters.push({ ...point, kind: "fire", height: 7 });
+					this.atmosphereLights.push({ ...point, kind: "fire", height: 4 });
+				} else if (decoration.kind === "lamp") this.atmosphereLights.push({ x: point.x + 7, y: point.y, kind: "lamp", height: 30 });
 			}
 			for (const fence of this.perimeterFences) fence.destroy(); this.perimeterFences = [];
 			for (const edge of landscape.perimeter) {
@@ -1212,7 +1253,7 @@ export function createWorld(
 			const label = this.text(0, -64, "", 16, "#ffedc7").setOrigin(.5).setFontFamily("Manrope, sans-serif").setFontStyle("bold").setLetterSpacing(0).setBackgroundColor("#0b1b20").setPadding(7, 4).setVisible(false);
 			const order = this.add.circle(-10, -34, 3.5, C.sage).setStrokeStyle(1, 0x10242b).setVisible(false);
 			const hit = this.add.zone(0, -21, 32, 46).setInteractive({ useHandCursor: true });
-			const slot: ScavActor = { actor, body, legA, legB, hand, sprite, poses, animation: createScavAnimation(index * .37), appearance, direction: "se", equipment, visualLoadout, tool, label, order, selection, hovered: false, gearSignature: "", position: { ...at }, anchor: { ...at }, route: [], goal: "", assignment: null, role: "idle", dwellUntil: this.time.now + 2000 + index * 800, visit: 0, facing: 1, climbing: false, status: "ready", health: 100, working: false, walking: false, walkSpan: 0, phase: index * 1.71 };
+			const slot: ScavActor = { actor, body, legA, legB, hand, sprite, poses, animation: createScavAnimation(index * .37), appearance, direction: "se", equipment, visualLoadout, tool, label, order, selection, hovered: false, gearSignature: "", routine: null, position: { ...at }, anchor: { ...at }, route: [], goal: "", assignment: null, role: "idle", dwellUntil: this.time.now + 2000 + index * 800, visit: 0, facing: 1, climbing: false, status: "ready", health: 100, working: false, walking: false, walkSpan: 0, phase: index * 1.71 };
 			hit.on("pointerover", (pointer: Phaser.Input.Pointer) => { if (this.acceptsPointer(pointer, "base")) { slot.hovered = true; selection.setVisible(true); label.setVisible(true); actor.setDepth(1_000_001); } });
 			hit.on("pointerout", () => { slot.hovered = false; const selected = snapshot().selectedScavId === scavId; selection.setVisible(selected); label.setVisible(selected); actor.setDepth(actor.y); });
 			// Native pointer-up distinguishes a deliberate tap from a drag before opening the inspector.
@@ -1340,6 +1381,7 @@ export function createWorld(
 				slot.equipment.update(slot.visualLoadout, slot.direction, { working: slot.working, mode: "slung", bodyAngle: slot.body.angle, torso, head });
 				const previousStatus = slot.status, previousAssignment = slot.assignment;
 				slot.assignment = room?.id ?? null; slot.status = scav.status; slot.health = scav.health;
+				if (room || scav.status !== "ready") slot.routine = null;
 				if (this.drag?.scavId === scav.id && (scav.status === "raiding" || scav.health < 25 || this.drag.shelter !== state.shelter || this.drag.scav !== scav)) this.cancelScavDrag();
 				if (scav.status === "raiding") {
 					if (previousStatus !== "raiding") { this.sendActor(slot, "depart", { x: 318, y: 102 }); slot.actor.setVisible(!reducedMotion); }
@@ -1364,10 +1406,10 @@ export function createWorld(
 				const selected = state.selectedScavId === scav.id;
 				slot.selection.setVisible(selected || slot.hovered || this.drag?.scavId === scav.id).setStrokeStyle(1.5, selected ? C.light : C.gold);
 				const activities: Record<string, string> = { workshop: "СОБИРАЕТ ДЕТАЛИ", ammo: "СНАРЯЖАЕТ ПАТРОНЫ", recycler: "СОРТИРУЕТ УТИЛЬ", medbay: "ГОТОВИТ МЕДИКАМЕНТЫ", radio: "РАБОТАЕТ В ЭФИРЕ" };
-				const activity = slot.role === "rest" ? slot.route.length ? "ИДЁТ ОТДЫХАТЬ" : "ВОССТАНАВЛИВАЕТСЯ" : slot.route.length ? room ? `ИДЁТ: ${ROOM_STYLE[room.type]?.label ?? "КОМНАТА"}` : "ОСМАТРИВАЕТ БАЗУ" : slot.working ? room?.type === "workshop" ? presentation?.stageLabel.toLocaleUpperCase("ru-RU") ?? "РАБОТАЕТ" : activities[slot.role] ?? "РАБОТАЕТ" : room ? production?.reason?.toLocaleUpperCase("ru-RU").slice(0, 24) ?? "ЖДЁТ ЗАКАЗ" : "НА БАЗЕ";
+				const activity = slot.role === "rest" ? slot.route.length ? "ИДЁТ ОТДЫХАТЬ" : "ВОССТАНАВЛИВАЕТСЯ" : slot.route.length ? room ? `ИДЁТ: ${ROOM_STYLE[room.type]?.label ?? "КОМНАТА"}` : "ИДЁТ ПО ДВОРУ" : slot.working ? room?.type === "workshop" ? presentation?.stageLabel.toLocaleUpperCase("ru-RU") ?? "РАБОТАЕТ" : activities[slot.role] ?? "РАБОТАЕТ" : room ? production?.reason?.toLocaleUpperCase("ru-RU").slice(0, 24) ?? "ЖДЁТ ЗАКАЗ" : slot.routine?.label.toLocaleUpperCase("ru-RU") ?? "НА БАЗЕ";
 				slot.label.setText(`${scav.name?.toLocaleUpperCase("ru-RU") ?? ""}\n${activity}`).setVisible(selected || slot.hovered);
 				slot.order.setVisible(Boolean(scav.autoRaid?.enabled)).setFillStyle(scav.autoRaid?.waitingReason ? C.gold : C.sage);
-				const gearSignature = slot.role;
+				const gearSignature = `${slot.role}:${slot.routine?.activity ?? ""}`;
 				if (slot.gearSignature !== gearSignature) {
 					slot.gearSignature = gearSignature; slot.tool.clear();
 					if (slot.role === "workshop") { line(slot.tool, [{ x: 1, y: 1 }, { x: 10, y: 1 }], 0xc6cbb6, 2); slot.tool.lineStyle(1.3, 0xd4d5ba).strokeCircle(11, 1, 2.3); }
@@ -1375,25 +1417,49 @@ export function createWorld(
 					if (slot.role === "recycler") { line(slot.tool, [{ x: 1, y: 0 }, { x: 2, y: 9 }], 0xd5bb92, 2); slot.tool.fillStyle(0x9dac9b).fillRect(-2, 8, 8, 3); }
 					if (slot.role === "medbay") slot.tool.fillStyle(0xd8ebe0).fillRect(0, 1, 5, 7).fillStyle(0x98cabc).fillRect(1, -1, 3, 2);
 					if (slot.role === "radio") slot.tool.fillStyle(0xbdc9a6).fillRect(-1, 0, 6, 7).fillStyle(0x659789).fillRect(0, 1, 4, 3);
+					if (slot.role === "idle" && slot.routine && ["warm", "rest", "chat"].includes(slot.routine.activity)) {
+						slot.tool.fillStyle(0x4b6559).fillRoundedRect(0, 0, 5, 5, 1).lineStyle(.7, 0xd9cbb0).strokeEllipse(2.5, 0, 5, 1.7).strokeCircle(5, 2, 1.5);
+					}
 				}
 			});
 		}
 
 		private patrolActor(slot: ScavActor, id: string, time: number): void {
 			if (slot.assignment || slot.status !== "ready" || slot.route.length || time < slot.dwellUntil || reducedMotion) return;
-			const state = this.viewState, ready = state?.shelter?.rooms.filter((room) => room.status === "ready") ?? [];
+			const state = this.viewState;
 			slot.visit++;
-			const people = state?.scavs?.filter((scav) => scav.status !== "raiding" && !scav.assignment) ?? [];
-			if (!ready.length || slot.visit % 3 === 0) this.sendActor(slot, `idle-home:${slot.visit}`, this.homePosition(Math.max(0, people.findIndex((scav) => scav.id === id)), people.length));
-			else {
-				const room = ready[(Math.floor(slot.phase * 7) + slot.visit * 3) % ready.length]!;
-				this.sendActor(slot, `visit:${slot.visit}:${room.id}`, getRoomLocalPoint(room, slot.visit % 2 ? 27 : 146, 80));
+			const person = state?.scavs?.find(scav => scav.id === id);
+			const routine = getShelterRoutine({ scavId: id, personality: person?.personality, visit: slot.visit, from: slot.position,
+				sites: getShelterSites(state?.shelter ?? { rooms: [] }), buildings: roomBuildings(state?.shelter?.rooms ?? []), decorations: this.landscape?.decorations ?? [],
+					reservedTargets: [...this.scavs.values()].filter(other => other !== slot && other.actor.visible && !other.assignment && other.status === "ready").map(other => other.anchor) });
+			slot.routine = routine; slot.role = "idle";
+			if (routine) this.sendActor(slot, `routine:${slot.visit}:${routine.activity}`, routine.point);
+			slot.dwellUntil = time + (routine?.dwellMs ?? 7000);
+		}
+
+		private animateAtmosphere(time: number): void {
+			if (!this.landscape || !this.atmosphereAir) return;
+			if (reducedMotion && this.lastAtmospherePaint >= 0) return;
+			if (time - this.lastWindPaint >= 83) {
+				this.lastWindPaint = time;
+				const wind = sampleShelterWind(time, reducedMotion);
+				for (const { art, decoration } of this.windProps) {
+					art.clear(); paintShelterDecoration(art, decoration, wind.sway * (1.1 + decoration.seed % 5 * .1));
+				}
 			}
-			slot.role = "idle"; slot.dwellUntil = time + 9000 + slot.phase * 400;
+			if (time - this.lastAtmospherePaint < 50) return;
+			this.lastAtmospherePaint = time;
+			const frame = sampleShelterAtmosphere({ timeMs: time, groundBounds: this.worldBounds, smokeEmitters: this.smokeEmitters, lights: this.atmosphereLights,
+				birdBounds: { x: this.worldBounds.x + 60, y: this.worldBounds.y + 25, width: Math.max(100, this.worldBounds.width - 120), height: 55 },
+				mistZones: [{ x: this.worldBounds.x + 12, y: this.worldBounds.y + this.worldBounds.height - 105, width: this.worldBounds.width - 24, height: 64 }], reducedMotion });
+			this.atmosphereGround.clear(); paintShelterAtmosphereGround(this.atmosphereGround, frame);
+			this.atmosphereAir.clear(); paintShelterAtmosphereAir(this.atmosphereAir, frame);
+			this.atmosphereGlows.clear(); paintShelterAtmosphereGlows(this.atmosphereGlows, frame);
 		}
 
 		private animateShelter(time: number, delta: number): void {
 			const step = Math.min(Math.max(delta, 0), 100) / 1000;
+			this.animateAtmosphere(time);
 			this.ambient.clear();
 			for (const [id, slot] of this.scavs) {
 				let walkedDistance = 0;
@@ -1414,7 +1480,7 @@ export function createWorld(
 						const previous = projectShelterPoint(before), current = projectShelterPoint(motion.point);
 						slot.direction = scavDirection(current.x - previous.x, current.y - previous.y, slot.direction);
 					}
-					if (hadRoute && motion.arrived) { slot.dwellUntil = time + 6500 + (slot.phase % 4) * 1700; slot.walking = false; slot.climbing = false; if (slot.status === "raiding") slot.actor.setVisible(false); }
+					if (hadRoute && motion.arrived) { slot.dwellUntil = time + (slot.routine?.dwellMs ?? 6500 + (slot.phase % 4) * 1700); slot.walking = false; slot.climbing = false; if (slot.status === "raiding") slot.actor.setVisible(false); }
 				} else { slot.walking = false; slot.climbing = false; }
 				const room = this.viewState?.shelter?.rooms.find((candidate) => candidate.id === slot.assignment);
 				const production = room ? this.viewState?.roomProduction?.[room.id] : undefined;
@@ -1423,6 +1489,10 @@ export function createWorld(
 				if (slot.working && room) {
 					slot.direction = (["ne", "se", "sw", "nw"] as const)[getRoomFacing(room)];
 					slot.facing = slot.direction.endsWith("e") ? 1 : -1;
+				}
+				if (!slot.assignment && !slot.walking && slot.routine?.lookAt) {
+					const from = projectShelterPoint(slot.position), to = projectShelterPoint(slot.routine.lookAt);
+					slot.direction = scavDirection(to.x - from.x, to.y - from.y, slot.direction); slot.facing = slot.direction.endsWith("e") ? 1 : -1;
 				}
 				const animation = advanceScavAnimation(slot.animation, { distance: walkedDistance, elapsedMs: step * 1000, walking: slot.walking || walkedDistance > 0, working: slot.working, facing: slot.facing, role: slot.role, workDone: (room?.queue[0]?.workDone ?? 0) / 1_000_000, workRate: production?.rate ?? 0, jobId: presentation?.jobId ?? null, stage: presentation?.stage, stageProgress: presentation?.stageProgress, reducedMotion, paused: !slot.actor.visible || this.drag?.scavId === id });
 				slot.animation = animation.state;
@@ -1434,7 +1504,9 @@ export function createWorld(
 				}
 				// All visual transforms pivot at the common feet baseline. Physics,
 				// hit zones and drag coordinates use the same projected feet position.
-				slot.body.setPosition(0, 0).setScale(slot.sprite ? 1 : pose.scaleX, pose.scaleY).setAngle(pose.angle * (slot.direction[1] === "e" ? 1 : -1));
+				const relaxed = Boolean(slot.routine && !slot.walking && !slot.working && slot.status === "ready");
+				const breath = relaxed && !reducedMotion ? Math.sin(time / 4300 * Math.PI * 2 + slot.phase) * .42 : 0;
+				slot.body.setPosition(0, 0).setScale(slot.sprite ? 1 : pose.scaleX, pose.scaleY).setAngle(pose.angle * (slot.direction[1] === "e" ? 1 : -1) + breath);
 				const torso = scavTorsoAnchor(Object.values(slot.poses ?? {}).map((image) => ({ weight: image.visible ? image.alpha : 0, torso: (image.frame.customData as { custom?: { torso?: Point } }).custom?.torso })));
 				const head = scavHeadAnchor(Object.values(slot.poses ?? {}).map((image) => ({ weight: image.visible ? image.alpha : 0, head: (image.frame.customData as { custom?: { head?: Point } }).custom?.head })));
 				slot.equipment.update(slot.visualLoadout, slot.direction, { working: slot.working, mode: "slung", bodyAngle: slot.body.angle, torso, head });
@@ -1443,8 +1515,8 @@ export function createWorld(
 				slot.legB.setAngle(-Math.sin(stride) * 9 * slot.animation.walkBlend);
 				slot.hand.setAngle(pose.handAngle);
 				if (slot.sprite) {
-					const hand = scavAttachment(slot.direction, true);
-					slot.tool.setPosition(hand.x + (pose.toolX - 13) * (hand.flipX ? -1 : 1), hand.y + pose.toolY + 21).setScale(hand.flipX ? -1 : 1, 1).setAngle(pose.toolAngle + (hand.behind ? -24 : 24)).setVisible(slot.working);
+					const idleProp = relaxed && slot.routine && ["warm", "rest", "chat"].includes(slot.routine.activity), hand = scavAttachment(slot.direction, slot.working);
+					slot.tool.setPosition(hand.x + (slot.working ? pose.toolX - 13 : 0) * (hand.flipX ? -1 : 1), hand.y + (slot.working ? pose.toolY + 21 : 0)).setScale(hand.flipX ? -1 : 1, 1).setAngle(slot.working ? pose.toolAngle + (hand.behind ? -24 : 24) : 0).setVisible(slot.working || Boolean(idleProp));
 					if (hand.behind) slot.body.sendToBack(slot.tool); else slot.body.bringToTop(slot.tool);
 				} else slot.tool.setPosition(pose.toolX - 7, pose.toolY).setAngle(pose.toolAngle).setVisible(slot.working);
 				if (slot.actor.visible) {
