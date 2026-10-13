@@ -150,7 +150,8 @@ export class RaidStreetRenderer {
 		for (const building of plan.buildings) this.buildBuilding(building);
 		for (const prop of plan.props) this.buildProp(prop);
 		for (const spot of plan.lootSpots) {
-			const p = this.project(spot), mark = this.scene.add.graphics(), label = this.text(0, -35, spot.label, 11).setOrigin(.5).setBackgroundColor("#12231ce8").setPadding(5, 3);
+			// Keep the search caption above the full character silhouette at the crate.
+			const p = this.project(spot), mark = this.scene.add.graphics(), label = this.text(0, -65, spot.label, 11).setOrigin(.5).setBackgroundColor("#12231ce8").setPadding(5, 3);
 			const box = this.scene.add.container(p.x, p.y).setDepth(p.y);
 			if (this.scene.textures.exists("raid-props")) { const image = this.scene.add.image(0, 0, "raid-props", "crates").setOrigin(.5, 1); image.setScale(29 / image.width); box.add(image); }
 			else { const crate = this.scene.add.graphics(); polygon(crate, [{ x: -11, y: -5 }, { x: 0, y: -11 }, { x: 12, y: -5 }, { x: 0, y: 2 }], 0x8e8761); polygon(crate, [{ x: -11, y: -5 }, { x: 0, y: 2 }, { x: 0, y: -10 }, { x: -11, y: -17 }], 0x5e6347); box.add(crate); }
