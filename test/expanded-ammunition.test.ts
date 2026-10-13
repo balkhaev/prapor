@@ -7,7 +7,7 @@ import { TACTICS, type RaidTactic } from "../src/game/operations";
 import { EXPEDITION_BRANCHES, type ExpeditionBranch } from "../src/game/systems";
 import { WEAPON_ENVIRONMENTS } from "../src/game/weapon-mechanics";
 
-const originalTypes = ["standard", "piercing", "expanding", "precision"] as const;
+const originalTypes = ["standard", "piercing", "expanding", "precision", "subsonic", "tracer", "highpressure", "surplus"] as const;
 const originalBallistics: Record<string, [number, number, number]> = {
 	"9x18": [28, 8, 28], "7.62x25": [32, 18, 26], "20g": [58, 10, 28],
 	"12g": [70, 14, 26], "7.62x39": [46, 30, 22], "5.45x39": [40, 32, 22],
@@ -16,6 +16,8 @@ const originalBallistics: Record<string, [number, number, number]> = {
 const originalSpecs = {
 	standard: [1, .3, 1, 1], piercing: [.82, .8, 1.65, 1.12],
 	expanding: [1.4, .1, 1.15, 1], precision: [.95, .35, 1.2, 1.03],
+	subsonic: [.82, .25, 1.25, .96], tracer: [.97, .3, 1.25, 1.04],
+	highpressure: [1.12, .4, 1.4, 1.22], surplus: [.88, .25, .75, 1.18],
 } as const;
 const part = (modelId: string, durability = 100): ModuleInstance => ({ id: `test-${modelId}`, modelId, durability, foundAt: 1 });
 const factory = (weaponId: string): WeaponInstance => ({
@@ -30,12 +32,12 @@ const suppressed = (weaponId = "sks", durability = 100): WeaponInstance => {
 const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value));
 
 describe("eight ammunition niches and identifiable calibre packs", () => {
-	test("72 packages have exact calibre, type code and decorative round count", () => {
+	test("128 packages have exact calibre, type code and decorative round count", () => {
 		expect(AMMO_TYPES).toEqual(["standard", "piercing", "expanding", "precision", "subsonic", "tracer", "highpressure", "surplus"]);
 		const codes: Record<AmmoType, string> = { standard: "FMJ", piercing: "AP", expanding: "HP", precision: "MATCH", subsonic: "SUB", tracer: "TR", highpressure: "+P", surplus: "STOCK" };
 		for (const model of AMMO_MODELS) {
 			expect(model.packCode).toBe(codes[model.type]);
-			expect(model.packRounds).toBe(["12g", "20g"].includes(model.caliber) ? 10 : ["9x18", "7.62x25", "9x19"].includes(model.caliber) ? 50 : 20);
+			expect(model.packRounds).toBe(["12g", "20g", ".338lapua"].includes(model.caliber) ? 10 : ["9x18", "7.62x25", "9x19", "5.7x28", "4.6x30", ".45acp"].includes(model.caliber) ? 50 : 20);
 			expect(model.id).toBe(`ammo-${model.caliber}-${model.type}`);
 		}
 		for (const id of ["toz", "mp133", "saiga"]) {
@@ -46,13 +48,14 @@ describe("eight ammunition niches and identifiable calibre packs", () => {
 		}
 	});
 
-	test("the existing 36 models retain their IDs, ballistics, costs and original exact outcomes", () => {
-		for (const definition of WEAPONS) for (const type of originalTypes) {
+	test("the existing 72 models retain their IDs, ballistics, costs and original exact outcomes", () => {
+		for (const definition of WEAPONS.filter((weapon) => Object.hasOwn(originalBallistics, RECEIVER_INFO[weapon.id]!.caliber))) for (const type of originalTypes) {
 			const weapon = factory(definition.id), model = getAmmoModel(weapon, type);
 			const [baseDamage, basePenetration, piercingGain] = originalBallistics[model.caliber]!;
 			const [damageMultiplier, armorDamage, ammoMultiplier, wearMultiplier] = originalSpecs[type];
 			expect(model.damage).toBe(Math.round(baseDamage * damageMultiplier * 10) / 10);
-			expect(model.penetration).toBe(type === "piercing" ? basePenetration + piercingGain : type === "expanding" ? Math.max(0, basePenetration - 12) : type === "precision" ? basePenetration + 5 : basePenetration);
+			const offset = { standard: 0, piercing: piercingGain, expanding: -12, precision: 5, subsonic: -6, tracer: 0, highpressure: 8, surplus: -3 }[type];
+			expect(model.penetration).toBe(Math.max(0, basePenetration + offset));
 			expect(model.armorDamage).toBe(armorDamage);
 			expect(model.ammoMultiplier).toBe(ammoMultiplier);
 			expect(model.wearMultiplier).toBe(wearMultiplier);
@@ -63,7 +66,10 @@ describe("eight ammunition niches and identifiable calibre packs", () => {
 				const contactWeight = branch === "combat" ? 1 : branch === "scavenge" ? .65 : .45;
 				const distance = WEAPON_ENVIRONMENTS[map.id]!.distance;
 				const precisionBonus = type === "precision" ? (distance === "far" ? .015 : distance === "mixed" ? .008 : 0) * (tactic === "cautious" ? 1 : tactic === "balanced" ? .8 : .4) : 0;
-				const bonus = clamp((effectiveDamage / baseDamage - 1) * .15 * contactWeight + precisionBonus, -.1, .1);
+				const quietBonus = type === "subsonic" && branch !== "combat" && ["asval", "vss"].includes(weapon.weaponId)
+					? (branch === "recon" ? .03 : .018) * (tactic === "cautious" ? 1 : tactic === "balanced" ? .8 : .35) : 0;
+				const tracerBonus = type === "tracer" ? branch === "combat" ? .012 : branch === "recon" ? -.015 : 0 : 0;
+				const bonus = clamp((effectiveDamage / baseDamage - 1) * .15 * contactWeight + precisionBonus + quietBonus + tracerBonus, -.1, .1);
 				const effect = getAmmoEffect(weapon, type, map.id, branch, stage, tactic);
 				expect(effect.penetrationChance).toBe(penetrationChance);
 				expect(effect.effectiveDamage).toBe(effectiveDamage);

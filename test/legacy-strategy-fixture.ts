@@ -1,3 +1,10 @@
+/** A paid pre-arsenal sortie keeps the loot catalogue that existed on departure. */
+export function withoutArsenalLoot<T>(value: T): T {
+	const state = value as { raids?: { expedition?: { lootCatalogVersion?: unknown } | null }[] };
+	for (const raid of state.raids ?? []) if (raid.expedition) delete raid.expedition.lootCatalogVersion;
+	return value;
+}
+
 /** Remove fields unavailable in v1–11 when deriving an authentic old fixture. */
 export function withoutRaidStrategy<T>(value: T): T {
 	const state = value as {
@@ -17,5 +24,5 @@ export function withoutRaidStrategy<T>(value: T): T {
 		delete report.sectorOutcome;
 		delete report.reconCompleted;
 	}
-	return value;
+	return withoutArsenalLoot(value);
 }

@@ -7,6 +7,7 @@ import {
 	setRoomRecipe, setRoomStockTarget, upgradeRoom, type ActionResult, type GameState,
 	type RoomInstance, type ShelterCost,
 } from "../src/game/engine";
+import { withoutArsenalLoot } from "./legacy-strategy-fixture";
 
 const NOW = 1_792_000_000_000;
 const requireAction = (result: ActionResult) => expect(result.ok, result.message).toBe(true);
@@ -354,6 +355,7 @@ describe("shelter logistics boundaries and paid event ownership", () => {
 		requireAction(assignWorker(current, current.scavs[1]!.id, medbay.id, NOW));
 		requireAction(setRoomRecipe(current, medbay.id, "medicine-batch", false, NOW));
 		requireAction(dispatchRaid(current, current.scavs[0]!.id, "courtyard", NOW));
+		withoutArsenalLoot(current);
 		// Derive a genuine pre-ballistics sortie: v12 never contained the later ammo snapshot.
 		delete current.raids[0]!.expedition!.ammunition;
 		advance(current, NOW + 7_123);

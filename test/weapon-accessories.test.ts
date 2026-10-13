@@ -11,7 +11,7 @@ import {
 import { useWeaponPlatformFixture } from "./weapon-fixtures";
 
 const NOW = 1_792_000_000_000;
-const accessories = MODULE_MODELS.slice(381);
+const accessories = MODULE_MODELS.slice(381, 411);
 function funded(): GameState {
 	const state = createGame(NOW);
 	state.base.workshop = 4;
@@ -39,13 +39,13 @@ function litSks() {
 
 describe("rooted weapon accessory connections", () => {
 	test("30 new physical parts append to all 381 existing IDs with independent optional slots and meaningful costs", () => {
-		expect(MODULE_MODELS).toHaveLength(411);
+		expect(MODULE_MODELS).toHaveLength(621);
 		expect(accessories).toHaveLength(30);
 		expect(accessories.filter((part) => part.slot === "mount")).toHaveLength(14);
 		expect(accessories.filter((part) => part.slot === "flashlight")).toHaveLength(8);
 		expect(accessories.filter((part) => part.slot === "laser")).toHaveLength(8);
 		expect(MODULE_SLOTS.slice(8)).toEqual(["mount", "flashlight", "laser"]);
-		expect(new Set(MODULE_MODELS.map((part) => part.id)).size).toBe(411);
+		expect(new Set(MODULE_MODELS.map((part) => part.id)).size).toBe(MODULE_MODELS.length);
 		for (const info of Object.values(RECEIVER_INFO)) {
 			for (const slot of ["mount", "flashlight", "laser"] as const) expect(info.requiredSlots).not.toContain(slot);
 		}

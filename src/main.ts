@@ -110,6 +110,7 @@ import { ammunitionCaliberLabel, ammunitionOptions, ammunitionPanel, ammunitionS
 import { createWorld } from "./scene";
 import { gunArt, scavPortrait } from "./art";
 import { weaponBuildArt, moduleArt } from "./armory-art";
+import { modularWeaponArtFamily, modularWeaponArtRevision, preloadModularWeaponArt } from "./modular-weapon-art";
 import { MODULE_DISPLAY_SLOTS, moduleCatalogPage, moduleFitsWeaponFamily, moduleModelMatches, moduleMountLabel, moduleSlotHint } from "./module-catalog";
 import { getResolvedModuleMounts, type ModuleModel } from "./game/modules";
 import { scavGearIllustration } from "./scav-gear-art";
@@ -1747,7 +1748,27 @@ function operationsBar() {
 	const enabled = state.scavs.filter((scav) => scav.autoRaid.enabled).length;
 	return `<div class="operations-bar"><div>${icon("repeat", 25)}<div><span class="eyebrow">Постоянные приказы</span><strong><span id="auto-order-count">${enabled}</span> — на автовыходах</strong><p>Ручной выход ждёт приказа на точках связи. Автовыход сам эвакуируется на заданной глубине.</p></div></div>${enabled ? '<button class="button danger small" data-action="auto-stop-all">Остановить все автовыходы</button>' : (page === "raids" ? '<button class="button secondary small" data-action="focus-roster">Выбрать бойца</button>' : '<button class="button secondary small" data-page="raids">Настроить отряд</button>')}</div>`;
 }
+let visibleWeaponArtRequest = "";
+/** Load only owned or currently displayed new parts; startup keeps its small original artwork. */
+function preloadVisibleWeaponArtwork() {
+	const ids = new Set(state.weapons.map((weapon) => weapon.weaponId));
+	const modelIds = [...state.modules.map((part) => part.modelId), ...Array.from(document.querySelectorAll("[data-model-id]"), (node) => node.getAttribute("data-model-id"))];
+	for (const modelId of modelIds) {
+		const model = modelId ? MODULE_BY_ID[modelId] : undefined;
+		const family = model ? modularWeaponArtFamily(model) : undefined;
+		if (family) ids.add(family);
+	}
+	for (const node of document.querySelectorAll("[data-weapon-model]")) {
+		const id = node.getAttribute("data-weapon-model"); if (id) ids.add(id);
+	}
+	const signature = [...ids].sort().join("|");
+	if (visibleWeaponArtRequest === signature) return;
+	visibleWeaponArtRequest = signature;
+	const revision = modularWeaponArtRevision();
+	void preloadModularWeaponArt([...ids]).then(() => { if (modularWeaponArtRevision() !== revision) render(); });
+}
 function render() {
+	queueMicrotask(preloadVisibleWeaponArtwork);
 	squadDraft = [...new Set(squadDraft.filter(id => state.scavs.some(scav => scav.id === id)))].slice(0,3);
 	deferredRender = false;
 	const tabsScroll = panel.querySelector<HTMLElement>(".armory-tabs")?.scrollLeft ?? 0;
@@ -1968,6 +1989,7 @@ function openWorkbench(id: string) {
 	document.querySelector<HTMLButtonElement>('[data-action="close-tools"]')?.focus();
 }
 function renderWorkbench() {
+	queueMicrotask(preloadVisibleWeaponArtwork);
 	const weapon = state.weapons.find((item) => item.id === selectedWeapon) ?? state.weapons[0];
 	if (!weapon) {
 		panel.innerHTML = `${arsenalTabs()}<div class="empty">Верстак свободен. Начни сборку со ствольной коробки на складе модулей.<button class="button secondary" data-arsenal-tab="modules">${icon("settings", 17)} К модулям</button></div>`;
@@ -2012,6 +2034,7 @@ function selectedProductionWorkshop() {
 	return room;
 }
 function renderModules() {
+	queueMicrotask(preloadVisibleWeaponArtwork);
 	const workshop = selectedProductionWorkshop();
 	const craftExpanded = panel.querySelector<HTMLDetailsElement>(".module-craft-catalog")?.open;
 	const installedExpanded = panel.querySelector<HTMLDetailsElement>(".installed-parts-list")?.open;

@@ -47,7 +47,7 @@ function fitGun(model: ModuleModel): { state: GameState; gun: WeaponInstance } {
 describe("expanded physical module catalogue", () => {
 	test("174 new parts retain the original factory kits and remain bounded physical tradeoffs", () => {
 		expect(additions).toHaveLength(174);
-		expect(MODULE_MODELS).toHaveLength(411);
+		expect(MODULE_MODELS).toHaveLength(621);
 		expect(new Set(MODULE_MODELS.map((item) => item.id)).size).toBe(MODULE_MODELS.length);
 		expect(Object.keys(MODULE_BY_ID)).toHaveLength(MODULE_MODELS.length);
 		for (const weapon of WEAPONS) {
