@@ -1,5 +1,5 @@
 import { LIVE_CAPACITY, LIVE_SERVER_NAME, type LiveCommand, type LiveEntity, type LiveSnapshot, type LiveStatus } from './game/live';
-import { LiveApiError, liveRequest, readLiveSnapshot, readLiveStatus, type LiveIdentity } from './live-client';
+import { LiveApiError, liveRequest, readLiveSnapshot, readLiveStatus, shouldRejoinLivePresence, type LiveIdentity } from './live-client';
 import { LiveScene } from './live-scene';
 import './live.css';
 
@@ -24,6 +24,7 @@ export function createLiveMode(options: LiveModeOptions) {
   let pollTimer = 0, lastKeyboardAt = 0;
   let controller: AbortController | null = null;
   let connection: Promise<unknown> = Promise.resolve();
+  let reconnectPresence = false;
   const { world, dock } = options;
   world.classList.add('live-world');
   world.hidden = true;
@@ -42,8 +43,14 @@ export function createLiveMode(options: LiveModeOptions) {
     const changed = message !== issue.message;
     message = issue.message;
     offline = issue.status === 0 || issue.status >= 500;
-    if (issue.status === 401 || ['account_changed', 'identity_changed', 'live_identity_changed', 'not_joined', 'not_online', 'player_missing', 'join_required'].includes(issue.code)) clearSession();
-    if (changed) options.onError?.(message);
+    if (shouldRejoinLivePresence(issue, account, options.getAccountId()) && snapshot) {
+      reconnectPresence = true;
+      clearSession();
+    } else if (issue.status === 401 || ['account_changed', 'identity_changed', 'live_identity_changed', 'not_joined', 'not_online', 'player_missing'].includes(issue.code)) {
+      reconnectPresence = false;
+      clearSession();
+    } else if (reconnectPresence && issue.status >= 400 && issue.status < 500 && issue.status !== 429) reconnectPresence = false;
+    if (changed && !reconnectPresence) options.onError?.(message);
   }
 
   async function poll(): Promise<void> {
@@ -51,6 +58,7 @@ export function createLiveMode(options: LiveModeOptions) {
     if (identityAccount !== options.getAccountId()) { resetIdentity(); return; }
     const version = generation, account = identityAccount;
     if (requestBusy) { schedule(version); return; }
+    if (reconnectPresence && !snapshot) { void join(true); return; }
     requestBusy = true; controller = new AbortController();
     try {
       if (snapshot) {
@@ -70,11 +78,12 @@ export function createLiveMode(options: LiveModeOptions) {
     finally { if (version === generation) { controller = null; requestBusy = false; render(); schedule(version); } }
   }
 
-  async function join(): Promise<void> {
+  async function join(reconnecting = false): Promise<void> {
     if (!active || actionBusy || destroyed) return;
     stopRequest();
     const version = ++generation, account = identityAccount = options.getAccountId();
-    requestBusy = true; actionBusy = true; message = ''; offline = false; render();
+    reconnectPresence = reconnecting;
+    requestBusy = true; actionBusy = true; message = reconnecting ? 'Связь с сервером восстановлена. Подключаемся к Периметру снова.' : ''; offline = false; render();
     try {
       const result = connection.then(async () => {
         if (!isCurrent(version, account)) return null;
@@ -89,6 +98,7 @@ export function createLiveMode(options: LiveModeOptions) {
       connection = result.catch(() => {});
       const next = await result;
       if (!next || !isCurrent(version, account)) return;
+      reconnectPresence = false; message = '';
       snapshot = next; status = next.server; receivedAt = Date.now(); scene.update(next); scene.setSelected(null);
       world.querySelector<HTMLCanvasElement>('canvas')?.focus({ preventScroll: true });
     } catch (error) { explain(error, version, account); }
@@ -112,21 +122,21 @@ export function createLiveMode(options: LiveModeOptions) {
   }
 
   function resetIdentity(): void {
-    generation++; stopRequest(); clearSession(); identityAccount = options.getAccountId(); message = ''; offline = false;
+    generation++; stopRequest(); clearSession(); reconnectPresence = false; identityAccount = options.getAccountId(); message = ''; offline = false;
     if (active) { render(); void poll(); }
   }
 
   function show(): void {
     if (destroyed) return;
     if (active) { refreshPanel(); return; }
-    active = true; generation++; identityAccount = options.getAccountId(); message = ''; offline = false;
+    active = true; generation++; reconnectPresence = false; identityAccount = options.getAccountId(); message = ''; offline = false;
     world.hidden = false; scene.show(); render(); void poll();
   }
 
   function hide(): void {
     if (!active) return;
     const leaving = snapshot ? identity() : null;
-    active = false; generation++; stopRequest(); clearSession(); world.hidden = true; scene.hide(); overlay.innerHTML = '';
+    active = false; generation++; stopRequest(); clearSession(); reconnectPresence = false; world.hidden = true; scene.hide(); overlay.innerHTML = '';
     dock.classList.remove('live-dock');
     if (leaving) connection = connection.then(() => liveRequest('leave', leaving, value => value)).catch(() => {});
   }
