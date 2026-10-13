@@ -16,6 +16,7 @@ const report = validateGeneratedWorld(world);
 const plan = analyseWorldPlan(world);
 console.log(JSON.stringify({ version: world.version, seed: world.seed, dimensions: [world.width, world.height], ...report,
   npcPosts: world.npcSpawns.length, templateLibrary: WORLD_TEMPLATES.length,
+  ...(world.city ? { city: world.city } : {}),
   districts: world.districts.map(district => ({ id: district.id, name: district.name, spawn: district.spawns[0] })),
   containerKinds: [...new Set(world.containers.map(container => container.kind))],
   planning: plan,
