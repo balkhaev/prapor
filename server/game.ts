@@ -35,8 +35,8 @@ const COMMAND_RULES: Record<GameCommandType, Rule[]> = {
   assignWorker: [id, nullableId], queueModuleProduction: [id, id], setRoomRecipe: [id, nullableId, bool], cancelProduction: [id, id],
   installModule: [id, id], removeModule: [id, slot], assembleWeapon: [id], disassembleWeapon: [id], sellModule: [id], recycleModule: [id], repairModule: [id],
   buySupplies: [id], craftGear: [id], equipGear: [id, gear, nullableId], repairGear: [id], recycleGear: [id],
-  setLoadoutOption: [id, choose('ammoType', 'medkit'), value => typeof value === 'boolean' || value === 'standard' || value === 'piercing'],
-  upgradeScavGear: [id, choose('armor', 'backpack')], setRaidTactic: [id, choose(...Object.keys(engine.TACTICS))], setAutoRaidDepth: [id, integer(1, 3)],
+  setLoadoutOption: [id, choose('ammoType', 'medkit'), value => typeof value === 'boolean' || engine.isAmmoType(value)],
+  upgradeScavGear: [id, choose('armor', 'backpack')], setRaidTactic: [id, choose(...Object.keys(engine.TACTICS))], setRaidPlan: [id, choose(...Object.keys(engine.RAID_OBJECTIVES)), choose(...Object.keys(engine.RAID_PREPARATIONS))], setAutoRaidDepth: [id, integer(1, 3)],
   setAutoRaid: [id, nullableId, integer(25, 100)], stopAllAutoRaids: [], dispatchRaid: [id, id], dispatchSquadRaid: [ids(3, 2), id], equipWeapon: [id, nullableId],
   refreshRecruitment: [], hireRecruitCandidate: [id], dismissScav: [id], chooseScavTalent: [id, id],
   upgradeBase: [choose('workshop', 'medbay', 'radio', 'storage')], repairWeapon: [id], sellWeapon: [id], recycleWeapon: [id],
@@ -184,7 +184,11 @@ export function createGameService(options: GameOptions): GameService {
         const joinedIdentity = identity;
         const snapshot = db.transaction(() => {
           let row = read.get(joinedIdentity.key);
-          if (!row) { const id = randomUUID(); db.query('INSERT INTO authoritative_games(identity,id,name,state) VALUES(?,?,?,?)').run(joinedIdentity.key, id, joinedIdentity.name, engine.saveGame(engine.createGame(now()))); row = read.get(joinedIdentity.key)!; }
+          if (!row) {
+            const id = randomUUID(), state = engine.createGame(now());
+            state.rng = randomInt(1, 4294967296);
+            db.query('INSERT INTO authoritative_games(identity,id,name,state) VALUES(?,?,?,?)').run(joinedIdentity.key, id, joinedIdentity.name, engine.saveGame(state)); row = read.get(joinedIdentity.key)!;
+          }
           if (token) db.query('INSERT INTO authoritative_guests(token_hash,identity,expires_at) VALUES(?,?,?)').run(hash(token), joinedIdentity.key, now() + COOKIE_SECONDS * 1000);
           const { snapshot, before } = advanceRow(row, joinedIdentity); persistSnapshot(joinedIdentity, snapshot, before); return snapshot;
         })();

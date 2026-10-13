@@ -187,7 +187,13 @@ describe("a bounded economy and shared equipment", () => {
 		expect(setLoadoutOption(state, scav.id, "ammoType", "piercing").ok).toBe(true);
 		const piercing = getRaidQuote(state, scav, map);
 		expect(piercing.ammo).toBeGreaterThan(ordinary.ammo);
-		expect(piercing.chance).toBeGreaterThan(ordinary.chance);
+		expect(piercing.chance).toBeLessThan(ordinary.chance);
+		const heavyMap = MAPS.find((sector) => sector.id === "bunker")!;
+		const penetratingHeavy = getRaidQuote(state, scav, heavyMap);
+		expect(setLoadoutOption(state, scav.id, "ammoType", "standard").ok).toBe(true);
+		const ordinaryHeavy = getRaidQuote(state, scav, heavyMap);
+		expect(penetratingHeavy.chance).toBeGreaterThan(ordinaryHeavy.chance);
+		expect(penetratingHeavy.ammo).toBeGreaterThan(ordinaryHeavy.ammo);
 		expect(setLoadoutOption(state, scav.id, "medkit", true).ok).toBe(true);
 		const prepared = getRaidQuote(state, scav, map);
 		expect(prepared.medicine).toBeGreaterThan(0);

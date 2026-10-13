@@ -3,7 +3,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createGameService, readGameCommand, readGameOptions, type GameService } from '../server/game';
-import { advance, createGame, getModuleSaleValue, parseSave, saveGame } from '../src/game/engine';
+import { advance, createGame, getModuleSaleValue, getRaidQuote, parseSave, saveGame } from '../src/game/engine';
+import { MAP_BY_ID } from '../src/game/data';
 import { Database } from 'bun:sqlite';
 import { getRaidFieldPlan } from '../src/raid-field';
 import type { GameActionSnapshot, GameCommand, GameSnapshot } from '../src/game/commands';
@@ -112,7 +113,8 @@ describe('authoritative game state and commands', () => {
     const { service, setTime } = setup(), client = await joinClient(service), scavId = client.snapshot.state.scavs[0]!.id;
     const started = await action(service, client, { type: 'dispatchRaid', args: [scavId, 'courtyard'] }); expect(started.body.result.ok).toBe(true);
     const raid = client.snapshot.state.raids[0]!; expect(raid.startedAt).toBe(NOW);
-    const expected = structuredClone(client.snapshot.state); advance(expected, raid.endsAt);
+    const expected = structuredClone(client.snapshot.state); expected.raids[0]!.outcomeSeed = 698906565; advance(expected, raid.endsAt);
+    for (const active of expected.raids) delete active.outcomeSeed;
     setTime(raid.endsAt); expect((await state(service, client)).state).toEqual(expected);
     expect(client.snapshot.state.raids[0]!.expedition!.status).toBe('choice');
     const cargo = client.snapshot.state.raids[0]!.expedition!.cargo.money, money = client.snapshot.state.money;
@@ -122,6 +124,42 @@ describe('authoritative game state and commands', () => {
     const replay = await action(service, client, { type: 'extractRaid', args: [raid.id] }, before); expect(replay.response.status).toBe(409);
     const repeated = await action(service, client, { type: 'extractRaid', args: [raid.id] }); expect(repeated.body.result.ok).toBe(false);
     expect(client.snapshot.state.money).toBe(money + cargo); expect(client.snapshot.state.history).toHaveLength(1);
+  });
+
+  test('raid objectives and paid scouting are server orders with frozen costs and one settlement', async () => {
+    const { service, setTime } = setup(), client = await joinClient(service), scavId = client.snapshot.state.scavs[0]!.id;
+    const planned = await action(service, client, { type: 'setRaidPlan', args: [scavId, 'intel', 'scouted'] });
+    expect(planned.body.result.ok).toBe(true);
+    expect(client.snapshot.state.scavs[0]!.raidPlan).toEqual({ objective: 'intel', preparation: 'scouted' });
+    const quote = getRaidQuote(client.snapshot.state, client.snapshot.state.scavs[0]!, MAP_BY_ID.courtyard!);
+    expect(quote.preparationMoney).toBe(20); expect(quote.preparationIntel).toBe(2);
+    const money = client.snapshot.state.money, intel = client.snapshot.state.supplies.intel;
+    const before = client.snapshot.revision;
+    await action(service, client, { type: 'dispatchRaid', args: [scavId, 'courtyard'] });
+    expect(client.snapshot.state.money).toBe(money - quote.money);
+    expect(client.snapshot.state.supplies.intel).toBe(intel - quote.intel);
+    const raid = structuredClone(client.snapshot.state.raids[0]!);
+    const duplicate = await action(service, client, { type: 'dispatchRaid', args: [scavId, 'courtyard'] }, before);
+    expect(duplicate.response.status).toBe(409);
+    expect(client.snapshot.state.money).toBe(money - quote.money);
+    await action(service, client, { type: 'setRaidPlan', args: [scavId, 'ammo', 'none'] });
+    expect(client.snapshot.state.raids[0]!.strategy).toEqual(raid.strategy);
+    setTime(raid.endsAt); await state(service, client);
+    expect(client.snapshot.state.sectorIntel?.courtyard).toBeUndefined();
+    const extracted = await action(service, client, { type: 'extractRaid', args: [raid.id] }); expect(extracted.body.result.ok).toBe(true);
+    expect(client.snapshot.state.sectorIntel!.courtyard).toEqual({ knowledge: 1, pressure: 1 });
+    await action(service, client, { type: 'extractRaid', args: [raid.id] });
+    expect(client.snapshot.state.sectorIntel!.courtyard).toEqual({ knowledge: 1, pressure: 1 });
+    expect(() => readGameCommand({ type: 'setRaidPlan', args: [scavId, 'free-cash', 'scouted'] })).toThrow();
+  });
+
+  test('expanded ammunition is accepted through the real ammo enum and invalid ammo is rejected', async () => {
+    const { service } = setup(), client = await joinClient(service), scavId = client.snapshot.state.scavs[0]!.id;
+    for (const ammo of ['standard', 'piercing', 'expanding', 'precision'] as const) {
+      const result = await action(service, client, { type: 'setLoadoutOption', args: [scavId, 'ammoType', ammo] });
+      expect(result.body.result.ok).toBe(true); expect(client.snapshot.state.scavs[0]!.loadout.ammoType).toBe(ammo);
+    }
+    expect(() => readGameCommand({ type: 'setLoadoutOption', args: [scavId, 'ammoType', 'unlimited'] })).toThrow();
   });
 
   test('authoritative database survives restart without importing a legacy client save', async () => {
@@ -138,6 +176,11 @@ describe('authoritative game state and commands', () => {
     const folder = await mkdtemp(join(tmpdir(), 'prapor-secrets-')); folders.push(folder);
     const path = join(folder, 'game.sqlite'); let seed = 698906565;
     const { service, setTime } = setup({ dbPath: path, outcomeSeed: () => seed }), client = await joinClient(service);
+    const originalDb = new Database(path, { readonly: true });
+    try {
+      const freshInternal = parseSave(originalDb.query<{ state: string }, []>('SELECT state FROM authoritative_games LIMIT 1').get()!.state)!;
+      expect(freshInternal.rng).not.toBe(createGame(client.snapshot.serverNow).rng);
+    } finally { originalDb.close(); }
     await action(service, client, { type: 'dispatchRaid', args: [client.snapshot.state.scavs[0]!.id, 'courtyard'] });
     const publicRaid = client.snapshot.state.raids[0]!;
     expect(publicRaid.outcomeSeed).toBeUndefined(); expect(client.snapshot.state.rng).toBe(1);

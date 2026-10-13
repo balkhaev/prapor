@@ -6,6 +6,7 @@ import { RECRUIT_TRAITS } from "./recruitment";
 import { defaultScavAppearance, isScavAppearance } from "./scav-appearances";
 import { getRaidQuote, type GameState, type Raid, type RaidReport, type Expedition } from "./engine";
 import { getRaidFieldPlan } from "../raid-field";
+import { isAmmoType } from "./ammunition";
 
 export type SquadRaidRole = "point" | "cover" | "medic";
 export const SQUAD_ROLE_LABELS: Record<SquadRaidRole, string> = { point: "Проводник", cover: "Прикрытие", medic: "Замыкающий" };
@@ -151,7 +152,7 @@ const num = (value: unknown, lo: number, hi: number, integer = false) => { if (t
 const bool = (value: unknown) => { if (typeof value !== "boolean") throw new Error("squad-boolean"); return value; };
 const arr = <T>(value: unknown, max: number, parser: (entry: unknown) => T): T[] => { if (!Array.isArray(value) || value.length > max) throw new Error("squad-array"); return value.map(parser); };
 const known = <T>(value: unknown, values: Record<string, T>) => { const key = str(value); if (!Object.hasOwn(values, key)) throw new Error("squad-known"); return key; };
-function parseMember(value: unknown): SquadRaidMember {
+function parseMember(value: unknown, version: number): SquadRaidMember {
 	const source = obj(value, ["raidId", "scavId", "scavName", "appearance", "weaponInstanceId", "weaponId", "weaponModules", "role", "seed", ...(value !== null && typeof value === "object" && Object.hasOwn(value, "outcomeSeed") ? ["outcomeSeed"] : []), "combat", "scouting", "health", "traitId", "tactic", "medkit", "baseChance", "chance", "baseDuration", "loadout"]);
 	if (!isScavAppearance(source.appearance) || !["point", "cover", "medic"].includes(source.role as string)) throw new Error("squad-appearance-role");
 	const modules = source.weaponModules;
@@ -160,16 +161,16 @@ function parseMember(value: unknown): SquadRaidMember {
 	for (const [slot, model] of Object.entries(modules)) { const modelId = known(model, MODULE_BY_ID); if (MODULE_BY_ID[modelId]!.slot !== slot) throw new Error("squad-module-slot"); weaponModules[slot as ModuleSlot] = modelId; }
 	const kit = obj(source.loadout, ["armorModelId", "armorCondition", "helmetModelId", "helmetCondition", "packModelId", "packCondition", "ammoType", "medkit"]);
 	const model = (value: unknown, slot: "armor" | "helmet" | "backpack", empty: string | null) => { if (value === empty) return empty; const id = known(value, GEAR_MODEL_BY_ID); if (GEAR_MODEL_BY_ID[id]!.slot !== slot) throw new Error("squad-gear-slot"); return id; };
-	if (kit.ammoType !== "standard" && kit.ammoType !== "piercing") throw new Error("squad-ammo");
+	if (!isAmmoType(kit.ammoType) || (version < 13 && kit.ammoType !== "standard" && kit.ammoType !== "piercing")) throw new Error("squad-ammo");
 	const loadout: Expedition["loadout"] = { armorModelId: model(kit.armorModelId, "armor", "none")!, armorCondition: num(kit.armorCondition, 0, 100), helmetModelId: model(kit.helmetModelId, "helmet", null), helmetCondition: num(kit.helmetCondition, 0, 100), packModelId: model(kit.packModelId, "backpack", "none")!, packCondition: num(kit.packCondition, 0, 100), ammoType: kit.ammoType, medkit: bool(kit.medkit) };
 	return { raidId: str(source.raidId), scavId: str(source.scavId), scavName: str(source.scavName, 30), appearance: source.appearance as number,
 		weaponInstanceId: str(source.weaponInstanceId), weaponId: known(source.weaponId, WEAPON_BY_ID), weaponModules, role: source.role as SquadRaidRole,
 		seed: num(source.seed, 1, 4294967295, true), ...(Object.hasOwn(source, "outcomeSeed") ? { outcomeSeed: num(source.outcomeSeed, 1, 4294967295, true) } : {}), combat: num(source.combat, 0, 100), scouting: num(source.scouting, 0, 100), health: num(source.health, 0, 100), traitId: source.traitId === null ? null : known(source.traitId, RECRUIT_TRAITS), tactic: known(source.tactic, TACTICS) as RaidTactic, medkit: bool(source.medkit), baseChance: num(source.baseChance, .15, .97), chance: num(source.chance, .15, .97), baseDuration: num(source.baseDuration, 20, 600), loadout };
 }
-export function parseSquadRaidSnapshot(value: unknown, report = false): SquadRaidSnapshot | SquadRaidReport {
+export function parseSquadRaidSnapshot(value: unknown, report = false, version = 13): SquadRaidSnapshot | SquadRaidReport {
 	const source = obj(value, ["leaderRaidId", "routeSeed", "stage", "branch", "members", "bonds", "actions", "usedMedkits", ...(report ? ["outcomes"] : [])]);
 	const snapshot: SquadRaidSnapshot = { leaderRaidId: str(source.leaderRaidId), routeSeed: num(source.routeSeed, 1, 4294967295, true), stage: num(source.stage, 1, 3, true), branch: known(source.branch, EXPEDITION_BRANCHES) as ExpeditionBranch,
-		members: arr(source.members, 3, parseMember), bonds: arr(source.bonds, 3, (entry) => { const bond = obj(entry, ["scavIds", "score"]); const ids = arr(bond.scavIds, 2, (id) => str(id)); if (ids.length !== 2 || ids[0]! >= ids[1]!) throw new Error("squad-bond-ids"); return { scavIds: ids as [string, string], score: num(bond.score, -60, 60, true) }; }),
+		members: arr(source.members, 3, (entry) => parseMember(entry, version)), bonds: arr(source.bonds, 3, (entry) => { const bond = obj(entry, ["scavIds", "score"]); const ids = arr(bond.scavIds, 2, (id) => str(id)); if (ids.length !== 2 || ids[0]! >= ids[1]!) throw new Error("squad-bond-ids"); return { scavIds: ids as [string, string], score: num(bond.score, -60, 60, true) }; }),
 		actions: arr(source.actions, 6, (entry) => { const action = obj(entry, ["id", "stage", "kind", "actorId", "targetId", "progress", "text"]); if (!["cover", "hesitation", "rescue"].includes(action.kind as string)) throw new Error("squad-action-kind"); return { id: str(action.id), stage: num(action.stage, 1, 3, true), kind: action.kind as SquadRaidAction["kind"], actorId: str(action.actorId), targetId: str(action.targetId), progress: num(action.progress, 0, 1), text: str(action.text, 400) }; }), usedMedkits: arr(source.usedMedkits, 2, (id) => str(id)) };
 	if (!report) return snapshot;
 	return { ...snapshot, outcomes: arr(source.outcomes, 3, (entry) => { const outcome = obj(entry, ["scavId", "raidId", "success", "lostScav", "lostWeapon", "health", "rescuedBy"]); return { scavId: str(outcome.scavId), raidId: str(outcome.raidId), success: bool(outcome.success), lostScav: bool(outcome.lostScav), lostWeapon: bool(outcome.lostWeapon), health: num(outcome.health, 0, 100), rescuedBy: outcome.rescuedBy === null ? null : str(outcome.rescuedBy) }; }) };

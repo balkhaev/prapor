@@ -15,6 +15,7 @@ export class LiveScene {
   private motions = new Map<string, Motion>();
   private atlases = new Map<number, Atlas | null>();
   private frame = 0;
+  private paintedAt = 0;
   private active = false;
   private width = 800;
   private height = 520;
@@ -43,7 +44,7 @@ export class LiveScene {
     this.resize();
   }
 
-  show(): void { this.active = true; this.resize(); this.animate(); }
+  show(): void { if (this.active) return; this.active = true; this.resize(); this.animate(); }
   hide(): void { this.active = false; cancelAnimationFrame(this.frame); this.frame = 0; }
   clear(): void { this.snapshot = null; this.motions.clear(); this.selected = null; this.paint(); }
   setSelected(id: string | null): void { this.selected = id; }
@@ -81,7 +82,12 @@ export class LiveScene {
     if (!this.snapshot || !this.active) return;
     this.canvas.focus({ preventScroll: true });
     const rect = this.canvas.getBoundingClientRect(), x = event.clientX - rect.left, y = event.clientY - rect.top;
-    const target = [...this.hitTargets].reverse().find(target => Math.abs(target.x - x) < 22 && y >= target.y - 62 && y <= target.y + 12);
+    const mini = this.minimapBounds(this.snapshot);
+    if (x >= mini.x - 8 && x <= mini.x + mini.width + 8 && y >= mini.y - 8 && y <= mini.y + mini.height + 21) {
+      if (x >= mini.x && x <= mini.x + mini.width && y >= mini.y && y <= mini.y + mini.height) this.command({ type: 'move', x: clamp(Math.round((x - mini.x) / mini.scale), 0, this.snapshot.world.width - 1), y: clamp(Math.round((y - mini.y) / mini.scale), 0, this.snapshot.world.height - 1) });
+      return;
+    }
+    const target = [...this.hitTargets].reverse().find(target => Math.abs(target.x - x) < Math.max(14, 18 * this.zoom) && y >= target.y - Math.max(38, 62 * this.zoom) && y <= target.y + 10 * this.zoom);
     if (target && target.entity.id !== this.snapshot.selfId) { this.selected = target.entity.id; this.select(target.entity.id); return; }
     const self = this.snapshot.entities.find(entity => entity.id === this.snapshot?.selfId);
     const drop = this.snapshot.drops.find(drop => { const p = this.project(drop); return Math.hypot(x - p.x, y - p.y) < 18; });
@@ -90,7 +96,7 @@ export class LiveScene {
     const destination = { x: Math.round((dx + dy) / 2 + this.camera.x), y: Math.round((dy - dx) / 2 + this.camera.y) };
     if (destination.x >= 0 && destination.y >= 0 && destination.x < this.snapshot.world.width && destination.y < this.snapshot.world.height) this.command({ type: 'move', ...destination });
   };
-  private animate = (): void => { if (!this.active) return; this.paint(); this.frame = requestAnimationFrame(this.animate); };
+  private animate = (at = performance.now()): void => { if (!this.active) return; if (at - this.paintedAt >= 1000 / 30) { this.paint(); this.paintedAt = at; } this.frame = requestAnimationFrame(this.animate); };
   private interpolated(motion: Motion, at: number): LivePoint { const amount = clamp((at - motion.at) / 350, 0, 1); return { x: motion.from.x + (motion.to.x - motion.from.x) * amount, y: motion.from.y + (motion.to.y - motion.from.y) * amount }; }
   private project(point: LivePoint, elevation = 0): LivePoint { return { x: this.origin.x + ((point.x - this.camera.x) - (point.y - this.camera.y)) * this.tile / 2, y: this.origin.y + ((point.x - this.camera.x) + (point.y - this.camera.y)) * this.tile / 4 - elevation }; }
   private polygon(points: LivePoint[], color: string, stroke?: string): void { const c = this.context; c.beginPath(); points.forEach((p, i) => i ? c.lineTo(p.x, p.y) : c.moveTo(p.x, p.y)); c.closePath(); c.fillStyle = color; c.fill(); if (stroke) { c.strokeStyle = stroke; c.lineWidth = .7; c.stroke(); } }
@@ -156,12 +162,17 @@ export class LiveScene {
     this.label(entity.kind === 'player' ? own ? 'ТВОЙ БОЕЦ' : 'ИГРОК' : 'ДИКИЙ · NPC', p.x, top + 13, own ? '#e8d8b6' : entity.kind === 'player' ? '#90c4ce' : '#ad9b88', 7);
     c.fillStyle = '#14271a'; c.fillRect(p.x - 17, top + 18, 34, 3); c.fillStyle = entity.health > 35 ? '#b6cc85' : '#e09d82'; c.fillRect(p.x - 17, top + 18, 34 * entity.health / 100, 3);
     if (entity.safeUntil > snapshot.now) this.label('ЗАЩИТА', p.x, p.y + 20, '#bddbb7', 8);
-    if (entity.action === 'combat') { c.fillStyle = '#f2bc72'; c.beginPath(); c.arc(p.x + 16, p.y - 30, 2 + Math.sin(now / 65) * 1.5, 0, Math.PI * 2); c.fill(); }
+    // A firing cue is brief and tied to a confirmed combat update.
+    if (entity.action === 'combat' && now - motion.at < 300) { c.fillStyle = '#f2bc72'; c.beginPath(); c.arc(p.x + 16, p.y - 30, 2 + Math.sin(now / 65) * 1.5, 0, Math.PI * 2); c.fill(); }
     this.hitTargets.push({ entity, x: p.x, y: p.y });
   }
+  private minimapBounds(snapshot: LiveSnapshot): { x: number; y: number; width: number; height: number; scale: number } {
+    const scale = Math.min(this.width < 480 ? 2.1 : 2.5, (this.width * .28) / snapshot.world.width, (this.height * .22) / snapshot.world.height);
+    const width = snapshot.world.width * scale, height = snapshot.world.height * scale;
+    return { x: this.width - width - 16, y: 62, width, height, scale };
+  }
   private minimap(snapshot: LiveSnapshot): void {
-    const c = this.context, scale = this.width < 480 ? 2.1 : 2.5, width = snapshot.world.width * scale, height = snapshot.world.height * scale;
-    const x = this.width - width - 16, y = 21;
+    const c = this.context, { x, y, scale, width, height } = this.minimapBounds(snapshot);
     c.fillStyle = '#14241fe6'; c.fillRect(x - 8, y - 8, width + 16, height + 29); c.strokeStyle = '#7c8c6166'; c.strokeRect(x - 8, y - 8, width + 16, height + 29);
     for (const obstacle of snapshot.world.obstacles) { c.fillStyle = '#63715b'; c.fillRect(x + obstacle.x * scale, y + obstacle.y * scale, obstacle.width * scale, obstacle.height * scale); }
     for (const extract of snapshot.world.extracts) { c.fillStyle = '#a9d380'; c.fillRect(x + extract.x * scale - 2, y + extract.y * scale - 2, 4, 4); }

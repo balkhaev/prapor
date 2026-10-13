@@ -9,7 +9,7 @@ export interface GameCommandArguments {
   disassembleWeapon: [string]; sellModule: [string]; recycleModule: [string]; repairModule: [string];
   buySupplies: [string]; craftGear: [string]; equipGear: [string, string, string | null];
   repairGear: [string]; recycleGear: [string]; setLoadoutOption: [string, 'ammoType' | 'medkit', string | boolean];
-  upgradeScavGear: [string, string]; setRaidTactic: [string, string]; setAutoRaidDepth: [string, number];
+  upgradeScavGear: [string, string]; setRaidTactic: [string, string]; setRaidPlan: [string, string, string]; setAutoRaidDepth: [string, number];
   setAutoRaid: [string, string | null, number]; stopAllAutoRaids: [];
   dispatchRaid: [string, string]; dispatchSquadRaid: [string[], string]; equipWeapon: [string, string | null];
   refreshRecruitment: []; hireRecruitCandidate: [string]; dismissScav: [string]; chooseScavTalent: [string, string];

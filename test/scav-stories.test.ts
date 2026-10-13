@@ -1,3 +1,4 @@
+import { withoutRaidStrategy } from "./legacy-strategy-fixture";
 import { describe, expect, test } from "bun:test";
 import { MAPS } from "../src/game/data";
 import {
@@ -68,10 +69,11 @@ function successfulRaid(state: GameState, scav: Scav, depth = 1) {
 
 /** A genuine historical shape with no modern fields hidden inside it. */
 function legacy(state: GameState, version: number) {
-	const source = JSON.parse(saveGame(state));
+	const source = withoutRaidStrategy(JSON.parse(saveGame(state)));
 	source.schemaVersion = version;
 	delete source.memorials; delete source.social; delete source.achievements;
 	if (version < 11) for (const raid of source.raids) if (raid.expedition) delete raid.expedition.weaponMechanics;
+	if (version < 13) for (const raid of source.raids) if (raid.expedition) delete raid.expedition.ammunition;
 	for (const scav of source.scavs) {
 		delete scav.story;
 		if (version < 6) delete scav.appearance;
@@ -526,7 +528,8 @@ describe("strict story saves and conservative historical migration", () => {
 		expect(queueModuleProduction(original, original.shelter.rooms[0]!.id, "factory-sks-stock", NOW).ok).toBe(true);
 		expect(dispatchRaid(original, original.scavs[1]!.id, "courtyard", NOW).ok).toBe(true);
 		advance(original, NOW + 1_000);
-		for (const raid of original.raids) if (raid.expedition) delete raid.expedition.weaponMechanics;
+		withoutRaidStrategy(original);
+		for (const raid of original.raids) if (raid.expedition) { delete raid.expedition.weaponMechanics; delete raid.expedition.ammunition; }
 		const old = legacy(original, 6), migrated = parseSave(JSON.stringify(old))!;
 		expect(migrated).not.toBeNull();
 		expect(legacy(migrated, 6)).toEqual(old);
