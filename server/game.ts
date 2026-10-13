@@ -54,6 +54,7 @@ const productionReserve: Rule = value => {
 const COMMAND_RULES: Record<GameCommandType, Rule[]> = {
   listMarketItem: [tradeRef, integer(1, MARKET_MAX_PRICE)], buyMarketListing: [id], cancelMarketListing: [id], claimMarketSale: [id],
   sellLootItem: [id], recycleLootItem: [id],
+  barterGear: [id, ids(16, 1)], claimLootDelivery: [id],
   excavateShelter: [coord, rowCoord], buildRoom: [choose(...Object.keys(engine.ROOM_DEFINITIONS)), coord, rowCoord], upgradeRoom: [id],
   assignWorker: [id, nullableId], queueModuleProduction: [id, id], setRoomRecipe: [id, nullableId, bool], cancelProduction: [id, id],
   setProductionReserve: [productionReserve], setRoomStockTarget: [id, value => value === null || integer(0, 1e6)(value)],

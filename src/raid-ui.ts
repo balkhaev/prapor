@@ -57,14 +57,14 @@ function renderRaidDebrief(state: GameState, report: RaidReport, receipts: RaidR
  const delivered = receipts.filter(item => item.success), supplies: Supplies = { ammo: 0, medicine: 0, scrap: 0, intel: 0 };
  for (const receipt of delivered) for (const key of Object.keys(supplies) as (keyof Supplies)[]) supplies[key] += receipt.supplies[key];
  const money = delivered.reduce((sum, item) => sum + item.money, 0), modules = delivered.reduce((sum, item) => sum + (item.moduleIds?.length ?? 0), 0);
- const loot=delivered.flatMap(item=>item.lootItems??[]),lootGuide=loot.reduce((sum,item)=>sum+(LOOT_MODEL_BY_ID[item.modelId]?.guidePrice??0),0);
+ const loot=delivered.flatMap(item=>item.lootItems??[]),lootGuide=loot.reduce((sum,item)=>sum+(LOOT_MODEL_BY_ID[item.modelId]?.guidePrice??0),0),pending=delivered.flatMap(item=>item.lootPending??[]);
  const uses = [money > 0 ? `${n(money)} ₽ — на закупки и работу базы.` : '',
   supplies.scrap > 0 ? `${n(supplies.scrap)} металла — на ремонт, строительство и производство.` : '',
   supplies.intel > 0 ? `${n(supplies.intel)} разведданных — на выходы в новые секторы.` : '',
   supplies.ammo > 0 ? 'Патроны пополняют запас для следующего выхода.' : '',
   supplies.medicine > 0 ? 'Медикаменты — на лечение бойцов и аптечки.' : '',
   modules > 0 ? 'Модули — для сборки и улучшения оружия; детали сверх вместимости уже проданы.' : '',
-  delivered.some(item => item.weaponId && !item.weaponAutoSold) ? 'Оружейный трофей проверь в арсенале перед выдачей бойцу.' : '',loot.length?`Доставлено трофеев: ${loot.length}, ориентир ${n(lootGuide)} ₽. Оставь для убежища, разбери или выстави на барахолку.`:''].filter(Boolean);
+  delivered.some(item => item.weaponId && !item.weaponAutoSold) ? 'Оружейный трофей проверь в арсенале перед выдачей бойцу.' : '',loot.length?`Доставлено трофеев: ${loot.length}, ориентир ${n(lootGuide)} ₽. Сохрани для бартера на снаряжение диких или выбери предметы для продажи.`:'',pending.length?`${pending.length} трофеев при эвакуации не поместились на склад и были сохранены в посылке. Текущий статус доставки — в разделе «Мой склад».`:''].filter(Boolean);
  if (!uses.length) uses.push(report.squad && receipts.length < report.squad.members.length
   ? 'В сохранившихся личных отчётах нет доставленной добычи. Полный итог груза отряда в последних записях не сохранился.'
   : receipts.some(item => !item.success)
@@ -97,6 +97,7 @@ export interface ConfirmedRaidCargo {
 	status: 'carried' | 'delivered' | 'lost'; money: number; supplies: Supplies;
 	parts: ConfirmedRaidPart[]; weaponIds: string[]; weight: number | null; capacity: number | null;
 	lootItems?: LootItem[];
+	lootPending?: LootItem[];
 	lootAutoSold?: {item:LootItem;money:number}[];
 }
 /** Report moduleIds are model IDs. Never borrow a similarly named part from the stash. */
@@ -116,6 +117,7 @@ export function getConfirmedRaidCargo(raid: Raid, candidate: RaidReport | null =
 		weaponIds: report?.success ? report.weaponId ? [report.weaponId] : [] : [...(cargo?.weaponIds ?? [])],
 		weight: cargo && !report?.success ? getCargoWeight(cargo) : null, capacity: raid.expedition?.capacity ?? null,
 		...((report?.success?report.lootItems:cargo?.lootItems)!==undefined?{lootItems:structuredClone((report?.success?report.lootItems:cargo?.lootItems)??[])}:{}),
+		...(report?.success&&report.lootPending?{lootPending:structuredClone(report.lootPending)}:{}),
 		...(report?.success&&report.lootAutoSold?{lootAutoSold:structuredClone(report.lootAutoSold)}:{}) };
 }
 function compatibility(model: ModuleModel) {
@@ -131,7 +133,7 @@ function renderCargo(raid: Raid, report: RaidReport | null) {
 	const values = (['ammo','medicine','scrap','intel'] as const).filter(key => cargo.supplies[key] > 0);
 	const supplyNames: Record<keyof Supplies, string> = { ammo: 'Патроны', medicine: 'Медикаменты', scrap: 'Металл', intel: 'Разведданные' };
 	const note = cargo.status === 'carried' ? 'До эвакуации груз остаётся под риском.' : cargo.status === 'lost' ? 'Эти детали не попали на склад.' : 'При полном складе лишние модули продаются. Ниже — находки выхода, а не остаток склада.';
-	return `<div class="live-cargo ${cargo.status === 'lost' ? 'failed' : ''}"><span class="eyebrow">${label}</span><strong>${n(cargo.money)} ₽ ${cargo.weight === null || cargo.capacity === null ? '' : `<small>${cargo.weight.toFixed(1)} / ${cargo.capacity.toFixed(1)} ед.</small>`}</strong><p>${note}</p>${values.length ? `<div class="live-cargo-supplies">${values.map(key => `<span>${supplyNames[key]} <b>${n(cargo.supplies[key])}</b></span>`).join('')}</div>` : ''}${cargo.parts.length ? `<div class="live-cargo-parts">${cargo.parts.map(part => `<article class="live-cargo-part" style="--rarity:${RARITY_COLORS[part.model.rarity]}"><span class="live-part-art">${moduleArt(part.model)}</span><div><strong>${e(part.model.label)}</strong><small>${MODULE_SLOT_LABELS[part.model.slot]} · ${RARITY_LABELS[part.model.rarity]}</small><b class="live-part-condition ${part.durability !== null && part.durability < 10 ? 'needs-repair' : ''}">${part.durability === null ? 'Состояние в отчёте не указано' : `${Math.floor(part.durability)}% · ${part.durability < 10 ? 'Нужен ремонт' : part.model.slot === 'receiver' ? 'Основа для сборки' : 'Исправная деталь'}`}</b><p>${e(compatibility(part.model))}</p>${part.instanceId ? `<small class="live-part-id">${e(part.instanceId)}${part.foundAt === null ? '' : ` · ${clock(part.foundAt)}`}</small>` : ''}</div></article>`).join('')}</div>` : `<small class="live-cargo-empty">${cargo.status === 'carried' ? 'Модули пока не подтверждены. Осмотр точки ещё не гарантирует находку.' : 'В этом грузе нет модулей.'}</small>`}${cargo.weaponIds.map(id => Object.hasOwn(WEAPON_BY_ID,id) ? `<p>Оружейный трофей: <b>${e(WEAPON_BY_ID[id]!.name)}</b></p>` : '').join('')}${raidLootReceipt(cargo.lootItems,cargo.status)}${raidLootOverflow(cargo.lootAutoSold)}</div>`;
+	return `<div class="live-cargo ${cargo.status === 'lost' ? 'failed' : ''}"><span class="eyebrow">${label}</span><strong>${n(cargo.money)} ₽ ${cargo.weight === null || cargo.capacity === null ? '' : `<small>${cargo.weight.toFixed(1)} / ${cargo.capacity.toFixed(1)} ед.</small>`}</strong><p>${note}</p>${values.length ? `<div class="live-cargo-supplies">${values.map(key => `<span>${supplyNames[key]} <b>${n(cargo.supplies[key])}</b></span>`).join('')}</div>` : ''}${cargo.parts.length ? `<div class="live-cargo-parts">${cargo.parts.map(part => `<article class="live-cargo-part" style="--rarity:${RARITY_COLORS[part.model.rarity]}"><span class="live-part-art">${moduleArt(part.model)}</span><div><strong>${e(part.model.label)}</strong><small>${MODULE_SLOT_LABELS[part.model.slot]} · ${RARITY_LABELS[part.model.rarity]}</small><b class="live-part-condition ${part.durability !== null && part.durability < 10 ? 'needs-repair' : ''}">${part.durability === null ? 'Состояние в отчёте не указано' : `${Math.floor(part.durability)}% · ${part.durability < 10 ? 'Нужен ремонт' : part.model.slot === 'receiver' ? 'Основа для сборки' : 'Исправная деталь'}`}</b><p>${e(compatibility(part.model))}</p>${part.instanceId ? `<small class="live-part-id">${e(part.instanceId)}${part.foundAt === null ? '' : ` · ${clock(part.foundAt)}`}</small>` : ''}</div></article>`).join('')}</div>` : `<small class="live-cargo-empty">${cargo.status === 'carried' ? 'Модули пока не подтверждены. Осмотр точки ещё не гарантирует находку.' : 'В этом грузе нет модулей.'}</small>`}${cargo.weaponIds.map(id => Object.hasOwn(WEAPON_BY_ID,id) ? `<p>Оружейный трофей: <b>${e(WEAPON_BY_ID[id]!.name)}</b></p>` : '').join('')}${raidLootReceipt(cargo.lootItems,cargo.status)}${raidLootReceipt(cargo.lootPending,"pending")}${raidLootOverflow(cargo.lootAutoSold)}</div>`;
 }
 function renderObjective(raid: Raid, report: RaidReport | null, now: number) {
 	if (report) return '';

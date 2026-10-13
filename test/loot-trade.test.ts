@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	advance, continueExpedition, createGame, creditMarketMoney, dispatchRaid, extractRaid, getCargoValue, getCargoWeight, getLootCapacity,
-	getLootTraderPrice, getSupplyCapacity, getTradeAssetRow, getTradeInventory, getTradeQuote, LOOT_MODELS, parseSave, parseTradeAsset, receiveTradeAsset,
+	getSupplyCapacity, getTradeAssetRow, getTradeInventory, getTradeQuote, LOOT_MODELS, parseSave, parseTradeAsset, receiveTradeAsset,
 	recycleLootItem, SAVE_VERSION, saveGame, sellLootItem, takeTradeAsset, type GameState, type LootItem,
 } from "../src/game/engine";
 import { MAPS } from "../src/game/data";
@@ -79,12 +79,12 @@ describe("named physical raid loot", () => {
 		failed.raid.chance = 0; advance(failed.state, failed.raid.endsAt);
 		expect(failed.state.lootItems).toBeUndefined(); expect(failed.state.history[0]!.lootItems).toEqual([]); expect(failed.state.history[0]!.lostCargo!.lootItems).toEqual(carried); valid(failed.state);
 	});
-	test("full loot shelves sell only overflow at the recorded lower trader price", () => {
+	test("full loot shelves preserve overflow intact without choosing a sale for the player", () => {
 		const { state, raid } = checkpoint(); for (let count = 0; count < getLootCapacity(state); count++) put(state);
 		const carried = structuredClone(raid.expedition!.cargo.lootItems!), cash = raid.expedition!.cargo.money;
 		expect(extractRaid(state, raid.id, state.lastUpdated).ok).toBe(true);
-		const report = state.history[0]!; expect(report.lootItems).toEqual([]); expect(report.lootAutoSold).toEqual(carried.map(item => ({ item, money: getLootTraderPrice(item) })));
-		expect(report.money).toBe(cash + carried.reduce((sum, item) => sum + getLootTraderPrice(item), 0)); expect(report.description).toContain("проданы торговцу");
+		const report = state.history[0]!; expect(report.lootItems).toEqual([]); expect(report.lootPending).toEqual(carried); expect(report.lootAutoSold).toBeUndefined();
+		expect(report.money).toBe(cash); expect(report.description).toContain("ждут в посылке"); expect(state.pendingLoot![0]!.items).toEqual(carried);
 		expect(state.lootItems).toHaveLength(getLootCapacity(state)); valid(state);
 	});
 	test("cargo totals include named finds and new bags retain higher value per weight instead of heavy junk", () => {
