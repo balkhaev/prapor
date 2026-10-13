@@ -258,8 +258,14 @@ export function noteSquadDispatch(state: GameState, raid: Raid) {
 	for (const pair of state.social.pairs) if (pair.scavIds.includes(raid.scavId) && !pair.overlap) {
 		const peerId = pair.scavIds.find((id) => id !== raid.scavId), peerRaid = state.raids.find((item) => item.scavId === peerId && item.id !== raid.id && item.mapId === raid.mapId);
 		if (!peerRaid || (peerRaid.expedition?.status !== "choice" && peerRaid.endsAt <= raid.startedAt)) continue;
+		// The offline cap shifts the displayed stage clock, while the authored sortie
+		// trail retains its real departure. Capture that stable provenance for a buddy
+		// who was already outside, including a held checkpoint after discarded time.
+		if (peerRaid.expedition && peerRaid.expedition.trail.length === 0) continue;
+		const stageLabel = peerRaid.expedition?.stage === 1 ? "Выход · этап 1" : `Выбор · этап ${peerRaid.expedition?.stage}`;
+		const peerStartedAt = peerRaid.expedition?.trail.find((event) => event.label === stageLabel)?.at ?? peerRaid.expedition?.trail[0]?.at ?? peerRaid.startedAt;
 		pair.overlap = { raidIds: pair.scavIds.map((id) => id === raid.scavId ? raid.id : peerRaid.id) as [string, string],
-			startedAt: pair.scavIds.map((id) => id === raid.scavId ? raid.startedAt : peerRaid.startedAt) as [number, number], mapId: raid.mapId, at: raid.startedAt, returned: [] };
+			startedAt: pair.scavIds.map((id) => id === raid.scavId ? raid.startedAt : peerStartedAt) as [number, number], mapId: raid.mapId, at: raid.startedAt, returned: [] };
 	}
 }
 export function noteSquadRaid(state: GameState, scav: Scav, report: RaidReport) {

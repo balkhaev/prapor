@@ -465,6 +465,36 @@ describe("shared deployment and production effects", () => {
 });
 
 describe("save migration and social provenance", () => {
+	test("a new buddy overlap formed after capped time can save, continue deeper and return across a clock rollback", () => {
+		const state = funded(), firstScav = state.scavs[0]!, secondScav = state.scavs[1]!;
+		expect(dispatchRaid(state, firstScav.id, "courtyard", state.lastUpdated).ok).toBe(true);
+		// NOW is a real creation seed whose two paid sorties reach the
+		// checkpoints below. No combat probability, seed or report is changed.
+		const first = state.raids[0]!;
+		advance(state, first.endsAt);
+		expect(first.expedition!.status).toBe("choice");
+		const summary = advance(state, state.lastUpdated + MAX_OFFLINE_MS + 86_400_000);
+		expect(summary.capped).toBe(true);
+		expect(parseSave(saveGame(state))).toEqual(state);
+		expect(dispatchRaid(state, secondScav.id, "courtyard", state.lastUpdated).ok).toBe(true);
+		const second = state.raids.find((item) => item.scavId === secondScav.id)!;
+		expect(parseSave(saveGame(state))).toEqual(state);
+		expect(continueExpedition(state, first.id, "recon", first.expedition!.offers[0]!, state.lastUpdated).ok).toBe(true);
+		expect(parseSave(saveGame(state))).toEqual(state);
+		const bulk = structuredClone(state), irregular = structuredClone(state), until = Math.max(first.endsAt, second.endsAt);
+		advance(bulk, until); irregularTicks(irregular, until);
+		expect(irregular).toEqual(bulk);
+		expect(parseSave(saveGame(bulk))).toEqual(bulk);
+		expect(extractRaid(bulk, second.id, bulk.lastUpdated).ok).toBe(true);
+		const restored = loadGameWithSummary(saveGame(bulk), bulk.lastUpdated - 30_000)!;
+		expect(restored).not.toBeNull();
+		expect(restored.summary.elapsedMs).toBe(0);
+		expect(parseSave(saveGame(restored.state))).toEqual(restored.state);
+		expect(extractRaid(restored.state, first.id, restored.state.lastUpdated).ok).toBe(true);
+		expect(relation(restored.state).sortiesTogether).toBe(1);
+		expect(parseSave(saveGame(restored.state))).toEqual(restored.state);
+	});
+
 	test("the original overlap survives deeper-stage departure, irregular advance and backwards-clock restoration", () => {
 		const state = funded();
 		for (const scav of state.scavs.slice(0, 2)) expect(dispatchRaid(state, scav.id, "courtyard", state.lastUpdated).ok).toBe(true);
