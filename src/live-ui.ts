@@ -249,7 +249,7 @@ export function createLiveMode(options: LiveModeOptions) {
     lastKeyboardAt = performance.now(); move(...direction);
   };
   dock.addEventListener('click', click); document.addEventListener('keydown', keyboard);
-  return { show, hide, refreshPanel, resetIdentity, isActive: () => active, destroy: () => { hide(); destroyed = true; generation++; dock.removeEventListener('click', click); document.removeEventListener('keydown', keyboard); scene.destroy(); overlay.remove(); } };
+  return { show, hide, refreshPanel, resetIdentity, isActive: () => active, isActionPending: () => actionBusy, destroy: () => { hide(); destroyed = true; generation++; dock.removeEventListener('click', click); document.removeEventListener('keydown', keyboard); scene.destroy(); overlay.remove(); } };
 }
 
 

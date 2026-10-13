@@ -4,6 +4,19 @@ export interface AccountUser {
 	email: string | null;
 	emailVerified: boolean;
 	pendingEmail: string | null;
+	googleLinked: boolean;
+	passwordEnabled: boolean;
+}
+
+export type AccountGoogleResult = "success" | "linked" | "cancelled" | "unavailable" | "failed" | "email-in-use" | "already-linked" | "session-changed";
+
+export function readAccountGoogleResult(hash: string): AccountGoogleResult | null {
+	const match = /^#account-google=(success|linked|cancelled|unavailable|failed|email-in-use|already-linked|session-changed)$/.exec(hash);
+	return match ? match[1] as AccountGoogleResult : null;
+}
+
+export function isAccountGoogleFragment(hash: string): boolean {
+	return /^#account-google(?:=|$)/.test(hash);
 }
 
 export type AccountEmailDelivery = "sent" | "failed" | "disabled" | "none" | null;
@@ -39,6 +52,8 @@ function messageForError(status: number, code: string, retryAfter: number | null
 	if (code === "network") return "Нет связи с сервером. Игра на этом устройстве доступна; попробуй ещё раз, когда появится интернет.";
 	if (code === "invalid_response") return "Сервер прислал неполный ответ. Попробуй ещё раз позже.";
 	if (code === "email_disabled") return "Отправка писем сейчас недоступна. Вход и восстановление по коду работают.";
+	if (code === "google_disabled" || code === "google_unavailable") return "Вход через Google сейчас недоступен. Попробуй позже или войди с позывным и паролем.";
+	if (code === "google_already_linked") return "Этот аккаунт уже связан с Google. Обнови страницу, чтобы проверить способ входа.";
 	if (["invalid_email", "email_invalid"].includes(code)) return "Введи полный адрес почты, например name@example.com.";
 	if (["email_taken", "email_exists"].includes(code)) return "Этот адрес уже привязан к другому аккаунту. Используй другую почту.";
 	if (code === "email_already_verified") return "Почта уже подтверждена. Обнови страницу, чтобы увидеть её статус.";
@@ -69,7 +84,8 @@ function record(value: unknown): value is Record<string, unknown> {
 function readUser(value: unknown): AccountUser {
 	if (!record(value) || typeof value.id !== "string" || typeof value.username !== "string" || !value.id || !/^[A-Za-z0-9_-]{3,24}$/.test(value.username)) throw new AccountApiError(0, "invalid_response");
 	if (!(value.email === undefined || value.email === null || typeof value.email === "string") || !(value.emailVerified === undefined || typeof value.emailVerified === "boolean") || !(value.pendingEmail === undefined || value.pendingEmail === null || typeof value.pendingEmail === "string")) throw new AccountApiError(0, "invalid_response");
-	return { id: value.id, username: value.username, email: typeof value.email === "string" ? value.email : null, emailVerified: value.emailVerified === true, pendingEmail: typeof value.pendingEmail === "string" ? value.pendingEmail : null };
+	if (!(value.googleLinked === undefined || typeof value.googleLinked === "boolean") || !(value.passwordEnabled === undefined || typeof value.passwordEnabled === "boolean")) throw new AccountApiError(0, "invalid_response");
+	return { id: value.id, username: value.username, email: typeof value.email === "string" ? value.email : null, emailVerified: value.emailVerified === true, pendingEmail: typeof value.pendingEmail === "string" ? value.pendingEmail : null, googleLinked: value.googleLinked === true, passwordEnabled: value.passwordEnabled !== false };
 }
 
 function readDelivery(value: unknown): AccountEmailDelivery {
@@ -119,9 +135,18 @@ async function request(path: string, method = "GET", body?: Record<string, unkno
 }
 
 export const accountApi = {
-	async session(): Promise<{ user: AccountUser | null; emailEnabled: boolean }> {
+	async session(): Promise<{ user: AccountUser | null; emailEnabled: boolean; googleEnabled: boolean }> {
 		const result = await request("/api/auth/session");
-		return { user: result.user === null ? null : readUser(result.user), emailEnabled: result.emailEnabled === true };
+		return { user: result.user === null ? null : readUser(result.user), emailEnabled: result.emailEnabled === true, googleEnabled: result.googleEnabled === true };
+	},
+	async beginGoogle(intent: "login" | "link", userId?: string): Promise<{ url: string }> {
+		if (intent === "link" && !userId) throw new AccountApiError(401, "unauthorized");
+		const result = await request("/api/auth/google", "POST", { intent }, intent === "link" ? { "X-Prapor-Account": userId! } : {});
+		if (typeof result.url !== "string") throw new AccountApiError(0, "invalid_response");
+		let url: URL;
+		try { url = new URL(result.url); } catch { throw new AccountApiError(0, "invalid_response"); }
+		if (url.protocol !== "https:" || url.hostname !== "accounts.google.com" || url.port || url.username || url.password || url.hash || url.pathname !== "/o/oauth2/v2/auth") throw new AccountApiError(0, "invalid_response");
+		return { url: url.href };
 	},
 	async register(username: string, password: string, email?: string): Promise<{ user: AccountUser; recoveryCode: string; emailDelivery: AccountEmailDelivery }> {
 		const result = await request("/api/auth/register", "POST", { username, password, ...(email ? { email } : {}) });

@@ -145,7 +145,7 @@ import {
 import { getSquadSocialEvents, getSocialPresentationKey } from "./game/squad-bonds";
 import { getAchievementViews, getUnseenAchievementIds } from "./game/achievements";
 import { achievementsPanel, achievementNotice, filterAchievementViews, readAchievementFilter, type AchievementFilter } from "./achievements-ui";
-import { accountApi, accountErrorMessage, type AccountUser } from "./account-client";
+import { accountApi, accountErrorMessage, isAccountGoogleFragment, readAccountGoogleResult, type AccountGoogleResult, type AccountUser } from "./account-client";
 import { mountAccountUI } from "./account-ui";
 
 import { readAccountEmailLink, isAccountEmailFragment, type AccountEmailLink } from "./account-link";
@@ -227,7 +227,8 @@ let playerAccount: AccountUser | null = null;
 
 let pendingAccountEmailLink: AccountEmailLink | null = readAccountEmailLink(window.location.hash);
 let invalidAccountEmailLink = isAccountEmailFragment(window.location.hash) && !pendingAccountEmailLink;
-if (isAccountEmailFragment(window.location.hash)) history.replaceState(history.state, '', window.location.pathname + window.location.search);
+let pendingAccountGoogleResult: AccountGoogleResult | null = isAccountGoogleFragment(window.location.hash) ? readAccountGoogleResult(window.location.hash) ?? 'failed' : null;
+if (isAccountEmailFragment(window.location.hash) || isAccountGoogleFragment(window.location.hash)) history.replaceState(history.state, '', window.location.pathname + window.location.search);
 const uiKey=()=> 'prapor.ui.'+(signedInUser?.id??'guest');
 function storedSession(): unknown { try {
     return JSON.parse(localStorage.getItem(uiKey()) ?? 'null');
@@ -630,10 +631,11 @@ async function initializeAccount() {
     accountChanging = true;
     setOverlayState();
     try {
-        const { user, emailEnabled } = await accountApi.session();
+        const { user, emailEnabled, googleEnabled } = await accountApi.session();
         if (epoch !== accountGeneration)
             return;
         accountUI.setEmailEnabled(emailEnabled);
+        accountUI.setGoogleEnabled(googleEnabled);
         signedInUser = user;
         playerAccount = user;
         accountUI.setUser(user);
@@ -654,6 +656,10 @@ async function initializeAccount() {
 
 function showPendingAccountEmailLink() {
 	if (accountChanging) return;
+	if (pendingAccountGoogleResult) {
+		const result = pendingAccountGoogleResult; pendingAccountGoogleResult = null;
+		accountUI.handleGoogleResult(result);
+	}
 	if (pendingAccountEmailLink) {
 		const link = pendingAccountEmailLink; pendingAccountEmailLink = null;
 		accountUI.handleEmailLink(link.kind, link.token);
@@ -664,6 +670,12 @@ function showPendingAccountEmailLink() {
 }
 
 function captureAccountEmailLink() {
+	if (isAccountGoogleFragment(window.location.hash)) {
+		pendingAccountGoogleResult = readAccountGoogleResult(window.location.hash) ?? 'failed';
+		history.replaceState(history.state, '', window.location.pathname + window.location.search);
+		if (!accountChanging) void initializeAccount();
+		return;
+	}
 	if (!isAccountEmailFragment(window.location.hash)) return;
 	pendingAccountEmailLink = readAccountEmailLink(window.location.hash);
 	invalidAccountEmailLink = !pendingAccountEmailLink;
@@ -3074,13 +3086,15 @@ const accountUI = mountAccountUI({
 	onAuthRevoked: revokeAccountSession,
 	onUserChanged: updateAccountProfile,
 	onEmailVerified: async () => {
-		const { user, emailEnabled } = await accountApi.session();
+		const { user, emailEnabled, googleEnabled } = await accountApi.session();
 		accountUI.setEmailEnabled(emailEnabled);
+		accountUI.setGoogleEnabled(googleEnabled);
 		if (user && signedInUser?.id === user.id) { updateAccountProfile(user); accountUI.setUser(user); }
 		else if (!user && signedInUser) revokeAccountSession();
 	},
 	onDialogChange: open => { accountDialogOpen = open; setOverlayState(); },
-  onBeforeLogout:async()=>!gameCommandPending&&!accountChanging,
+  onBeforeLogout:async()=>!gameCommandPending&&!accountChanging&&!liveMode?.isActionPending(),
+  onBeforeGoogle:()=>{if(gameCommandPending||accountChanging||liveMode?.isActionPending())return false;persist();return true;},
   onLogout:async()=>{accountGeneration++;signedInUser=null;playerAccount=null;liveMode?.resetIdentity();await loadServerProgress();accountUI.setStatus('Аккаунт отключён. Подключён гостевой серверный прогресс.');},
   onReconnect:async()=>{await loadServerProgress();},onSync:async()=>{await refreshServerProgress();},
 });
