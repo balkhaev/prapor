@@ -1,3 +1,5 @@
+import { SCAV_APPEARANCES, defaultScavAppearance, isScavAppearance } from "./game/scav-appearances";
+
 export type ScavDirection = "se" | "sw" | "ne" | "nw";
 export const SCAV_DIRECTIONS = ["se", "sw", "ne", "nw"] as const satisfies readonly ScavDirection[];
 export const SCAV_POSES = ["idle", "walk-a", "walk-b", "work"] as const;
@@ -7,16 +9,37 @@ export type ScavPose = typeof SCAV_POSES[number];
 export const SCAV_ORIGIN = { x: .5, y: 480 / 512 } as const;
 export const SCAV_REFERENCE_HEIGHT = 360;
 
-const APPEARANCES: Readonly<Record<string, number>> = { veteran: 0, collector: 1, runner: 2, careful: 3 };
-const normalizeAppearance = (appearance: number) => Number.isFinite(appearance) ? ((Math.trunc(appearance) % 4) + 4) % 4 : 0;
+const legacyAppearance = (appearance: number) => Number.isFinite(appearance) ? ((Math.trunc(appearance) % 4) + 4) % 4 : 0;
 
-/** The world character matches the personality-based portrait even after a new sortie. */
-export function scavAppearance(personality?: string, fallback = 0): number {
-	return personality && Object.hasOwn(APPEARANCES, personality) ? APPEARANCES[personality]! : normalizeAppearance(fallback);
+/** Saved visual identity takes priority; older saves retain their original personality model. */
+export function scavAppearance(personality?: string, fallback = 0, appearance?: number): number {
+	if (isScavAppearance(appearance)) return appearance;
+	return SCAV_APPEARANCES.some((look) => look.personality === personality) ? defaultScavAppearance(personality ?? "") : legacyAppearance(fallback);
 }
 
 export function scavTexture(appearance: number): string {
-	return `scav-iso-${normalizeAppearance(appearance)}`;
+	return `scav-iso-${isScavAppearance(appearance) ? appearance : legacyAppearance(appearance)}`;
+}
+
+/** A queued atlas uses a loaded model of the same personality until its whole atlas is ready. */
+export function scavAvailableAppearance(appearance: number, isLoaded: (texture: string) => boolean): number {
+	const valid = isScavAppearance(appearance) ? appearance : legacyAppearance(appearance);
+	return isLoaded(scavTexture(valid)) ? valid : defaultScavAppearance(SCAV_APPEARANCES[valid]?.personality ?? "");
+}
+
+/** Only the four compatibility atlases and the current roster are needed at startup. */
+export function scavPreloadAppearances(scavs: readonly { personality?: string; appearance?: number }[] = []): number[] {
+	return [...new Set([0, 1, 2, 3, ...scavs.map((scav) => scavAppearance(scav.personality, 0, scav.appearance))])];
+}
+
+/** Equipment follows the same blended torso motion as the character's animated poses. */
+export function scavTorsoAnchor(poses: readonly { weight: number; torso?: { x: number; y: number } }[]): { x: number; y: number } | undefined {
+	let x = 0, y = 0, total = 0;
+	for (const { weight, torso } of poses) {
+		if (!torso || weight <= 0 || ![weight, torso.x, torso.y].every(Number.isFinite)) continue;
+		x += torso.x * weight; y += torso.y * weight; total += weight;
+	}
+	return total > 0 ? { x: x / total, y: y / total } : undefined;
 }
 
 export function scavFrame(pose: ScavPose, direction: ScavDirection): string {

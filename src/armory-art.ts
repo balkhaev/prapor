@@ -138,6 +138,27 @@ export function weaponBuildArt(weapon: WeaponInstance, selectedSlot?: ModuleSlot
 	return `<svg class="weapon-build-art" viewBox="0 0 900 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="${escape(accessible)}"><title>${escape(accessible)}</title>${defs}<ellipse cx="450" cy="259" rx="322" ry="10" fill="#061009" opacity=".34"/><g stroke-linejoin="round" stroke-linecap="round">${partArt}</g></svg>`;
 }
 
+/** The carried weapon uses the very same installed-part geometry as the workbench. */
+export function weaponActorArt(weapon: WeaponInstance): { svg: string; width: number; height: number; grip: { x: number; y: number }; muzzle: { x: number; y: number } } {
+	const base = profile(weapon.weaponId), installed = weapon.modules;
+	const barrel = installed.barrel ? MODULE_BY_ID[installed.barrel.modelId]?.appearance : undefined;
+	const gun = { ...base, barrelEnd: base.barrelEnd + (barrel === "long" ? 40 : barrel === "short" ? -55 : 0) };
+	const { paint, defs } = palette(paintId(weapon.id));
+	const parts = (["stock", "barrel", "magazine", "receiver", "handguard", "foregrip", "muzzle", "optic"] as ModuleSlot[]).flatMap((slot) => {
+		const instance = installed[slot], model = instance ? MODULE_BY_ID[instance.modelId] : undefined;
+		return model ? [{ shape: geometry(slot, slot === "barrel" ? "factory" : model.appearance, gun, paint), slot, instance }] : [];
+	});
+	const left = Math.min(370, ...parts.map(({ shape }) => shape.bounds[0])) - 4;
+	const top = Math.min(120, ...parts.map(({ shape }) => shape.bounds[1])) - 4;
+	const right = Math.max(gun.barrelEnd, ...parts.map(({ shape }) => shape.bounds[0] + shape.bounds[2])) + 4;
+	const bottom = Math.max(210, ...parts.map(({ shape }) => shape.bounds[1] + shape.bounds[3])) + 4;
+	const width = right - left, height = bottom - top;
+	const muzzlePart = parts.find(({ slot }) => slot === "muzzle");
+	const muzzleX = muzzlePart ? muzzlePart.shape.bounds[0] + muzzlePart.shape.bounds[2] - 10 : gun.barrelEnd;
+	return { svg: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${left} ${top} ${width} ${height}">${defs}<g stroke-linejoin="round" stroke-linecap="round">${parts.map(({ shape, slot, instance }) => renderPart(shape, paint, slot, true, false, instance?.durability)).join("")}</g></svg>`, width, height,
+		grip: { x: 410 - left, y: 175 - top }, muzzle: { x: muzzleX - left, y: 138 - top } };
+}
+
 function moduleProfile(model: ModuleModel): Profile {
 	if (model.weaponId) return profile(model.weaponId);
 	const platform = model.platforms.join(" ").toLowerCase();
