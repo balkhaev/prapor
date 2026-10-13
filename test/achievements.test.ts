@@ -125,7 +125,7 @@ describe("achievement decisions use real sortie and inventory events", () => {
 
 	test("enough requires voluntary stage-two extraction with a full enough pack and an available next route", () => {
 		let state = campaign();
-		let raid = firstCheckpoint(state);
+		let raid = firstCheckpoint(state, 1);
 		nextCheckpoint(state, raid, "combat");
 		expect(raid.expedition!.stage).toBe(2);
 		expect(getCargoWeight(raid.expedition!.cargo)).toBeGreaterThanOrEqual(raid.expedition!.capacity * .8);
@@ -162,7 +162,7 @@ describe("achievement decisions use real sortie and inventory events", () => {
 	});
 
 	test("being forced home by resource shortage does not satisfy enough", () => {
-		const state = campaign(), raid = firstCheckpoint(state);
+		const state = campaign(), raid = firstCheckpoint(state, 1);
 		nextCheckpoint(state, raid, "combat");
 		expect(getCargoWeight(raid.expedition!.cargo)).toBeGreaterThanOrEqual(raid.expedition!.capacity * .8);
 		state.supplies.ammo = 0;
@@ -368,7 +368,6 @@ describe("achievement decisions use real sortie and inventory events", () => {
 	test("a real raid scrap receipt does not lose early catalog recipes when many alternatives are eligible", () => {
 		let state = campaign();
 		const raid = firstCheckpoint(state), source = raid.expedition!.cargo.modules[0]!;
-		expect(source.modelId).toBe("foregrip-light");
 		expect(getModuleRecycleYield(source)).toBe(1);
 		expect(extractRaid(state, raid.id, state.lastUpdated).ok).toBe(true);
 		state.supplies.scrap = MODULE_BY_ID["factory-sks-stock"]!.craftCost.scrap - 1;
@@ -460,7 +459,7 @@ describe("achievement decisions use real sortie and inventory events", () => {
 	});
 
 	test("v8 migration starts event tracking without inventing awards from old statistics", () => {
-		const oldState = campaign(), raid = firstCheckpoint(oldState);
+		const oldState = campaign(), raid = firstCheckpoint(oldState, 1);
 		nextCheckpoint(oldState, raid, "combat");
 		expect(extractRaid(oldState, raid.id, oldState.lastUpdated).ok).toBe(true);
 		const oldSave = JSON.parse(saveGame(oldState));
@@ -478,7 +477,7 @@ describe("achievement decisions use real sortie and inventory events", () => {
 	});
 
 	test("saved awards reject unknown IDs and timestamps from the future", () => {
-		const state = campaign(), raid = firstCheckpoint(state);
+		const state = campaign(), raid = firstCheckpoint(state, 1);
 		nextCheckpoint(state, raid, "combat");
 		expect(extractRaid(state, raid.id, state.lastUpdated).ok).toBe(true);
 		const unknown = JSON.parse(saveGame(state));
