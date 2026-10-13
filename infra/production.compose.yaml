@@ -22,9 +22,18 @@ services:
       APP_ORIGINS: https://game.delopusk.ru,https://game.balkhaev.com
       TRUSTED_PROXIES: 172.18.0.2
       AUTH_HASH_CONCURRENCY: "2"
+      RESEND_API_KEY_FILE: /run/secrets/resend_api_key
+      RESEND_FROM: "ggpick <noreply@ggpick.club>"
+      PUBLIC_BASE_URL: https://game.balkhaev.com
       RELEASE_COMMIT: ${PRAPOR_COMMIT:?Set the checked release commit}
     volumes:
       - /data/prapor/data:/app/data
+      - type: bind
+        source: /data/prapor/secrets/resend_api_key
+        target: /run/secrets/resend_api_key
+        read_only: true
+        bind:
+          create_host_path: false
     expose: ["3000"]
     networks: [coolify]
     healthcheck:

@@ -1,5 +1,5 @@
 import "./account.css";
-import { accountApi, accountErrorMessage, type AccountSavedAt, type AccountUser } from "./account-client";
+import { AccountApiError, accountApi, accountErrorMessage, type AccountEmailDelivery, type AccountSavedAt, type AccountUser } from "./account-client";
 
 export type AccountAuthSource = "login" | "register" | "session";
 export type AccountStatusTone = "neutral" | "success" | "warning";
@@ -21,18 +21,23 @@ export interface AccountUIOptions {
 	onDialogChange?: (open: boolean) => void;
 	onSync?: () => void | Promise<void>;
 	onReconnect?: () => void | Promise<void>;
+	onAuthRevoked?: () => void;
+	onUserChanged?: (user: AccountUser) => void;
+	onEmailVerified?: (user: AccountUser | null) => void | Promise<void>;
 }
 
 export interface AccountUI {
 	setUser: (user: AccountUser | null) => void;
 	setStatus: (text: string, tone?: AccountStatusTone) => void;
+	setEmailEnabled: (enabled: boolean) => void;
+	handleEmailLink: (kind: "verify" | "reset", token: string) => void;
 	open: () => void;
 	chooseProgress: (options: ProgressChoiceOptions) => Promise<ProgressChoice>;
 	destroy: () => void;
 }
 
-type FormMode = "login" | "register" | "recover";
-type DialogMode = FormMode | "dashboard" | "recovery-code" | "progress";
+type FormMode = "login" | "register" | "recover" | "forgot" | "email" | "reset";
+type DialogMode = FormMode | "dashboard" | "recovery-code" | "progress" | "verify";
 
 function e(text: string): string {
 	return text.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
@@ -68,6 +73,58 @@ export function mountAccountUI(options: AccountUIOptions): AccountUI {
 	let pendingChoice: { promise: Promise<ProgressChoice>; resolve: (choice: ProgressChoice) => void } | null = null;
 	let progressOptions: ProgressChoiceOptions | null = null;
 	let disposed = false;
+	let emailEnabled = false;
+	let emailNotice = "";
+	let resendUntil = 0;
+	let forgotUntil = 0;
+	let resendTimer: ReturnType<typeof setInterval> | null = null;
+	let linkToken = "";
+	let deferredLink: { kind: "verify" | "reset"; token: string } | null = null;
+
+	function setEmailEnabled(enabled: boolean) {
+		emailEnabled = enabled;
+		if (mode === "dashboard" && dialog.open && !busy) renderDashboard();
+	}
+
+	function deliveryNotice(delivery: AccountEmailDelivery): string {
+		if (delivery === "sent") return "Письмо отправлено. Открой ссылку, чтобы подтвердить почту. Если письма нет, проверь папку «Спам».";
+		if (delivery === "failed") return "Адрес сохранён, но письмо отправить не удалось. Попробуй отправить его ещё раз через минуту.";
+		if (delivery === "disabled") return "Адрес сохранён. Отправка писем сейчас недоступна; подтвердить почту можно будет позже.";
+		return "";
+	}
+
+	function stopResendTimer() {
+		if (resendTimer !== null) clearInterval(resendTimer);
+		resendTimer = null;
+	}
+
+	function updateResendButton() {
+		const button = body.querySelector<HTMLButtonElement>("[data-resend-email], [data-forgot-submit]");
+		if (!button || !dialog.open) { stopResendTimer(); return; }
+		const forgottenPassword = button.hasAttribute("data-forgot-submit");
+		const seconds = Math.max(0, Math.ceil(((forgottenPassword ? forgotUntil : resendUntil) - Date.now()) / 1000));
+		button.disabled = busy || !emailEnabled || seconds > 0;
+		button.textContent = seconds > 0 ? `Повторить через ${seconds} сек.` : forgottenPassword ? "Отправить ссылку" : "Отправить письмо ещё раз";
+		if (seconds > 0 && resendTimer === null) resendTimer = setInterval(updateResendButton, 1000);
+		if (seconds === 0) stopResendTimer();
+	}
+
+	function rememberDelivery(delivery: AccountEmailDelivery) {
+		emailNotice = deliveryNotice(delivery);
+		if (delivery === "sent" || delivery === "failed") resendUntil = Date.now() + 60_000;
+	}
+
+	function validEmail(email: string): boolean {
+		return email.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+	}
+
+	function emailField(value = "", required = true): string {
+		return `<label class="account-field" for="account-email">Почта${required ? "" : " · необязательно"}<input id="account-email" name="email" value="${e(value)}" type="email" autocomplete="email" autocapitalize="none" spellcheck="false" maxlength="254" ${required ? "required" : ""} data-lock ${required ? "autofocus" : ""} aria-describedby="account-email-hint" placeholder="name@example.com"></label><p class="account-field-hint" id="account-email-hint">Для подтверждения адреса и восстановления доступа. Письма придут от noreply@ggpick.club.</p>`;
+	}
+
+	function passwordFields(repeat: boolean, current: boolean): string {
+		return `<label class="account-field" for="account-password">${current ? "Текущий пароль" : "Новый пароль"}<span class="account-password-field"><input id="account-password" name="password" type="password" autocomplete="${current ? "current-password" : "new-password"}" minlength="12" maxlength="128" required data-lock aria-describedby="account-password-hint"><button type="button" class="account-password-toggle" data-show-password="account-password" data-lock aria-pressed="false" aria-label="Показать пароль">Показать</button></span></label><p class="account-field-hint" id="account-password-hint">12–128 символов. Подойдёт длинная фраза; сохрани пароль в менеджере паролей.</p>${repeat ? `<label class="account-field" for="account-password-repeat">Повтори новый пароль<span class="account-password-field"><input id="account-password-repeat" name="passwordRepeat" type="password" autocomplete="new-password" minlength="12" maxlength="128" required data-lock><button type="button" class="account-password-toggle" data-show-password="account-password-repeat" data-lock aria-pressed="false" aria-label="Показать повтор пароля">Показать</button></span></label>` : ""}`;
+	}
 
 	function updateLauncher() {
 		launcher.querySelector<HTMLElement>(".account-launcher-label")!.textContent = user?.username ?? "Аккаунт";
@@ -88,6 +145,7 @@ export function mountAccountUI(options: AccountUIOptions): AccountUI {
 	}
 
 	function setUser(next: AccountUser | null) {
+		if (user?.id !== next?.id) { emailNotice = ""; resendUntil = 0; }
 		user = next;
 		if (next) rememberedUsername = next.username;
 		updateLauncher();
@@ -99,6 +157,7 @@ export function mountAccountUI(options: AccountUIOptions): AccountUI {
 		origin = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 		options.onDialogChange?.(true);
 		dialog.showModal();
+		updateResendButton();
 		launcher.setAttribute("aria-expanded", "true");
 	}
 
@@ -111,6 +170,8 @@ export function mountAccountUI(options: AccountUIOptions): AccountUI {
 
 	function finishClose() {
 		if (!dialog.open) return;
+		linkToken = "";
+		stopResendTimer();
 		dialog.close();
 		launcher.setAttribute("aria-expanded", "false");
 		options.onDialogChange?.(false);
@@ -149,6 +210,7 @@ export function mountAccountUI(options: AccountUIOptions): AccountUI {
 			if (next && label) { submit.dataset.idleLabel = submit.textContent ?? ""; submit.textContent = label; }
 			else if (submit.dataset.idleLabel) { submit.textContent = submit.dataset.idleLabel; delete submit.dataset.idleLabel; }
 		}
+		updateResendButton();
 	}
 
 	function showError(message: string) {
@@ -163,7 +225,43 @@ export function mountAccountUI(options: AccountUIOptions): AccountUI {
 
 	const errorMarkup = `<p class="account-error" role="alert" data-account-error hidden></p>`;
 
+	function renderEmailForm(next: "forgot" | "email" | "reset", notice?: string) {
+		if (next === "email" && !user) { renderForm("login"); return; }
+		if (next !== "reset") linkToken = "";
+		mode = next; busy = false; dialog.setAttribute("aria-busy", "false"); close.disabled = false;
+		title.textContent = next === "forgot" ? "Восстановить по почте" : next === "reset" ? "Задать новый пароль" : user?.email ? "Изменить почту" : "Добавить почту";
+		const intro = next === "forgot" ? "Введи почту, которую подтвердил в аккаунте. Если адрес подходит, на него придёт ссылка для смены пароля." : next === "reset" ? "Задай новый пароль. Все старые сессии будут завершены. После смены мы покажем новый код восстановления." : user?.emailVerified ? "Новая почта заменит текущую только после подтверждения. До этого восстановление работает через прежний подтверждённый адрес." : "Подтверди адрес по ссылке из письма, чтобы использовать почту для восстановления пароля. Для изменения нужен текущий пароль.";
+		body.innerHTML = `<p id="account-description" class="account-intro">${e(intro)}</p>${notice ? `<p class="account-notice">${e(notice)}</p>` : ""}<form class="account-form">${next === "reset" ? passwordFields(true, false) : emailField(next === "email" ? user?.pendingEmail ?? user?.email ?? "" : "")}${next === "email" ? passwordFields(false, true) : ""}${errorMarkup}<button type="submit" class="account-button account-primary" data-submit data-lock ${next === "forgot" ? "data-forgot-submit" : ""}>${next === "forgot" ? "Отправить ссылку" : next === "reset" ? "Изменить пароль" : "Сохранить адрес и отправить письмо"}</button></form><div class="account-form-footer">${next === "email" ? `<button type="button" class="account-text-button" data-dashboard data-lock>Назад в аккаунт</button>` : `<button type="button" class="account-text-button" data-mode="recover" data-lock>Восстановить по коду</button><button type="button" class="account-text-button" data-mode="login" data-lock>Назад ко входу</button>`}</div>`;
+		updateResendButton();
+		focusFirst();
+	}
+
+	function handleEmailLink(kind: "verify" | "reset", token: string) {
+		if (disposed) return;
+		if (!/^[A-Za-z0-9_-]{43}$/.test(token)) {
+			if (!busy && !recoveryCode && !pendingChoice) { renderForm(emailEnabled ? "forgot" : "recover", "Ссылка повреждена. Запроси новое письмо или восстанови доступ по коду."); showDialog(); }
+			return;
+		}
+		if (busy || pendingChoice || recoveryCode) { deferredLink = { kind, token }; return; }
+		linkToken = token;
+		if (kind === "reset") renderEmailForm("reset");
+		else {
+			mode = "verify"; busy = false; dialog.setAttribute("aria-busy", "false"); close.disabled = false;
+			title.textContent = "Подтвердить почту";
+			body.innerHTML = `<p id="account-description" class="account-intro">Нажми кнопку, чтобы подтвердить адрес из письма. Подтверждение позволит восстанавливать пароль через эту почту.</p>${errorMarkup}<button type="button" class="account-button account-primary" data-verify-email data-lock>Подтвердить почту</button><button type="button" class="account-text-button" data-close data-lock>Закрыть</button>`;
+		}
+		showDialog(); focusFirst();
+	}
+
+	function openDeferredLink() {
+		if (!deferredLink || busy || workflowDepth > 0 || recoveryCode || pendingChoice) return;
+		const link = deferredLink; deferredLink = null;
+		handleEmailLink(link.kind, link.token);
+	}
+
 	function renderForm(next: FormMode, notice?: string) {
+		if (next === "email" || next === "forgot" || next === "reset") { renderEmailForm(next, notice); return; }
+		linkToken = "";
 		mode = next;
 		busy = false;
 		dialog.setAttribute("aria-busy", "false");
@@ -173,7 +271,21 @@ export function mountAccountUI(options: AccountUIOptions): AccountUI {
 		const passwordLabel = recovering ? "Новый пароль" : "Пароль";
 		title.textContent = registering ? "Создать аккаунт" : recovering ? "Вернуть доступ" : "Войти в аккаунт";
 		body.innerHTML = `<p id="account-description" class="account-intro">${registering ? "Закрепи позывной и сохрани убежище в аккаунте. Можно продолжать играть без регистрации." : recovering ? "Введи свой позывной и сохранённый код. Все старые сессии будут завершены; после смены пароля войди заново." : "Продолжи свою игру на другом устройстве. Гостевой прогресс остаётся в этом браузере."}</p>${!recovering ? `<div class="account-tabs" role="group" aria-label="Регистрация и вход"><button type="button" data-mode="login" data-lock aria-pressed="${!registering}">Вход</button><button type="button" data-mode="register" data-lock aria-pressed="${registering}">Регистрация</button></div>` : ""}${notice ? `<p class="account-notice">${e(notice)}</p>` : ""}<form class="account-form"><label class="account-field" for="account-username">Позывной<input id="account-username" name="username" value="${e(rememberedUsername)}" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" minlength="3" maxlength="24" pattern="[A-Za-z0-9_-]{3,24}" required data-lock autofocus aria-describedby="account-username-hint"></label><p class="account-field-hint" id="account-username-hint">3–24 символа: латинские буквы, цифры, _ и -. Регистр букв не важен.</p>${recovering ? `<label class="account-field" for="account-recovery">Код восстановления<input id="account-recovery" name="recoveryCode" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="128" required data-lock placeholder="Код из сохранённого личного дела"></label>` : ""}<label class="account-field" for="account-password">${passwordLabel}<span class="account-password-field"><input id="account-password" name="password" type="password" autocomplete="${registering || recovering ? "new-password" : "current-password"}" minlength="12" maxlength="128" required data-lock aria-describedby="account-password-hint"><button type="button" class="account-password-toggle" data-show-password="account-password" data-lock aria-pressed="false" aria-label="Показать пароль">Показать</button></span></label><p class="account-field-hint" id="account-password-hint">12–128 символов. Подойдёт длинная фраза; сохрани пароль в менеджере паролей.</p>${registering || recovering ? `<label class="account-field" for="account-password-repeat">Повтори ${recovering ? "новый " : ""}пароль<span class="account-password-field"><input id="account-password-repeat" name="passwordRepeat" type="password" autocomplete="new-password" minlength="12" maxlength="128" required data-lock><button type="button" class="account-password-toggle" data-show-password="account-password-repeat" data-lock aria-pressed="false" aria-label="Показать повтор пароля">Показать</button></span></label>` : ""}${registering ? `<p class="account-footnote">Почта и телефон не нужны. После регистрации мы один раз покажем код восстановления — сохрани его отдельно от пароля.</p>` : ""}${errorMarkup}<button type="submit" class="account-button account-primary" data-submit data-lock>${registering ? "Создать аккаунт" : recovering ? "Изменить пароль" : "Войти"}</button></form><div class="account-form-footer"><button type="button" class="account-text-button" data-mode="${recovering ? "login" : "recover"}" data-lock>${recovering ? "Назад ко входу" : "Забыл пароль"}</button><button type="button" class="account-text-button" data-close data-lock>Продолжить без аккаунта</button></div>`;
+		if (registering && emailEnabled) {
+			body.querySelector("#account-username-hint")!.insertAdjacentHTML("afterend", emailField("", false));
+			body.querySelector<HTMLElement>(".account-footnote")!.textContent = "Почта необязательна. После регистрации подтверди её по письму. Код восстановления всё равно понадобится — мы покажем его один раз.";
+		}
+		if (!recovering && emailEnabled) body.querySelector<HTMLButtonElement>('[data-mode="recover"]')!.dataset.mode = "forgot";
+		if (recovering && emailEnabled) body.querySelector(".account-form-footer")!.insertAdjacentHTML("afterbegin", `<button type="button" class="account-text-button" data-mode="forgot" data-lock>Восстановить по почте</button>`);
 		focusFirst();
+	}
+
+	function emailCard(): string {
+		if (!user) return "";
+		const verified = Boolean(user.emailVerified && user.email);
+		const pending = user.pendingEmail ?? (!verified ? user.email : null);
+		const primaryAddress = verified ? user.email : pending;
+		return `<section class="account-email-card" aria-label="Почта для восстановления"><div class="account-email-head"><span class="account-eyebrow">Почта для восстановления</span><span class="account-email-badge ${verified ? "is-verified" : ""}">${verified ? "Подтверждена" : primaryAddress ? "Не подтверждена" : "Не добавлена"}</span></div>${primaryAddress ? `<strong class="account-email-address">${e(primaryAddress)}</strong>` : `<p>Добавь почту, чтобы восстановить доступ, если забудешь пароль и потеряешь код.</p>`}${verified && pending && pending !== user.email ? `<p class="account-email-pending">Ожидает подтверждения: <strong>${e(pending)}</strong>. Прежний адрес продолжает работать до подтверждения нового.</p>` : pending ? `<p>Открой письмо и подтверди адрес по ссылке. До этого для восстановления доступен код.</p>` : ""}${emailNotice ? `<p class="account-email-notice" role="status">${e(emailNotice)}</p>` : ""}${emailEnabled ? `<div class="account-email-actions"><button type="button" class="account-text-button" data-mode="email" data-lock>${primaryAddress ? "Изменить почту" : "Добавить почту"}</button>${pending ? `<button type="button" class="account-text-button" data-resend-email data-lock>Отправить письмо ещё раз</button>` : ""}</div>` : `<p class="account-field-hint">Отправка писем временно недоступна. Восстановление по коду работает.</p>`}</section>`;
 	}
 
 	function renderDashboard() {
@@ -184,6 +296,8 @@ export function mountAccountUI(options: AccountUIOptions): AccountUI {
 		close.disabled = false;
 		title.textContent = user.username;
 		body.innerHTML = `<p id="account-description" class="account-intro">Личное дело доступно на других устройствах. Подключи убежище к аккаунту, чтобы продолжить игру после входа.</p><div class="account-summary"><span class="account-eyebrow">Связь с аккаунтом</span><p class="account-sync-status" data-account-status data-tone="${statusTone}" role="status">${e(status)}</p></div>${errorMarkup}<div class="account-actions">${options.onSync ? `<button type="button" class="account-button account-primary" data-sync data-lock>Синхронизировать</button>` : ""}${options.onReconnect ? `<button type="button" class="account-button" data-reconnect data-lock>Подключить убежище</button>` : ""}<button type="button" class="account-button" data-close data-lock>Вернуться в штаб</button></div><p class="account-footnote">После выхода сохранение остаётся в этом браузере. На другом устройстве для доступа к нему понадобится вход.</p><button type="button" class="account-text-button account-logout" data-logout data-lock>Выйти из аккаунта</button>`;
+		body.querySelector(".account-summary")!.insertAdjacentHTML("afterend", emailCard());
+		updateResendButton();
 		focusFirst();
 	}
 
@@ -192,7 +306,7 @@ export function mountAccountUI(options: AccountUIOptions): AccountUI {
 		if (!dialog.open) { user ? renderDashboard() : renderForm("login"); showDialog(); focusFirst(); }
 	}
 
-	function renderRecoveryCode(code: string, continuation: () => Promise<void>, afterRecovery: boolean) {
+	function renderRecoveryCode(code: string, continuation: () => Promise<void>, afterRecovery: boolean, notice = "") {
 		mode = "recovery-code";
 		busy = false;
 		dialog.setAttribute("aria-busy", "false");
@@ -203,6 +317,7 @@ export function mountAccountUI(options: AccountUIOptions): AccountUI {
 		title.textContent = "Сохрани код восстановления";
 		body.innerHTML = `<p id="account-description" class="account-intro">${afterRecovery ? "Пароль изменён. Старый код больше не действует. " : "Аккаунт создан. "}Этот код показывается один раз. Он позволяет сменить пароль и получить доступ к аккаунту.</p><div class="account-code-card"><label for="account-secret" class="account-eyebrow">Твой новый код</label><textarea id="account-secret" class="account-secret" rows="2" readonly spellcheck="false" aria-label="Код восстановления"></textarea><div class="account-code-actions"><button type="button" class="account-button" data-copy-code>Скопировать</button><button type="button" class="account-button" data-download-code>Скачать .txt</button></div><p class="account-field-hint" role="status" data-code-status>Храни его в безопасном месте. Не отправляй другим людям.</p></div><label class="account-acknowledgment"><input type="checkbox" data-code-ack> <span>Я сохранил код и понимаю, что его больше не покажут</span></label>${errorMarkup}<button type="button" class="account-button account-primary" data-code-continue disabled>${afterRecovery ? "Сохранено · перейти ко входу" : "Сохранено · продолжить"}</button>`;
 		body.querySelector<HTMLTextAreaElement>("#account-secret")!.value = code;
+		if (notice) body.querySelector(".account-intro")!.insertAdjacentHTML("afterend", `<p class="account-notice">${e(notice)}</p>`);
 		focusFirst();
 	}
 
@@ -219,10 +334,12 @@ export function mountAccountUI(options: AccountUIOptions): AccountUI {
 		} finally {
 			workflowDepth--;
 			if (!disposed) setBusy(false);
+			openDeferredLink();
 		}
 	}
 
 	async function submitForm(form: HTMLFormElement) {
+		if (mode === "forgot" || mode === "email" || mode === "reset") { await submitEmailForm(form, mode); return; }
 		if (busy || !["login", "register", "recover"].includes(mode)) return;
 		clearError();
 		if (!form.reportValidity()) return;
@@ -230,25 +347,30 @@ export function mountAccountUI(options: AccountUIOptions): AccountUI {
 		const username = String(data.get("username") ?? "").trim();
 		const password = String(data.get("password") ?? "");
 		const repeat = String(data.get("passwordRepeat") ?? "");
+		const email = String(data.get("email") ?? "").trim();
 		if (!/^[A-Za-z0-9_-]{3,24}$/.test(username)) { showError("Позывной: 3–24 латинских символа, цифры, _ или -."); return; }
 		if (password.length < 12 || password.length > 128) { showError("Пароль должен содержать от 12 до 128 символов."); return; }
 		if (mode !== "login" && password !== repeat) { showError("Пароли не совпадают. Введи одинаковый пароль в обоих полях."); form.querySelector<HTMLInputElement>("#account-password-repeat")?.focus(); return; }
+		if (email && !validEmail(email)) { showError("Введи полный адрес почты, например name@example.com."); form.querySelector<HTMLInputElement>("#account-email")?.focus(); return; }
 		rememberedUsername = username;
 		const submittedMode = mode;
 		setBusy(true, submittedMode === "register" ? "Создаём аккаунт…" : submittedMode === "recover" ? "Меняем пароль…" : "Входим…");
 		try {
 			if (submittedMode === "register") {
-				const result = await accountApi.register(username, password);
+				const result = await accountApi.register(username, password, email || undefined);
 				if (disposed) return;
 				setUser(result.user);
 				setStatus("Аккаунт создан · сохрани код восстановления", "neutral");
-				renderRecoveryCode(result.recoveryCode, () => authenticate(result.user, "register"), false);
+				rememberDelivery(result.emailDelivery);
+				renderRecoveryCode(result.recoveryCode, () => authenticate(result.user, "register"), false, emailNotice);
 			} else if (submittedMode === "recover") {
 				const code = String(data.get("recoveryCode") ?? "").trim();
 				const result = await accountApi.recover(username, code, password);
 				if (disposed) return;
 				setUser(null);
+				setStatus("Пароль изменён. Войди с новым паролем.");
 				renderRecoveryCode(result.recoveryCode, async () => { renderForm("login", "Пароль изменён. Войди с новым паролем."); }, true);
+				options.onAuthRevoked?.();
 			} else {
 				const result = await accountApi.login(username, password);
 				if (disposed) return;
@@ -259,6 +381,94 @@ export function mountAccountUI(options: AccountUIOptions): AccountUI {
 		} finally {
 			if (!disposed && mode !== "recovery-code") setBusy(false);
 		}
+	}
+
+	async function submitEmailForm(form: HTMLFormElement, submittedMode: "forgot" | "email" | "reset") {
+		if (busy || submittedMode === "forgot" && forgotUntil > Date.now()) return;
+		clearError();
+		if (!form.reportValidity()) return;
+		const data = new FormData(form);
+		const email = String(data.get("email") ?? "").trim();
+		const password = String(data.get("password") ?? "");
+		const repeat = String(data.get("passwordRepeat") ?? "");
+		if (submittedMode !== "reset" && !validEmail(email)) { showError("Введи полный адрес почты, например name@example.com."); return; }
+		if (submittedMode !== "forgot" && (password.length < 12 || password.length > 128)) { showError("Пароль должен содержать от 12 до 128 символов."); return; }
+		if (submittedMode === "reset" && password !== repeat) { showError("Пароли не совпадают. Введи одинаковый пароль в обоих полях."); form.querySelector<HTMLInputElement>("#account-password-repeat")?.focus(); return; }
+		if (submittedMode === "reset" && !linkToken) { showError("Ссылка недействительна. Запроси новое письмо."); return; }
+		setBusy(true, submittedMode === "reset" ? "Меняем пароль…" : "Отправляем письмо…");
+		try {
+			if (submittedMode === "forgot") {
+				await accountApi.forgotPassword(email);
+				if (disposed) return;
+				forgotUntil = Date.now() + 60_000;
+				renderEmailForm("forgot", "Если у аккаунта есть этот подтверждённый адрес, на него придёт ссылка для смены пароля. Проверь почту и папку «Спам».");
+				body.querySelector<HTMLInputElement>("#account-email")!.value = email;
+			} else if (submittedMode === "email") {
+				if (!user) throw new AccountApiError(401, "unauthorized");
+				const expectedId = user.id;
+				const result = await accountApi.setEmail(expectedId, email, password);
+				if (disposed) return;
+				if (!acceptEmailProfile(expectedId, result.user)) return;
+				setUser(result.user); options.onUserChanged?.(result.user);
+				rememberDelivery(result.emailDelivery); renderDashboard();
+			} else {
+				const result = await accountApi.resetPassword(linkToken, password);
+				if (disposed) return;
+				linkToken = ""; setUser(null); setStatus("Пароль изменён. Войди с новым паролем.");
+				renderRecoveryCode(result.recoveryCode, async () => { renderForm("login", "Пароль изменён. Войди с новым паролем."); }, true);
+				options.onAuthRevoked?.();
+			}
+		} catch (error) {
+			if (!disposed) {
+				if (error instanceof AccountApiError && error.status === 429 && submittedMode === "forgot") forgotUntil = Date.now() + Math.max(error.retryAfter ?? 60, 1) * 1000;
+				showError(accountErrorMessage(error));
+			}
+		} finally { if (!disposed && mode !== "recovery-code") setBusy(false); openDeferredLink(); }
+	}
+
+	function acceptEmailProfile(expectedId: string, profile: AccountUser): boolean {
+		if (user?.id === expectedId && profile.id === expectedId) return true;
+		if (!user) renderForm("login", "Сессия завершилась во время запроса. Войди заново, чтобы проверить почту аккаунта.");
+		else { renderDashboard(); showError("Сессия изменилась во время запроса. Показан текущий аккаунт; для проверки другого аккаунта войди в него."); }
+		return false;
+	}
+
+	async function resendEmail() {
+		if (busy || !user || !emailEnabled || resendUntil > Date.now()) return;
+		const expectedId = user.id;
+		setBusy(true); clearError();
+		try {
+			const result = await accountApi.resendEmail(expectedId);
+			if (disposed) return;
+			if (!acceptEmailProfile(expectedId, result.user)) return;
+			setUser(result.user); options.onUserChanged?.(result.user);
+			rememberDelivery(result.emailDelivery); renderDashboard();
+		} catch (error) {
+			if (!disposed) {
+				if (error instanceof AccountApiError && error.status === 429) resendUntil = Date.now() + Math.max(error.retryAfter ?? 60, 1) * 1000;
+				showError(accountErrorMessage(error));
+			}
+		} finally { if (!disposed) setBusy(false); openDeferredLink(); }
+	}
+
+	async function verifyEmail() {
+		if (busy || !linkToken) return;
+		setBusy(true); clearError();
+		try {
+			const result = await accountApi.verifyEmail(linkToken);
+			if (disposed) return;
+			linkToken = "";
+			if (user && result.user?.id === user.id) { setUser(result.user); options.onUserChanged?.(result.user); }
+			let refreshFailed = false;
+			try { await options.onEmailVerified?.(result.user); } catch { refreshFailed = true; }
+			if (disposed) return;
+			const matchesCurrentAccount = Boolean(user && result.user?.id === user.id);
+			if (matchesCurrentAccount) emailNotice = "Почта подтверждена. Теперь её можно использовать для восстановления доступа.";
+			mode = "verify"; title.textContent = "Почта подтверждена";
+			body.innerHTML = `<p id="account-description" class="account-intro">${matchesCurrentAccount ? "Почта этого аккаунта подтверждена. Теперь через неё можно восстановить доступ." : "Адрес из письма подтверждён. Чтобы продолжить, войди в соответствующий аккаунт."}</p>${refreshFailed ? `<p class="account-notice">Не удалось проверить текущий вход. Обнови страницу, если статус аккаунта не изменился.</p>` : ""}<button type="button" class="account-button account-primary" ${user ? "data-dashboard" : 'data-mode="login"'} data-lock>${user ? matchesCurrentAccount ? "Вернуться в аккаунт" : "Вернуться в текущий аккаунт" : "Перейти ко входу"}</button>${user && !matchesCurrentAccount ? `<button type="button" class="account-text-button" data-mode="login" data-lock>Войти в другой аккаунт</button>` : ""}`;
+			focusFirst();
+		} catch (error) { if (!disposed) showError(accountErrorMessage(error)); }
+		finally { if (!disposed) setBusy(false); openDeferredLink(); }
 	}
 
 	function renderProgress(settings: ProgressChoiceOptions, replacing?: "server" | "local") {
@@ -306,7 +516,7 @@ export function mountAccountUI(options: AccountUIOptions): AccountUI {
 			if (!disposed) renderDashboard();
 		} catch (error) {
 			if (!disposed) { renderDashboard(); showError(accountErrorMessage(error)); }
-		} finally { workflowDepth--; if (!disposed) setBusy(false); }
+		} finally { workflowDepth--; if (!disposed) setBusy(false); openDeferredLink(); }
 	}
 
 	async function logout() {
@@ -322,13 +532,16 @@ export function mountAccountUI(options: AccountUIOptions): AccountUI {
 			await options.onLogout();
 			if (!disposed) renderForm("login", "Ты вышел из аккаунта. Убежище осталось на этом устройстве.");
 		} catch (error) { if (!disposed) showError(accountErrorMessage(error)); }
-		finally { workflowDepth--; if (!disposed) setBusy(false); }
+		finally { workflowDepth--; if (!disposed) setBusy(false); openDeferredLink(); }
 	}
 
 	async function handleClick(event: MouseEvent) {
 		const target = event.target instanceof Element ? event.target.closest<HTMLButtonElement>("button") : null;
 		if (!target || target.disabled) return;
 		if (target === close || target.hasAttribute("data-close")) { attemptClose(); return; }
+		if (target.hasAttribute("data-dashboard") && !busy) { linkToken = ""; renderDashboard(); return; }
+		if (target.hasAttribute("data-resend-email")) { await resendEmail(); return; }
+		if (target.hasAttribute("data-verify-email")) { await verifyEmail(); return; }
 		if (target.dataset.mode && !busy) {
 			const usernameInput = body.querySelector<HTMLInputElement>("#account-username");
 			if (usernameInput) rememberedUsername = usernameInput.value;
@@ -365,6 +578,7 @@ export function mountAccountUI(options: AccountUIOptions): AccountUI {
 			body.querySelector<HTMLTextAreaElement>("#account-secret")!.value = "";
 			setBusy(true);
 			await continuation();
+			openDeferredLink();
 			return;
 		}
 		if (target.dataset.choose && progressOptions) { renderProgress(progressOptions, target.dataset.choose as "server" | "local"); return; }
@@ -414,6 +628,8 @@ export function mountAccountUI(options: AccountUIOptions): AccountUI {
 	return {
 		setUser,
 		setStatus,
+		setEmailEnabled,
+		handleEmailLink,
 		open,
 		chooseProgress,
 		destroy() {
@@ -422,6 +638,9 @@ export function mountAccountUI(options: AccountUIOptions): AccountUI {
 			pendingChoice?.resolve("cancel");
 			pendingChoice = null;
 			recoveryCode = "";
+			linkToken = "";
+			deferredLink = null;
+			stopResendTimer();
 			secretContinue = null;
 			finishClose();
 			root.removeEventListener("click", clickListener);

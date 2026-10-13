@@ -7,6 +7,7 @@ import { createAccountService, getClientAddress, readAccountOptions, type Accoun
 import { createHandler } from "../server/handler";
 import { createGame, saveGame } from "../src/game/engine";
 import { exportGameSave } from "../src/game-save";
+import type { AccountMail } from "../server/mail";
 
 const ORIGIN = "https://game.delopusk.ru";
 const PASSWORD = "strong password 123";
@@ -17,7 +18,7 @@ const options = () => ({ dbPath, secureCookies: true, allowedOrigins: [ORIGIN, "
 function request(path: string, method = "GET", body?: unknown, cookie?: string, headers: Record<string, string> = {}): Request {
   return new Request(`${ORIGIN}${path}`, { method, headers: {
     ...(method !== "GET" ? { origin: ORIGIN, "content-type": "application/json" } : {}),
-    ...(path === "/api/save" && cookie && accountIds.has(cookie) ? { "x-prapor-account": accountIds.get(cookie)! } : {}),
+    ...(["/api/save", "/api/auth/email", "/api/auth/email/resend"].includes(path) && cookie && accountIds.has(cookie) ? { "x-prapor-account": accountIds.get(cookie)! } : {}),
     ...(cookie ? { cookie } : {}), ...headers,
   }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
 }
@@ -54,7 +55,7 @@ describe("account authentication security", () => {
     expect(cookie).not.toContain("Domain=");
     expect(login.headers.get("cache-control")).toBe("no-store");
     expect(login.headers.get("access-control-allow-origin")).toBeNull();
-    expect(await (await call("/api/auth/session", "GET", undefined, cookie.split(";")[0])).json()).toEqual({ user: { id: registered.id, username: "Scav_1" } });
+    expect(await (await call("/api/auth/session", "GET", undefined, cookie.split(";")[0])).json()).toEqual({ user: { id: registered.id, username: "Scav_1", email: null, emailVerified: false, pendingEmail: null }, emailEnabled: false });
     const db = new Database(dbPath, { readonly: true });
     const user = db.query<{ password_hash: string; recovery_hash: string }, []>("SELECT password_hash,recovery_hash FROM users").get()!;
     const sessions = db.query<{ token_hash: string }, []>("SELECT token_hash FROM sessions").all();
@@ -94,7 +95,7 @@ describe("account authentication security", () => {
     expect((await call("/api/auth/session", "POST", {})).status).toBe(405);
     expect((await call("/api/auth/unknown")).status).toBe(404);
     expect((await call("/api")).status).toBe(404);
-    expect(await (await call("/api/auth/session")).json()).toEqual({ user: null });
+    expect(await (await call("/api/auth/session")).json()).toEqual({ user: null, emailEnabled: false });
     expect((await call("/api/save")).status).toBe(401);
     expect((await createHandler(folder, service)(new Request(`${ORIGIN}/api/missing`, { headers: { accept: "text/html" } }))).headers.get("content-type")).toContain("application/json");
   });
@@ -109,7 +110,7 @@ describe("account authentication security", () => {
     expect(recovered.user).toBeUndefined();
     expect(recovered.recoveryCode).not.toBe(account.recoveryCode);
     for (const cookie of [account.cookie, secondCookie]) {
-      expect(await (await call("/api/auth/session", "GET", undefined, cookie)).json()).toEqual({ user: null });
+      expect(await (await call("/api/auth/session", "GET", undefined, cookie)).json()).toEqual({ user: null, emailEnabled: false });
       expect((await call("/api/save", "GET", undefined, cookie)).status).toBe(401);
     }
     const reusedCode = await call("/api/auth/recover", "POST", { username: "scav_1", recoveryCode: account.recoveryCode, password: PASSWORD });
@@ -120,11 +121,11 @@ describe("account authentication security", () => {
     expect(login.status).toBe(200);
     const cookie = login.headers.get("set-cookie")!.split(";")[0]!;
     expect((await call("/api/auth/logout", "POST", {}, cookie)).headers.get("set-cookie")).toContain("Max-Age=0");
-    expect(await (await call("/api/auth/session", "GET", undefined, cookie)).json()).toEqual({ user: null });
+    expect(await (await call("/api/auth/session", "GET", undefined, cookie)).json()).toEqual({ user: null, emailEnabled: false });
     time += 15 * 60_000 + 1000;
     const fresh = await call("/api/auth/login", "POST", { username: "Scav_1", password: "new password 123" });
     time += 31 * 24 * 60 * 60_000;
-    expect(await (await call("/api/auth/session", "GET", undefined, fresh.headers.get("set-cookie")!.split(";")[0])).json()).toEqual({ user: null });
+    expect(await (await call("/api/auth/session", "GET", undefined, fresh.headers.get("set-cookie")!.split(";")[0])).json()).toEqual({ user: null, emailEnabled: false });
   });
 
   test("username throttling applies across client IPs and resets after the window", async () => {
@@ -208,6 +209,179 @@ describe("account save ownership and durability", () => {
     const db = new Database(dbPath, { readonly: true });
     expect(db.query<{ revision: number }, []>("SELECT revision FROM saves").get()!.revision).toBe(0);
     db.close();
+  });
+});
+
+describe("optional account email and password mail", () => {
+  let mails: AccountMail[];
+  const tokenOf = (message: AccountMail): string => new URL(message.url).hash.split("=")[1]!;
+  const enableMail = (sender?: (message: AccountMail) => Promise<void>) => {
+    service.close(); mails = [];
+    service = createAccountService({ ...options(), sendMail: sender ?? (async message => { mails.push(message); }) });
+  };
+  const registerEmail = async (email: string, username = "MailScav") => {
+    const result = await call("/api/auth/register", "POST", { username, password: PASSWORD, email });
+    expect(result.status).toBe(201);
+    const body = await result.json() as { user: { id: string; email: string; pendingEmail: string | null; emailVerified: boolean }; recoveryCode: string; emailDelivery: string };
+    const cookie = result.headers.get("set-cookie")!.split(";")[0]!;
+    accountIds.set(cookie, body.user.id);
+    return { ...body, cookie };
+  };
+
+  test("registration normalizes email and stores only token hashes; explicit verification is one use and never logs in", async () => {
+    enableMail();
+    const account = await registerEmail("Mail.User+game@Example.COM");
+    expect(account.user).toMatchObject({ email: "mail.user+game@example.com", pendingEmail: "mail.user+game@example.com", emailVerified: false });
+    expect(account.emailDelivery).toBe("sent");
+    expect(mails).toHaveLength(1);
+    expect(mails[0]!.to).toBe("mail.user+game@example.com");
+    expect(mails[0]!.url).toStartWith("https://game.balkhaev.com/#account-verify=");
+    const token = tokenOf(mails[0]!);
+    expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    const db = new Database(dbPath, { readonly: true });
+    const ticket = db.query<{ token_hash: string; purpose: string }, []>("SELECT token_hash,purpose FROM email_tickets").get()!;
+    expect(ticket.token_hash).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(ticket)).not.toContain(token);
+    db.close();
+    expect((await call("/api/auth/email/verify", "GET")).status).toBe(405);
+    expect((await call("/api/auth/password/reset", "POST", { token, password: "new long password" })).status).toBe(400);
+    const verified = await call("/api/auth/email/verify", "POST", { token });
+    expect(verified.status).toBe(200);
+    expect(verified.headers.get("set-cookie")).toBeNull();
+    expect(await verified.json()).toMatchObject({ ok: true, user: { id: account.user.id, email: "mail.user+game@example.com", emailVerified: true, pendingEmail: null } });
+    expect((await call("/api/auth/email/verify", "POST", { token })).status).toBe(400);
+    expect(await (await call("/api/auth/session")).json()).toEqual({ user: null, emailEnabled: true });
+    expect(await (await call("/api/auth/session", "GET", undefined, account.cookie)).json()).toMatchObject({ emailEnabled: true, user: { emailVerified: true } });
+  });
+
+  test("forgot responses are identical and prompt even while real delivery is unresolved; reset is atomic and revokes credentials", async () => {
+    enableMail();
+    const account = await registerEmail("owner@example.com");
+    await call("/api/auth/email/verify", "POST", { token: tokenOf(mails[0]!) });
+    time += 61_000;
+    let finish!: () => void;
+    service.close();
+    service = createAccountService({ ...options(), sendMail: async message => { mails.push(message); await new Promise<void>(resolve => { finish = resolve; }); } });
+    const absent = await call("/api/auth/password/forgot", "POST", { email: "absent@example.com" });
+    const known = await Promise.race([call("/api/auth/password/forgot", "POST", { email: "OWNER@example.com" }), new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error("Forgot waited for transport")), 100))]);
+    expect(known.status).toBe(absent.status);
+    expect(await known.json()).toEqual(await absent.json());
+    expect(mails).toHaveLength(2);
+    expect(mails[1]!.purpose).toBe("reset");
+    finish(); await Promise.resolve();
+    const token = tokenOf(mails[1]!);
+    const replies = await Promise.all([1, 2].map(() => call("/api/auth/password/reset", "POST", { token, password: "new account password 123" })));
+    expect(replies.map(reply => reply.status).sort()).toEqual([200, 400]);
+    const changed = await replies.find(reply => reply.status === 200)!.json() as { recoveryCode: string };
+    expect(changed.recoveryCode).not.toBe(account.recoveryCode);
+    expect(await (await call("/api/auth/session", "GET", undefined, account.cookie)).json()).toEqual({ user: null, emailEnabled: true });
+    expect((await call("/api/auth/recover", "POST", { username: "MailScav", recoveryCode: account.recoveryCode, password: PASSWORD })).status).toBe(401);
+    expect((await call("/api/auth/login", "POST", { username: "MailScav", password: PASSWORD })).status).toBe(401);
+    expect((await call("/api/auth/login", "POST", { username: "MailScav", password: "new account password 123" })).status).toBe(200);
+    expect((await call("/api/auth/email/verify", "POST", { token })).status).toBe(400);
+  });
+
+  test("changing email preserves the verified address until proof, while resends and ownership are bounded", async () => {
+    enableMail();
+    const first = await registerEmail("first@example.com", "First");
+    await call("/api/auth/email/verify", "POST", { token: tokenOf(mails[0]!) });
+    time += 61_000;
+    expect((await call("/api/auth/email", "POST", { email: "next@example.com", password: "wrong password 123" }, first.cookie)).status).toBe(401);
+    expect((await call("/api/auth/email", "POST", { email: "next@example.com", password: PASSWORD }, first.cookie, { "x-prapor-account": "wrong-account" })).status).toBe(401);
+    const update = await call("/api/auth/email", "POST", { email: "next@example.com", password: PASSWORD }, first.cookie);
+    expect(await update.json()).toMatchObject({ user: { email: "first@example.com", emailVerified: true, pendingEmail: "next@example.com" }, emailDelivery: "sent" });
+    const stale = tokenOf(mails[1]!);
+    const early = await call("/api/auth/email/resend", "POST", {}, first.cookie);
+    expect(early.status).toBe(429);
+    expect(early.headers.get("retry-after")).toBe("60");
+    time += 61_000;
+    expect((await call("/api/auth/email/resend", "POST", {}, first.cookie)).status).toBe(200);
+    expect((await call("/api/auth/email/verify", "POST", { token: stale })).status).toBe(400);
+    expect((await call("/api/auth/email/verify", "POST", { token: tokenOf(mails[2]!) })).status).toBe(200);
+    time += 61_000;
+    const other = await registerEmail("NEXT@example.com", "Other");
+    const denied = await call("/api/auth/email/verify", "POST", { token: tokenOf(mails[3]!) });
+    expect(denied.status).toBe(409);
+    expect(await denied.json()).toEqual({ code: "email_taken" });
+    expect(await (await call("/api/auth/session", "GET", undefined, other.cookie)).json()).toMatchObject({ user: { emailVerified: false } });
+  });
+
+  test("a pending replacement cannot recover the account; the verified current address still can, and reset links expire", async () => {
+    enableMail();
+    const account = await registerEmail("original@example.com");
+    await call("/api/auth/email/verify", "POST", { token: tokenOf(mails[0]!) });
+    time += 61_000;
+    await call("/api/auth/email", "POST", { email: "replacement@example.com", password: PASSWORD }, account.cookie);
+    await call("/api/auth/password/forgot", "POST", { email: "replacement@example.com" });
+    expect(mails).toHaveLength(2);
+    await call("/api/auth/password/forgot", "POST", { email: "original@example.com" });
+    expect(mails).toHaveLength(3);
+    expect(mails[2]!.to).toBe("original@example.com");
+    const reset = tokenOf(mails[2]!);
+    time += 30 * 60_000 + 1;
+    expect((await call("/api/auth/password/reset", "POST", { token: reset, password: "replacement password" })).status).toBe(400);
+    expect((await call("/api/auth/login", "POST", { username: "MailScav", password: PASSWORD })).status).toBe(200);
+  });
+
+  test("mail failure preserves account and save; recipient cooldown survives restart and disabled mail stays optional", async () => {
+    enableMail(async message => { mails.push(message); throw new Error("private provider failure"); });
+    const account = await registerEmail("shared@example.com");
+    expect(account.emailDelivery).toBe("failed");
+    expect((await call("/api/save", "PUT", { revision: 0, save: saveGame(createGame(time)) }, account.cookie)).status).toBe(200);
+    expect((await call("/api/auth/email/verify", "POST", { token: tokenOf(mails[0]!) })).status).toBe(400);
+    service.close();
+    service = createAccountService({ ...options(), sendMail: async message => { mails.push(message); } });
+    const another = await registerEmail("SHARED@example.com", "Second");
+    expect(another.emailDelivery).toBe("failed");
+    expect(mails).toHaveLength(1);
+    expect((await call("/api/auth/email/resend", "POST", {}, account.cookie)).status).toBe(429);
+    time += 61_000;
+    expect((await call("/api/auth/email/resend", "POST", {}, account.cookie)).status).toBe(200);
+    service.close(); service = createAccountService(options());
+    const disabled = await registerEmail("third@example.com", "Third");
+    expect(disabled.emailDelivery).toBe("disabled");
+    expect((await call("/api/auth/email/resend", "POST", {}, disabled.cookie)).status).toBe(503);
+    expect(await (await call("/api/auth/password/forgot", "POST", { email: "third@example.com" })).json()).toEqual({ ok: true });
+  });
+
+  test("expiring tokens and credential recovery invalidate unfinished email operations", async () => {
+    enableMail();
+    const account = await register();
+    let finish!: () => void;
+    service.close();
+    service = createAccountService({ ...options(), sendMail: async message => { mails.push(message); await new Promise<void>(resolve => { finish = resolve; }); } });
+    const pending = call("/api/auth/email", "POST", { email: "pending@example.com", password: PASSWORD }, account.cookie);
+    while (!finish) await new Promise(resolve => setTimeout(resolve, 5));
+    expect((await call("/api/auth/recover", "POST", { username: "Scav_1", recoveryCode: account.recoveryCode, password: "replacement password" })).status).toBe(200);
+    finish();
+    expect((await pending).status).toBe(401);
+    expect((await call("/api/auth/email/verify", "POST", { token: tokenOf(mails[0]!) })).status).toBe(400);
+    service.close(); service = createAccountService({ ...options(), sendMail: async message => { mails.push(message); } });
+    const expiring = await registerEmail("expires@example.com", "Expiry");
+    time += 24 * 60 * 60_000 + 1;
+    expect((await call("/api/auth/email/verify", "POST", { token: tokenOf(mails[1]!) })).status).toBe(400);
+    expect(await (await call("/api/auth/session", "GET", undefined, expiring.cookie)).json()).toMatchObject({ user: { emailVerified: false } });
+  });
+
+  test("the pre-email database migrates in place without losing credentials or a cloud save", async () => {
+    const account = await register("Legacy");
+    const currentDb = new Database(dbPath, { readonly: true });
+    const credentials = currentDb.query<{ password_hash: string; recovery_hash: string }, []>("SELECT password_hash,recovery_hash FROM users").get()!;
+    currentDb.close();
+    const legacyPath = join(folder, "legacy.sqlite"), legacyDb = new Database(legacyPath, { create: true });
+    legacyDb.exec(`CREATE TABLE users(id TEXT PRIMARY KEY,username TEXT NOT NULL,username_key TEXT NOT NULL UNIQUE,password_hash TEXT NOT NULL,recovery_hash TEXT NOT NULL,credential_version INTEGER NOT NULL DEFAULT 1,created_at INTEGER NOT NULL);
+      CREATE TABLE saves(user_id TEXT PRIMARY KEY REFERENCES users(id),revision INTEGER NOT NULL DEFAULT 0,saved_at INTEGER,save TEXT);`);
+    legacyDb.query("INSERT INTO users(id,username,username_key,password_hash,recovery_hash,created_at) VALUES(?,?,?,?,?,?)").run(account.id, "Legacy", "legacy", credentials.password_hash, credentials.recovery_hash, time);
+    const save = saveGame(createGame(time));
+    legacyDb.query("INSERT INTO saves(user_id,revision,saved_at,save) VALUES(?,?,?,?)").run(account.id, 7, time, save);
+    legacyDb.close(); service.close();
+    service = createAccountService({ ...options(), dbPath: legacyPath });
+    const login = await call("/api/auth/login", "POST", { username: "Legacy", password: PASSWORD });
+    expect(login.status).toBe(200);
+    expect(await login.json()).toMatchObject({ user: { id: account.id, email: null, pendingEmail: null, emailVerified: false } });
+    const cookie = login.headers.get("set-cookie")!.split(";")[0]!;
+    accountIds.set(cookie, account.id);
+    expect(await (await call("/api/save", "GET", undefined, cookie)).json()).toEqual({ revision: 7, savedAt: time, save });
   });
 });
 

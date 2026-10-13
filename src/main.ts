@@ -161,6 +161,7 @@ import { getScavPersonalEvent } from "./game/scav-stories";
 import { accountApi, AccountApiError, accountErrorMessage, type AccountUser } from "./account-client";
 import { mountAccountUI } from "./account-ui";
 import { createCloudSaveSync, type CloudBaseline, type CloudSyncStatus } from "./account-sync";
+import { readAccountEmailLink, isAccountEmailFragment, type AccountEmailLink } from "./account-link";
 
 type Page = "home" | "raids" | "arsenal" | "base" | "contracts" | "journal" | "recruits";
 const e = (value: unknown) =>
@@ -223,6 +224,9 @@ let accountGeneration = 0;
 let signedInUser: AccountUser | null = null;
 let playerAccount: AccountUser | null = null;
 let cloudSync: ReturnType<typeof createCloudSaveSync> | null = null;
+let pendingAccountEmailLink: AccountEmailLink | null = readAccountEmailLink(window.location.hash);
+let invalidAccountEmailLink = isAccountEmailFragment(window.location.hash) && !pendingAccountEmailLink;
+if (isAccountEmailFragment(window.location.hash)) history.replaceState(history.state, '', window.location.pathname + window.location.search);
 const accountKey = (user: AccountUser, key: string) => `prapor.account.${encodeURIComponent(user.id)}.${key}`;
 function createPlayerSaveStore(user: AccountUser | null) {
 	const keyFor = (key: string) => user ? accountKey(user, key) : key;
@@ -476,7 +480,11 @@ function requestSaveOwnership() {
 	saveOwnershipPending = true;
 	void navigator.locks.request('prapor-game-writer', {ifAvailable:true}, async lock => {
 		saveOwnershipPending = false;
-		if (!lock) { updateSaveBanner(); setOverlayState(); return; }
+		if (!lock) {
+			updateSaveBanner(); setOverlayState();
+			if (!accountStartupChecked && (pendingAccountEmailLink || invalidAccountEmailLink)) { accountStartupChecked = true; void initializeAccount(); }
+			return;
+		}
 		if (storedProgressChanged()) { updateSaveBanner(); return; }
 		ownsSaveLease = true;
 		try {
@@ -576,7 +584,7 @@ async function connectAccount(user: AccountUser, source: 'login' | 'register' | 
 		activatePlayerSave(user, store, candidate);
 		cloudSync!.connect(remote.revision);
 		await cloudSync!.flush();
-	} finally { accountChanging = false; setOverlayState(); }
+	} finally { accountChanging = false; setOverlayState(); showPendingAccountEmailLink(); }
 }
 
 async function initializeAccount() {
@@ -584,13 +592,44 @@ async function initializeAccount() {
 	accountChanging = true; setOverlayState();
 	accountUI.setStatus('Проверяем связь с аккаунтом…');
 	try {
-		const { user } = await accountApi.session();
+		const { user, emailEnabled } = await accountApi.session();
+		accountUI.setEmailEnabled(emailEnabled);
 		if (epoch !== accountGeneration) return;
 		accountChanging = false;
-		if (user) await connectAccount(user, 'session');
+		if (user && ownsSaveLease) await connectAccount(user, 'session');
+		else if (user) { signedInUser = user; accountUI.setUser(user); accountUI.setStatus('Игра открыта в другой вкладке. Почту можно подтвердить здесь.'); }
 		else accountUI.setStatus('Гостевая игра: прогресс хранится в этом браузере.');
 	} catch (error) { if (epoch === accountGeneration || accountGeneration === epoch + 1) accountUI.setStatus(accountErrorMessage(error), 'warning'); }
-	finally { accountChanging = false; setOverlayState(); }
+	finally { accountChanging = false; setOverlayState(); showPendingAccountEmailLink(); }
+}
+
+function showPendingAccountEmailLink() {
+	if (accountChanging) return;
+	if (pendingAccountEmailLink) {
+		const link = pendingAccountEmailLink; pendingAccountEmailLink = null;
+		accountUI.handleEmailLink(link.kind, link.token);
+	} else if (invalidAccountEmailLink) {
+		invalidAccountEmailLink = false;
+		accountUI.open(); toast('Ссылка из письма неполная. Запроси новое письмо в аккаунте.', false);
+	}
+}
+
+function captureAccountEmailLink() {
+	if (!isAccountEmailFragment(window.location.hash)) return;
+	pendingAccountEmailLink = readAccountEmailLink(window.location.hash);
+	invalidAccountEmailLink = !pendingAccountEmailLink;
+	history.replaceState(history.state, '', window.location.pathname + window.location.search);
+	showPendingAccountEmailLink();
+}
+
+function updateAccountProfile(user: AccountUser) {
+	if (signedInUser?.id === user.id) signedInUser = user;
+	if (playerAccount?.id === user.id) playerAccount = user;
+}
+
+function revokeAccountSession() {
+	accountGeneration++; cloudSync?.disconnect(); signedInUser = null;
+	accountUI.setUser(null);
 }
 
 function showCloudStatus(status: CloudSyncStatus, savedAt?: number | string) {
@@ -2698,6 +2737,7 @@ const responsiveContext = () => {
 };
 window.addEventListener("resize", responsiveContext);
 import.meta.hot?.dispose(() => {
+	window.removeEventListener('hashchange', captureAccountEmailLink);
 	clearInterval(cloudTimer); cloudSync?.disconnect(); accountUI.destroy(); accountRoot.remove();
 	cancelWorkerPlacement();
 	gameSound.destroy();
@@ -2740,6 +2780,14 @@ accountRoot.id = 'account-root'; document.body.append(accountRoot);
 const accountUI = mountAccountUI({
 	root: accountRoot,
 	onAuthenticated: connectAccount,
+	onAuthRevoked: revokeAccountSession,
+	onUserChanged: updateAccountProfile,
+	onEmailVerified: async () => {
+		const { user, emailEnabled } = await accountApi.session();
+		accountUI.setEmailEnabled(emailEnabled);
+		if (user && signedInUser?.id === user.id) { updateAccountProfile(user); accountUI.setUser(user); }
+		else if (!user && signedInUser) revokeAccountSession();
+	},
 	onDialogChange: open => { accountDialogOpen = open; setOverlayState(); },
 	onBeforeLogout: async () => {
 		if (accountChanging || !ownsSaveLease || saveConflict) { accountUI.setStatus('Дождись подключения записи или обнови игру перед выходом.', 'warning'); return false; }
@@ -2774,5 +2822,7 @@ cloudSync = createCloudSaveSync({
 	onStatus: showCloudStatus,
 });
 const cloudTimer = setInterval(() => { if (!document.hidden && !accountChanging && cloudSync?.isConnected()) void cloudSync.flush(); }, 15_000);
+window.addEventListener('hashchange', captureAccountEmailLink);
 window.addEventListener('online', () => { if (!accountChanging && cloudSync?.isConnected()) void cloudSync.flush(); });
 requestSaveOwnership();
+if (!navigator.locks) showPendingAccountEmailLink();

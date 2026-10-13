@@ -4,6 +4,7 @@ param(
     [ValidatePattern('^[0-9a-f]{40}$')]
     [string] $Commit,
     [string] $Project = 'F:/code/prapor',
+    [string] $ResendKeyFile = 'F:/AI/prapor/resend_api_key',
     [switch] $ValidateOnly
 )
 
@@ -18,6 +19,8 @@ $releaseId = 'prapor-release-' + $Commit.Substring(0, 12) + '-' + [Guid]::NewGui
 $scratchPath = Join-Path $scratchBase $releaseId
 $remoteScratch = '/tmp/' + $releaseId
 $remoteStarted = $false
+$secretSource = $null
+$secretHash = $null
 
 function Get-GitText([string[]] $Arguments) {
     $output = & git -C $projectPath @Arguments
@@ -42,6 +45,49 @@ function Copy-ToManagement([string] $LocalPath, [string] $RemotePath) {
     if ($LASTEXITCODE -ne 0) { throw "Upload failed ($LASTEXITCODE)" }
 }
 
+function Ensure-ResendSecret([string] $LocalFile, [string] $Checksum) {
+    if ($LocalFile) {
+        # The key is a sibling of the source export, never a build-context input.
+        Copy-ToManagement $LocalFile "$remoteScratch/resend_api_key"
+        Invoke-Management "set -eu`nchmod 600 '$remoteScratch/resend_api_key'`ntest `"`$(sha256sum '$remoteScratch/resend_api_key' | awk '{print `$1}')`" = '$Checksum'`nscp -i '$originKey' -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 '$remoteScratch/resend_api_key' '${originTarget}:$remoteScratch/resend_api_key'"
+        $secretScript = @'
+set -eu
+scratch='__SCRATCH__'
+secret=/data/prapor/secrets/resend_api_key
+test ! -L /data/prapor/secrets
+test ! -L "$secret"
+test ! -e "$secret" || test -f "$secret"
+chmod 600 "$scratch/resend_api_key"
+test "$(sha256sum "$scratch/resend_api_key" | awk '{print $1}')" = '__HASH__'
+install -d -m 700 /data/prapor/secrets
+chown 0:0 /data/prapor/secrets
+if test ! -f "$secret" || ! cmp -s "$scratch/resend_api_key" "$secret"; then
+    test ! -e "$secret.next"
+    install -m 400 "$scratch/resend_api_key" "$secret.next"
+    chown 1000:1000 "$secret.next"
+    mv "$secret.next" "$secret"
+fi
+chown 1000:1000 "$secret"
+chmod 400 "$secret"
+test -s "$secret"
+test "$(stat -c '%a:%u:%g' "$secret")" = '400:1000:1000'
+test "$(sha256sum "$secret" | awk '{print $1}')" = '__HASH__'
+'@
+        Invoke-Origin ($secretScript.Replace('__SCRATCH__', $remoteScratch).Replace('__HASH__', $Checksum))
+    } else {
+        # With no local key, preserve the existing provisioned value verbatim.
+        Invoke-Origin @'
+set -eu
+secret=/data/prapor/secrets/resend_api_key
+test ! -L /data/prapor/secrets
+test ! -L "$secret"
+test -f "$secret" && test -s "$secret"
+test "$(stat -c '%a:%u:%g' "$secret")" = '400:1000:1000'
+test "$(stat -c '%a:%u:%g' /data/prapor/secrets)" = '700:0:0'
+'@
+    }
+}
+
 try {
     if ((Get-GitText @('branch', '--show-current')) -ne 'main') { throw 'Release requires canonical main.' }
     if ((Get-GitText @('rev-parse', 'HEAD')) -ne $Commit) { throw 'Release commit must be canonical HEAD.' }
@@ -50,6 +96,17 @@ try {
     if ($canonicalRoot -ne ($projectPath -replace '\\', '/')) { throw 'Project must be the repository root.' }
     $policy = Get-Content -LiteralPath (Join-Path $projectPath '.devhub/worktree.json') -Raw | ConvertFrom-Json
     if ($policy.releaseBranch -ne 'main') { throw 'Unexpected release branch in project policy.' }
+
+    if ($ResendKeyFile -and (Test-Path -LiteralPath $ResendKeyFile -PathType Leaf)) {
+        $secretSource = (Resolve-Path -LiteralPath $ResendKeyFile).Path
+        $secretItem = Get-Item -LiteralPath $secretSource
+        $projectPrefix = $projectPath.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+        if ($secretSource.StartsWith($projectPrefix, [StringComparison]::OrdinalIgnoreCase)) { throw 'Resend key must live outside the Git checkout.' }
+        if (($secretItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $secretItem.Length -lt 1 -or $secretItem.Length -gt 1024) { throw 'Resend key must be a small regular protected file.' }
+        $secretHash = (Get-FileHash -LiteralPath $secretSource -Algorithm SHA256).Hash.ToLowerInvariant()
+    } elseif ($PSBoundParameters.ContainsKey('ResendKeyFile') -and $ResendKeyFile) {
+        throw 'Explicit Resend key file is missing.'
+    }
 
     New-Item -ItemType Directory -Path $scratchPath | Out-Null
     $archivePath = Join-Path $scratchPath 'source.tar'
@@ -98,6 +155,7 @@ test ! -e /data/prapor/release.env || grep -Fq 'Managed by prapor infra/deploy.p
     Copy-ToManagement $archivePath "$remoteScratch/source.tar"
     Copy-ToManagement $releaseEnvPath "$remoteScratch/release.env"
     Invoke-Management "set -eu`ntest `"`$(sha256sum '$remoteScratch/source.tar' | awk '{print `$1}')`" = '$archiveHash'`nssh -i '$originKey' -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 '$originTarget' 'mkdir -m 700 $remoteScratch'`nscp -i '$originKey' -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 '$remoteScratch/source.tar' '$remoteScratch/release.env' '${originTarget}:$remoteScratch/'"
+    Ensure-ResendSecret $secretSource $secretHash
 
     $originScript = @'
 set -eu
@@ -113,8 +171,10 @@ test "$(docker inspect "prapor-game:$commit" --format '{{index .Config.Labels "o
 smoke="${scratch##*/}-smoke"
 trap 'docker rm -f "$smoke" >/dev/null 2>&1 || true' EXIT
 signature=''
-for mode in absent inherited; do
-    if test "$mode" = inherited; then
+for mode in absent inherited configured; do
+    if test "$mode" = configured; then
+        docker run --rm -d --name "$smoke" --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true --tmpfs /app/data:uid=1000,gid=1000,mode=0700 --tmpfs /tmp:uid=1000,gid=1000,mode=1770 --mount type=bind,src=/data/prapor/secrets/resend_api_key,dst=/run/secrets/resend_api_key,readonly -e RESEND_API_KEY_FILE=/run/secrets/resend_api_key -e 'RESEND_FROM=ggpick <noreply@ggpick.club>' -e PUBLIC_BASE_URL=https://game.balkhaev.com "prapor-game:$commit" >/dev/null
+    elif test "$mode" = inherited; then
         docker run --rm -d --name "$smoke" --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true --tmpfs /app/data:uid=1000,gid=1000,mode=0700 --tmpfs /tmp:uid=1000,gid=1000,mode=1770 -e NODE_ENV=production -e DEVHUB_ORIGIN=http://evil.invalid -e DEVHUB_ROOT=/missing -e DEVHUB_PORT=1 -e DEVHUB_EMBEDDED=true "prapor-game:$commit" >/dev/null
     else
         docker run --rm -d --name "$smoke" --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true --tmpfs /app/data:uid=1000,gid=1000,mode=0700 --tmpfs /tmp:uid=1000,gid=1000,mode=1770 "prapor-game:$commit" >/dev/null
@@ -133,9 +193,10 @@ console.log(Bun.hash(JSON.stringify(names.map(name=>[name,health.headers.get(nam
     if test "$mode" = absent; then signature="$current"; else test "$signature" = "$current"; fi
     docker stop -t 5 "$smoke" >/dev/null
 done
-printf '%s\n' 'Standalone artifact smoke passed without/with inherited DEVHUB variables.'
+printf '%s\n' 'Standalone artifact smoke passed without/with DEVHUB variables and with the runtime email secret.'
 app_uid=$(docker run --rm --entrypoint id "prapor-game:$commit" -u)
 app_gid=$(docker run --rm --entrypoint id "prapor-game:$commit" -g)
+test "$app_uid:$app_gid" = '1000:1000'
 install -d -m 755 /data/prapor
 install -d -m 700 /data/prapor/data
 chown "$app_uid:$app_gid" /data/prapor/data
