@@ -10,6 +10,7 @@
   "services": [
     {
       "command": "bun x --no-install vite --host 127.0.0.1 --port 3020 --strictPort",
+      "needs": ["accounts"],
       "health": "/",
       "id": "game",
       "name": "2D игра",
@@ -20,6 +21,20 @@
           "url": "/"
         }
       ]
+    },
+    {
+      "command": "bun server.ts",
+      "health": "/health",
+      "id": "accounts",
+      "name": "Аккаунты и сохранения",
+      "port": 3021,
+      "env": {
+        "NODE_ENV": "development",
+        "HOST": "127.0.0.1",
+        "PORT": "3021",
+        "APP_ORIGINS": "http://127.0.0.1:3020,http://localhost:3020,http://127.0.0.1:3021",
+        "ACCOUNT_DB_PATH": "F:/AI/prapor/accounts.sqlite"
+      }
     }
   ]
 }

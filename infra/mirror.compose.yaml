@@ -1,0 +1,32 @@
+# Managed by prapor infra/deploy.ps1.
+name: prapor-game-mirror
+services:
+  mirror:
+    image: nginx:1.28-alpine@sha256:a8b39bd9cf0f83869a2162827a0caf6137ddf759d50a171451b335cecc87d236
+    container_name: prapor-game-mirror
+    entrypoint: [nginx, -g, "daemon off;"]
+    user: "101:101"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp:uid=101,gid=101,size=32m,mode=1770]
+    mem_limit: 96m
+    cpus: 0.5
+    stop_grace_period: 15s
+    volumes:
+      - /data/prapor/mirror/nginx.conf:/etc/nginx/nginx.conf:ro
+    expose: ["8080"]
+    networks: [coolify]
+    healthcheck:
+      test: [CMD, wget, -qO-, http://127.0.0.1:8080/healthz]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 5s
+    labels:
+      prapor.managed: "true"
+      traefik.enable: "false"
+networks:
+  coolify:
+    external: true
