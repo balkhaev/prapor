@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
-	advanceShelterLift, createShelterLift, SHELTER_LIFT_BOARD_MS, SHELTER_LIFT_SPEED,
+	advanceShelterLift, createShelterLift, restoreShelterLift, SHELTER_LIFT_BOARD_MS, SHELTER_LIFT_SPEED,
 	type LiftRequest, type ShelterLiftState,
 } from "../src/shelter-lift";
 import { SHELTER_FLOOR_Y } from "../src/shelter-motion";
@@ -29,6 +29,49 @@ function samePhysicalState(a: ShelterLiftState, b: ShelterLiftState) {
 }
 
 describe("one physical shelter lift", () => {
+	test("open doors wait for actual entry instead of boarding a caller still outside", () => {
+		const walking = { ...A, ready: false };
+		let result = step(createShelterLift(), [walking], 5000);
+		expect(result.state.y).toBe(A.from);
+		expect(result.state.phase).toBe("boarding");
+		expect(result.state.doorOpen).toBe(true);
+		expect(result.state.passengerId).toBeNull();
+		expect(result.boarded).toEqual([]);
+		expect(result.state.remainingMs).toBe(SHELTER_LIFT_BOARD_MS);
+		result = step(result.state, [{ ...walking, ready: true }], SHELTER_LIFT_BOARD_MS - 1);
+		expect(result.boarded).toEqual([]);
+		result = step(result.state, [{ ...walking, ready: true }], 1);
+		expect(result.boarded).toEqual([A.id]);
+		expect(result.state.y).toBe(A.from);
+		expect(result.state.passengerId).toBe(A.id);
+	});
+
+	test("a caller that leaves the open doorway is cancelled before boarding and the next caller continues", () => {
+		const next = { id: "next", from: 339, to: 450 };
+		const waiting = step(createShelterLift(), [{ ...A, ready: false }, next], 1000).state;
+		const result = step(waiting, [next], 10_000);
+		expect(result.cancelled).toEqual([A.id]);
+		expect(result.boarded).toEqual([next.id]);
+		expect(result.dropped).toEqual([{ id: next.id, to: 450, cancelled: false }]);
+	});
+
+	test("serialized moving cabin resumes from the same physical point and timer", () => {
+		for (const elapsed of [0, 125, 300, 1000, 4000]) {
+			const state = step(createShelterLift(), [A], elapsed).state;
+			const restored = restoreShelterLift(JSON.parse(JSON.stringify(state)));
+			expect(restored).not.toBeNull();
+			samePhysicalState(restored!, state);
+			const uninterrupted = step(state, [A], 2000), resumed = step(restored!, [A], 2000);
+			samePhysicalState(resumed.state, uninterrupted.state);
+			expect(resumed.boarded).toEqual(uninterrupted.boarded);
+			expect(resumed.dropped).toEqual(uninterrupted.dropped);
+		}
+	});
+
+	test("restore rejects impossible cabin states without snapping to a valid floor", () => {
+		const valid = createShelterLift();
+		for (const value of [null, {}, { ...valid, y: NaN }, { ...valid, y: 300 }, { ...valid, y: 600 }, { ...valid, targetY: 300 }, { ...valid, remainingMs: Infinity }, { ...valid, phase: "travel" }, { ...valid, queue: [{ id: "bad", from: 300, to: 450 }] }]) expect(restoreShelterLift(value)).toBeNull();
+	});
 	test("pickup never moves the waiting passenger, boarding takes time, and travel starts from the actual pickup floor", () => {
 		const request = { id: "upstairs", from: 129, to: 450 };
 		let result = step(createShelterLift(), [request], 500);

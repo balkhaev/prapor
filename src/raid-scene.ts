@@ -1,7 +1,7 @@
 import Phaser from "phaser";
 import { MODULE_BY_ID, type Raid, type RaidReport, type WeaponInstance } from "./game/engine";
 import { WEAPON_BY_ID } from "./game/data";
-import { getRaidFieldFrame, getRaidFieldPlan, projectRaidFieldPoint } from "./raid-field";
+import { getRaidFieldFrame, getRaidFieldObjective, getRaidFieldPlan, projectRaidFieldPoint, readRaidFieldCamera, type RaidFieldCameraState } from "./raid-field";
 import { advanceScavAnimation, createScavAnimation, type ScavAnimationState } from "./shelter-animation";
 import type { ShelterCamera, ShelterViewport } from "./shelter-camera";
 
@@ -34,6 +34,7 @@ export class RaidStreetRenderer {
 	private viewport: ShelterViewport;
 	private camera: ShelterCamera = { zoom: 1.8, x: 0, y: 0 };
 	private following = true;
+	private pendingCamera: RaidFieldCameraState | null = null;
 	private selectedId: string | null = null;
 	private cachedRaid: Raid | null = null;
 	private plan: Plan | null = null;
@@ -69,14 +70,28 @@ export class RaidStreetRenderer {
 	}
 	private project(point: { x: number; y: number; z?: number }): Point { return projectRaidFieldPoint(point, this.projection); }
 	private quad(x: number, y: number, width = 1, height = 1, z = 0): Point[] { return [{ x, y, z }, { x: x + width, y, z }, { x: x + width, y: y + height, z }, { x, y: y + height, z }].map((p) => this.project(p)); }
-	selectRaid(id: string | null): void { if (id !== this.selectedId) { this.selectedId = id; this.cachedRaid = null; this.carriedWeapon = null; this.report = null; this.following = true; } }
+	selectRaid(id: string | null): void { if (id !== this.selectedId) { this.selectedId = id; this.cachedRaid = null; this.carriedWeapon = null; this.report = null; this.following = true; this.pendingCamera = null; } }
 	reset(): void {
-		this.world.removeAll(true); this.plan = null; this.planInput = ""; this.builtRaidId = null; this.selectedId = null; this.cachedRaid = null; this.carriedWeapon = null; this.report = null; this.pawn = null; this.enemies = []; this.loot.clear(); this.occluders = [];
+		this.world.removeAll(true); this.plan = null; this.planInput = ""; this.builtRaidId = null; this.selectedId = null; this.cachedRaid = null; this.carriedWeapon = null; this.report = null; this.pawn = null; this.enemies = []; this.loot.clear(); this.occluders = []; this.pendingCamera = null;
 		this.groundMinimap.clear(); this.mini.clear(); this.progress.clear(); this.title.setText("УЛИЦЫ · НАБЛЮДЕНИЕ");
 	}
-	getCameraState(): ShelterCamera & { following: boolean } { return { ...this.camera, following: this.following }; }
+	getCameraState(): ShelterCamera & { following: boolean } { return this.pendingCamera ? { ...this.pendingCamera } : { ...this.camera, following: this.following }; }
+	/** The first real frame owns pawn placement; apply persisted camera only after that placement. */
+	restoreCamera(value: unknown): void {
+		const camera = readRaidFieldCamera(value);
+		if (!camera) return;
+		this.pendingCamera = camera;
+		if (this.plan && this.pawn?.point) this.applyRestoredCamera();
+	}
+	private applyRestoredCamera(): void {
+		if (!this.pendingCamera) return;
+		const { following, ...camera } = this.pendingCamera; this.pendingCamera = null;
+		this.camera = camera; this.following = following;
+		if (following) this.follow(1);
+		this.applyCamera();
+	}
 	setFollow(enabled: boolean): void { this.following = enabled; if (enabled && this.pawn) this.follow(1); this.applyCamera(); }
-	resetCamera(): void { this.camera.zoom = 1.8; this.setFollow(true); }
+	resetCamera(): void { this.pendingCamera = null; this.camera.zoom = 1.8; this.setFollow(true); }
 	resize(viewport: ShelterViewport): void {
 		const center = { x: this.camera.x + this.viewport.width / this.camera.zoom / 2, y: this.camera.y + this.viewport.height / this.camera.zoom / 2 };
 		this.viewport = { ...viewport }; this.camera.x = center.x - viewport.width / this.camera.zoom / 2; this.camera.y = center.y - viewport.height / this.camera.zoom / 2;
@@ -84,7 +99,7 @@ export class RaidStreetRenderer {
 		this.progress.setPosition(23, viewport.height - 53); if (this.following) this.follow(1); this.applyCamera();
 	}
 	zoomBy(factor: number, at?: Point): void {
-		if (!Number.isFinite(factor) || factor <= 0) return;
+		if (!Number.isFinite(factor) || factor <= 0 || at && (!Number.isFinite(at.x) || !Number.isFinite(at.y))) return;
 		const anchor = at ?? { x: this.viewport.width / 2, y: this.viewport.height / 2 };
 		const world = { x: this.camera.x + anchor.x / this.camera.zoom, y: this.camera.y + anchor.y / this.camera.zoom };
 		this.camera.zoom = clamp(this.camera.zoom * factor, .7, 4);
@@ -92,7 +107,7 @@ export class RaidStreetRenderer {
 		if (at) this.following = false; else if (this.following) this.follow(1);
 		this.applyCamera();
 	}
-	panBy(dx: number, dy: number): void { this.following = false; this.camera.x += dx / this.camera.zoom; this.camera.y += dy / this.camera.zoom; this.applyCamera(); }
+	panBy(dx: number, dy: number): void { if (!Number.isFinite(dx) || !Number.isFinite(dy)) return; this.following = false; this.camera.x += dx / this.camera.zoom; this.camera.y += dy / this.camera.zoom; this.applyCamera(); }
 	private applyCamera(): void {
 		// A valid raid position may sit at the map edge. Following keeps that
 		// position framed instead of pushing the pawn behind the minimap.
@@ -105,7 +120,8 @@ export class RaidStreetRenderer {
 	private follow(amount: number): void {
 		if (!this.pawn) return;
 		const x = this.pawn.root.x - this.viewport.width / this.camera.zoom / 2, y = this.pawn.root.y - this.viewport.height / this.camera.zoom * .59;
-		this.camera.x += (x - this.camera.x) * amount; this.camera.y += (y - this.camera.y) * amount;
+		if (amount >= 1) { this.camera.x = x; this.camera.y = y; }
+		else { this.camera.x += (x - this.camera.x) * amount; this.camera.y += (y - this.camera.y) * amount; }
 	}
 
 	private build(plan: Plan, raid: Raid): void {
@@ -294,15 +310,18 @@ export class RaidStreetRenderer {
 	update(snapshot: RaidStreetSnapshot, now: number, delta: number): void {
 		const id = snapshot.selectedRaidId !== undefined ? snapshot.selectedRaidId ?? snapshot.raids[0]?.id ?? null : this.selectedId ?? snapshot.raids[0]?.id ?? null;
 		if (id !== this.selectedId) this.selectRaid(id);
-		const raid = snapshot.raids.find((raid) => raid.id === id) ?? (this.cachedRaid?.id === id ? this.cachedRaid : null);
+		const activeRaid = snapshot.raids.find((raid) => raid.id === id);
+		const raid = activeRaid ?? (this.cachedRaid?.id === id ? this.cachedRaid : null);
 		if (!raid) { this.world.setVisible(false); this.mini.clear(); this.groundMinimap.clear(); this.progress.clear(); this.title.setText("УЛИЦЫ · НАБЛЮДЕНИЕ"); this.caption.setText("Отправь бойца в рейд и выбери «Наблюдать»"); return; }
 		this.world.setVisible(true);
-		this.cachedRaid = raid; this.report = snapshot.history?.find((report) => report.raidId === id) ?? (this.report?.raidId === id ? this.report : null);
+		this.cachedRaid = raid;
+		this.report = activeRaid ? null : snapshot.history?.find((report) => report.raidId === id) ?? (this.report?.raidId === id ? this.report : null);
 		this.carriedWeapon = snapshot.weapons?.find((weapon) => weapon.id === raid.weaponInstanceId) ?? this.carriedWeapon;
 		const input = `${raid.mapId}:${raid.seed}:${raid.expedition?.stage ?? 1}:${raid.expedition?.branch ?? "scavenge"}:${raid.tactic}`;
 		const plan = this.plan && this.planInput === input ? this.plan : getRaidFieldPlan(raid); this.planInput = input;
-		if (this.plan?.id !== plan.id) this.build(plan, raid);
+		if (this.plan?.id !== plan.id || this.builtRaidId !== raid.id) this.build(plan, raid);
 		const frame = getRaidFieldFrame(raid, this.report ? raid.endsAt : now, plan);
+		const objective = getRaidFieldObjective(raid, this.report ? raid.endsAt : now, plan);
 		const point = this.project(frame.position);
 		const firstFrame = !this.pawn!.point;
 		this.animatePawn(this.pawn!, point, frame, Math.min(100, Math.max(0, delta)));
@@ -319,10 +338,28 @@ export class RaidStreetRenderer {
 		}
 		for (const [id, loot] of this.loot) {
 			const visited = frame.visitedLootIds.includes(id), visible = frame.visibleLootIds.includes(id);
-			loot.root.setVisible(visible); loot.mark.clear(); loot.label.setVisible(visible && !visited).setText(visited ? "ОСМОТРЕНО" : this.plan!.lootSpots.find((spot) => spot.id === id)?.label ?? "Поиск");
-			if (visible) { loot.mark.lineStyle(1.5, visited ? 0xaac78e : 0xebca82, .85).strokeEllipse(0, 0, 29, 14); if (visited) line(loot.mark, [{ x: -5, y: -2 }, { x: -1, y: 2 }, { x: 6, y: -5 }], 0xb5d096, 1.7); else polygon(loot.mark, [{ x: 0, y: -23 }, { x: -4, y: -29 }, { x: 4, y: -29 }], 0xf0d19a); }
+			const current = objective.searchTargetId === id && !this.report && !frame.paused;
+			loot.root.setVisible(visible); loot.mark.clear(); loot.label.setVisible(visible && !visited).setText(current ? `ПОИСК · ${Math.floor(frame.segmentProgress * 100)}%` : this.plan!.lootSpots.find((spot) => spot.id === id)?.label ?? "Поиск");
+			if (visible) {
+				loot.mark.lineStyle(1.5, visited ? 0xaac78e : 0xebca82, .85).strokeEllipse(0, 0, 29, 14);
+				if (visited) line(loot.mark, [{ x: -5, y: -2 }, { x: -1, y: 2 }, { x: 6, y: -5 }], 0xb5d096, 1.7);
+				else if (current) loot.mark.lineStyle(2.8, 0xf0d19a, .95).beginPath().arc(0, -10, 18, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * frame.segmentProgress, false).strokePath();
+				else polygon(loot.mark, [{ x: 0, y: -23 }, { x: -4, y: -29 }, { x: 4, y: -29 }], 0xf0d19a);
+			}
 		}
 		this.effects.clear();
+		if (!this.report && !frame.paused && frame.enemyPositions.length) {
+			for (const enemy of frame.enemyPositions) {
+				const target = this.project(enemy);
+				this.effects.lineStyle(1.5, 0xd49b76, .75).strokeEllipse(target.x, target.y + 1, 29, 14);
+				polygon(this.effects, [{ x: target.x, y: target.y - 54 }, { x: target.x - 5, y: target.y - 63 }, { x: target.x + 5, y: target.y - 63 }], 0xe7ab80);
+			}
+			if (frame.action === "cover") {
+				// An observation/contact marker, not a simulated hit or future combat outcome.
+				this.effects.lineStyle(3, 0xaac7b0, .8).strokeEllipse(point.x, point.y + 1, 38, 19);
+				line(this.effects, [{ x: point.x - 13, y: point.y - 19 }, { x: point.x - 13, y: point.y - 34 }, { x: point.x + 13, y: point.y - 34 }, { x: point.x + 13, y: point.y - 19 }], 0xb8d3bc, 2, .75);
+			}
+		}
 		if (!this.reducedMotion && frame.action === "skirmish" && !frame.paused && !this.report && frame.enemyPositions.length) {
 			const target = this.project(frame.enemyPositions[0]!); const pulse = ((now - raid.startedAt) % 1600) / 1600;
 			if (pulse < .045) { const muzzle = this.gunMuzzle(this.pawn!); line(this.effects, [muzzle, { x: target.x, y: target.y - 23 }], 0xfad395, 1.5, .72); this.effects.fillStyle(0xffe7b0, .95).fillCircle(muzzle.x, muzzle.y, 4); }
@@ -330,10 +367,13 @@ export class RaidStreetRenderer {
 		}
 		if (this.pawn!.root.visible) { this.effects.lineStyle(1.3, 0xf0d295, .6).strokeEllipse(point.x, point.y + 1, 29, 14); polygon(this.effects, [{ x: point.x, y: point.y - 57 }, { x: point.x - 4, y: point.y - 64 }, { x: point.x + 4, y: point.y - 64 }], 0xf0d295); }
 		if (!this.reducedMotion && plan.theme.weather === "rain") for (let n = 0; n < 25; n++) { const x = this.camera.x + ((n * 137 + now / 60) % (this.viewport.width / this.camera.zoom)), y = this.camera.y + ((n * 91 + now / 10) % (this.viewport.height / this.camera.zoom)); line(this.effects, [{ x, y }, { x: x - 2, y: y + 6 }], 0xbac9c5, .7, .17); }
-		if (this.following) this.follow(firstFrame || delta <= 0 || this.reducedMotion ? 1 : 1 - Math.exp(-Math.min(delta, 100) / 240));
+		if (this.pendingCamera) this.applyRestoredCamera();
+		else if (this.following) this.follow(firstFrame || delta <= 0 || this.reducedMotion ? 1 : 1 - Math.exp(-Math.min(delta, 100) / 240));
 		this.applyCamera(); this.world.sort("depth"); this.updateMini(frame);
-		const status = this.report ? this.report.success ? "РЕЙД ЗАВЕРШЁН · ДОБЫЧА НА БАЗЕ" : "РЕЙД ЗАВЕРШЁН · СМОТРИ ОТЧЁТ" : frame.paused ? "ЖДЁТ ПРИКАЗА · ДОБЫЧА ПРИ НЁМ" : frame.label.toLocaleUpperCase("ru-RU");
-		this.title.setText(`${raid.scavName} · ${plan.theme.label}`); this.caption.setText(status);
+		const status = this.report ? this.report.success ? "РЕЙД ЗАВЕРШЁН · ДОБЫЧА НА БАЗЕ" : "РЕЙД ЗАВЕРШЁН · СМОТРИ ОТЧЁТ"
+			: objective.settling ? "КОНТРОЛЬНАЯ ТОЧКА · ОЖИДАЕТСЯ СВОДКА" : frame.paused ? "ЖДЁТ ПРИКАЗА · ДОБЫЧА ПРИ НЁМ"
+			: `${objective.label}${frame.action === "search" ? ` · ${Math.floor(frame.segmentProgress * 100)}%` : frame.enemyPositions.length ? ` · КОНТАКТ ${frame.enemyPositions.length}` : ""}`;
+		this.title.setText(`${raid.scavName} · Этап ${raid.expedition?.stage ?? 1} · ${plan.theme.label}`); this.caption.setText(status);
 		this.progress.clear(); this.progress.fillStyle(0x0c1c16, .92).fillRoundedRect(0, 0, Math.min(350, this.viewport.width - 224), 10, 3).fillStyle(0xcbb580).fillRoundedRect(0, 0, Math.min(350, this.viewport.width - 224) * frame.progress, 10, 3);
 	}
 	destroy(): void { this.layer.destroy(true); this.loot.clear(); this.enemies = []; this.occluders = []; this.pawn = null; this.cachedRaid = null; }

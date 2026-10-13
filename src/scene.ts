@@ -1,9 +1,9 @@
 import Phaser from "phaser";
 import { getRaidPhase, type Raid, type RaidReport, type RoomInstance, type WeaponInstance } from "./game/engine";
 import { type BaseRoom } from "./game/data";
-import { advanceShelterRoute, clientToShelterPoint, getShelterCell, planShelterRoute, SHELTER_SHAFT_X } from "./shelter-motion";
+import { advanceShelterRoute, clientToShelterPoint, getShelterCell, planShelterRoute, SHELTER_SHAFT_X, SHELTER_FLOOR_Y } from "./shelter-motion";
 import { clampShelterCamera, focusShelterRect, panShelterCamera, projectShelterRect, resizeShelterCamera, shelterViewportForSize, viewportToShelter, zoomShelterCamera, type ShelterCamera, type ShelterRect, type ShelterViewport, type ClientRect } from "./shelter-camera";
-import { advanceShelterLift, createShelterLift, type LiftRequest } from "./shelter-lift";
+import { advanceShelterLift, createShelterLift, restoreShelterLift, type LiftRequest } from "./shelter-lift";
 import { advanceScavAnimation, createScavAnimation, type ScavAnimationState } from "./shelter-animation";
 import { advanceShelterStationClock, getShelterProductionPresentation, type ProductionPresentation } from "./shelter-production";
 import { projectShelterPoint, unprojectShelterPoint, projectShelterBounds, shelterRoomPolygon, shelterRoomPosition } from "./shelter-isometric";
@@ -78,6 +78,8 @@ type ScavActor = {
 	walking: boolean;
 	walkSpan: number;
 	phase: number;
+	liftSide: -1 | 1;
+	inLift: boolean;
 };
 export interface WorldInteractions {
 	canInteract?: () => boolean;
@@ -105,6 +107,8 @@ export interface WorldController {
 	cancelScavDrag: () => void;
 	cancelCameraGesture: () => void;
 	getCameraState: () => WorldCameraState;
+	getPresentationState: () => unknown;
+	restorePresentationState: (value: unknown) => void;
 	zoomBy: (factor: number, clientX?: number, clientY?: number) => void;
 	panBy: (dx: number, dy: number) => void;
 	resetCamera: () => void;
@@ -272,6 +276,11 @@ export function createWorld(
 		private viewState: WorldSnapshot | null = null;
 		private liftModel = createShelterLift();
 		private liftDoors!: Phaser.GameObjects.Graphics;
+		private liftDisplay!: Phaser.GameObjects.Text;
+		private liftDoorAmount = 0;
+		private liftDisplaySignature = "";
+		private pendingPresentation: unknown = null;
+		private presentationReady = false;
 		private viewCamera: ShelterCamera = { zoom: 1, x: 0, y: 0 };
 		private viewport: ShelterViewport = { ...initialViewport };
 		private viewportObserver: ResizeObserver | null = null;
@@ -321,6 +330,8 @@ export function createWorld(
 			this.installDragListeners();
 			this.installViewportObserver();
 			this.syncSnapshot();
+			this.presentationReady = true;
+			if (this.pendingPresentation) { const saved = this.pendingPresentation; this.pendingPresentation = null; this.restorePresentationState(saved); }
 			this.show(requestedView);
 			this.game.canvas.setAttribute("aria-hidden", "true");
 			this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
@@ -334,6 +345,7 @@ export function createWorld(
 				this.places.clear();
 				this.cells.clear();
 				this.scavs.clear();
+				this.presentationReady = false;
 			});
 		}
 
@@ -353,6 +365,105 @@ export function createWorld(
 		}
 
 		getCameraState(): WorldCameraState { return { ...(requestedView === "raid" && this.raidStreet ? this.raidStreet.getCameraState() : this.viewCamera), panMode: this.panMode, view: requestedView, minZoom: requestedView === "raid" ? .7 : 1, maxZoom: 4 }; }
+
+		getPresentationState(): unknown {
+			if (!this.presentationReady) return this.pendingPresentation;
+			const actual = snapshot();
+			// Actions save immediately, before the next visual sync. Never export a
+			// stale base presence after dispatch, removal, reassignment or import.
+			const actors = [...this.scavs].filter(([id, slot]) => {
+				if (actual.shelter !== this.viewState?.shelter || !slot.actor.visible) return false;
+				const scav = actual.scavs?.find((candidate) => candidate.id === id);
+				const assignment = actual.shelter?.rooms.find((room) => room.id === scav?.assignment && room.workerIds.includes(id))?.id ?? null;
+				return Boolean(scav && scav.status !== "raiding" && assignment === slot.assignment);
+			});
+			const eligible = new Set(actors.map(([id]) => id));
+			const lift = structuredClone(this.liftModel);
+			if (lift.passengerId && (!eligible.has(lift.passengerId) || !this.scavs.get(lift.passengerId)?.inLift)
+				|| lift.trip && !eligible.has(lift.trip.id)) {
+				lift.passengerId = null; lift.trip = null; lift.phase = "pickup"; lift.cancelledTrip = false; lift.doorOpen = false;
+				lift.targetY = SHELTER_FLOOR_Y.reduce<number>((y, floor) => Math.abs(floor - lift.y) < Math.abs(y - lift.y) ? floor : y, 228);
+			}
+			lift.queue = lift.queue.filter((ticket) => eligible.has(ticket.id));
+			lift.completed = lift.completed.filter((ticket) => eligible.has(ticket.id));
+			return { version: 1, camera: { ...this.viewCamera }, viewport: { ...this.viewport }, panMode: this.panMode,
+				raidId: requestedRaidId, raidCamera: this.raidStreet?.getCameraState(), lift,
+				actors: actors.map(([id, slot]) => ({ id,
+					x: slot.position.x, y: slot.position.y, assignment: slot.assignment, role: slot.role, goal: slot.goal,
+					anchor: { ...slot.anchor }, route: slot.route.map((point) => ({ ...point })), liftSide: slot.liftSide,
+					visit: slot.visit, facing: slot.facing, dwellMs: Math.max(0, slot.dwellUntil - this.time.now), animation: { ...slot.animation } })) };
+		}
+
+		restorePresentationState(value: unknown): void {
+			if (!value || typeof value !== "object") return;
+			if (!this.presentationReady) { this.pendingPresentation = value; return; }
+			const data = value as Record<string, unknown>;
+			if (data.version !== 1) return;
+			this.cancelScavDrag(); this.cancelCameraGesture();
+			// Imports replace model identity. Synchronize that reset before applying
+			// positions so the following regular sync cannot wipe restored motion.
+			if (snapshot().shelter !== this.viewState?.shelter) this.syncSnapshot();
+			const object = (v: unknown): Record<string, unknown> | null => v && typeof v === "object" ? v as Record<string, unknown> : null;
+			const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+			const camera = object(data.camera), savedViewport = object(data.viewport);
+			if (camera && finite(camera.zoom) && finite(camera.x) && finite(camera.y) && camera.zoom >= 1 && camera.zoom <= 4) {
+				const priorViewport = savedViewport && finite(savedViewport.width) && finite(savedViewport.height) && savedViewport.width > 0 && savedViewport.height > 0 ? { width: savedViewport.width, height: savedViewport.height } : this.viewport;
+				this.viewCamera = resizeShelterCamera({ zoom: camera.zoom, x: camera.x, y: camera.y }, priorViewport, this.viewport);
+			}
+			if (typeof data.panMode === "boolean") this.panMode = data.panMode;
+			const state = snapshot(), restored = new Set<string>(), lift = Array.isArray(data.actors) ? restoreShelterLift(data.lift) : null;
+			const point = (v: unknown, inCabin = false): Point | null => {
+				const p = object(v);
+				if (!p || !finite(p.x) || !finite(p.y)) return null;
+				const x = p.x, y = p.y;
+				if (x < 32 || x > 808) return null;
+				const floor = SHELTER_FLOOR_Y.find((floor) => Math.abs(floor - y) < .01);
+				if (floor !== undefined) return { x, y: floor };
+				return inCabin && Math.abs(x - SHELTER_SHAFT_X) < .01 && y >= 129 && y <= 450 ? { x, y } : null;
+			};
+			if (lift && Array.isArray(data.actors)) for (const slot of this.scavs.values()) slot.inLift = false;
+			if (lift && Array.isArray(data.actors)) for (const raw of data.actors.slice(0, 32)) {
+				const saved = object(raw); if (!saved || typeof saved.id !== "string") continue;
+				const slot = this.scavs.get(saved.id), scav = state.scavs?.find((candidate) => candidate.id === saved.id);
+				if (!slot || !scav || scav.status === "raiding" || saved.assignment !== slot.assignment || saved.role !== slot.role) continue;
+				const at = point(saved, lift?.passengerId === saved.id), anchor = point(saved.anchor);
+				if (!at || !anchor || typeof saved.goal !== "string" || saved.goal.length > 180) continue;
+				const allowedGoal = slot.assignment ? saved.goal.startsWith(`work:${slot.assignment}:`) : slot.role === "rest" ? saved.goal === slot.goal
+					: saved.goal.startsWith("idle-home:") || saved.goal.startsWith("visit:") && state.shelter?.rooms.some((room) => saved.goal === `visit:${saved.visit}:${room.id}`);
+				if (!allowedGoal || !Array.isArray(saved.route) || saved.route.length > 8) continue;
+				const unchangedGoal = !slot.assignment || saved.goal === slot.goal;
+				const route = saved.route.map((p) => point(p));
+				if (route.some((p) => !p)) continue;
+				const legs = [at, ...route as Point[]];
+				if (legs.some((to, index) => index > 0 && Math.abs(to.y - legs[index - 1]!.y) > .01 && Math.abs(to.x - SHELTER_SHAFT_X) > .01)
+					|| Math.hypot((route.length ? route[route.length - 1]!.x : at.x) - anchor.x, (route.length ? route[route.length - 1]!.y : at.y) - anchor.y) > 1) continue;
+				// A changed real production phase keeps its current destination. The
+				// saved feet position is useful, but old work never overrides the game.
+				this.placeActor(slot, at); slot.liftSide = saved.liftSide === -1 ? -1 : 1;
+				if (unchangedGoal) { slot.anchor = anchor; slot.goal = saved.goal; slot.route = route as Point[]; }
+				else slot.route = this.actorRoute(slot, slot.anchor);
+				if (finite(saved.visit)) slot.visit = Math.max(0, Math.min(1_000_000, Math.floor(saved.visit)));
+				if (finite(saved.dwellMs)) slot.dwellUntil = this.time.now + Math.max(0, Math.min(60_000, saved.dwellMs));
+				slot.facing = saved.facing === -1 ? -1 : 1;
+				const animation = object(saved.animation);
+				if (animation) { const next = { ...slot.animation }; for (const key of Object.keys(next) as (keyof ScavAnimationState)[]) if (key !== "observedJob" && finite(animation[key])) (next as unknown as Record<string, unknown>)[key] = animation[key]; next.observedJob = typeof animation.observedJob === "string" ? animation.observedJob : null; slot.animation = next; }
+				restored.add(saved.id);
+			}
+			if (lift) {
+				if (lift.passengerId && !restored.has(lift.passengerId)) {
+					// A removed/reassigned passenger is never pulled out of a real room
+					// into an old cabin. Park the empty cabin physically at a nearby floor.
+					lift.passengerId = null; lift.trip = null; lift.phase = "pickup"; lift.cancelledTrip = false;
+					lift.targetY = SHELTER_FLOOR_Y.reduce<number>((y, floor) => Math.abs(floor - lift.y) < Math.abs(y - lift.y) ? floor : y, 228);
+					lift.doorOpen = false;
+				}
+				lift.queue = lift.queue.filter((ticket) => restored.has(ticket.id)); this.liftModel = lift;
+				this.liftDoorAmount = lift.doorOpen ? 1 : 0;
+				if (lift.passengerId) { const rider = this.scavs.get(lift.passengerId); if (rider) { rider.inLift = true; this.placeActor(rider, { x: SHELTER_SHAFT_X, y: lift.y }); } }
+			}
+			if (typeof data.raidId === "string" && data.raidId === requestedRaidId && (state.raids.some((raid) => raid.id === data.raidId) || state.history?.some((report) => report.raidId === data.raidId))) { this.selectRaid(data.raidId); this.raidStreet.restoreCamera(data.raidCamera); }
+			this.paintLift(0); this.applyCamera();
+		}
 		selectRaid(id: string | null): void { requestedRaidId = id; this.raidStreet?.selectRaid(id); if (requestedView === "raid" && this.raidStreet) this.raidStreet.update(snapshot(), Date.now(), 0); this.applyCamera(); }
 		setRaidFollow(enabled: boolean): void { this.raidStreet?.setFollow(enabled); this.applyCamera(); }
 
@@ -679,8 +790,10 @@ export function createWorld(
 			polygon(lift, [{ x: -15, y: -5 }, { x: 0, y: 3 }, { x: 0, y: 7 }, { x: -15, y: -1 }], 0x43594a);
 			polygon(lift, [{ x: 15, y: -5 }, { x: 0, y: 3 }, { x: 0, y: 7 }, { x: 15, y: -1 }], 0x2a4135);
 			for (const x of [-13, 13]) line(lift, [{ x, y: -3 }, { x, y: -21 }], 0xa8ac8b, 1.4);
+			this.elevator = this.add.container(0, 0, [lift]); this.baseLayer.add(this.elevator);
 			this.liftDoors = this.add.graphics();
-			this.elevator = this.add.container(0, 0, [lift, this.liftDoors]); this.baseLayer.add(this.elevator);
+			this.liftDisplay = this.text(0, 0, "ЛИФТ", 8, "#dde2c7").setOrigin(.5).setBackgroundColor("#10242a").setPadding(3, 2);
+			this.baseLayer.add([this.liftDoors, this.liftDisplay]);
 			this.ambient = this.add.graphics().setDepth(800); this.baseLayer.add(this.ambient);
 			this.dragGhost = this.add.graphics().setDepth(1200); this.baseLayer.add(this.dragGhost);
 			this.baseCaption = this.text(29, 27, "УБЕЖИЩЕ 07", 15, "#ded2ae").setVisible(false);
@@ -786,7 +899,7 @@ export function createWorld(
 			const label = this.text(0, -64, "", 16, "#ffedc7").setOrigin(.5).setFontFamily("Manrope, sans-serif").setFontStyle("bold").setLetterSpacing(0).setBackgroundColor("#0b1b20").setPadding(7, 4).setVisible(false);
 			const order = this.add.circle(-10, -34, 3.5, C.sage).setStrokeStyle(1, 0x10242b).setVisible(false);
 			const hit = this.add.zone(0, -21, 32, 46).setInteractive({ useHandCursor: true });
-			const slot: ScavActor = { actor, body, legA, legB, hand, sprite, poses, animation: createScavAnimation(index * .37), appearance, gear, tool, label, order, selection, hovered: false, gearSignature: "", position: { ...at }, anchor: { ...at }, route: [], goal: "", assignment: null, role: "idle", dwellUntil: this.time.now + 2000 + index * 800, visit: 0, facing: 1, climbing: false, status: "ready", health: 100, working: false, walking: false, walkSpan: 0, phase: index * 1.71 };
+			const slot: ScavActor = { actor, body, legA, legB, hand, sprite, poses, animation: createScavAnimation(index * .37), appearance, gear, tool, label, order, selection, hovered: false, gearSignature: "", position: { ...at }, anchor: { ...at }, route: [], goal: "", assignment: null, role: "idle", dwellUntil: this.time.now + 2000 + index * 800, visit: 0, facing: 1, climbing: false, status: "ready", health: 100, working: false, walking: false, walkSpan: 0, phase: index * 1.71, liftSide: at.x < SHELTER_SHAFT_X ? -1 : 1, inLift: false };
 			hit.on("pointerover", (pointer: Phaser.Input.Pointer) => { if (this.acceptsPointer(pointer, "base")) { slot.hovered = true; selection.setVisible(true); label.setVisible(true); actor.setDepth(850); } });
 			hit.on("pointerout", () => { slot.hovered = false; const selected = snapshot().selectedScavId === scavId; selection.setVisible(selected); label.setVisible(selected); actor.setDepth(actor.y); });
 			// Native pointer-up distinguishes a deliberate tap from a drag before opening the inspector.
@@ -865,9 +978,20 @@ export function createWorld(
 		private sendActor(slot: ScavActor, goal: string, at: Point): void {
 			if (slot.goal === goal && Math.hypot(slot.anchor.x - at.x, slot.anchor.y - at.y) < 1) return;
 			slot.goal = goal; slot.anchor = { ...at };
-			slot.route = reducedMotion ? [] : planShelterRoute(slot.position, at);
-			if (reducedMotion) this.placeActor(slot, at);
+			const instant = reducedMotion && !slot.inLift;
+			slot.route = instant ? [] : this.actorRoute(slot, at);
+			if (instant) this.placeActor(slot, at);
 			slot.working = false;
+		}
+
+		private actorRoute(slot: ScavActor, at: Point): Point[] {
+			const from = { ...slot.position }, route = planShelterRoute(from, at);
+			if (Math.abs(from.y - at.y) > .01 && SHELTER_FLOOR_Y.some((floor) => Math.abs(from.y - floor) < .01) && !slot.inLift) {
+				slot.liftSide = from.x < SHELTER_SHAFT_X ? -1 : from.x > SHELTER_SHAFT_X ? 1 : at.x < SHELTER_SHAFT_X ? -1 : 1;
+				const waiting = { x: SHELTER_SHAFT_X + slot.liftSide * 26, y: from.y };
+				if (route[0]?.y === from.y) route[0] = waiting; else route.unshift(waiting);
+			}
+			return route;
 		}
 
 		private syncPeople(state: WorldSnapshot): void {
@@ -886,7 +1010,7 @@ export function createWorld(
 				const previousStatus = slot.status, previousAssignment = slot.assignment;
 				slot.assignment = room?.id ?? null; slot.status = scav.status; slot.health = scav.health;
 				if (this.drag?.scavId === scav.id && (scav.status === "raiding" || scav.health < 25 || this.drag.shelter !== state.shelter || this.drag.scav !== scav)) this.cancelScavDrag();
-				if (scav.status === "raiding") { slot.actor.setVisible(false); slot.route = []; slot.goal = "raiding"; slot.working = false; return; }
+				if (scav.status === "raiding") { slot.actor.setVisible(false); slot.route = []; slot.goal = "raiding"; slot.working = false; slot.inLift = false; return; }
 				if (previousStatus === "raiding") this.placeActor(slot, { x: 112, y: 129 });
 				slot.actor.setVisible(true).setScale(.78).setAlpha(this.drag?.scavId === scav.id ? .45 : scav.status === "wounded" ? .78 : 1);
 				if (scav.status === "wounded" && (!room || scav.health < 25)) {
@@ -943,18 +1067,22 @@ export function createWorld(
 			const liftRequests: LiftRequest[] = [];
 			for (const [id, slot] of this.scavs) {
 				const next = slot.route[0];
-				const passenger = this.liftModel.passengerId === id;
-				if (slot.actor.visible && next && Math.abs(slot.position.x - SHELTER_SHAFT_X) < .01 && (passenger || Math.abs(next.y - slot.position.y) > .01) && (this.drag?.scavId !== id || passenger)) liftRequests.push({ id, from: slot.position.y, to: next.y });
+				const passenger = this.liftModel.passengerId === id && slot.inLift;
+				// A returned scav has a new entrance presence. An old, cancelled
+				// cabin ticket must finish parking before this identity can call again.
+				if (this.liftModel.passengerId === id && !slot.inLift) continue;
+				if (slot.actor.visible && next && (passenger || Math.abs(next.y - slot.position.y) > .01) && (this.drag?.scavId !== id || passenger)) liftRequests.push({ id, from: slot.position.y, to: next.y, ready: Math.abs(slot.position.x - SHELTER_SHAFT_X) < .01 });
 			}
 			const lift = advanceShelterLift(this.liftModel, liftRequests, step * 1000);
 			this.liftModel = lift.state;
-			const rider = lift.state.passengerId ? this.scavs.get(lift.state.passengerId) : null;
-			if (rider) this.placeActor(rider, { x: SHELTER_SHAFT_X, y: lift.state.y });
+			for (const id of lift.boarded) { const rider = this.scavs.get(id); if (rider?.actor.visible) rider.inLift = true; }
+			if (lift.state.passengerId) { const rider = this.scavs.get(lift.state.passengerId); if (rider?.inLift && rider.actor.visible) this.placeActor(rider, { x: SHELTER_SHAFT_X, y: lift.state.y }); }
 			for (const drop of lift.dropped) {
 				const slot = this.scavs.get(drop.id);
-				if (!slot?.actor.visible) continue;
+				if (!slot?.inLift || !slot.actor.visible) continue;
+				slot.inLift = false;
 				this.placeActor(slot, { x: SHELTER_SHAFT_X, y: drop.to });
-				slot.route = planShelterRoute({ x: SHELTER_SHAFT_X, y: drop.to }, slot.anchor);
+				slot.route = this.actorRoute(slot, slot.anchor);
 			}
 			this.ambient.clear();
 			for (const [id, slot] of this.scavs) {
@@ -962,16 +1090,32 @@ export function createWorld(
 				if (slot.actor.visible && this.drag?.scavId !== id) {
 					this.patrolActor(slot, id, time);
 					const speed = slot.status === "wounded" ? 27 : 58;
-					const next = slot.route[0], vertical = this.liftModel.passengerId === id || Boolean(next && Math.abs(next.y - slot.position.y) > .01);
+					const passenger = this.liftModel.passengerId === id && slot.inLift;
+					const next = slot.route[0], vertical = passenger || Boolean(next && Math.abs(next.y - slot.position.y) > .01);
 					const hadRoute = slot.route.length > 0;
-					const distance = next ? Math.hypot(next.x - slot.position.x, next.y - slot.position.y) : 0;
-					const motion = advanceShelterRoute(slot.position, slot.route, vertical ? 0 : Math.min(speed * step, distance));
-					if (!vertical) walkedDistance = Math.abs(motion.point.x - slot.position.x);
-					slot.route = motion.route;
-					if (hadRoute) this.placeActor(slot, motion.point);
-					slot.walking = hadRoute && !vertical; slot.climbing = this.liftModel.passengerId === id;
-					if (slot.walking && !vertical) slot.facing = motion.facing;
-					if (hadRoute && motion.arrived) { slot.dwellUntil = time + 6500 + (slot.phase % 4) * 1700; slot.walking = false; slot.climbing = false; }
+					if (vertical && !passenger) {
+						const entering = this.liftModel.phase === "boarding" && this.liftModel.trip?.id === id;
+						const ahead = this.liftModel.queue.slice(0, Math.max(0, this.liftModel.queue.findIndex((ticket) => ticket.id === id))).filter((ticket) => ticket.from === slot.position.y && this.scavs.get(ticket.id)?.liftSide === slot.liftSide).length;
+						const waitingX = SHELTER_SHAFT_X + slot.liftSide * (26 + ahead * 24);
+						const targetX = entering ? SHELTER_SHAFT_X : waitingX;
+						const dx = targetX - slot.position.x, advance = Math.sign(dx) * Math.min(Math.abs(dx), speed * step);
+						this.placeActor(slot, { x: slot.position.x + advance, y: slot.position.y }); walkedDistance = Math.abs(advance);
+						slot.walking = walkedDistance > .001; slot.climbing = false;
+						if (slot.walking) slot.facing = dx < 0 ? -1 : 1;
+						if (slot.hovered || this.viewState?.selectedScavId === id) {
+							const name = this.viewState?.scavs?.find((scav) => scav.id === id)?.name?.toLocaleUpperCase("ru-RU") ?? "";
+							slot.label.setText(`${name}\n${entering ? "ВХОДИТ В ЛИФТ" : "ЖДЁТ ЛИФТ"}`);
+						}
+					} else {
+						const distance = next ? Math.hypot(next.x - slot.position.x, next.y - slot.position.y) : 0;
+						const motion = advanceShelterRoute(slot.position, slot.route, vertical ? 0 : Math.min(speed * step, distance));
+						if (!vertical) walkedDistance = Math.abs(motion.point.x - slot.position.x);
+						slot.route = motion.route;
+						if (hadRoute) this.placeActor(slot, motion.point);
+						slot.walking = hadRoute && !vertical; slot.climbing = passenger;
+						if (slot.walking && !vertical) slot.facing = motion.facing;
+						if (hadRoute && motion.arrived) { slot.dwellUntil = time + 6500 + (slot.phase % 4) * 1700; slot.walking = false; slot.climbing = false; }
+					}
 				} else { slot.walking = false; slot.climbing = false; }
 				const room = this.viewState?.shelter?.rooms.find((candidate) => candidate.id === slot.assignment);
 				const production = room ? this.viewState?.roomProduction?.[room.id] : undefined;
@@ -1006,11 +1150,7 @@ export function createWorld(
 					}
 				}
 			}
-			const liftPoint = projectShelterPoint({ x: SHELTER_SHAFT_X, y: this.liftModel.y });
-			this.elevator.setPosition(liftPoint.x, liftPoint.y).setDepth(liftPoint.y - 1);
-			this.liftDoors.clear();
-			if (!this.liftModel.doorOpen) line(this.liftDoors, [{ x: -13, y: -21 }, { x: 13, y: -21 }], 0xb4b692, 1.6, .85);
-			this.liftDoors.fillStyle(this.liftModel.phase === "travel" ? 0xe0c17b : this.liftModel.doorOpen ? 0xb1d28a : 0x7f9384).fillCircle(13, -22, 2);
+			this.paintLift(step * 1000);
 			for (const cell of this.cells.values()) {
 				const g = cell.animation;
 				g.clear();
@@ -1022,6 +1162,29 @@ export function createWorld(
 				if (cell.production) cell.stationClock = advanceShelterStationClock(cell.stationClock, delta, cell.production, reducedMotion);
 				paintIsometricProduction(g, cell.column, cell.row, cell.room, cell.production, cell.stationClock, reducedMotion);
 			}
+		}
+
+		private paintLift(elapsedMs: number): void {
+			const lift = this.liftModel, at = projectShelterPoint({ x: SHELTER_SHAFT_X, y: lift.y });
+			this.elevator.setPosition(at.x, at.y).setDepth(at.y - 1);
+			const target = lift.doorOpen ? 1 : 0;
+			this.liftDoorAmount = reducedMotion ? target : target + (this.liftDoorAmount - target) * Math.exp(-elapsedMs / 70);
+			const openness = this.liftDoorAmount, door = this.liftDoors;
+			door.setPosition(at.x, at.y).setDepth(at.y + 1).clear();
+			// The projected platform keeps its front gate above its passenger in
+			// depth order. The gate slides; world-space pickup and travel stay exact.
+			door.fillStyle(0x597279, .3).fillRect(-13, -21, 13 * (1 - openness), 17).fillRect(13 * openness, -21, 13 * (1 - openness), 17);
+			line(door, [{ x: -13, y: -21 }, { x: -13 * openness, y: -21 }], 0xc1c9b6, 1.6, .85);
+			line(door, [{ x: 13 * openness, y: -21 }, { x: 13, y: -21 }], 0xc1c9b6, 1.6, .85);
+			for (const x of [-13, 13]) line(door, [{ x, y: -21 }, { x, y: -4 }], 0x768b78, 1.5, .85);
+			door.fillStyle(lift.phase === "travel" || lift.phase === "pickup" ? 0xe6c581 : lift.doorOpen ? 0xb7d998 : 0x8fa99d).fillCircle(13, -22, 2);
+			const floor = SHELTER_FLOOR_Y.indexOf(lift.targetY as typeof SHELTER_FLOOR_Y[number]);
+			const direction = Math.abs(lift.targetY - lift.y) < .01 ? "" : lift.targetY > lift.y ? "↓ " : "↑ ";
+			const place = floor === 0 ? "ВХОД" : `−${Math.max(1, floor)}`;
+			const phase = lift.phase === "boarding" ? "ПОСАДКА" : lift.phase === "alighting" ? "ВЫХОД" : lift.phase === "pickup" ? "ПОДАЧА" : lift.phase === "travel" ? "В ПУТИ" : "СТОЯНКА";
+			const signature = `${direction}${place}\n${phase}${lift.queue.length ? ` · ${lift.queue.length}` : ""}`;
+			if (signature !== this.liftDisplaySignature) { this.liftDisplaySignature = signature; this.liftDisplay.setText(signature); }
+			this.liftDisplay.setPosition(at.x, at.y - 40).setDepth(899).setVisible(this.viewCamera.zoom >= 1.6 || lift.phase !== "idle");
 		}
 		private paintMap(): void {
 			const g = this.add.graphics();
@@ -1498,6 +1661,8 @@ export function createWorld(
 		cancelScavDrag: () => scene.cancelScavDrag(),
 		cancelCameraGesture: () => scene.cancelCameraGesture(),
 		getCameraState: () => scene.getCameraState(),
+		getPresentationState: () => scene.getPresentationState(),
+		restorePresentationState: (value) => scene.restorePresentationState(value),
 		zoomBy: (factor, clientX, clientY) => scene.zoomBy(factor, clientX, clientY),
 		panBy: (dx, dy) => scene.panBy(dx, dy),
 		resetCamera: () => scene.resetCamera(),
