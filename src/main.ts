@@ -143,6 +143,8 @@ import { projectShelterBounds, shelterRoomPolygon, shelterRoomPosition, SHELTER_
 import { renderLiveRaidPanel, updateLiveRaidPanel, getWatchedReport } from "./raid-ui";
 import { createGameSaveStore, parseGameSave, PREVIOUS_SAVE_KEY, MAX_GAME_SAVE_LENGTH } from "./game-save";
 import { readGameSession, type GameSession } from "./game-session";
+import { createGameSound, type GameSoundCue } from "./game-sound";
+import { createGameFeedbackCursor, observeGameFeedback, type GameResourceGains } from "./game-feedback";
 
 type Page = "home" | "raids" | "arsenal" | "base" | "contracts" | "journal";
 const e = (value: unknown) =>
@@ -181,6 +183,7 @@ const paths: Record<string, string> = {
 	backpack: "M8 7V5a4 4 0 0 1 8 0v2M7 7h10l3 4v10H4V11ZM8 14h8v7H8M4 11h16",
 	repeat: "M20 8H5l4-4M4 16h15l-4 4M20 8v4M4 16v-4",
 	stop: "M5 5h14v14H5Z",
+	sound: "M4 9h4l5-4v14l-5-4H4ZM16 8a6 6 0 0 1 0 8M19 5a10 10 0 0 1 0 14",
 };
 const icon = (name: string, size = 19) =>
 	`<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${paths[name] ?? paths.base}"/></svg>`;
@@ -233,6 +236,7 @@ const selectedPerks = new Map<string, RunPerk>();
 let contractFilter: "open" | "done" | "all" = "open";
 let deferredRender = false;
 let world: ReturnType<typeof createWorld> | null = null;
+const gameSound = createGameSound();
 let toastTimer: ReturnType<typeof setTimeout>;
 let storageWarning = false;
 let worldInputBlockedUntil = 0;
@@ -300,6 +304,28 @@ const panel = document.querySelector<HTMLDivElement>("#panel")!;
 document.querySelector(".command-footer")!.prepend(document.querySelector("#offline-summary")!);
 document.querySelector(".world-head .view-switch")!.insertAdjacentHTML("afterend", '<div class="camera-controls" role="group" aria-label="Вид убежища"><button data-camera="out" aria-label="Отдалить убежище" title="Отдалить (−)">−</button><span id="camera-scale" class="camera-scale" aria-label="Масштаб">100%</span><button data-camera="in" aria-label="Приблизить убежище" title="Приблизить (+)">+</button><button data-camera="fit" class="camera-fit" aria-label="Обзор всего убежища" title="Обзор всего убежища (0)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 9V3h6m6 0h6v6m0 6v6h-6M9 21H3v-6"/></svg><span>Обзор</span></button><button data-camera="pan" aria-label="Рука: перемещать вид" title="Рука: перетаскивать убежище" aria-pressed="false"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 12V5a2 2 0 0 1 4 0v7-8a2 2 0 0 1 4 0v8-5a2 2 0 0 1 4 0v8c0 4-3 7-7 7h-1c-2 0-4-1-5-3L3 12a2 2 0 0 1 3-2l2 2"/></svg></button></div>');
 const worldViewport = document.querySelector<HTMLElement>("#world")!;
+document.querySelector('.camera-controls [data-camera="fit"]')!.insertAdjacentHTML("beforebegin", `<button data-camera="near" class="camera-fit camera-near" aria-label="Рабочий вид базы" title="Рабочий вид базы: ближе к комнатам">${icon("base",15)}<span>К комнатам</span></button>`);
+document.querySelector(".world-head")!.insertAdjacentHTML("beforeend", `<button class="scene-sound" data-action="toggle-sound" aria-label="Звуки игры" aria-pressed="false" title="Включить звуки игры">${icon("sound",17)}<span>Звук</span></button>`);
+worldViewport.insertAdjacentHTML("afterend", '<div id="scene-hover" class="scene-hover" hidden><strong></strong><span></span></div>');
+function updateSceneHover(value: { title: string; detail: string } | null) {
+	const readout = document.querySelector<HTMLElement>("#scene-hover"); if (!readout) return;
+	readout.hidden = !value || !canWorldInteract() || Boolean(workerPlacement || crewPointer);
+	if (readout.hidden || !value) return;
+	readout.querySelector("strong")!.textContent = value.title;
+	readout.querySelector("span")!.textContent = value.detail;
+}
+function updateSoundControl() {
+	const button = document.querySelector<HTMLButtonElement>(".scene-sound"); if (!button) return;
+	button.setAttribute("aria-pressed", String(gameSound.enabled));
+	button.title = gameSound.enabled ? "Выключить звуки игры" : "Включить звуки игры";
+	button.classList.toggle("active", gameSound.enabled);
+}
+async function toggleGameSound() {
+	await gameSound.setEnabled(!gameSound.enabled);
+	updateSoundControl();
+	if (gameSound.enabled) gameSound.play("confirm");
+}
+updateSoundControl();
 worldViewport.tabIndex = 0;
 worldViewport.setAttribute("role", "region");
 worldViewport.setAttribute("aria-describedby", "camera-help");
@@ -321,6 +347,7 @@ function updateCameraControls() {
 	if (farther) farther.disabled = !available || cameraView.zoom <= (cameraView.minZoom ?? MIN_SHELTER_ZOOM) + 0.001;
 	if (closer) closer.disabled = !available || cameraView.zoom >= (cameraView.maxZoom ?? MAX_SHELTER_ZOOM) - 0.001;
 	const fit = controls.querySelector<HTMLButtonElement>('[data-camera="fit"]');
+	const near = controls.querySelector<HTMLButtonElement>('[data-camera="near"]'); if (near) near.hidden = worldView !== "base";
 	if (fit) { fit.innerHTML = `${icon(worldView === "raid" ? "people" : "home", 13)} <span>${worldView === "raid" ? "За бойцом" : "Обзор"}</span>`; fit.setAttribute('aria-label', worldView === "raid" ? "Следовать за бойцом" : "Обзор всего убежища"); fit.title = worldView === "raid" ? "Следовать за бойцом (0)" : "Обзор всего убежища (0)"; }
 	if (farther) farther.setAttribute('aria-label', worldView === "raid" ? "Отдалить улицу" : "Отдалить убежище");
 	if (closer) closer.setAttribute('aria-label', worldView === "raid" ? "Приблизить улицу" : "Приблизить убежище");
@@ -346,6 +373,7 @@ function cameraAction(action: string) {
 	if (action === "in") world.zoomBy(1.25);
 	else if (action === "out") world.zoomBy(0.8);
 	else if (action === "fit") { world.setPanMode(false); world.resetCamera(); }
+	else if (action === "near" && worldView === "base") { world.setPanMode(false); world.focusBase(); }
 	else if (action === "pan") world.setPanMode(!cameraView.panMode);
 	if (worldView === "raid" && action === "fit") world.setRaidFollow(true);
 	holdWorldInput();
@@ -588,7 +616,7 @@ function assignPlacedWorker(scavId: string, roomId: string) {
 	const returnFocus = workerPlacement?.mode === "keyboard";
 	cancelWorkerPlacement();
 	const result = assignWorker(state, scavId, roomId);
-	act(result.ok && scav && room ? { ...result, message: alreadyAssigned ? `${scav.name} уже работает: ${ROOM_DEFINITIONS[room.type].label}.` : `${scav.name} назначен: ${ROOM_DEFINITIONS[room.type].label}.` } : result);
+	act(result.ok && scav && room ? { ...result, message: alreadyAssigned ? `${scav.name} уже работает: ${ROOM_DEFINITIONS[room.type].label}.` : `${scav.name} назначен: ${ROOM_DEFINITIONS[room.type].label}.` } : result, "assign");
 	announceWorkerPlacement(result.ok && scav && room ? `${scav.name}: ${ROOM_DEFINITIONS[room.type].label}.` : result.message);
 	if (returnFocus) focusWorkerHandle(scavId);
 }
@@ -674,7 +702,7 @@ document.addEventListener("focusin", workerTargetFocus);
 window.addEventListener("blur", cancelPlacementForBlur);
 document.addEventListener("keydown", handleCameraKey);
 worldViewport.addEventListener("pointerdown", focusWorldViewport);
-function act(result: ActionResult) {
+function act(result: ActionResult, cue: GameSoundCue = "confirm") {
 	const origin = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 	const focusKey = origin?.dataset.focusKey;
 	const scope = origin?.closest("#command-dock") ? "#command-dock" : origin?.closest("#tool-root") ? "#tool-root" : "#app";
@@ -682,6 +710,7 @@ function act(result: ActionResult) {
 		? ["action", "id", "mod", "slot", "jobId", "recipeId", "modelId", "moduleId"].filter((key) => origin.dataset[key] != null)
 			.map((key) => `[data-${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}="${CSS.escape(origin.dataset[key]!)}"]`).join("")
 		: null;
+	gameSound.play(result.ok ? cue : "blocked");
 	toast(result.message, result.ok);
 	persist();
 	render();
@@ -1073,6 +1102,7 @@ function setOverlayState() {
 	const drawerOpen = Boolean(selectedScav);
 	const toolsOpen = page !== "home";
 	const mobileContext = window.innerWidth <= 850 && contextMode !== "overview";
+	if (modalOpen || drawerOpen || toolsOpen || mobileContext) updateSceneHover(null);
 	if (!canWorldDrag()) cancelWorkerPlacement(false, true);
 	if (!canWorldCamera()) world?.cancelCameraGesture();
 	updateCameraControls();
@@ -1116,6 +1146,7 @@ function openRoom(room: BaseRoom) {
 }
 function openShelterRoom(id: string, requestedTab?: CommandRoomTab) {
 	const room = state.shelter.rooms.find((item) => item.id === id); if (!room) return;
+	if (contextMode !== "room" || selectedRoomId !== id) gameSound.play("select");
 	const roomOrigin = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 	if (room.type === "workshop") productionWorkshopId = id;
 	closeInspector();
@@ -1152,6 +1183,7 @@ function refreshCommandOverview(summary: CommandSummary) {
 	if (activeKey) focusCommandControl(activeKey);
 }
 function openShelterSite(column: number, row: number) {
+	if (contextMode !== "build" || selectedShelterSite?.column !== column || selectedShelterSite?.row !== row) gameSound.play("select");
 	closeInspector();
 	selectedShelterSite = { column, row };
 	selectedRoomId = null;
@@ -1249,11 +1281,21 @@ function commandOverview(summary = getCommandSummary(state)) {
 	const waiting = summary.attention.length;
 	const staffed = state.scavs.filter((scav) => scav.assignment).length;
 	const ready = CONTRACTS.filter((contract) => !state.claimedContracts.includes(contract.id) && !getContractLockReason(state, contract) && getContractProgress(state, contract) >= contract.target);
-	const weapon = state.weapons.find((item) => item.id === selectedWeapon) ?? state.weapons[0];
 	const last = state.history[0];
 	const productionTarget = summary.attention[0] ?? summary.rooms.find((room) => room.kind === "running") ?? summary.rooms.find((room) => room.tab === "production") ?? summary.rooms[0];
 	const counts = `${running} работают · ${waiting} ждут`;
-	return `<div class="command-overview-head"><span class="eyebrow">Хозяйство убежища</span><strong>${counts}</strong><small>${summary.queuedJobs} заказов · ${summary.freeWorkers} свободных бойцов${summary.counts.building ? ` · строек: ${summary.counts.building}` : ""}</small></div><div class="command-system-grid"><button class="command-system production-system" data-command-room="${productionTarget?.roomId ?? ""}" data-command-tab="${productionTarget?.tab ?? "production"}" data-focus-key="command-production" aria-label="Производство: ${running} комнат работают, ${waiting} ждут приказа"><span class="system-art" aria-hidden="true">${roomMiniArt("workshop","summary-workshop")}</span><span><strong>Производство</strong><b>${summary.queuedJobs} заказов · ${staffed} рабочих</b><small>${waiting ? `${waiting} комнат ждут действий` : `${running} комнат работают`}</small></span></button><button class="command-system armory-system" data-page="arsenal" aria-label="Арсенал: ${state.weapons.length} пушек, ${state.modules.length} модулей"><span class="system-art" aria-hidden="true">${weapon ? weaponBuildArt(weapon) : icon("arsenal",30)}</span><span><strong>Арсенал</strong><b>${state.weapons.length} пушек · ${state.modules.length} модулей</b><small>Верстак и комплекты</small></span></button><button class="command-system" data-page="contracts" aria-label="Поручения: ${ready.length} готовых наград"><span class="system-mark" aria-hidden="true">${icon("contracts",26)}</span><span><strong>Поручения</strong><b>${ready.length ? `${ready.length} наград готово` : `${state.claimedContracts.length} выполнено`}</b><small>Забрать у Прапора</small></span>${ready.length ? '<i class="system-attention"></i>' : ""}</button><button class="command-system" data-action="open-market" aria-label="Снабжение, закупки и материалы"><span class="system-art" aria-hidden="true">${roomMiniArt("storage","summary-storage")}</span><span><strong>Снабжение</strong><b>${state.weapons.length} / ${getStorageCapacity(state)} в арсенале</b><small>Закупки и материалы</small></span></button><button class="command-system" data-page="journal" aria-label="Журнал: ${state.history.length} отчётов"><span class="system-mark" aria-hidden="true">${icon("journal",25)}</span><span><strong>Журнал</strong><b>${state.history.length} отчётов</b><small>${last ? `${e(last.scavName)}: ${last.success ? "вернулся" : "потери"}` : "Радио пока молчит"}</small></span></button><button class="command-system" data-action="open-discoveries" aria-label="Память отряда: ${state.blueprints.length} открытий"><span class="system-mark" aria-hidden="true">${icon("intel",25)}</span><span><strong>Память отряда</strong><b>${state.blueprints.length} открытий</b><small>Сохранено навсегда</small></span></button></div><div class="command-priority-band"><span class="command-priority-counts">${counts}</span>${summary.attention.slice(0,2).map(commandNextAction).join("") || `<div class="command-flow-status">${icon(summary.counts.building ? "time" : "check",19)}<span><strong>${summary.counts.building ? `${summary.counts.building} комнат в стройке` : running ? "Производство идёт" : summary.counts.ready ? "Партии готовы" : "База без заказов"}</strong><small>${summary.queuedJobs} заказов · ${summary.freeWorkers} свободны</small></span></div>`}</div>`;
+	const needsOrder = state.raids.find((raid) => raid.expedition?.status === "choice");
+	const nextSteps = [needsOrder ? `<button class="command-next-action next-raid" data-watch-raid="${needsOrder.id}" aria-label="${e(needsOrder.scavName)} ждёт приказа на контрольной точке"><span class="command-next-mark" aria-hidden="true">${icon("raids",17)}</span><span class="command-next-copy"><strong>${e(needsOrder.scavName)} · контрольная точка</strong><small>Выбрать маршрут или вернуться ${icon("arrow",12)}</small></span></button>` : "", ...summary.attention.slice(0, needsOrder ? 1 : 2).map(commandNextAction)].join("");
+	const system = (name: string, symbol: string, detail: string, attributes: string, label = `${name}: ${detail}`, attention = false) => `<button class="command-system" ${attributes} aria-label="${e(label)}"><span class="system-symbol" aria-hidden="true">${icon(symbol,20)}</span><span><strong>${e(name)}</strong><b>${e(detail)}</b></span>${attention ? '<i class="system-attention"></i>' : ""}</button>`;
+	const tools = [
+		system("Производство", "scrap", `${summary.queuedJobs} заказов · ${staffed} рабочих`, `data-command-room="${productionTarget?.roomId ?? ""}" data-command-tab="${productionTarget?.tab ?? "production"}" data-focus-key="command-production"`),
+		system("Арсенал", "arsenal", `${state.weapons.length} пушек · ${state.modules.length} модулей`, 'data-page="arsenal"'),
+		system("Поручения", "contracts", ready.length ? `${ready.length} наград готово` : `${state.claimedContracts.length} выполнено`, 'data-page="contracts"', undefined, ready.length > 0),
+		system("Снабжение", "backpack", "Закупки и материалы", 'data-action="open-market"'),
+		system("Журнал", "journal", last ? `${last.scavName}: ${last.success ? "вернулся" : "потери"}` : "Отчёты о выходах", 'data-page="journal"'),
+		system("Память отряда", "intel", `${state.blueprints.length} открытий`, 'data-action="open-discoveries"'),
+	].join("");
+	return `<div class="command-overview-head"><span class="eyebrow">Дела базы</span><strong>${counts}</strong><small>${summary.freeWorkers} свободных бойцов${summary.counts.building ? ` · ${summary.counts.building} строек` : ""}${state.shelter.expansions.length ? ` · стен в работе: ${state.shelter.expansions.length}` : ""}</small></div><div class="command-priority-band"><span class="command-priority-counts">${counts}</span>${nextSteps || `<div class="command-flow-status">${icon(summary.counts.building ? "time" : "check",19)}<span><strong>${summary.counts.building ? "Строительство идёт" : running ? "Производство идёт" : summary.counts.ready ? "Партии готовы" : "Готовы к новому выходу"}</strong><small>${summary.queuedJobs} заказов · ${summary.freeWorkers} свободны</small></span></div>`}</div><div class="command-system-grid">${tools}</div>`;
 }
 function renderShelter() {
 	const recipeScroll = panel.querySelector<HTMLElement>(".room-module-recipes")?.scrollTop ?? 0;
@@ -1725,6 +1767,7 @@ document.addEventListener("click", (event) => {
 		return;
 	}
 	if (target.dataset.workerHandle) { beginKeyboardAssignment(target.dataset.workerHandle); return; }
+	if (target.dataset.action === "toggle-sound") { void toggleGameSound(); return; }
 	if (target.hasAttribute("data-worker-cancel")) { cancelWorkerPlacement(true, true); return; }
 	if (target.dataset.workerRoom && workerPlacement?.mode === "keyboard") {
 		const reason = getWorkerAssignmentReason(state, workerPlacement.scavId, target.dataset.workerRoom);
@@ -1791,23 +1834,23 @@ document.addEventListener("click", (event) => {
 			toolOrigin = target; page = "arsenal"; arsenalTab = "market"; render(); document.querySelector<HTMLButtonElement>('[data-action="close-tools"]')?.focus(); break;
 		case "excavate-wall": {
 			const result = excavateShelter(state, Number(target.dataset.column), Number(target.dataset.row));
-			act(result); return;
+			act(result, "build"); return;
 		}
 		case "build-room": {
 			const column = Number(target.dataset.column), row = Number(target.dataset.row);
 			const result = buildRoom(state, target.dataset.roomType as ShelterRoomType, column, row);
 			if (result.ok) { selectedRoomId = state.shelter.rooms.find((room) => room.column === column && room.row === row)?.id ?? null; selectedShelterSite = null; contextMode = "room"; roomContextTab = "upgrade"; }
-			act(result);
+			act(result, "build");
 			break;
 		}
 		case "upgrade-room":
-			act(upgradeRoom(state, id));
+			act(upgradeRoom(state, id), "build");
 			break;
 		case "assign-worker":
-			act(assignWorker(state, chosenWorkers.get(id) ?? "", id));
+			act(assignWorker(state, chosenWorkers.get(id) ?? "", id), "assign");
 			break;
 		case "release-worker":
-			act(assignWorker(state, id, null));
+			act(assignWorker(state, id, null), "assign");
 			break;
 		case "open-work-room":
 			openShelterRoom(id);
@@ -2280,6 +2323,7 @@ function watchRaid(id: string) {
 	render(); worldViewport.focus({preventScroll:true});
 }
 function setView(view: "base" | "map" | "raid") {
+	updateSceneHover(null);
 	if (view === "raid") {
 		const target = state.raids.find(raid => raid.id === selectedRaidId) ?? (lastWatchedRaid?.id === selectedRaidId ? null : state.raids[0]);
 		if (target) { selectedRaidId = target.id; lastWatchedRaid = target; world?.selectRaid(target.id); }
@@ -2327,6 +2371,7 @@ world = createWorld(
 		document.querySelector<HTMLButtonElement>('[data-action="close-tools"]')?.focus();
 	},
 	{ canInteract: canWorldInteract,
+		onHover: updateSceneHover,
 		canCamera: canWorldCamera,
 		onCameraChange: onWorldCameraChange,
 		canDrag: canWorldDrag,
@@ -2361,6 +2406,26 @@ function notifyCompleted(summary: AdvanceSummary) {
 		if (report) toast(`${report.scavName}: ${report.description}`, report.success);
 	}
 }
+let feedbackCursor = createGameFeedbackCursor(state, initialSession.view === "raid" ? initialSession.raidId : null);
+const resourcePulseTimers = new Map<HTMLElement, ReturnType<typeof setTimeout>>();
+function pulseResourceGains(gains: GameResourceGains) {
+	for (const [key, gain] of Object.entries(gains)) {
+		if (gain <= 0) continue;
+		const resource = document.querySelector<HTMLElement>(`#res-${key}`)?.closest<HTMLElement>(".resource");
+		if (!resource) continue;
+		const previous = resourcePulseTimers.get(resource); if (previous) clearTimeout(previous);
+		resource.dataset.gain = `+${n(gain)}`; resource.classList.add("resource-pop");
+		resourcePulseTimers.set(resource, setTimeout(() => { resource.classList.remove("resource-pop"); delete resource.dataset.gain; resourcePulseTimers.delete(resource); }, 1300));
+	}
+}
+function updateGameFeedback(quiet = false) {
+	const feedback = observeGameFeedback(feedbackCursor, state, worldView === "raid" ? selectedRaidId : null);
+	feedbackCursor = feedback.cursor;
+	if (!quiet) {
+		for (const event of feedback.events) gameSound.play(event.cue);
+		if (feedback.events.some((event) => event.cue === "complete" || event.cue === "return")) pulseResourceGains(feedback.gains);
+	}
+}
 const simulationTimer = setInterval(() => {
 	if (document.hidden || !ownsSaveLease || protectedSave || storedProgressChanged()) return;
 	const beforeLevel = state.level,
@@ -2368,6 +2433,7 @@ const simulationTimer = setInterval(() => {
 		beforeShelter = shelterStatus(),
 		beforeContracts = readyContracts();
 	const summary = advance(state);
+	updateGameFeedback();
 	hud();
 	if (worldView === "raid") { const raid = watchedRaid(); if (raid) updateLiveRaidPanel(document.querySelector<HTMLElement>('#command-dock')!, raid, watchedReport(), state); }
 	if (
@@ -2387,6 +2453,7 @@ document.addEventListener("visibilitychange", () => {
 	if (document.hidden) { cancelWorkerPlacement(false, true); world?.cancelCameraGesture(); persist(); }
 	else if (ownsSaveLease && !protectedSave && !storedProgressChanged()) {
 		const summary = advance(state);
+		updateGameFeedback(true);
 		if (summary.elapsedMs >= 60_000 || summary.completedCount) offlineSummary = summary;
 		refreshAfterAdvance();
 		persist();
@@ -2409,6 +2476,8 @@ const responsiveContext = () => {
 window.addEventListener("resize", responsiveContext);
 import.meta.hot?.dispose(() => {
 	cancelWorkerPlacement();
+	gameSound.destroy();
+	for (const timer of resourcePulseTimers.values()) clearTimeout(timer); resourcePulseTimers.clear();
 	persist();
 	clearInterval(simulationTimer);
 	clearTimeout(toastTimer);
