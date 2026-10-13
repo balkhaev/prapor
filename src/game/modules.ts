@@ -1,7 +1,7 @@
 import { WEAPONS, type Attachment, type Rarity } from "./data";
 import { WEAPON_ROLES } from "./systems";
 
-export type ModuleSlot = "receiver" | "barrel" | "handguard" | "stock" | "magazine" | "optic" | "muzzle" | "foregrip";
+export type ModuleSlot = "receiver" | "barrel" | "handguard" | "stock" | "magazine" | "optic" | "muzzle" | "foregrip" | "mount" | "flashlight" | "laser";
 export interface ModuleInstance { id: string; modelId: string; durability: number; foundAt: number; legacyAttachments?: Record<Attachment, number> }
 export interface ModuleModel {
 	id: string; label: string; description: string; slot: ModuleSlot;
@@ -10,13 +10,13 @@ export interface ModuleModel {
 	stats: { damage: number; ergonomics: number; recoil: number; reliability: number; weight: number; ammoMultiplier: number };
 	craftCost: { money: number; scrap: number }; workshopLevel: number; lootTier: number;
 }
-export const MODULE_SLOTS: ModuleSlot[] = ["receiver", "barrel", "handguard", "stock", "magazine", "optic", "muzzle", "foregrip"];
+export const MODULE_SLOTS: ModuleSlot[] = ["receiver", "barrel", "handguard", "stock", "magazine", "optic", "muzzle", "foregrip", "mount", "flashlight", "laser"];
 export const MODULE_PLATFORM_LABELS: Record<string, string> = {
 	pm: "ПМ", tt: "ТТ", toz: "ТОЗ-106", mp133: "МР-133", kedr: "Кедр", sks: "СКС",
 	ak: "АК", saiga: "Сайга", vityaz: "Витязь", mosin: "Мосинка", val: "ВАЛ / ВСС", rpk: "РПК", svd: "СВД", pkp: "ПКП",
 };
 export const modulePlatformLabel = (platform: string) => Object.hasOwn(MODULE_PLATFORM_LABELS, platform) ? MODULE_PLATFORM_LABELS[platform]! : platform.toUpperCase();
-export const MODULE_SLOT_LABELS: Record<ModuleSlot, string> = { receiver: "Ствольная коробка", barrel: "Ствол", handguard: "Цевьё", stock: "Приклад", magazine: "Магазин", optic: "Прицел", muzzle: "Дульное устройство", foregrip: "Рукоять" };
+export const MODULE_SLOT_LABELS: Record<ModuleSlot, string> = { receiver: "Ствольная коробка", barrel: "Ствол", handguard: "Цевьё", stock: "Приклад", magazine: "Магазин", optic: "Прицел", muzzle: "Дульное устройство", foregrip: "Рукоять", mount: "Крепление", flashlight: "Фонарь", laser: "Лазер" };
 const platforms: Record<string, [string, string]> = {
 	pm: ["pm", "9x18"], tt: ["tt", "7.62x25"], toz: ["toz", "20g"], mp133: ["mp133", "12g"],
 	pp91: ["kedr", "9x18"], sks: ["sks", "7.62x39"], ak74: ["ak", "5.45x39"], saiga: ["saiga", "12g"],
@@ -211,4 +211,97 @@ model("foregrip-bipod", "Сошки «Опора»", "foregrip", "Отдача �
 model("foregrip-folding", "Складная рукоять «Шарнир»", "foregrip", "Отдача −10 без потери удобства. Вес 0,26 кг, надёжность −2; нужна нижняя планка.", {
 	appearance: "folding", value: 165, rarity: "rare", workshopLevel: 3, lootTier: 3, requiresMount: "rail-bottom", stats: stats({ recoil: -10, reliability: -2, weight: 0.26 }),
 });
+
+// Physical accessory sockets supplement the existing rails and muzzle threads.
+// Integral suppressors, pistol barrels and shortened barrels cannot take a clamp.
+// Wide collars need a full-size barrel or the long/fluted compact replacement.
+for (const part of MODULE_MODELS) {
+	if (part.slot === "handguard" && ["rail", "carbon"].includes(part.appearance)) {
+		part.providesMounts.push("rail-side");
+		part.description = part.description.replace("для прицела и рукояти", "для прицела, рукояти, фонаря и лазера").replace("две планки", "три планки");
+	}
+	if (part.slot === "barrel" && part.appearance !== "short" && part.platforms.every((platform) => !["pm", "tt", "val"].includes(platform))) {
+		part.providesMounts = [...part.providesMounts];
+		part.providesMounts.push("barrel-clamp");
+		if (["long", "fluted"].includes(part.appearance) || part.platforms.every((platform) => !["kedr", "toz"].includes(platform))) part.providesMounts.push("barrel-clamp-wide");
+	}
+}
+
+const accessoryMounts: { id: string; label: string; description: string; requiresMount: string; providesMounts: string[]; value: number; rarity: Rarity; workshopLevel: number; weight: number; ergonomics: number; reliability: number }[] = [
+	{ id: "dovetail-low", label: "Низкий боковой кронштейн «Основа»", description: "Садится на ласточкин хвост. Верхняя планка для прицела и боковая для света; низкая линия прицеливания.", requiresMount: "dovetail", providesMounts: ["rail-top", "rail-side"], value: 90, rarity: "common", workshopLevel: 1, weight: .18, ergonomics: -2, reliability: 1 },
+	{ id: "dovetail-high", label: "Высокий кронштейн «Просвет»", description: "Высокая верхняя планка над коробкой и боковой порт. Тяжелее низкого кронштейна, но прочнее.", requiresMount: "dovetail", providesMounts: ["rail-top", "rail-side"], value: 125, rarity: "uncommon", workshopLevel: 2, weight: .27, ergonomics: -4, reliability: 2 },
+	{ id: "dovetail-qd", label: "Быстросъёмный кронштейн «Рычаг»", description: "Замок с рычагом на ласточкин хвост; открывает верхнюю и боковую планки. Легче, но замок снижает надёжность.", requiresMount: "dovetail", providesMounts: ["rail-top", "rail-side"], value: 185, rarity: "rare", workshopLevel: 3, weight: .15, ergonomics: -1, reliability: -2 },
+	{ id: "dovetail-bridge", label: "Усиленный кронштейн «Мост»", description: "Длинный мост на ласточкин хвост с верхней и боковой планками. Жёсткая опора тяжёлой оптики; вес 0,38 кг.", requiresMount: "dovetail", providesMounts: ["rail-top", "rail-side"], value: 240, rarity: "epic", workshopLevel: 4, weight: .38, ergonomics: -6, reliability: 4 },
+	{ id: "barrel-ring", label: "Кольцевой хомут «Обхват»", description: "Обжимает открытый ствол; добавляет боковую планку для фонаря и лазера. Верхнюю планку не создаёт.", requiresMount: "barrel-clamp", providesMounts: ["rail-side"], value: 45, rarity: "common", workshopLevel: 1, weight: .12, ergonomics: -2, reliability: 0 },
+	{ id: "barrel-dual", label: "Двойной хомут «Пара»", description: "Две стяжки на стволе удерживают боковую планку. Прочнее кольцевого, но тяжелее. Нужно место для широкого хомута.", requiresMount: "barrel-clamp-wide", providesMounts: ["rail-side"], value: 90, rarity: "uncommon", workshopLevel: 2, weight: .23, ergonomics: -3, reliability: 2 },
+	{ id: "barrel-long", label: "Длинный хомут «Балка»", description: "Боковая направляющая на длинной стяжке ствола. Жёсткая опора крупных устройств; заметно утяжеляет переднюю часть. Нужно место для широкого хомута.", requiresMount: "barrel-clamp-wide", providesMounts: ["rail-side"], value: 135, rarity: "rare", workshopLevel: 3, weight: .32, ergonomics: -5, reliability: 3 },
+	{ id: "barrel-offset", label: "Смещённый хомут «Обход»", description: "Выносит боковую планку в сторону от ствола. Компактная стяжка легче, но менее надёжна.", requiresMount: "barrel-clamp", providesMounts: ["rail-side"], value: 115, rarity: "uncommon", workshopLevel: 2, weight: .1, ergonomics: -1, reliability: -1 },
+	{ id: "bottom-short", label: "Короткий нижний переходник «Уголок»", description: "Нижняя планка цевья служит основанием короткой боковой планки. Рукоять остаётся в собственном слоте.", requiresMount: "rail-bottom", providesMounts: ["rail-side"], value: 50, rarity: "common", workshopLevel: 1, weight: .08, ergonomics: -1, reliability: 0 },
+	{ id: "bottom-wide", label: "Широкий нижний переходник «Скоба»", description: "Скоба с двумя винтами ставится на нижнюю планку и открывает боковую. Вес выше, соединение прочнее.", requiresMount: "rail-bottom", providesMounts: ["rail-side"], value: 105, rarity: "uncommon", workshopLevel: 2, weight: .17, ergonomics: -3, reliability: 2 },
+	{ id: "bottom-offset", label: "Нижний вынос «Фланг»", description: "Уводит боковые устройства от нижней рукояти. Требует нижнюю планку; лёгкая выносная опора снижает надёжность.", requiresMount: "rail-bottom", providesMounts: ["rail-side"], value: 155, rarity: "rare", workshopLevel: 3, weight: .11, ergonomics: -1, reliability: -1 },
+	{ id: "top-offset", label: "Верхний вынос «Плечо»", description: "Ставится на существующую верхнюю планку и добавляет боковую. Не заменяет отсутствие верхней планки.", requiresMount: "rail-top", providesMounts: ["rail-side"], value: 80, rarity: "uncommon", workshopLevel: 2, weight: .12, ergonomics: -2, reliability: 0 },
+	{ id: "top-triple", label: "Верхняя тройная планка «Разветвитель»", description: "Разветвляет верхнюю планку на боковые позиции фонаря и лазера. Массивное основание с жёсткими винтами.", requiresMount: "rail-top", providesMounts: ["rail-side"], value: 170, rarity: "rare", workshopLevel: 3, weight: .25, ergonomics: -4, reliability: 2 },
+	{ id: "top-light", label: "Облегчённая боковая планка «Ребро»", description: "Перфорированный переходник с верхней планки на боковую. Вес 0,06 кг, но тонкая конструкция менее надёжна.", requiresMount: "rail-top", providesMounts: ["rail-side"], value: 225, rarity: "epic", workshopLevel: 4, weight: .06, ergonomics: -1, reliability: -2 },
+];
+for (const part of accessoryMounts) {
+	model(`mount-${part.id}`, part.label, "mount", `${part.description} Удобство ${part.ergonomics}, надёжность ${part.reliability >= 0 ? "+" : ""}${part.reliability}.`, {
+		appearance: part.id, requiresMount: part.requiresMount, providesMounts: part.providesMounts,
+		value: part.value, rarity: part.rarity, workshopLevel: part.workshopLevel, lootTier: part.workshopLevel,
+		stats: stats({ weight: part.weight, ergonomics: part.ergonomics, reliability: part.reliability }),
+	});
+}
+const flashlights: { id: string; label: string; description: string; value: number; rarity: Rarity; workshopLevel: number; weight: number; damage: number; ergonomics: number; reliability: number }[] = [
+	{ id: "mini", label: "Мини-фонарь «Светляк»", description: "Короткий узкий корпус с одной батарейкой; самый лёгкий свет для ближнего осмотра.", value: 65, rarity: "common", workshopLevel: 1, weight: .09, damage: 1, ergonomics: 0, reliability: -1 },
+	{ id: "long", label: "Длинный фонарь «Луч»", description: "Длинная батарейная трубка и крупная линза. Яркий свет, но передняя часть оружия тяжелее.", value: 145, rarity: "uncommon", workshopLevel: 2, weight: .31, damage: 3, ergonomics: -5, reliability: -1 },
+	{ id: "armored", label: "Защищённый фонарь «Броня»", description: "Ребристый металлический кожух защищает электронику. Тяжёлый, зато надёжный.", value: 215, rarity: "rare", workshopLevel: 3, weight: .28, damage: 2, ergonomics: -4, reliability: 3 },
+	{ id: "wide", label: "Широкий фонарь «Заливка»", description: "Плоская широкая головка освещает ближние углы. Большой корпус цепляется за снаряжение.", value: 125, rarity: "uncommon", workshopLevel: 2, weight: .22, damage: 2, ergonomics: -3, reliability: 0 },
+	{ id: "angled", label: "Угловой фонарь «Поворот»", description: "Головка смещена от батарейной трубки. Короткий корпус удобнее длинного, но шарнир уязвим.", value: 165, rarity: "rare", workshopLevel: 3, weight: .14, damage: 2, ergonomics: -1, reliability: -2 },
+	{ id: "taped", label: "Обмотанный фонарь «Изолента»", description: "Потёртый корпус обмотан лентой; ставится на настоящую боковую планку через штатный зажим.", value: 40, rarity: "common", workshopLevel: 1, weight: .18, damage: 1, ergonomics: -2, reliability: -3 },
+	{ id: "focus", label: "Фокусируемый фонарь «Даль»", description: "Большая линза и кольцо фокусировки дают направленный свет. Сложнее и тяжелее простого фонаря.", value: 285, rarity: "epic", workshopLevel: 4, weight: .27, damage: 4, ergonomics: -5, reliability: -2 },
+	{ id: "scout", label: "Компактный фонарь «Разведчик»", description: "Узкий защищённый корпус с утопленной кнопкой. Дорогой свет с небольшим весом.", value: 235, rarity: "rare", workshopLevel: 3, weight: .12, damage: 2, ergonomics: -1, reliability: 1 },
+];
+for (const part of flashlights) {
+	model(`flashlight-${part.id}`, part.label, "flashlight", `${part.description} +${part.damage} огневой мощи, ${part.ergonomics} удобства, ${part.reliability >= 0 ? "+" : ""}${part.reliability} надёжности. Нужна боковая планка.`, {
+		appearance: part.id, requiresMount: "rail-side", value: part.value, rarity: part.rarity, workshopLevel: part.workshopLevel, lootTier: part.workshopLevel,
+		stats: stats({ weight: part.weight, damage: part.damage, ergonomics: part.ergonomics, reliability: part.reliability }),
+	});
+}
+const lasers: { id: string; label: string; description: string; value: number; rarity: Rarity; workshopLevel: number; weight: number; damage: number; ergonomics: number; recoil: number; reliability: number }[] = [
+	{ id: "micro", label: "Микролазер «Иголка»", description: "Короткий тонкий излучатель с красной линзой. Лёгкая подсказка для ближнего наведения.", value: 90, rarity: "common", workshopLevel: 1, weight: .06, damage: 1, ergonomics: 2, recoil: 0, reliability: -1 },
+	{ id: "box", label: "Коробчатый лазер «Метка»", description: "Прямоугольный корпус с винтами поправок. Зеленая линза и широкое основание.", value: 145, rarity: "uncommon", workshopLevel: 2, weight: .16, damage: 3, ergonomics: -2, recoil: -1, reliability: 0 },
+	{ id: "tube", label: "Трубчатый лазер «Нить»", description: "Длинная тонкая трубка с красным излучателем. Недорогая настройка линии наведения.", value: 80, rarity: "common", workshopLevel: 1, weight: .12, damage: 2, ergonomics: -1, recoil: 0, reliability: -2 },
+	{ id: "dual", label: "Двойной лазер «Близнецы»", description: "Два излучателя в широком корпусе. Дороже и тяжелее одиночного указателя.", value: 235, rarity: "rare", workshopLevel: 3, weight: .24, damage: 4, ergonomics: -4, recoil: -2, reliability: -2 },
+	{ id: "range", label: "Лазерный дальномер «Отметка»", description: "Крупный блок с двумя окнами и дисплеем расстояния. Помогает наведению, но весит 0,35 кг.", value: 330, rarity: "epic", workshopLevel: 4, weight: .35, damage: 6, ergonomics: -6, recoil: -2, reliability: -3 },
+	{ id: "armored", label: "Защищённый лазер «Кожух»", description: "Усиленные углы и утопленная линза защищают модуль. Массивный зажим на боковую планку.", value: 225, rarity: "rare", workshopLevel: 3, weight: .23, damage: 3, ergonomics: -3, recoil: -2, reliability: 3 },
+	{ id: "offset", label: "Смещённый лазер «Касательная»", description: "Небольшой блок с выступающим излучателем, вынесенным от оси корпуса. Лёгкий, но уязвимый.", value: 170, rarity: "uncommon", workshopLevel: 2, weight: .09, damage: 2, ergonomics: 1, recoil: -1, reliability: -2 },
+	{ id: "precision", label: "Регулируемый лазер «Ориентир»", description: "Удлинённый блок с крупными барабанами поправок. Точное наведение стоит веса и удобства.", value: 290, rarity: "epic", workshopLevel: 4, weight: .2, damage: 5, ergonomics: -3, recoil: -3, reliability: 1 },
+];
+for (const part of lasers) {
+	model(`laser-${part.id}`, part.label, "laser", `${part.description} +${part.damage} огневой мощи, ${part.ergonomics >= 0 ? "+" : ""}${part.ergonomics} удобства, ${part.recoil} отдачи, ${part.reliability >= 0 ? "+" : ""}${part.reliability} надёжности. Нужна боковая планка.`, {
+		appearance: part.id, requiresMount: "rail-side", value: part.value, rarity: part.rarity, workshopLevel: part.workshopLevel, lootTier: part.workshopLevel,
+		stats: stats({ weight: part.weight, damage: part.damage, ergonomics: part.ergonomics, recoil: part.recoil, reliability: part.reliability }),
+	});
+}
 export const MODULE_BY_ID: Record<string, ModuleModel> = Object.fromEntries(MODULE_MODELS.map((item) => [item.id, item]));
+
+/** Only real, rooted connections expose rails: an adapter cannot support itself. */
+export function getResolvedModuleMounts(parts: Partial<Record<ModuleSlot, ModuleInstance>>, excludedSlot?: ModuleSlot): string[] {
+	const pending = MODULE_SLOTS.flatMap((slot) => {
+		const item = parts[slot];
+		const definition = item && Object.hasOwn(MODULE_BY_ID, item.modelId) ? MODULE_BY_ID[item.modelId] : undefined;
+		return slot !== excludedSlot && definition?.slot === slot ? [definition] : [];
+	});
+	const mounts = new Set<string>();
+	let progressed = true;
+	while (progressed) {
+		progressed = false;
+		for (let index = pending.length - 1; index >= 0; index--) {
+			const part = pending[index]!;
+			if (part.requiresMount && !mounts.has(part.requiresMount)) continue;
+			for (const mount of part.providesMounts) mounts.add(mount);
+			pending.splice(index, 1);
+			progressed = true;
+		}
+	}
+	return [...mounts];
+}
