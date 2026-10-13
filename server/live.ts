@@ -1,8 +1,9 @@
 import { Database } from "bun:sqlite";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomInt, randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { LIVE_CAPACITY, LIVE_SERVER_ID, LIVE_SERVER_NAME, type LiveCommand, type LiveDrop, type LiveEntity, type LiveEvent, type LivePlayer, type LivePoint, type LiveSnapshot, type LiveStatus, type LiveWorld } from "../src/game/live";
+import { LIVE_CAPACITY, LIVE_SERVER_ID, LIVE_SERVER_NAME, type LiveCommand, type LiveDrop, type LiveEntity, type LiveEvent, type LiveMapId, type LivePlayer, type LivePoint, type LiveSnapshot, type LiveStatus, type LiveWorld } from "../src/game/live";
+import { hasLiveLineOfSight, isLiveWalkable, LIVE_MAPS } from "../src/game/live-maps";
 import type { AccountService } from "./accounts";
 
 export interface LiveOptions {
@@ -22,30 +23,44 @@ export interface LiveService {
   close(): void;
 }
 interface Participant extends LiveEntity, LivePlayer {
+  mapId: LiveMapId;
   identity: string;
   online: boolean;
   heartbeat: number;
   destination: LivePoint | null;
   nextMove: number;
   nextAttack: number;
+  lastCombatAt: number;
+  disconnectAt: number;
 }
-interface Scav extends LiveEntity { respawnAt: number; nextMove: number; nextAttack: number }
-interface Drop extends LiveDrop { expiresAt: number }
+interface Scav extends LiveEntity {
+  mapId: LiveMapId; faction: "scavs" | "raiders"; role: "patrol" | "guard" | "marksman";
+  home: LivePoint; route: LivePoint[]; routeIndex: number; spawnIndex: number;
+  respawnAt: number; nextMove: number; nextAttack: number;
+}
+interface Drop extends LiveDrop { mapId: LiveMapId; expiresAt: number; source?: "supply" | "body" }
+interface MapEvent extends LiveEvent { mapId: LiveMapId }
 const TICK_MS = 250, HEARTBEAT_MS = 15_000, RESPAWN_MS = 10_000, COOKIE_SECONDS = 30 * 24 * 60 * 60;
-const WORLD: LiveWorld = {
-  width: 32, height: 24,
-  obstacles: [
-    { x: 7, y: 4, width: 4, height: 4 }, { x: 16, y: 3, width: 3, height: 6 },
-    { x: 23, y: 6, width: 5, height: 3 }, { x: 4, y: 13, width: 5, height: 4 },
-    { x: 12, y: 12, width: 6, height: 3 }, { x: 22, y: 15, width: 4, height: 5 },
-  ],
-  extracts: [{ x: 2, y: 2 }, { x: 29, y: 21 }],
+const DEFAULT_MAP: LiveMapId = "customs", WORLD_VERSION = 2, TRAVEL_MS = 30_000, COMBAT_TRAVEL_MS = 8000;
+const maps = new Map(LIVE_MAPS.map(map => [map.id, map]));
+const mapFrom = (id: unknown): LiveMapId | null => typeof id === "string" && maps.has(id as LiveMapId) ? id as LiveMapId : null;
+const worldFor = (id: LiveMapId): LiveWorld => {
+  const { npcSpawns: _npcs, lootSpawns: _loot, ...world } = maps.get(id)!;
+  return world;
 };
+const terrain = new Map(LIVE_MAPS.map(map => {
+  const blocked = new Set<number>();
+  for (let y = 0; y < map.height; y++) for (let x = 0; x < map.width; x++) if (!isLiveWalkable(map, { x, y })) blocked.add(y * map.width + x);
+  return [map.id, blocked];
+}));
 const hashToken = (token: string): string => createHash("sha256").update(token).digest("hex");
 const distance = (a: LivePoint, b: LivePoint): number => Math.hypot(a.x - b.x, a.y - b.y);
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 const exactKeys = (body: Record<string, unknown>, keys: string[]): boolean => Object.keys(body).length === keys.length && keys.every(key => Object.hasOwn(body, key));
-const walkable = ({ x, y }: LivePoint): boolean => Number.isInteger(x) && Number.isInteger(y) && x >= 0 && y >= 0 && x < WORLD.width && y < WORLD.height && !WORLD.obstacles.some(wall => x >= wall.x && x < wall.x + wall.width && y >= wall.y && y < wall.y + wall.height);
+const walkable = (mapId: LiveMapId, { x, y }: LivePoint): boolean => {
+  const world = maps.get(mapId)!;
+  return Number.isInteger(x) && Number.isInteger(y) && x >= 0 && y >= 0 && x < world.width && y < world.height && !terrain.get(mapId)!.has(y * world.width + x);
+};
 
 class LiveError extends Error {
   constructor(readonly status: number, readonly code: string, readonly retryAfter?: number) { super(code); }
@@ -85,10 +100,15 @@ async function readJson(request: Request): Promise<Record<string, unknown>> {
     return value;
   } catch { throw new LiveError(400, "invalid_json"); }
 }
-function commandFrom(body: Record<string, unknown>): LiveCommand {
+function commandFrom(body: Record<string, unknown>, mapId: LiveMapId): LiveCommand {
   if (typeof body.type !== "string") throw new LiveError(400, "invalid_command");
-  if (body.type === "move" && exactKeys(body, ["type", "x", "y"]) && typeof body.x === "number" && typeof body.y === "number" && walkable({ x: body.x, y: body.y })) return { type: "move", x: body.x, y: body.y };
+  if (body.type === "move" && exactKeys(body, ["type", "x", "y"]) && typeof body.x === "number" && typeof body.y === "number" && walkable(mapId, { x: body.x, y: body.y })) return { type: "move", x: body.x, y: body.y };
   if (body.type === "attack" && exactKeys(body, ["type", "targetId"]) && typeof body.targetId === "string" && /^[a-zA-Z0-9_-]{1,80}$/.test(body.targetId)) return { type: "attack", targetId: body.targetId };
+  if (body.type === "engage" && exactKeys(body, ["type", "targetId"]) && (body.targetId === null || typeof body.targetId === "string" && /^[a-zA-Z0-9_-]{1,80}$/.test(body.targetId))) return { type: "engage", targetId: body.targetId };
+  if (body.type === "travel" && exactKeys(body, ["type", "mapId"])) {
+    const destination = mapFrom(body.mapId);
+    if (destination) return { type: "travel", mapId: destination };
+  }
   if (body.type === "loot" && exactKeys(body, ["type", "id"]) && typeof body.id === "string" && /^[a-zA-Z0-9_-]{1,80}$/.test(body.id)) return { type: "loot", id: body.id };
   if (body.type === "patrol" && exactKeys(body, ["type", "enabled"]) && typeof body.enabled === "boolean") return { type: "patrol", enabled: body.enabled };
   if (["heal", "extract", "respawn"].includes(body.type) && exactKeys(body, ["type"])) return { type: body.type as "heal" | "extract" | "respawn" };
@@ -104,9 +124,9 @@ export function readLiveOptions(env: Record<string, string | undefined>, account
   };
 }
 
-/** One authoritative, persistent world. Browsers submit intents, never simulation state. */
+/** One authoritative server with persistent shared maps. Browsers submit intents, never simulation state. */
 export function createLiveService(options: LiveOptions): LiveService {
-  const now = options.now ?? Date.now, random = options.random ?? Math.random, secure = options.secureCookies ?? true;
+  const now = options.now ?? Date.now, random = options.random ?? (() => randomInt(0x1_0000_0000) / 0x1_0000_0000), secure = options.secureCookies ?? true;
   const cookieName = secure ? "__Host-prapor_live" : "prapor_live";
   const origins = new Set(options.allowedOrigins ?? ["https://game.delopusk.ru", "https://game.balkhaev.com"]), hosts = new Set<string>();
   for (const origin of origins) {
@@ -124,7 +144,9 @@ export function createLiveService(options: LiveOptions): LiveService {
     CREATE INDEX IF NOT EXISTS live_guest_expiry ON live_guests(expires_at);
     CREATE TABLE IF NOT EXISTS live_world(id INTEGER PRIMARY KEY CHECK(id=1), state TEXT NOT NULL);`);
   const players = new Map<string, Participant>(), scavs = new Map<string, Scav>(), drops = new Map<string, Drop>();
-  let startedAt = now(), events: LiveEvent[] = [], closed = false, failed = false, lastSave = now(), lastTick = now(), lastCleanup = now();
+  const lootCooldowns = new Map<string, number>();
+  const lootKey = (mapId: LiveMapId, point: LivePoint): string => `${mapId}:${point.x}:${point.y}`;
+  let startedAt = now(), events: MapEvent[] = [], closed = false, failed = false, lastSave = now(), lastTick = now(), lastCleanup = now();
   const readGuest = db.query<{ identity: string }, [string, number]>("SELECT identity FROM live_guests WHERE token_hash=? AND expires_at>?");
   const savePlayer = db.query("INSERT INTO live_players(identity,state) VALUES(?,?) ON CONFLICT(identity) DO UPDATE SET state=excluded.state");
   const saveWorld = db.query("INSERT INTO live_world(id,state) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET state=excluded.state");
@@ -133,71 +155,117 @@ export function createLiveService(options: LiveOptions): LiveService {
     const row = readPlayer.get(identity);
     if (!row) return undefined;
     const player = JSON.parse(row.state) as Participant;
-    if (player.identity !== identity || !walkable(player)) throw new Error("Invalid stored live player");
+    if (player.identity !== identity) throw new Error("Invalid stored live player");
+    player.mapId = mapFrom(player.mapId) ?? DEFAULT_MAP;
+    if (!walkable(player.mapId, player)) Object.assign(player, pickPoint(player.mapId, true));
+    player.targetId = null; player.travelReadyAt ??= 0; player.lastCombatAt ??= 0; player.disconnectAt = 0;
     player.online = false; player.destination = null; player.patrol = false; player.action = player.health <= 0 ? "downed" : "idle";
     return player;
   };
-  const stored = db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get();
-  if (stored) {
-    const world = JSON.parse(stored.state) as { startedAt: number; scavs: Scav[]; drops: Drop[]; events: LiveEvent[] };
-    startedAt = world.startedAt;
-    for (const scav of world.scavs) scavs.set(scav.id, scav);
-    for (const drop of world.drops) if (drop.expiresAt > now()) drops.set(drop.id, drop);
-    events = world.events.slice(-40);
-  }
-  const event = (kind: LiveEvent["kind"], text: string, actorId?: string, targetId?: string): void => {
-    events.push({ id: randomUUID(), at: now(), kind, text, ...(actorId ? { actorId } : {}), ...(targetId ? { targetId } : {}) });
-    events = events.slice(-40);
-  };
-  const occupied = (point: LivePoint, exceptId?: string): boolean => [...players.values(), ...scavs.values()].some(entity => entity.id !== exceptId && entity.health > 0 && (!("online" in entity) || entity.online) && entity.x === point.x && entity.y === point.y);
-  const clear = (point: LivePoint, exceptId?: string): boolean => walkable(point) && !occupied(point, exceptId);
-  const pickPoint = (spawn = false): LivePoint => {
-    const points: LivePoint[] = [];
-    for (let y = 0; y < WORLD.height; y++) for (let x = 0; x < WORLD.width; x++) {
-      const point = { x, y };
-      if (clear(point) && (!spawn || WORLD.extracts.some(exit => distance(point, exit) <= 4))) points.push(point);
+  const event = (mapId: LiveMapId, kind: LiveEvent["kind"], text: string, actorId?: string, targetId?: string, shot?: Pick<LiveEvent, "from" | "to" | "damage">): void => {
+    events.push({ mapId, id: randomUUID(), at: now(), kind, text, ...(actorId ? { actorId } : {}), ...(targetId ? { targetId } : {}), ...shot });
+    // Each map keeps its own recent feed, even when another map has a busy battle.
+    for (const map of LIVE_MAPS) {
+      const local = events.filter(item => item.mapId === map.id);
+      if (local.length > 40) { const keep = new Set(local.slice(-40).map(item => item.id)); events = events.filter(item => item.mapId !== map.id || keep.has(item.id)); }
     }
-    return points[Math.min(points.length - 1, Math.floor(random() * points.length))] ?? { x: 0, y: 0 };
   };
-  const publicEntity = (entity: LiveEntity): LiveEntity => ({ id: entity.id, kind: entity.kind, name: entity.name, appearance: entity.appearance, health: entity.health, action: entity.action, safeUntil: entity.safeUntil, x: entity.x, y: entity.y });
+  const occupied = (mapId: LiveMapId, point: LivePoint, exceptId?: string): boolean => [...players.values(), ...scavs.values()].some(entity => entity.mapId === mapId && entity.id !== exceptId && entity.health > 0 && (!("online" in entity) || entity.online) && entity.x === point.x && entity.y === point.y);
+  const clear = (mapId: LiveMapId, point: LivePoint, exceptId?: string): boolean => walkable(mapId, point) && !occupied(mapId, point, exceptId);
+  const pickPoint = (mapId: LiveMapId, spawn = false): LivePoint => {
+    const world = maps.get(mapId)!;
+    const points: LivePoint[] = [];
+    for (let y = 0; y < world.height; y++) for (let x = 0; x < world.width; x++) {
+      const point = { x, y };
+      if (clear(mapId, point) && (!spawn || world.extracts.some(exit => distance(point, exit) <= 4))) points.push(point);
+    }
+    if (!points.length) {
+      if (spawn) return pickPoint(mapId);
+      throw new LiveError(503, "server_full");
+    }
+    const sheltered = spawn ? points.filter(point => ![...scavs.values()].some(scav => scav.mapId === mapId && scav.health > 0 && distance(point, scav) < 8)) : [];
+    const choices = sheltered.length ? sheltered : points;
+    return choices[Math.min(choices.length - 1, Math.floor(random() * choices.length))]!;
+  };
+  const publicEntity = (entity: LiveEntity): LiveEntity => ({ id: entity.id, kind: entity.kind, name: entity.name, appearance: entity.appearance, health: entity.health, action: entity.action, safeUntil: entity.safeUntil, x: entity.x, y: entity.y, ...(entity.faction ? { faction: entity.faction } : {}), ...(entity.role ? { role: entity.role } : {}) });
   const persist = (): void => {
     db.transaction(() => {
       for (const player of players.values()) savePlayer.run(player.identity, JSON.stringify(player));
-      saveWorld.run(JSON.stringify({ startedAt, scavs: [...scavs.values()], drops: [...drops.values()], events }));
+      saveWorld.run(JSON.stringify({ version: WORLD_VERSION, startedAt, scavs: [...scavs.values()], drops: [...drops.values()], events, lootCooldowns: [...lootCooldowns] }));
     })();
     lastSave = now();
   };
-  const spawnScav = (index: number): Scav => ({ ...pickPoint(), id: `scav-${index}`, kind: "scav", name: ["Косой", "Бродяга", "Шрам", "Лис", "Глухарь", "Рыжий"][index % 6]!, appearance: index % 32, health: 100, action: "idle", safeUntil: 0, respawnAt: 0, nextMove: now() + 750, nextAttack: 0 });
-  if (!scavs.size) for (let index = 0; index < 12; index++) scavs.set(`scav-${index}`, spawnScav(index));
-  const addDrop = (point: LivePoint, amount: number): void => {
-    const id = randomUUID();
-    drops.set(id, { id, x: point.x, y: point.y, amount, expiresAt: now() + 120_000 });
-  };
-  if (!drops.size) for (let index = 0; index < 10; index++) addDrop(pickPoint(), 10 + Math.floor(random() * 21));
-  const status = (): LiveStatus => ({ id: LIVE_SERVER_ID, name: LIVE_SERVER_NAME, online: [...players.values()].filter(player => player.online).length, capacity: LIVE_CAPACITY, startedAt });
-  const snapshot = (player: Participant): LiveSnapshot => ({
-    server: status(), now: now(), world: WORLD, selfId: player.id,
-    self: { id: player.id, ammo: player.ammo, medkits: player.medkits, cargo: player.cargo, stash: player.stash, kills: player.kills, respawnAt: player.respawnAt, patrol: player.patrol },
-    entities: [...players.values()].filter(player => player.online).map(publicEntity).concat([...scavs.values()].map(publicEntity)),
-    drops: [...drops.values()].map(drop => ({ id: drop.id, x: drop.x, y: drop.y, amount: drop.amount })), events,
-  });
-  const lineOfSight = (a: LivePoint, b: LivePoint): boolean => {
-    const steps = Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y)) * 4;
-    for (let index = 1; index < steps; index++) {
-      if (!walkable({ x: Math.round(a.x + (b.x - a.x) * index / steps), y: Math.round(a.y + (b.y - a.y) * index / steps) })) return false;
+  const spawnScav = (mapId: LiveMapId, index: number, id = `scav-${mapId}-${index}`): Scav => {
+    const spawn = maps.get(mapId)!.npcSpawns[index % maps.get(mapId)!.npcSpawns.length]!;
+    const nearby: LivePoint[] = [];
+    if (!clear(mapId, spawn.point, id)) for (let y = spawn.point.y - 4; y <= spawn.point.y + 4; y++) for (let x = spawn.point.x - 4; x <= spawn.point.x + 4; x++) {
+      const point = { x, y };
+      if (distance(point, spawn.point) <= 4 && clear(mapId, point, id) && !maps.get(mapId)!.extracts.some(exit => distance(exit, point) < 6)) nearby.push(point);
     }
-    return true;
+    nearby.sort((a, b) => distance(a, spawn.point) - distance(b, spawn.point));
+    const point = clear(mapId, spawn.point, id) ? spawn.point : nearby[0];
+    return { ...point, mapId, id, kind: "scav", name: spawn.faction === "raiders" ? ["Рейдер Борз", "Рейдер Яр", "Рейдер Туман", "Рейдер Север"][index % 4]! : ["Косой", "Бродяга", "Шрам", "Лис", "Глухарь", "Рыжий"][index % 6]!,
+      x: point?.x ?? spawn.point.x, y: point?.y ?? spawn.point.y,
+      appearance: (spawn.faction === "raiders" ? 16 : 0) + index % 16, faction: spawn.faction, role: spawn.role,
+      home: { ...spawn.point }, route: spawn.route.length ? spawn.route.map(point => ({ ...point })) : [{ ...spawn.point }], routeIndex: Math.max(0, spawn.route.findIndex(point => point.x === spawn.point.x && point.y === spawn.point.y)), spawnIndex: index,
+      health: point ? 100 : 0, action: point ? "idle" : "downed", safeUntil: 0, respawnAt: point ? 0 : now() + 1000, nextMove: now() + 750, nextAttack: now() + 1000 };
   };
-  const pathStep = (entity: LiveEntity, destination: LivePoint): LivePoint | null => {
+  const addDrop = (mapId: LiveMapId, point: LivePoint, amount: number, source: Drop["source"] = "body"): void => {
+    const id = randomUUID();
+    drops.set(id, { mapId, id, x: point.x, y: point.y, amount, source, expiresAt: now() + 120_000 });
+  };
+  const stored = db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get();
+  if (stored) {
+    const world = JSON.parse(stored.state) as { version?: number; startedAt: number; scavs: Scav[]; drops: Drop[]; events: MapEvent[]; lootCooldowns?: Array<[string, number]> };
+    startedAt = world.startedAt;
+    // Old NPC layouts are replaced once; verified player bodies and dropped cargo are retained.
+    for (const [index, scav] of (world.version === WORLD_VERSION ? world.scavs : []).entries()) {
+      scav.mapId = mapFrom(scav.mapId) ?? DEFAULT_MAP;
+      if (!walkable(scav.mapId, scav)) Object.assign(scav, pickPoint(scav.mapId));
+      scav.faction = scav.faction === "raiders" ? "raiders" : "scavs";
+      scav.role = ["patrol", "guard", "marksman"].includes(scav.role) ? scav.role : "patrol";
+      scav.home = scav.home && walkable(scav.mapId, scav.home) ? scav.home : { x: scav.x, y: scav.y };
+      scav.route = scav.route?.filter(point => walkable(scav.mapId, point)) ?? [scav.home];
+      if (!scav.route.length) scav.route = [scav.home];
+      scav.routeIndex ??= 0; scav.spawnIndex ??= index;
+      scavs.set(scav.id, scav);
+    }
+    for (const drop of world.drops) {
+      drop.mapId = mapFrom(drop.mapId) ?? DEFAULT_MAP;
+      if (drop.expiresAt > now() && walkable(drop.mapId, drop)) drops.set(drop.id, drop);
+    }
+    events = world.events.slice(-120).map(item => ({ ...item, mapId: mapFrom(item.mapId) ?? DEFAULT_MAP }));
+    for (const [key, ready] of world.lootCooldowns ?? []) if (ready > now()) lootCooldowns.set(key, ready);
+  }
+  for (const map of LIVE_MAPS) {
+    if (![...scavs.values()].some(scav => scav.mapId === map.id)) for (let index = 0; index < map.npcSpawns.length; index++) {
+      const scav = spawnScav(map.id, index); scavs.set(scav.id, scav);
+    }
+    if (![...drops.values()].some(drop => drop.mapId === map.id)) for (const point of map.lootSpawns) if ((lootCooldowns.get(lootKey(map.id, point)) ?? 0) <= now()) addDrop(map.id, point, 10 + Math.floor(random() * 21), "supply");
+  }
+  const status = (): LiveStatus => ({ id: LIVE_SERVER_ID, name: LIVE_SERVER_NAME, online: [...players.values()].filter(player => player.online).length, capacity: LIVE_CAPACITY, startedAt,
+    maps: LIVE_MAPS.map(map => ({ id: map.id, name: map.name, description: map.description, theme: map.theme, width: map.width, height: map.height,
+      online: [...players.values()].filter(player => player.online && player.mapId === map.id).length, npcs: [...scavs.values()].filter(scav => scav.mapId === map.id && scav.health > 0).length })) });
+  const snapshot = (player: Participant): LiveSnapshot => ({
+    server: status(), now: now(), world: worldFor(player.mapId), selfId: player.id,
+    self: { id: player.id, ammo: player.ammo, medkits: player.medkits, cargo: player.cargo, stash: player.stash, kills: player.kills, respawnAt: player.respawnAt, patrol: player.patrol, targetId: player.targetId, travelReadyAt: player.travelReadyAt },
+    entities: [...players.values()].filter(other => other.online && other.mapId === player.mapId).map(publicEntity).concat([...scavs.values()].filter(scav => scav.mapId === player.mapId).map(publicEntity)),
+    drops: [...drops.values()].filter(drop => drop.mapId === player.mapId).map(drop => ({ id: drop.id, x: drop.x, y: drop.y, amount: drop.amount })),
+    events: events.filter(item => item.mapId === player.mapId).slice(-40).map(({ mapId: _mapId, ...item }) => item),
+  });
+  const lineOfSight = (mapId: LiveMapId, a: LivePoint, b: LivePoint): boolean => hasLiveLineOfSight(maps.get(mapId)!, a, b);
+  const pathStep = (entity: Participant | Scav, destination: LivePoint): LivePoint | null => {
     if (entity.x === destination.x && entity.y === destination.y) return null;
-    const key = (point: LivePoint): number => point.y * WORLD.width + point.x;
+    const width = maps.get(entity.mapId)!.width;
+    const key = (point: LivePoint): number => point.y * width + point.x;
+    const occupiedCells = new Set([...players.values(), ...scavs.values()].filter(other => other.id !== entity.id && other.mapId === entity.mapId && other.health > 0 && (!("online" in other) || other.online)).map(key));
     const queue: LivePoint[] = [{ x: entity.x, y: entity.y }], parents = new Map<number, LivePoint | null>([[key(entity), null]]);
     let found: LivePoint | null = null;
     for (let index = 0; index < queue.length; index++) {
       const point = queue[index]!;
       if (point.x === destination.x && point.y === destination.y) { found = point; break; }
       for (const next of [{ x: point.x + 1, y: point.y }, { x: point.x - 1, y: point.y }, { x: point.x, y: point.y + 1 }, { x: point.x, y: point.y - 1 }]) {
-        if (!clear(next, entity.id) || parents.has(key(next))) continue;
+        if (!walkable(entity.mapId, next) || occupiedCells.has(key(next)) || parents.has(key(next))) continue;
         parents.set(key(next), point); queue.push(next);
       }
     }
@@ -211,38 +279,43 @@ export function createLiveService(options: LiveOptions): LiveService {
   const down = (target: Participant | Scav, attacker: Participant | Scav): void => {
     target.health = 0; target.action = "downed"; target.respawnAt = now() + RESPAWN_MS;
     const amount = "cargo" in target ? target.cargo : 25 + Math.floor(random() * 26);
-    if (amount > 0) addDrop(target, amount);
-    if ("cargo" in target) { target.cargo = 0; target.destination = null; target.patrol = false; }
+    if (amount > 0) addDrop(target.mapId, target, amount);
+    if ("cargo" in target) { target.cargo = 0; target.destination = null; target.patrol = false; target.targetId = null; }
     if ("kills" in attacker) attacker.kills++;
-    event("combat", `${attacker.name} победил ${target.name}.`, attacker.id, target.id);
   };
+  const rangeOf = (entity: Participant | Scav): number => entity.kind === "player" || "role" in entity && entity.role === "marksman" ? 7 : 5;
   const attack = (attacker: Participant | Scav, target: Participant | Scav): void => {
-    if (target.health <= 0 || attacker.health <= 0 || target.id === attacker.id || "online" in target && !target.online) throw new LiveError(409, "target_unavailable");
+    if (target.mapId !== attacker.mapId || target.health <= 0 || attacker.health <= 0 || target.id === attacker.id || "online" in target && !target.online) throw new LiveError(409, "target_unavailable");
     if (now() < target.safeUntil) throw new LiveError(409, "spawn_protection");
-    if (distance(attacker, target) > (attacker.kind === "player" ? 7 : 5) || !lineOfSight(attacker, target)) throw new LiveError(409, "target_out_of_range");
+    if (distance(attacker, target) > rangeOf(attacker) || !lineOfSight(attacker.mapId, attacker, target)) throw new LiveError(409, "target_out_of_range");
     if (attacker.nextAttack > now()) throw new LiveError(429, "action_cooldown", 1);
     if ("ammo" in attacker && attacker.ammo <= 0) throw new LiveError(409, "no_ammo");
     if ("ammo" in attacker) { attacker.ammo--; attacker.destination = null; }
     attacker.safeUntil = 0; attacker.nextAttack = now() + (attacker.kind === "player" ? 900 : 1500); attacker.action = "combat";
-    target.health = Math.max(0, target.health - (attacker.kind === "player" ? 25 : 15));
+    if ("lastCombatAt" in attacker) attacker.lastCombatAt = now();
+    if ("lastCombatAt" in target) target.lastCombatAt = now();
+    const damage = Math.min(target.health, attacker.kind === "player" ? 25 : "faction" in attacker && attacker.faction === "raiders" ? 20 : 15);
+    target.health -= damage;
     if (target.health <= 0) down(target, attacker);
-    else event("combat", `${attacker.name} стреляет в ${target.name}.`, attacker.id, target.id);
+    event(attacker.mapId, "combat", target.health <= 0 ? `${attacker.name} победил ${target.name}.` : `${attacker.name} стреляет в ${target.name}.`, attacker.id, target.id,
+      { from: { x: attacker.x, y: attacker.y }, to: { x: target.x, y: target.y }, damage });
   };
   const loot = (player: Participant, id: string): void => {
     const drop = drops.get(id);
-    if (!drop || drop.expiresAt <= now()) throw new LiveError(409, "loot_unavailable");
+    if (!drop || drop.mapId !== player.mapId || drop.expiresAt <= now()) throw new LiveError(409, "loot_unavailable");
     if (distance(player, drop) > 1.5) throw new LiveError(409, "loot_out_of_range");
     if (player.cargo + drop.amount > 500) throw new LiveError(409, "cargo_full");
     drops.delete(id); player.cargo += drop.amount;
-    event("loot", `${player.name} забрал груз: ${drop.amount}.`, player.id);
+    if (drop.source === "supply") lootCooldowns.set(lootKey(player.mapId, drop), now() + 30_000);
+    event(player.mapId, "loot", `${player.name} забрал груз: ${drop.amount}.`, player.id);
   };
   const respawn = (player: Participant): void => {
     if (player.health > 0) throw new LiveError(409, "already_alive");
     if (player.respawnAt > now()) throw new LiveError(409, "respawn_not_ready");
-    const point = pickPoint(true);
+    const point = pickPoint(player.mapId, true);
     player.x = point.x; player.y = point.y; player.health = 100; player.ammo = 60; player.medkits = 2; player.cargo = 0;
-    player.respawnAt = 0; player.safeUntil = now() + 5000; player.destination = null; player.action = "idle"; player.nextAttack = 0;
-    event("respawn", `${player.name} вернулся на Периметр.`, player.id);
+    player.respawnAt = 0; player.safeUntil = now() + 5000; player.destination = null; player.action = "idle"; player.nextAttack = 0; player.targetId = null; player.patrol = false;
+    event(player.mapId, "respawn", `${player.name} вернулся в район «${maps.get(player.mapId)!.name}».`, player.id);
   };
   const limits = new Map<string, { count: number; expires: number }>();
   const limit = (key: string, maximum: number, windowMs = 60_000): void => {
@@ -261,38 +334,60 @@ export function createLiveService(options: LiveOptions): LiveService {
     if (++bucket.count > maximum) throw new LiveError(429, "rate_limited", Math.max(1, Math.ceil((bucket.expires - time) / 1000)));
   };
   const expire = (): void => {
-    for (const player of players.values()) if (player.online && now() - player.heartbeat >= HEARTBEAT_MS) {
-      player.online = false; player.destination = null; player.patrol = false; player.action = player.health > 0 ? "idle" : "downed";
-      event("leave", `${player.name} потерял связь.`, player.id);
+    for (const player of players.values()) if (player.online && (player.disconnectAt > 0 ? now() >= player.disconnectAt : now() - player.heartbeat >= HEARTBEAT_MS)) {
+      player.online = false; player.destination = null; player.patrol = false; player.targetId = null; player.action = player.health > 0 ? "idle" : "downed";
+      event(player.mapId, "leave", player.disconnectAt ? `${player.name} покинул район.` : `${player.name} потерял связь.`, player.id);
+      player.disconnectAt = 0;
     }
     for (const [identity, player] of players) if (!player.online && now() - player.heartbeat >= 60_000) {
       savePlayer.run(identity, JSON.stringify(player)); players.delete(identity);
     }
   };
-  const nearestTarget = (entity: LiveEntity): Participant | Scav | undefined => {
-    const targets: Array<Participant | Scav> = entity.kind === "player"
-      ? [...scavs.values()].filter(scav => scav.health > 0)
-      : [...players.values()].filter(player => player.online && player.health > 0 && player.safeUntil <= now());
+  const leashOf = (scav: Scav): number => scav.role === "patrol" ? 14 : scav.role === "marksman" ? 10 : 8;
+  const nearestTarget = (entity: Participant | Scav): Participant | Scav | undefined => {
+    const targets: Array<Participant | Scav> = "identity" in entity
+      ? [...scavs.values()].filter(scav => scav.mapId === entity.mapId && scav.health > 0)
+      : [...players.values(), ...scavs.values()].filter(target => target.id !== entity.id && target.mapId === entity.mapId && target.health > 0 && target.safeUntil <= now()
+        && ("online" in target ? target.online : target.faction !== entity.faction)
+        && distance(entity, target) <= (entity.role === "marksman" ? 11 : entity.role === "patrol" ? 9 : 7)
+        && distance(entity.home, target) <= leashOf(entity));
     return targets.sort((a, b) => distance(entity, a) - distance(entity, b))[0];
+  };
+  const targetFor = (player: Participant, id: string): Participant | Scav => {
+    const target = [...players.values(), ...scavs.values()].find(entity => entity.id === id && entity.mapId === player.mapId && entity.health > 0 && (!("online" in entity) || entity.online));
+    if (!target || target.id === player.id) throw new LiveError(409, "target_unavailable");
+    return target;
   };
   const simulate = (): void => {
     expire();
     for (const drop of drops.values()) if (drop.expiresAt <= now()) drops.delete(drop.id);
-    while (drops.size < 10) addDrop(pickPoint(), 10 + Math.floor(random() * 21));
+    for (const [key, ready] of lootCooldowns) if (ready <= now()) lootCooldowns.delete(key);
+    for (const map of LIVE_MAPS) {
+      let count = [...drops.values()].filter(drop => drop.mapId === map.id).length;
+      while (count < map.lootSpawns.length) {
+        const candidates = map.lootSpawns.filter(point => (lootCooldowns.get(lootKey(map.id, point)) ?? 0) <= now() && ![...drops.values()].some(drop => drop.mapId === map.id && drop.x === point.x && drop.y === point.y));
+        if (!candidates.length) break;
+        addDrop(map.id, candidates[Math.min(candidates.length - 1, Math.floor(random() * candidates.length))]!, 10 + Math.floor(random() * 21), "supply"); count++;
+      }
+    }
     for (const scav of scavs.values()) {
       if (scav.health <= 0) {
-        if (scav.respawnAt <= now()) { Object.assign(scav, spawnScav(Number(scav.id.slice(5)))); event("respawn", `${scav.name} появился в районе.`, scav.id); }
+        if (scav.respawnAt <= now()) { Object.assign(scav, spawnScav(scav.mapId, scav.spawnIndex, scav.id)); event(scav.mapId, "respawn", `${scav.name} появился в районе.`, scav.id); }
         continue;
       }
       const target = nearestTarget(scav);
       scav.action = "idle";
-      if (target && distance(scav, target) <= 5 && lineOfSight(scav, target)) {
+      if (target && distance(scav, target) <= rangeOf(scav) && lineOfSight(scav.mapId, scav, target)) {
         if (scav.nextAttack <= now()) attack(scav, target);
         scav.action = "combat";
       } else if (scav.nextMove <= now()) {
-        const destination = target && distance(scav, target) <= 11 ? target : pickPoint();
-        // Target's occupied tile is never entered; approach a free adjacent tile instead.
-        const goal = target === destination ? [{ x: target.x + 1, y: target.y }, { x: target.x - 1, y: target.y }, { x: target.x, y: target.y + 1 }, { x: target.x, y: target.y - 1 }].filter(point => clear(point, scav.id)).sort((a, b) => distance(scav, a) - distance(scav, b))[0] : destination;
+        const routePoint = scav.route[scav.routeIndex % scav.route.length]!;
+        if (distance(scav, routePoint) < 1.5) scav.routeIndex = (scav.routeIndex + 1) % scav.route.length;
+        // Guards and marksmen stay near their post; patrols follow authored routes.
+        const destination = target ?? (scav.role === "patrol" ? scav.route[scav.routeIndex]! : scav.home);
+        const approach = target || occupied(scav.mapId, destination, scav.id);
+        const goal = approach ? [{ x: destination.x + 1, y: destination.y }, { x: destination.x - 1, y: destination.y }, { x: destination.x, y: destination.y + 1 }, { x: destination.x, y: destination.y - 1 }]
+          .filter(point => clear(scav.mapId, point, scav.id) && (!target || distance(scav.home, point) <= leashOf(scav))).sort((a, b) => distance(scav, a) - distance(scav, b))[0] : destination;
         const step = goal ? pathStep(scav, goal) : null;
         if (step) { scav.x = step.x; scav.y = step.y; scav.action = "moving"; }
         scav.nextMove = now() + 750;
@@ -301,15 +396,25 @@ export function createLiveService(options: LiveOptions): LiveService {
     for (const player of players.values()) {
       if (!player.online || player.health <= 0) continue;
       if (player.action === "combat" && player.nextAttack <= now()) player.action = "idle";
+      if (player.targetId) {
+        let target: Participant | Scav | undefined;
+        try { target = targetFor(player, player.targetId); } catch (error) { if (!(error instanceof LiveError)) throw error; player.targetId = null; }
+        if (player.ammo <= 0) player.targetId = null;
+        if (target && player.targetId && target.safeUntil <= now() && distance(player, target) <= rangeOf(player) && lineOfSight(player.mapId, player, target)) {
+          if (player.nextAttack <= now()) attack(player, target);
+          if (target.health <= 0) player.targetId = null;
+          continue;
+        }
+      }
       if (player.patrol) {
         const target = nearestTarget(player);
-        if (target && distance(player, target) <= 7 && lineOfSight(player, target) && player.ammo > 0) {
+        if (target && target.safeUntil <= now() && distance(player, target) <= 7 && lineOfSight(player.mapId, player, target) && player.ammo > 0) {
           if (player.nextAttack <= now()) attack(player, target);
           continue;
         }
-        const drop = [...drops.values()].filter(drop => drop.amount + player.cargo <= 500).sort((a, b) => distance(player, a) - distance(player, b))[0];
+        const drop = [...drops.values()].filter(drop => drop.mapId === player.mapId && drop.amount + player.cargo <= 500).sort((a, b) => distance(player, a) - distance(player, b))[0];
         if (drop && distance(player, drop) <= 1.5) { loot(player, drop.id); player.destination = null; }
-        if (!player.destination) player.destination = drop ?? pickPoint();
+        if (!player.destination) player.destination = drop ?? pickPoint(player.mapId);
       }
       if (player.destination && player.nextMove <= now()) {
         const step = pathStep(player, player.destination);
@@ -346,18 +451,39 @@ export function createLiveService(options: LiveOptions): LiveService {
   };
   const currentPlayer = (request: Request): Participant => {
     const identity = identityFrom(request), player = identity ? players.get(identity.identity) : null;
-    if (!player || !player.online) throw new LiveError(401, "join_required");
+    if (!player || !player.online || player.disconnectAt > 0) throw new LiveError(401, "join_required");
     if (request.headers.get("x-prapor-live") !== player.id) throw new LiveError(401, "live_identity_changed");
     return player;
   };
   const doCommand = (player: Participant, command: LiveCommand): void => {
     if (command.type === "respawn") { respawn(player); return; }
     if (player.health <= 0) throw new LiveError(409, "player_downed");
-    if (command.type === "move") { player.destination = { x: command.x, y: command.y }; player.patrol = false; }
+    if (command.type === "move") { player.destination = { x: command.x, y: command.y }; player.patrol = false; player.targetId = null; }
     if (command.type === "attack") {
-      const target = [...players.values(), ...scavs.values()].find(target => target.id === command.targetId);
-      if (!target) throw new LiveError(409, "target_unavailable");
-      attack(player, target); player.patrol = false;
+      const target = targetFor(player, command.targetId);
+      attack(player, target); player.patrol = false; player.targetId = null;
+    }
+    if (command.type === "engage") {
+      if (command.targetId === null) { player.targetId = null; return; }
+      const target = targetFor(player, command.targetId);
+      if (target.safeUntil > now()) throw new LiveError(409, "spawn_protection");
+      if (player.ammo <= 0) throw new LiveError(409, "no_ammo");
+      player.targetId = target.id; player.patrol = false; player.destination = null;
+      if (player.nextAttack <= now() && distance(player, target) <= rangeOf(player) && lineOfSight(player.mapId, player, target)) attack(player, target);
+      if (target.health <= 0) player.targetId = null;
+    }
+    if (command.type === "travel") {
+      if (command.mapId === player.mapId) throw new LiveError(409, "already_on_map");
+      if (!maps.get(player.mapId)!.extracts.some(exit => distance(player, exit) <= 1.5)) throw new LiveError(409, "extract_out_of_range");
+      if (player.travelReadyAt > now()) throw new LiveError(409, "travel_cooldown");
+      if (player.lastCombatAt > now() - COMBAT_TRAVEL_MS) throw new LiveError(409, "in_combat");
+      const point = pickPoint(command.mapId, true), previous = player.mapId, amount = player.cargo;
+      // Both the cargo deposit and map transfer commit with one server transaction.
+      player.stash += amount; player.cargo = 0; player.mapId = command.mapId; Object.assign(player, point);
+      player.destination = null; player.patrol = false; player.targetId = null; player.action = "idle";
+      player.travelReadyAt = now() + TRAVEL_MS; player.safeUntil = now() + 5000;
+      event(previous, "travel", `${player.name} отправился в район «${maps.get(command.mapId)!.name}».`, player.id);
+      event(player.mapId, "travel", `${player.name} прибыл из района «${maps.get(previous)!.name}»${amount ? ` и сохранил груз: ${amount}` : ""}.`, player.id);
     }
     if (command.type === "loot") loot(player, command.id);
     if (command.type === "heal") {
@@ -366,13 +492,12 @@ export function createLiveService(options: LiveOptions): LiveService {
       player.medkits--; player.health = Math.min(100, player.health + 45);
     }
     if (command.type === "extract") {
-      if (!WORLD.extracts.some(exit => distance(player, exit) <= 1.5)) throw new LiveError(409, "extract_out_of_range");
-      if (player.cargo <= 0) throw new LiveError(409, "no_cargo");
+      if (!maps.get(player.mapId)!.extracts.some(exit => distance(player, exit) <= 1.5)) throw new LiveError(409, "extract_out_of_range");
       const amount = player.cargo; player.stash += amount; player.cargo = 0; player.ammo = 60; player.medkits = 2;
-      player.destination = null; player.patrol = false;
-      event("extract", `${player.name} сохранил груз: ${amount}.`, player.id);
+      player.destination = null; player.patrol = false; player.targetId = null;
+      event(player.mapId, "extract", amount ? `${player.name} сохранил груз: ${amount}.` : `${player.name} пополнил боекомплект на выходе.`, player.id);
     }
-    if (command.type === "patrol") { player.patrol = command.enabled; player.destination = null; }
+    if (command.type === "patrol") { player.patrol = command.enabled; player.destination = null; player.targetId = null; }
   };
   const fetchApi = async (request: Request, clientAddress = "unknown"): Promise<Response | null> => {
     const url = new URL(request.url), path = url.pathname;
@@ -390,7 +515,7 @@ export function createLiveService(options: LiveOptions): LiveService {
       if (path === "/api/live/status") return response(status());
       if (path === "/api/live/join") {
         const body = await readJson(request);
-        if (!exactKeys(body, [])) throw new LiveError(400, "invalid_request");
+        if (!exactKeys(body, []) && !(exactKeys(body, ["mapId"]) && mapFrom(body.mapId))) throw new LiveError(400, "invalid_request");
         limit(`join:${ipKey}`, 120);
         let identity = identityFrom(request), token: string | undefined;
         let player = identity ? players.get(identity.identity) ?? loadPlayer(identity.identity) : undefined;
@@ -401,19 +526,19 @@ export function createLiveService(options: LiveOptions): LiveService {
           db.query("INSERT INTO live_guests(token_hash,identity,expires_at) VALUES(?,?,?)").run(hashToken(token), identity.identity, now() + COOKIE_SECONDS * 1000);
         }
         if (!player) {
-          const id = randomUUID(), point = pickPoint(true);
-          player = { id, ...point, kind: "player", identity: identity.identity, name: identity.name ?? `Дикий ${id.slice(0, 4).toUpperCase()}`, appearance: Math.floor(random() * 32),
+          const mapId = mapFrom(body.mapId) ?? DEFAULT_MAP, id = randomUUID(), point = pickPoint(mapId, true);
+          player = { id, mapId, ...point, kind: "player", identity: identity.identity, name: identity.name ?? `Дикий ${id.slice(0, 4).toUpperCase()}`, appearance: Math.floor(random() * 32),
             health: 100, safeUntil: now() + 5000, action: "idle", ammo: 60, medkits: 2, cargo: 0, stash: 0, kills: 0, respawnAt: 0, patrol: false,
-            online: false, heartbeat: now(), destination: null, nextMove: 0, nextAttack: 0 };
+            targetId: null, travelReadyAt: 0, lastCombatAt: 0, disconnectAt: 0, online: false, heartbeat: now(), destination: null, nextMove: 0, nextAttack: 0 };
           players.set(player.identity, player);
         }
         players.set(player.identity, player);
         if (identity.name) player.name = identity.name;
         if (!player.online) {
-          if (player.health > 0 && occupied(player, player.id)) { const point = pickPoint(true); player.x = point.x; player.y = point.y; }
-          event("join", `${player.name} вышел на Периметр.`, player.id);
+          if (player.health > 0 && occupied(player.mapId, player, player.id)) { const point = pickPoint(player.mapId, true); player.x = point.x; player.y = point.y; }
+          event(player.mapId, "join", `${player.name} вышел в район «${maps.get(player.mapId)!.name}».`, player.id);
         }
-        player.online = true; player.heartbeat = now(); persist();
+        player.online = true; player.disconnectAt = 0; player.heartbeat = now(); persist();
         return response(snapshot(player), 200, token ? { "Set-Cookie": `${cookieName}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${COOKIE_SECONDS}${secure ? "; Secure" : ""}` } : {});
       }
       const player = currentPlayer(request);
@@ -425,11 +550,19 @@ export function createLiveService(options: LiveOptions): LiveService {
       player.heartbeat = now();
       if (path === "/api/live/leave") {
         if (!exactKeys(body, [])) throw new LiveError(400, "invalid_request");
-        player.online = false; player.destination = null; player.patrol = false; player.action = player.health > 0 ? "idle" : "downed";
-        event("leave", `${player.name} покинул Периметр.`, player.id); persist(); return response({ ok: true });
+        player.destination = null; player.patrol = false; player.targetId = null; player.action = player.health > 0 ? "idle" : "downed";
+        if (player.health > 0 && player.lastCombatAt > now() - COMBAT_TRAVEL_MS) {
+          // Leaving the view cannot make a body disappear in the middle of a fight.
+          player.disconnectAt = now() + COMBAT_TRAVEL_MS;
+          event(player.mapId, "leave", `${player.name} выходит из района; тело остаётся уязвимым ещё 8 секунд.`, player.id);
+        } else {
+          player.online = false; player.disconnectAt = 0;
+          event(player.mapId, "leave", `${player.name} покинул район.`, player.id);
+        }
+        persist(); return response({ ok: true });
       }
       limit(`action:${player.id}`, 180);
-      doCommand(player, commandFrom(body)); persist();
+      doCommand(player, commandFrom(body, player.mapId)); persist();
       return response(snapshot(player));
     } catch (error) {
       if (error instanceof LiveError) return response({ code: error.code }, error.status, error.retryAfter ? { "Retry-After": String(error.retryAfter) } : {});
