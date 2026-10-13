@@ -41,7 +41,11 @@ const NOW = 1_792_000_000_000;
 // dispatches use checkpoint expeditions, covered independently in roguelite.test.
 function dispatchLegacyRaid(state: GameState, scavId: string, mapId: string, now: number) {
 	const result = dispatchRaid(state, scavId, mapId, now);
-	if (result.ok) state.raids.find((raid) => raid.id === result.raidId)!.expedition = null;
+	if (result.ok) {
+		const raid = state.raids.find((raid) => raid.id === result.raidId)!;
+		raid.expedition = null;
+		delete raid.strategy;
+	}
 	return result;
 }
 

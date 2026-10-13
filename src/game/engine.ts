@@ -34,9 +34,11 @@ import { getWeaponMechanics, getWeaponRouteEffect, type WeaponRaidSnapshot } fro
 export * from "./weapon-mechanics";
 import { AMMO_BY_ID, getAmmoModel, getAmmoEffect, getAmmoSupplyMultiplier, isAmmoType } from "./ammunition";
 export * from "./ammunition";
+import { RAID_OBJECTIVES, RAID_PREPARATIONS, getRaidStrategy, getRaidStrategyEffects, parseRaidPlan, parseRaidStrategy, parseSectorIntel, parseSectorIntelRecord, settleSectorIntel, type RaidObjective, type RaidPreparation, type RaidPlan, type RaidStrategy, type SectorIntel } from "./raid-strategy";
+export * from "./raid-strategy";
 
 export const SAVE_KEY = "prapor.save.v1";
-export const SAVE_VERSION = 12;
+export const SAVE_VERSION = 13;
 export const MAX_OFFLINE_MS = 8 * 60 * 60 * 1000;
 export const MAX_ROOM_LEVEL = 5;
 
@@ -69,6 +71,8 @@ export interface Scav {
 	profile: ScavProfile;
 	story: ScavStory;
 	autoRaid: { mapId: string; enabled: boolean; minHealth: number; runs: number; waitingReason: string | null; maxDepth: number };
+	/** A future order; changes never alter an already paid sortie. */
+	raidPlan?: RaidPlan;
 }
 export interface Expedition {
 	stage: number; status: "travel" | "choice"; branch: ExpeditionBranch;
@@ -83,6 +87,8 @@ export interface Expedition {
 	weaponMechanics?: WeaponRaidSnapshot;
 	/** Paid ammunition choice and its costs remain fixed throughout a sortie. */
 	ammunition?: { modelId: string; firstBonus: number; wearMultiplier: number; ammoMultiplier: number };
+	/** A recon stage is credited only if the sortie later extracts successfully. */
+	reconCompleted?: boolean;
 }
 export interface Raid {
 	id: string;
@@ -104,6 +110,7 @@ export interface Raid {
 	expedition: Expedition | null;
 	/** Each physical sortie stays independent; this links its coordinated party. */
 	squad?: SquadRaidSnapshot;
+	strategy?: RaidStrategy;
 }
 export interface RaidReport {
 	id: string;
@@ -128,6 +135,9 @@ export interface RaidReport {
 	lostCargo: Cargo | null;
 	moduleIds: string[];
 	squad?: SquadRaidReport;
+	strategy?: RaidStrategy;
+	sectorOutcome?: SectorIntel;
+	reconCompleted?: boolean;
 }
 export interface GameState {
 	schemaVersion: number;
@@ -152,6 +162,7 @@ export interface GameState {
 	memorials: ScavMemorial[];
 	social: SquadSocialState;
 	achievements: AchievementState;
+	sectorIntel?: Record<string, SectorIntel>;
 	stats: {
 		raidsWon: number;
 		raidsCompleted: number;
@@ -1108,8 +1119,11 @@ export function getRaidAmmoCost(scav: Scav, map: RaidMap, state?: GameState): nu
 }
 
 export function getRaidQuote(state: GameState, scav: Scav, map: RaidMap) {
-	const money = 10 + map.level * 5;
+	const strategy = getRaidStrategy(state, scav, map.id), effects = getRaidStrategyEffects(strategy);
+	const preparation = RAID_PREPARATIONS[strategy.preparation];
+	const money = 10 + map.level * 5 + preparation.money;
 	const ammo = getRaidAmmoCost(scav, map, state);
+	const intel = map.intelCost + preparation.intel;
 	const medicine = scav.loadout.medkit ? 1 : 0;
 	let reason: string | null = null;
 	const weapon = state.weapons.find((item) => item.id === scav.weaponInstanceId);
@@ -1122,9 +1136,12 @@ export function getRaidQuote(state: GameState, scav: Scav, map: RaidMap) {
 	else if (!getWeaponStats(weapon).ready) reason = getWeaponBuildIssues(weapon)[0] ?? "Пушка не готова к выходу.";
 	else if (state.money < money) reason = `Для выхода нужно ${money} ₽.`;
 	else if (state.supplies.ammo < ammo) reason = `Нужно ${ammo} патронов.`;
-	else if (state.supplies.intel < map.intelCost) reason = `Нужно ${map.intelCost} разведданных.`;
+	else if (state.supplies.intel < intel) reason = `Нужно ${intel} разведданных${preparation.intel ? " с учётом подготовки" : ""}.`;
 	else if (state.supplies.medicine < medicine) reason = "В комплекте аптечка: нужен 1 медикамент.";
-	return { money, ammo, intel: map.intelCost, medicine, chance: getRaidChance(state, scav, map), duration: getRaidDuration(state, scav, map), reason,
+	const baseChance = getRaidChance(state, scav, map);
+	return { money, ammo, intel, medicine, chance: baseChance === 0 ? 0 : clamp(baseChance + effects.chanceBonus, .22, .97),
+		duration: Math.max(20, Math.min(600, Math.round(getRaidDuration(state, scav, map) * effects.durationMultiplier))), reason,
+		strategy, preparationMoney: preparation.money, preparationIntel: preparation.intel,
 		ammunition: weapon ? getAmmoEffect(weapon, scav.loadout.ammoType, map.id, "scavenge", 1, scav.tactic) : null };
 }
 
@@ -1158,6 +1175,13 @@ export function setRaidTactic(state: GameState, scavId: string, tactic: RaidTact
 	if (!scav || !Object.hasOwn(TACTICS, tactic)) return fail("Боец или тактика не найдены.");
 	scav.tactic = tactic;
 	return ok(`Тактика ${scav.status === "raiding" ? "следующего выхода" : "выхода"}: ${TACTICS[tactic].label}.`);
+}
+
+export function setRaidPlan(state: GameState, scavId: string, objective: RaidObjective, preparation: RaidPreparation): ActionResult {
+	const scav = state.scavs.find(item => item.id === scavId);
+	if (!scav || !Object.hasOwn(RAID_OBJECTIVES, objective) || !Object.hasOwn(RAID_PREPARATIONS, preparation)) return fail("Боец или план выхода не найдены.");
+	scav.raidPlan = { objective, preparation };
+	return ok(`План ${scav.status === "raiding" ? "следующего выхода" : "выхода"}: ${RAID_OBJECTIVES[objective].label}. ${RAID_PREPARATIONS[preparation].label}.`);
 }
 
 export function getAutoRaidStatus(state: GameState, scav: Scav): string {
@@ -1208,13 +1232,14 @@ function startRaid(state: GameState, scav: Scav, map: RaidMap, now: number, isAu
 		lootBonus: getPersonality(scav).lootBonus + scav.scouting / 450 + TACTICS[scav.tactic].lootBonus + scav.gear.backpack * 0.12 + getScavProfileEffects(scav).loot,
 		seed: takeSeed(state), isAuto, tactic: scav.tactic,
 		armorLevel: scav.gear.armor, backpackLevel: scav.gear.backpack,
+		strategy: { ...quote.strategy },
 		expedition: { stage: 1, status: "travel", branch: "scavenge", cargo: { money: 0, supplies: emptySupplies(), weaponIds: [], modules: [] },
 			legacyLoot: false, gunCombatBonus: (60 - weaponStats.recoil) / 1000,
 			weaponMechanics: { power: weaponStats.power, reliability: weaponStats.reliability, firstBonus: weaponEffect.bonus, wearMultiplier: getWeaponMechanics(weapon).wearMultiplier },
 			ammunition: { modelId: ammunition.model.id, firstBonus: ammunition.bonus, wearMultiplier: ammunition.model.wearMultiplier, ammoMultiplier: ammunition.model.ammoMultiplier },
 			perks: [], offers: [], discoveries: [], autoDepth: isAuto ? scav.autoRaid.maxDepth : 1,
 			baseChance: quote.chance, baseDuration: quote.duration, capacity: stats.capacity,
-			trail: [{ at: now, label: "Выход · этап 1", text: `${scav.name} вышел в «${map.name}». ${TACTICS[scav.tactic].label}: ${quote.money} ₽, ${quote.ammo} патронов${quote.intel ? `, ${quote.intel} разведданных` : ""}${quote.medicine ? ", аптечка" : ""}. Патрон: ${ammunition.model.label}; ${ammunition.enemy.label.toLowerCase()}.`.slice(0, 400), kind: "neutral" }],
+			trail: [{ at: now, label: "Выход · этап 1", text: `${scav.name} вышел в «${map.name}». ${TACTICS[scav.tactic].label}: ${quote.money} ₽, ${quote.ammo} патронов${quote.intel ? `, ${quote.intel} разведданных` : ""}${quote.medicine ? ", аптечка" : ""}.${quote.strategy.objective !== "general" || quote.strategy.preparation !== "none" ? ` Цель: ${RAID_OBJECTIVES[quote.strategy.objective].label}. ${RAID_PREPARATIONS[quote.strategy.preparation].label}.` : ""} Патрон: ${ammunition.model.label}; ${ammunition.enemy.label.toLowerCase()}.`.slice(0, 400), kind: "neutral" }],
 			ammoMultiplier: getWeaponRole(weapon).ammoMultiplier * weaponStats.ammoMultiplier * stats.ammoMultiplier,
 			loadout: { armorModelId: armor?.modelId ?? "none", armorCondition: armor?.durability ?? 0,
 				helmetModelId: helmet?.modelId ?? null, helmetCondition: helmet?.durability ?? 0,
@@ -1629,8 +1654,9 @@ function getIndividualExpeditionChoices(state: GameState, raid: Raid, selectedPe
 			+ (ammunition ? ammunition.bonus - expedition.ammunition!.firstBonus : 0)
 			+ (weapon ? getWeaponRole(weapon).branches[branch] ?? 0 : 0)
 			+ (perks.includes("careful") ? 0.06 : 0) - (perks.includes("haggler") ? 0.04 : 0), 0.15, 0.97);
-		const duration = Math.max(20, Math.round(expedition.baseDuration * (1 + (stage - 1) * 0.16)
+		const unboundedDuration = Math.max(20, Math.round(expedition.baseDuration * (1 + (stage - 1) * 0.16)
 			* definition.durationMultiplier * (perks.includes("pathfinder") ? 0.8 : 1)));
+		const duration = raid.strategy ? Math.min(600, unboundedDuration) : unboundedDuration;
 		let reason: string | null = null;
 		if (expedition.status !== "choice") reason = "Дождись контрольной точки.";
 		else if (!scav || !weapon || !getWeaponStats(weapon).ready) reason = "Оружию нужен ремонт: пора эвакуироваться.";
@@ -1721,16 +1747,20 @@ function discoverBlueprint(state: GameState, expedition: Expedition, blueprint: 
 	if (state.blueprints.includes(blueprint)) return;
 	state.blueprints.push(blueprint); expedition.discoveries.push(blueprint);
 }
-function fitCargo(cargo: Cargo, capacity: number) {
+function fitCargo(cargo: Cargo, capacity: number, objective: RaidObjective = "general") {
 	// Currency weighs nothing. Preserve previous cargo and favour real guns over bulk supplies.
-	for (const key of ["ammo", "scrap", "medicine", "intel"] as (keyof Supplies)[]) {
+	const target = RAID_OBJECTIVES[objective].supply;
+	const discardSupply = (key: keyof Supplies) => {
 		const weight = key === "ammo" ? 0.1 : key === "scrap" ? 0.5 : key === "medicine" ? 1 : 0.25;
 		const overflow = getCargoWeight(cargo) - capacity;
-		if (overflow <= 0) break;
+		if (overflow <= 0) return;
 		cargo.supplies[key] = Math.max(0, cargo.supplies[key] - Math.ceil((overflow - 0.00001) / weight));
-	}
+	};
+	// A supply order keeps its promised resource ahead of other supplies and trophies.
+	for (const key of ["ammo", "scrap", "medicine", "intel"] as (keyof Supplies)[]) if (key !== target) discardSupply(key);
 	while (getCargoWeight(cargo) > capacity && cargo.weaponIds.length > 0) cargo.weaponIds.pop();
 	while (getCargoWeight(cargo) > capacity && cargo.modules.length > 0) cargo.modules.pop();
+	if (target) discardSupply(target);
 }
 function wearEquippedGear(state: GameState, scav: Scav, stage: number, failed: boolean) {
 	for (const key of ["armorItemId", "helmetItemId", "backpackItemId"] as const) {
@@ -1741,6 +1771,7 @@ function wearEquippedGear(state: GameState, scav: Scav, stage: number, failed: b
 /** Resolve a checkpoint exactly once. A successful manual checkpoint remains an active raid. */
 function reachCheckpoint(state: GameState, raid: Raid, now: number, party?: { injuryMultiplier: number; rescuedBy: string | null }): RaidReport | null {
 	const expedition = raid.expedition!;
+	const objective = RAID_OBJECTIVES[raid.strategy?.objective ?? "general"];
 	const map = ownValue(MAP_BY_ID, raid.mapId)!;
 	const scav = state.scavs.find((item) => item.id === raid.scavId)!;
 	const weapon = state.weapons.find((item) => item.id === raid.weaponInstanceId)!;
@@ -1780,16 +1811,18 @@ function reachCheckpoint(state: GameState, raid: Raid, now: number, party?: { in
 		return finishExpedition(state, raid, false, now, party?.rescuedBy ?? null);
 	}
 	scav.health = Math.max(25, scav.health - Math.ceil((3 + random() * (8 + map.danger * 10) + expedition.stage * 2) * injury));
+	if (raid.strategy && expedition.branch === "recon") expedition.reconCompleted = true;
 	const branch = EXPEDITION_BRANCHES[expedition.branch];
 	const lootMultiplier = Math.max(0.3, (0.5 + expedition.stage * 0.25) * (1 + raid.lootBonus + branch.lootBonus)
 		* (expedition.perks.includes("careful") ? 0.9 : 1));
 	expedition.cargo.money += Math.round((map.reward[0] + random() * (map.reward[1] - map.reward[0])) * lootMultiplier
-		* (expedition.perks.includes("haggler") ? 1.2 : 1) * (field?.moneyMultiplier ?? 1));
+		* (expedition.perks.includes("haggler") ? 1.2 : 1) * (field?.moneyMultiplier ?? 1) * objective.moneyMultiplier);
 	expedition.cargo.supplies.ammo += 2 + Math.floor(random() * (4 + map.level));
 	expedition.cargo.supplies.medicine += random() < 0.45 ? 1 : 0;
 	expedition.cargo.supplies.scrap += 2 + Math.floor(random() * (expedition.branch === "scavenge" ? 7 + map.level : 4 + map.level));
 	expedition.cargo.supplies.intel += expedition.branch === "recon" ? 2 + Math.floor(random() * 2) : random() < 0.4 ? 1 : 0;
 	if (field) for (const key of Object.keys(field.resourceBonus) as (keyof Supplies)[]) expedition.cargo.supplies[key] += field.resourceBonus[key];
+	if (objective.supply) expedition.cargo.supplies[objective.supply] += objective.resourceBonus;
 	const weaponChance = map.weaponChance * (expedition.branch === "combat" ? 1.15 : 0.7) * (expedition.legacyLoot ? 1 : 0.24) + (expedition.perks.includes("gunsmith") ? 0.1 : 0);
 	if (random() < weaponChance) {
 		const weaponId = map.weapons[Math.min(map.weapons.length - 1, Math.floor(random() ** (1.5 - expedition.stage * 0.16) * map.weapons.length))]!;
@@ -1798,6 +1831,7 @@ function reachCheckpoint(state: GameState, raid: Raid, now: number, party?: { in
 	}
 	if (!expedition.legacyLoot) {
 		const partsRandom = generator((raid.seed ^ Math.imul(expedition.stage, 0x2c1b3c6d)) >>> 0);
+		const strategyPartsRandom = generator((raid.seed ^ Math.imul(expedition.stage, 0x72e51b09)) >>> 0);
 		const count = expedition.branch === "combat" ? 2 + Math.floor(partsRandom() * 2) : 1 + (partsRandom() < 0.35 ? 1 : 0);
 		for (let i = 0; i < count; i++) {
 			const receiverRoll = partsRandom() < (expedition.branch === "combat" ? 0.32 : 0.12);
@@ -1808,11 +1842,13 @@ function reachCheckpoint(state: GameState, raid: Raid, now: number, party?: { in
 					&& (model.platforms.includes("*") || model.platforms.includes(info.platform)) && (model.calibers.includes("*") || model.calibers.includes(info.caliber)));
 			const weightedPool = !receiverRoll && field?.preferredSlots.length ? pool.flatMap((model) => field.preferredSlots.includes(model.slot) ? [model, model] : [model]) : pool;
 			const model = weightedPool[Math.floor(partsRandom() * weightedPool.length)]!;
-			expedition.cargo.modules.push(createModule(state, model.id, now, Math.min(100, 45 + Math.floor(partsRandom() * 46) + (expedition.perks.includes("gunsmith") ? 10 : 0))));
+			const durability = Math.min(100, 45 + Math.floor(partsRandom() * 46) + (expedition.perks.includes("gunsmith") ? 10 : 0));
+			if (objective.moduleMultiplier < 1 && strategyPartsRandom() >= objective.moduleMultiplier) continue;
+			expedition.cargo.modules.push(createModule(state, model.id, now, durability));
 			if (model.slot === "receiver" && !state.discoveredWeapons.includes(model.weaponId!)) state.discoveredWeapons.push(model.weaponId!);
 		}
 	}
-	fitCargo(expedition.cargo, expedition.capacity);
+	fitCargo(expedition.cargo, expedition.capacity, raid.strategy?.objective);
 	expedition.trail.push({ at: now, label: `Контрольная точка ${expedition.stage}`, text: (`Маршрут «${EXPEDITION_BRANCHES[expedition.branch].label}» пройден. В рюкзаке ${expedition.cargo.money} ₽, ${getCargoWeight(expedition.cargo)} ед. груза и ${expedition.cargo.weaponIds.length} ед. оружия.${discoveriesText ? ` Передано: ${discoveriesText}.` : ""}${streetText}`).slice(0, 400), kind: "loot" });
 	expedition.status = "choice";
 	const candidates = (Object.keys(RUN_PERKS) as RunPerk[]).filter((perk) => !expedition.perks.includes(perk));
@@ -1834,6 +1870,20 @@ function attachSquadReports(state: GameState, snapshot: SquadRaidSnapshot, repor
 		return { scavId: member.scavId, raidId: member.raidId, success: report.success, lostScav: report.lostScav, lostWeapon: report.lostWeapon, health: state.scavs.find((scav) => scav.id === member.scavId)?.health ?? 0, rescuedBy: snapshot.actions.find((action) => action.kind === "rescue" && action.targetId === member.scavId)?.actorId ?? null };
 	}) };
 	for (const report of reports) report.squad = structuredClone(squad);
+	completeStrategySortie(state, reports);
+}
+
+function completeStrategySortie(state: GameState, reports: RaidReport[]) {
+	const planned = reports.filter(report => report.strategy);
+	if (!planned.length) return;
+	const mapId = planned[0]!.mapId;
+	const learned = planned.some(report => report.success && (report.strategy!.objective === "intel" || report.reconCompleted));
+	const outcome = settleSectorIntel(state, mapId, learned, planned.some(report => report.depth >= 2));
+	for (const report of planned) {
+		report.sectorOutcome = { ...outcome };
+		const last = report.events.at(-1);
+		if (last) last.text = `${last.text} Сектор: изученность ${outcome.knowledge}/5, патрули ${outcome.pressure}/6.`.slice(0, 400);
+	}
 }
 function reachSquadCheckpoint(state: GameState, raid: Raid, now: number): RaidReport[] {
 	const squad = raid.squad!, group = getRaidGroup(state, raid), reports: RaidReport[] = [];
@@ -1866,7 +1916,8 @@ function finishExpedition(state: GameState, raid: Raid, success: boolean, now: n
 		scavAppearance: raid.scavAppearance ?? scav.appearance ?? defaultScavAppearance(scav.personality),
 		at: now, success, lostScav: false, lostWeapon: false, money: 0, supplies: emptySupplies(), weaponId: null,
 		weaponAutoSold: false, description: "", isAuto: raid.isAuto, tactic: raid.tactic, events: [], depth: expedition.stage,
-		discoveries: [...expedition.discoveries], lostCargo: success ? null : structuredClone(expedition.cargo), moduleIds: [] };
+		discoveries: [...expedition.discoveries], lostCargo: success ? null : structuredClone(expedition.cargo), moduleIds: [],
+		...(raid.strategy ? { strategy: { ...raid.strategy } } : {}), ...(expedition.reconCompleted ? { reconCompleted: true } : {}) };
 	state.stats.raidsCompleted++; scav.raids++;
 	if (raid.isAuto) { state.stats.autoRaidsCompleted++; scav.autoRaid.runs++; }
 	const oldLevel = scav.level;
@@ -1929,6 +1980,7 @@ function finishExpedition(state: GameState, raid: Raid, success: boolean, now: n
 		if (survivor) survivor.weaponInstanceId = createWeapon(state, "pm", now, 70).id;
 	}
 	report.events = [...expedition.trail, { at: now, label: success ? "Эвакуация" : report.lostScav ? "Связь потеряна" : "Отход", text: report.description + (success ? ` Доставлено ${report.money} ₽.` : ""), kind: success ? "success" : "danger" }];
+	if (!raid.squad) completeStrategySortie(state, [report]);
 	noteScavRaid(scav, report);
 	if (report.lostScav) rememberLostScav(state, scav, report);
 	noteSquadRaid(state, scav, report);
@@ -2319,7 +2371,7 @@ function parseGear(value: unknown): GearItem {
 	return { id: string(source.id), modelId: known(source.modelId, GEAR_MODEL_BY_ID), durability: number(source.durability, 100) };
 }
 function parseAmmoType(value: unknown, version: number): AmmoType {
-	if (!isAmmoType(value) || (version < 12 && value !== "standard" && value !== "piercing")) throw new Error("ammo-type");
+	if (!isAmmoType(value) || (version < 13 && value !== "standard" && value !== "piercing")) throw new Error("ammo-type");
 	return value;
 }
 function parseLoadout(value: unknown, version: number): Loadout {
@@ -2346,7 +2398,7 @@ function parseEvents(value: unknown, max: number): RaidReport["events"] {
 function parseExpedition(value: unknown, version: number): Expedition | null {
 	if (value === null) return null;
 	const source = record(value);
-	fields(source, ["stage", "status", "branch", "cargo", "perks", "offers", "discoveries", "loadout", "autoDepth", "baseChance", "baseDuration", "capacity", "ammoMultiplier", "trail", ...(version >= 4 ? ["legacyLoot", "gunCombatBonus"] : []), ...(version >= 11 ? ["weaponMechanics"] : []), ...(version >= 12 ? ["ammunition"] : [])]);
+	fields(source, ["stage", "status", "branch", "cargo", "perks", "offers", "discoveries", "loadout", "autoDepth", "baseChance", "baseDuration", "capacity", "ammoMultiplier", "trail", ...(version >= 4 ? ["legacyLoot", "gunCombatBonus"] : []), ...(version >= 11 ? ["weaponMechanics"] : []), ...(version >= 12 ? ["reconCompleted"] : []), ...(version >= 13 ? ["ammunition"] : [])]);
 	const loadout = record(source.loadout);
 	fields(loadout, ["armorModelId", "armorCondition", "helmetModelId", "helmetCondition", "packModelId", "packCondition", "ammoType", "medkit"]);
 	if (source.status !== "travel" && source.status !== "choice") throw new Error("checkpoint-status");
@@ -2372,12 +2424,13 @@ function parseExpedition(value: unknown, version: number): Expedition | null {
 		fields(snapshot, ["power", "reliability", "firstBonus", "wearMultiplier"]);
 		expedition.weaponMechanics = { power: number(snapshot.power, 250, 0, true), reliability: number(snapshot.reliability, 100, 10, true), firstBonus: number(snapshot.firstBonus, .12, -.12), wearMultiplier: number(snapshot.wearMultiplier, 1.4, .85) };
 	}
-	if (version >= 12 && Object.hasOwn(source, "ammunition")) {
+	if (version >= 13 && Object.hasOwn(source, "ammunition")) {
 		const ammo = record(source.ammunition);
 		fields(ammo, ["modelId", "firstBonus", "wearMultiplier", "ammoMultiplier"]);
 		expedition.ammunition = { modelId: known(ammo.modelId, AMMO_BY_ID), firstBonus: number(ammo.firstBonus, .1, -.1), wearMultiplier: number(ammo.wearMultiplier, 1.4, .8), ammoMultiplier: number(ammo.ammoMultiplier, 2.2, .7) };
 	}
 	if (!expedition.ammunition && expedition.loadout.ammoType !== "standard" && expedition.loadout.ammoType !== "piercing") throw new Error("missing-ammunition");
+	if (version >= 12 && Object.hasOwn(source, "reconCompleted")) expedition.reconCompleted = bool(source.reconCompleted);
 	unique(expedition.perks); unique(expedition.offers); unique(expedition.discoveries);
 	if (expedition.perks.length !== expedition.stage - 1 || expedition.offers.some((perk) => expedition.perks.includes(perk))
 		|| (expedition.status === "choice" && expedition.stage < 3 ? expedition.offers.length !== 2 : expedition.offers.length !== 0)
@@ -2579,7 +2632,7 @@ function validateStorySources(state: GameState, scav: Pick<Scav, "name" | "story
 }
 function parseScav(value: unknown, version: number): Scav {
 	const source = record(value);
-	fields(source, ["id", "name", "personality", "appearance", "level", "xp", "health", "combat", "scouting", "weaponInstanceId", "status", "raids", ...(version >= 2 ? ["tactic", "gear", "autoRaid"] : []), ...(version >= 3 ? ["loadout"] : []), ...(version >= 5 ? ["assignment"] : []), ...(version >= 6 ? ["profile"] : []), ...(version >= 7 ? ["story"] : [])]);
+	fields(source, ["id", "name", "personality", "appearance", "level", "xp", "health", "combat", "scouting", "weaponInstanceId", "status", "raids", ...(version >= 2 ? ["tactic", "gear", "autoRaid"] : []), ...(version >= 3 ? ["loadout"] : []), ...(version >= 5 ? ["assignment"] : []), ...(version >= 6 ? ["profile"] : []), ...(version >= 7 ? ["story"] : []), ...(version >= 12 ? ["raidPlan"] : [])]);
 	if (!["ready", "raiding", "wounded"].includes(source.status as string))
 		throw new Error("status");
 	let gear: Scav["gear"] = { armor: 0, backpack: 0 };
@@ -2618,11 +2671,12 @@ function parseScav(value: unknown, version: number): Scav {
 		profile: version >= 6 ? parseScavProfile(source.profile) : neutralScavProfile(),
 		story: version >= 7 ? parseScavStory(source.story) : createScavStory(string(source.id), 0, false),
 		autoRaid,
+		...(version >= 12 && Object.hasOwn(source, "raidPlan") ? { raidPlan: parseRaidPlan(source.raidPlan) } : {}),
 	};
 }
 function parseRaid(value: unknown, version: number): Raid {
 	const source = record(value);
-	fields(source, ["id", "scavId", "scavName", "scavAppearance", "mapId", "weaponInstanceId", "startedAt", "endsAt", "chance", "lootBonus", "seed", ...(version >= 2 ? ["isAuto", "tactic", "armorLevel", "backpackLevel"] : []), ...(version >= 3 ? ["expedition"] : []), ...(version >= 10 ? ["squad"] : [])]);
+	fields(source, ["id", "scavId", "scavName", "scavAppearance", "mapId", "weaponInstanceId", "startedAt", "endsAt", "chance", "lootBonus", "seed", ...(version >= 2 ? ["isAuto", "tactic", "armorLevel", "backpackLevel"] : []), ...(version >= 3 ? ["expedition"] : []), ...(version >= 10 ? ["squad"] : []), ...(version >= 12 ? ["strategy"] : [])]);
 	const startedAt = number(source.startedAt);
 	const endsAt = number(source.endsAt);
 	const expedition = version >= 3 ? parseExpedition(source.expedition, version) : null;
@@ -2646,11 +2700,12 @@ function parseRaid(value: unknown, version: number): Raid {
 		backpackLevel: version === 1 ? 0 : number(source.backpackLevel, 3, 0, true),
 		expedition,
 		...(version >= 10 && Object.hasOwn(source, "squad") ? { squad: parseSquadRaidSnapshot(source.squad, false, version) as SquadRaidSnapshot } : {}),
+		...(version >= 12 && Object.hasOwn(source, "strategy") ? { strategy: parseRaidStrategy(source.strategy) } : {}),
 	};
 }
 function parseReport(value: unknown, version: number): RaidReport {
 	const source = record(value);
-	fields(source, ["id", "raidId", "scavName", "scavAppearance", "mapId", "at", "success", "lostScav", "lostWeapon", "money", "supplies", "weaponId", "weaponAutoSold", "description", ...(version >= 2 ? ["isAuto", "tactic", "events"] : []), ...(version >= 3 ? ["depth", "discoveries", "lostCargo"] : []), ...(version >= 4 ? ["moduleIds"] : []), ...(version >= 10 ? ["squad"] : [])]);
+	fields(source, ["id", "raidId", "scavName", "scavAppearance", "mapId", "at", "success", "lostScav", "lostWeapon", "money", "supplies", "weaponId", "weaponAutoSold", "description", ...(version >= 2 ? ["isAuto", "tactic", "events"] : []), ...(version >= 3 ? ["depth", "discoveries", "lostCargo"] : []), ...(version >= 4 ? ["moduleIds"] : []), ...(version >= 10 ? ["squad"] : []), ...(version >= 12 ? ["strategy", "sectorOutcome", "reconCompleted"] : [])]);
 	return {
 		id: string(source.id),
 		raidId: string(source.raidId),
@@ -2675,6 +2730,9 @@ function parseReport(value: unknown, version: number): RaidReport {
 		tactic: version === 1 ? "balanced" : known(source.tactic, TACTICS) as RaidTactic,
 		events: version === 1 ? [] : parseEvents(source.events, version >= 3 ? 10 : 4),
 		...(version >= 10 && Object.hasOwn(source, "squad") ? { squad: parseSquadRaidSnapshot(source.squad, true, version) as SquadRaidReport } : {}),
+		...(version >= 12 && Object.hasOwn(source, "strategy") ? { strategy: parseRaidStrategy(source.strategy) } : {}),
+		...(version >= 12 && Object.hasOwn(source, "sectorOutcome") ? { sectorOutcome: parseSectorIntel(source.sectorOutcome) } : {}),
+		...(version >= 12 && Object.hasOwn(source, "reconCompleted") ? { reconCompleted: bool(source.reconCompleted) } : {}),
 	};
 }
 
@@ -2683,9 +2741,9 @@ export function parseSave(raw: string): GameState | null {
 	try {
 		if (typeof raw !== "string" || raw.length > 1_000_000) return null;
 		const source = record(JSON.parse(raw));
-		if (source.schemaVersion !== 1 && source.schemaVersion !== 2 && source.schemaVersion !== 3 && source.schemaVersion !== 4 && source.schemaVersion !== 5 && source.schemaVersion !== 6 && source.schemaVersion !== 7 && source.schemaVersion !== 8 && source.schemaVersion !== 9 && source.schemaVersion !== 10 && source.schemaVersion !== 11 && source.schemaVersion !== SAVE_VERSION) return null;
+		if (source.schemaVersion !== 1 && source.schemaVersion !== 2 && source.schemaVersion !== 3 && source.schemaVersion !== 4 && source.schemaVersion !== 5 && source.schemaVersion !== 6 && source.schemaVersion !== 7 && source.schemaVersion !== 8 && source.schemaVersion !== 9 && source.schemaVersion !== 10 && source.schemaVersion !== 11 && source.schemaVersion !== 12 && source.schemaVersion !== SAVE_VERSION) return null;
 		const version = source.schemaVersion;
-		fields(source, ["schemaVersion", "createdAt", "lastUpdated", "money", "supplies", "xp", "level", "base", "scavs", "weapons", "raids", "history", "claimedContracts", "discoveredWeapons", "stats", "clock", "rng", "nextId", ...(version >= 3 ? ["gearItems", "blueprints"] : []), ...(version >= 4 ? ["modules"] : []), ...(version >= 5 ? ["shelter"] : []), ...(version >= 6 ? ["recruitment"] : []), ...(version >= 7 ? ["memorials"] : []), ...(version >= 8 ? ["social"] : []), ...(version >= 9 ? ["achievements"] : [])]);
+		fields(source, ["schemaVersion", "createdAt", "lastUpdated", "money", "supplies", "xp", "level", "base", "scavs", "weapons", "raids", "history", "claimedContracts", "discoveredWeapons", "stats", "clock", "rng", "nextId", ...(version >= 3 ? ["gearItems", "blueprints"] : []), ...(version >= 4 ? ["modules"] : []), ...(version >= 5 ? ["shelter"] : []), ...(version >= 6 ? ["recruitment"] : []), ...(version >= 7 ? ["memorials"] : []), ...(version >= 8 ? ["social"] : []), ...(version >= 9 ? ["achievements"] : []), ...(version >= 12 ? ["sectorIntel"] : [])]);
 		const base = record(source.base);
 		const stats = record(source.stats);
 		const clock = record(source.clock);
@@ -2741,6 +2799,7 @@ export function parseSave(raw: string): GameState | null {
 			memorials: version >= 7 ? array(source.memorials, MAX_SCAV_MEMORIALS, parseScavMemorial) : [],
 			social: version >= 8 ? parseSquadSocialState(source.social) : { pairs: [], losses: [] },
 			achievements: version >= 9 ? parseAchievementState(source.achievements, (value) => parseWeapon(value, version)) : createAchievementState(),
+			...(version >= 12 && Object.hasOwn(source, "sectorIntel") ? { sectorIntel: parseSectorIntelRecord(source.sectorIntel) } : {}),
 			stats: {
 				raidsWon: number(stats.raidsWon, 1e9, 0, true),
 				raidsCompleted: number(stats.raidsCompleted, 1e9, 0, true),
@@ -2902,6 +2961,13 @@ export function parseSave(raw: string): GameState | null {
 					|| raid.expedition.discoveries.some((blueprint) => !state.blueprints.includes(blueprint))
 					|| (raid.isAuto && raid.expedition.status === "choice")) throw new Error("raid-loadout");
 				if (raid.expedition.trail.some((event, index) => event.at > state.lastUpdated || (index > 0 && event.at < raid.expedition!.trail[index - 1]!.at))) throw new Error("raid-trail-time");
+				if (raid.strategy && raid.expedition.legacyLoot || raid.expedition.reconCompleted && (!raid.strategy || raid.expedition.stage < 2
+					|| raid.expedition.stage === 2 && (raid.expedition.status !== "choice" || raid.expedition.branch !== "recon"))) throw new Error("strategy-recon-source");
+			}
+			if (raid.strategy && (!raid.expedition || raid.strategy.knowledge > (state.sectorIntel?.[raid.mapId]?.knowledge ?? 0))) throw new Error("strategy-sector-source");
+			if (raid.squad) {
+				for (const member of getRaidGroup(state, raid)) if (Boolean(member.strategy) !== Boolean(raid.strategy)
+					|| member.strategy && raid.strategy && (member.strategy.knowledge !== raid.strategy.knowledge || member.strategy.pressure !== raid.strategy.pressure)) throw new Error("strategy-squad-source");
 			}
 		}
 		for (const weapon of state.weapons) {
@@ -2925,6 +2991,13 @@ export function parseSave(raw: string): GameState | null {
 			if (report.events.some((event, index) => event.at > report.at || (index > 0 && event.at < report.events[index - 1]!.at))) throw new Error("story-time");
 			unique(report.discoveries);
 			if (report.discoveries.some((blueprint) => !state.blueprints.includes(blueprint)) || (report.success && report.lostCargo !== null)) throw new Error("report-discovery");
+			if (Boolean(report.strategy) !== Boolean(report.sectorOutcome) || report.reconCompleted && (!report.strategy || report.depth < 2)) throw new Error("strategy-report-source");
+			if (report.strategy && report.sectorOutcome && (report.strategy.knowledge > report.sectorOutcome.knowledge
+				|| report.sectorOutcome.knowledge > (state.sectorIntel?.[report.mapId]?.knowledge ?? 0))) throw new Error("strategy-report-sector");
+			if (report.squad) for (const member of report.squad.members) {
+				const peer = state.history.find(other => other.raidId === member.raidId);
+				if (peer && (Boolean(peer.strategy) !== Boolean(report.strategy) || JSON.stringify(peer.sectorOutcome) !== JSON.stringify(report.sectorOutcome))) throw new Error("strategy-report-party");
+			}
 		}
 		if (
 			allIds.some(

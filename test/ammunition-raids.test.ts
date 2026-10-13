@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
 	SAVE_VERSION, advance, continueExpedition, createGame, dispatchRaid, dispatchSquadRaid,
-	getExpeditionChoices, getLoadoutStats, getRaidQuote, getSquadRaidQuote, getWeaponRole,
+	getExpeditionChoices, getLoadoutStats, getRaidQuote, getSquadRaidQuote, getSectorIntel, getWeaponRole,
 	getWeaponStats, loadGameWithSummary, parseSave, saveGame, setAutoRaid, setAutoRaidDepth,
-	setLoadoutOption, setRaidTactic, type GameState, type Raid,
+	setLoadoutOption, setRaidPlan, setRaidTactic, type GameState, type Raid,
 } from "../src/game/engine";
 import { AMMO_TYPES, getAmmoEffect, getAmmoModel } from "../src/game/ammunition";
 import { MAP_BY_ID } from "../src/game/data";
@@ -11,6 +11,7 @@ import { TACTICS } from "../src/game/operations";
 import { EXPEDITION_BRANCHES, type AmmoType, type RunPerk } from "../src/game/systems";
 import { getWeaponRouteEffect } from "../src/game/weapon-mechanics";
 import { useWeaponPlatformFixture } from "./weapon-fixtures";
+import { withoutRaidStrategy } from "./legacy-strategy-fixture";
 
 const NOW = 1_792_000_000_000;
 const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
@@ -184,6 +185,7 @@ describe("caliber ammunition changes real paid raids", () => {
 			raid.chance = raid.expedition.baseChance = clamp(raid.expedition.baseChance - raid.expedition.ammunition.firstBonus + .055, .22, .97);
 			delete raid.expedition.ammunition;
 		}
+		withoutRaidStrategy(raw);
 		const old = parseSave(JSON.stringify(raw))!;
 		expect(old).not.toBeNull(); expect(old.schemaVersion).toBe(SAVE_VERSION);
 		const raid = old.raids[0]!, expedition = raid.expedition!, perk = expedition.offers[0]!, map = MAP_BY_ID[raid.mapId]!;
@@ -210,6 +212,55 @@ describe("caliber ammunition changes real paid raids", () => {
 		expect(restored).toEqual(old); expect(copy(old)).toEqual(old);
 	});
 
+	test("released v12 strategy raids keep paid quotes, sector knowledge and completed recon while using classic ammunition", () => {
+		let original: GameState | null = null;
+		for (let offset = 0; offset < 512 && !original; offset++) {
+			const state = funded(NOW + offset), scav = state.scavs[0]!;
+			state.sectorIntel = { courtyard: { knowledge: 3, pressure: 2 } };
+			expect(setLoadoutOption(state, scav.id, "ammoType", "piercing").ok).toBe(true);
+			expect(setRaidPlan(state, scav.id, "intel", "scouted").ok).toBe(true);
+			expect(dispatchRaid(state, scav.id, "courtyard", state.lastUpdated).ok).toBe(true);
+			const raid = state.raids[0]!;
+			advance(state, raid.endsAt);
+			if (state.raids[0]?.expedition?.status !== "choice") continue;
+			expect(continueExpedition(state, raid.id, "recon", raid.expedition!.offers[0]!, state.lastUpdated).ok).toBe(true);
+			advance(state, raid.endsAt);
+			if (state.raids[0]?.expedition?.status === "choice") original = state;
+		}
+		expect(original).not.toBeNull();
+		const current = original!, paid = current.raids[0]!;
+		expect(paid.expedition!.reconCompleted).toBe(true);
+		delete paid.expedition!.ammunition;
+		const raw = JSON.parse(saveGame(current)); raw.schemaVersion = 12;
+		const old = parseSave(JSON.stringify(raw))!;
+		expect(old).not.toBeNull(); expect(old.schemaVersion).toBe(SAVE_VERSION);
+		expect(old).toEqual(current);
+		expect(getSectorIntel(old, "courtyard")).toEqual({ knowledge: 3, pressure: 2 });
+		expect(old.scavs[0]!.raidPlan).toEqual({ objective: "intel", preparation: "scouted" });
+		const raid = old.raids[0]!, expedition = raid.expedition!, perk = expedition.offers[0]!;
+		expect(raid.strategy).toEqual(paid.strategy);
+		expect(expedition.reconCompleted).toBe(true);
+		expect(expedition.ammunition).toBeUndefined();
+		const choices = getExpeditionChoices(old, raid, perk), map = MAP_BY_ID[raid.mapId]!;
+		expect(choices).toEqual(getExpeditionChoices(current, paid, perk));
+		for (const choice of choices) {
+			expect(choice.ammunition).toBeNull();
+			expect(choice.ammo).toBe(Math.max(1, Math.ceil(map.ammoCost * TACTICS[raid.tactic].ammoMultiplier
+				* EXPEDITION_BRANCHES[choice.branch].ammoMultiplier * expedition.ammoMultiplier * 1.65)
+				+ ([...expedition.perks, perk].includes("pathfinder") ? 1 : 0)));
+		}
+		for (const state of [current, old]) {
+			const member = state.raids[0]!, before = state.supplies.ammo;
+			const quote = getExpeditionChoices(state, member, perk).find((choice) => choice.branch === "combat")!;
+			expect(continueExpedition(state, member.id, "combat", perk, state.lastUpdated).ok).toBe(true);
+			expect(member.chance).toBe(quote.chance);
+			expect(state.supplies.ammo).toBe(before - quote.ammo);
+		}
+		const until = current.raids[0]!.endsAt + 1_319;
+		advance(current, until); tickIrregularly(old, until);
+		expect(old).toEqual(current); expect(copy(old)).toEqual(old);
+	});
+
 	test("unknown and mismatched caliber cartridges, extra fields and malformed frozen costs reject the whole save", () => {
 		const state = funded();
 		expect(dispatchRaid(state, state.scavs[0]!.id, "courtyard", state.lastUpdated).ok).toBe(true);
@@ -233,13 +284,13 @@ describe("caliber ammunition changes real paid raids", () => {
 			const forged = structuredClone(raw); forged.raids[0].expedition.ammunition = value;
 			expect(parseSave(JSON.stringify(forged))).toBeNull();
 		}
-		const injectedV11 = structuredClone(raw); injectedV11.schemaVersion = 11;
-		expect(parseSave(JSON.stringify(injectedV11))).toBeNull();
+		const injectedV12 = structuredClone(raw); injectedV12.schemaVersion = 12;
+		expect(parseSave(JSON.stringify(injectedV12))).toBeNull();
 		for (const type of ["expanding", "precision"]) {
-			const unsupportedV11 = structuredClone(raw); unsupportedV11.schemaVersion = 11;
-			delete unsupportedV11.raids[0].expedition.ammunition;
-			unsupportedV11.scavs[0].loadout.ammoType = type;
-			expect(parseSave(JSON.stringify(unsupportedV11))).toBeNull();
+			const unsupportedV12 = structuredClone(raw); unsupportedV12.schemaVersion = 12;
+			delete unsupportedV12.raids[0].expedition.ammunition;
+			unsupportedV12.scavs[0].loadout.ammoType = type;
+			expect(parseSave(JSON.stringify(unsupportedV12))).toBeNull();
 		}
 		expect(copy(state)).toEqual(state);
 	});
