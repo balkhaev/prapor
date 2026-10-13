@@ -293,7 +293,9 @@ export function generateLiveWorld(seed = LIVE_WORLD_SEED): LiveMapDefinition {
   // regular population and route composition, so it does not move any saved loot slot.
   const entryDistance = (poi: LivePoi): number => Math.min(...poi.entrances.flatMap(port => extracts.map(exit => Math.hypot(port.x - exit.x, port.y - exit.y))));
   for (const boss of BOSSES) {
-    const outer = pois.filter(poi => poi.districtId === boss.districtId && !poi.tags.includes('city'));
+    // Keep the low-danger entry settlements available for the first loot stop,
+    // even when one is the only instance of a boss's preferred building type.
+    const outer = pois.filter(poi => poi.districtId === boss.districtId && !poi.tags.includes('city') && poi.danger >= 2);
     const exact = outer.filter(poi => poi.templateId === boss.poiTemplateId);
     const options = exact.length ? exact : outer;
     const safe = options.filter(poi => entryDistance(poi) >= boss.live.aggroRange + 8);
