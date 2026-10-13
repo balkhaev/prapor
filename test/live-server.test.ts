@@ -113,7 +113,7 @@ describe("shared endless live server", () => {
     const guest = await enter();
     const before = await state(guest.session);
     for (const body of [
-      { type: "move", x: getLiveMap("perimeter").obstacles[0]!.x, y: getLiveMap("perimeter").obstacles[0]!.y }, { type: "move", x: 128, y: 0 }, { type: "move", x: 0.5, y: 1 },
+      { type: "move", x: getLiveMap("perimeter").obstacles[0]!.x, y: getLiveMap("perimeter").obstacles[0]!.y }, { type: "move", x: getLiveMap("perimeter").width, y: 0 }, { type: "move", x: 0.5, y: 1 },
       { type: "move", x: 3, y: 3, health: 999 }, { type: "heal", cargo: 500 }, { type: "loot", id: "drop-0", amount: 999 },
       { type: { toString: null } }, { type: ["heal"] }, {}, { type: "patrol", enabled: "true" },
     ]) expect((await call("action", "POST", body, guest.session)).status).toBe(400);
@@ -359,11 +359,12 @@ describe("shared endless live server", () => {
     placePlayers([{ session: first.session, x: 0, y: 0 }, { session: second.session, x: 1, y: 0 }]); await enter(first.session); await enter(second.session);
     await act(first.session, { type: "attack", targetId: second.session.id });
     expect((await state(second.session)).self.body.parts.chest.hp).toBe(53);
-    placePlayers([{ session: first.session, x: 63, y: 0 }]); await enter(first.session); await enter(second.session);
-    await act(first.session, { type: "move", x: 65, y: 0 }); await advance(1250, [first.session, second.session]);
+    const boundary = getLiveMap("perimeter").districts.find(district => district.id === "sawmill")!.x;
+    placePlayers([{ session: first.session, x: boundary - 1, y: 0 }]); await enter(first.session); await enter(second.session);
+    await act(first.session, { type: "move", x: boundary + 1, y: 0 }); await advance(1250, [first.session, second.session]);
     const crossed = await state(first.session);
     expect(crossed.world.id).toBe("perimeter"); expect(crossed.self.purpose).toBe("loot"); expect(crossed.self.districtId).toBe("sawmill");
-    expect(crossed.entities.find(entity => entity.id === first.session.id)).toMatchObject({ x: 65, y: 0 });
+    expect(crossed.entities.find(entity => entity.id === first.session.id)).toMatchObject({ x: boundary + 1, y: 0 });
     expect((await call("action", "POST", { type: "travel", mapId: "depot" }, first.session)).status).toBe(400);
   });
 
@@ -430,9 +431,31 @@ describe("shared endless live server", () => {
     });
     const restored = (await enter(guest.session)).state;
     expect(restored.selfId).toBe(guest.session.id); expect(restored.self).toMatchObject({ ammo: 17, medkits: 1, cargo: 65, stash: 120, districtId: "depot" });
-    expect(restored.entities.find(entity => entity.id === guest.session.id)).toMatchObject({ x: 0, y: 64 });
-    expect(restored.drops.find(drop => drop.id === "legacy-body")).toMatchObject({ x: 1, y: 64, amount: 73 });
+    const district = getLiveMap("perimeter").districts.find(district => district.id === "depot")!;
+    expect(restored.entities.find(entity => entity.id === guest.session.id)).toMatchObject({ x: district.x, y: district.y });
+    expect(restored.drops.find(drop => drop.id === "legacy-body")).toMatchObject({ x: district.x + 1, y: district.y, amount: 73 });
     expect(restored.server.maps[0]!.npcs).toBe(getLiveMap("perimeter").npcSpawns.length); expect(service.healthy()).toBe(true);
+  });
+  test("expanding the saved V2 world preserves global body positions, private kit and durable loose cargo across two restarts", async () => {
+    const guest = await enter(), map = getLiveMap("perimeter"), point = { x: 0, y: 0 };
+    expect(isLiveWalkable(map, point)).toBe(true);
+    placePlayers([{ session: guest.session, ...point, health: 71, ammo: 17, medkits: 1, cargo: 65, stash: 120 }]);
+    editStorage(db => {
+      const saved = JSON.parse(db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!.state);
+      saved.geometryVersion = "perimeter-g2-a827381f"; saved.drops = [{ id: "v2-loose-cargo", mapId: "perimeter", x: 1, y: 0, source: "body", amount: 73, expiresAt: time + 120_000 }];
+      db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify(saved));
+    });
+    const restored = (await enter(guest.session)).state;
+    expect(restored.world).toMatchObject({ width: 192, height: 192, generatorVersion: 3 });
+    expect(restored.self).toMatchObject({ ammo: 17, medkits: 1, cargo: 65, stash: 120 });
+    expect(restored.entities.find(entity => entity.id === guest.session.id)).toMatchObject(point);
+    expect(restored.entities.find(entity => entity.id === guest.session.id)!.health).toBeCloseTo(71);
+    expect(restored.drops.find(drop => drop.id === "v2-loose-cargo")).toMatchObject({ x: 1, y: 0, amount: 73 });
+    editStorage(() => {});
+    const again = (await enter(guest.session)).state;
+    expect(again.self.body).toEqual(restored.self.body); expect(again.self.medicine).toEqual(restored.self.medicine);
+    expect(again.self).toMatchObject({ ammo: 17, cargo: 65, stash: 120 }); expect(again.entities.find(entity => entity.id === guest.session.id)).toMatchObject(point);
+    expect(again.drops.filter(drop => drop.id === "v2-loose-cargo")).toHaveLength(1);
   });
 
   test("container search uses a server deadline, survives confirmed discovery across restart and permits only one shared pickup", async () => {
