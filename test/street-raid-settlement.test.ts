@@ -43,7 +43,8 @@ describe("street encounters remain real checkpoint settlements", () => {
 		expect(raid.expedition!.offers).toEqual(["careful", "gunsmith"]);
 		expect(raid.expedition!.cargo.modules).toHaveLength(1);
 		expect(raid.expedition!.cargo.modules[0]!.durability).toBe(90);
-		expect(state.nextId).toBe(32);
+		expect(raid.expedition!.cargo.lootItems!.map(item => item.id)).toEqual(["loot-32", "loot-33"]);
+		expect(state.nextId).toBe(32 + raid.expedition!.cargo.lootItems!.length);
 		expect(Math.abs(raid.expedition!.cargo.money - 116 * modifier.moneyMultiplier)).toBeLessThanOrEqual(1);
 		for (const key of ["ammo", "medicine", "scrap", "intel"] as const) {
 			const original = { ammo: 6, medicine: 0, scrap: 2, intel: 1 };

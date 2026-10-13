@@ -49,9 +49,9 @@ function setBody(session: Session, body: HealthState, medicine = createMedicalIn
 beforeEach(async () => {
   folder = await mkdtemp(join(tmpdir(), "prapor-health-")); dbPath = join(folder, "live.sqlite"); time = 1_800_000_000_000;
   service = createLiveService(options());
-  editStorage(db => db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify({ startedAt: time, events: [],
-    scavs: [{ id: "scav-0", kind: "scav", name: "Косой", appearance: 0, x: 31, y: 23, health: 100, action: "idle", safeUntil: 0, respawnAt: 0, nextMove: time + 1_000_000, nextAttack: time + 1_000_000 }],
-    drops: Array.from({ length: 10 }, (_, index) => ({ id: `drop-${index}`, x: 30, y: 20, amount: 10, expiresAt: time + 1_000_000 })),
+  editStorage(db => db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify({ version: 2, startedAt: time, events: [],
+    scavs: [{ id: "scav-0", mapId: "customs", kind: "scav", name: "Косой", appearance: 0, faction: "scavs", role: "guard", home: { x: 31, y: 23 }, route: [{ x: 31, y: 23 }], routeIndex: 0, spawnIndex: 0, x: 31, y: 23, health: 100, action: "idle", safeUntil: 0, respawnAt: 0, nextMove: time + 1_000_000, nextAttack: time + 1_000_000 }],
+    drops: Array.from({ length: 10 }, (_, index) => ({ id: `drop-${index}`, mapId: "customs", x: 30, y: 20, amount: 10, expiresAt: time + 1_000_000 })),
   })));
 });
 afterEach(async () => { service.close(); await rm(folder, { recursive: true, force: true }); });

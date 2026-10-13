@@ -1,5 +1,6 @@
 import { withoutMedical } from './legacy-health-fixture';
 import { expect, test } from "bun:test";
+import { withoutLoot } from "./legacy-loot-fixture";
 import { advance, assignWorker, continueExpedition, createGame, dispatchRaid, FIELD_KITS, getAmmoEffect, getExpeditionChoices, healthPercent, resolveMedicalEncounter, getFieldKitStock, getResourceProductionQuote, getRoomProductionState, parseSave, queueFieldKitProduction, queueModuleProduction, saveGame, setAutoRaid, setFieldKit, setGameOutcomeSeedSource, setLoadoutOption, setRoomRecipe, setRoomStockTarget, TACTICS, upgradeRoom, type FieldKit, type GameState, type RoomInstance } from "../src/game/engine";
 import { MAP_BY_ID } from "../src/game/data";
 
@@ -145,6 +146,7 @@ test("v13 ammunition and server outcome seeds migrate unchanged while shelter lo
 	expect(setLoadoutOption(state, scav.id, "ammoType", "expanding").ok).toBe(true);
 	setGameOutcomeSeedSource(state, () => 123_456);
 	expect(dispatchRaid(state, scav.id, "courtyard", NOW).ok).toBe(true);
+	withoutLoot(state);
 	advance(state, NOW + 7_123);
 	withoutMedical(state);
 	const raw = JSON.parse(saveGame(state)); raw.schemaVersion = 13;

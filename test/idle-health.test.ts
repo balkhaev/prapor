@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { advance, applyHit, canDeploy, createGame, createHealth, dispatchRaid, getRaidQuote, getRecoveryWaitMs, getScavHealingQuote, healScav, healthPercent, isScavMedicallyReady, parseSave, saveGame, setAutoRaid, setLoadoutOption, type GameState } from '../src/game/engine';
+import { SAVE_VERSION, advance, applyHit, canDeploy, createGame, createHealth, dispatchRaid, getRaidQuote, getRecoveryWaitMs, getScavHealingQuote, healScav, healthPercent, isScavMedicallyReady, parseSave, saveGame, setAutoRaid, setLoadoutOption, type GameState } from '../src/game/engine';
 import { MAP_BY_ID } from '../src/game/data';
 
 const NOW = 1_792_000_000_000;
@@ -88,16 +88,16 @@ describe('medical decisions in idle sorties and the shelter', () => {
 		expect(copy(state)).toEqual(state);
 	});
 
-	test('a v15 paid sortie retains aggregate rules and a living zero-HP survivor through the upgrade', () => {
+	test('a v16 paid sortie retains loot, aggregate rules and a living zero-HP survivor through the upgrade', () => {
 		const state = funded(), woundedScav = state.scavs[1]!;
 		woundedScav.health = 0; woundedScav.status = 'wounded';
 		dispatchRaid(state, state.scavs[0]!.id, 'courtyard', NOW);
-		const historical = structuredClone(state); historical.schemaVersion = 15;
+		const historical = structuredClone(state); historical.schemaVersion = 16;
 		for (const scav of historical.scavs) delete scav.body;
 		for (const raid of historical.raids) delete raid.expedition!.medical;
 		const restored = parseSave(JSON.stringify(historical))!; expect(restored).not.toBeNull();
 		expect(restored.scavs[1]!.health).toBe(0); expect(restored.raids[0]!.expedition!.medical).toBeUndefined();
-		const reference = structuredClone(historical); reference.schemaVersion = 16;
+		const reference = structuredClone(historical); reference.schemaVersion = SAVE_VERSION;
 		advance(restored, restored.raids[0]!.endsAt); advance(reference, reference.raids[0]!.endsAt);
 		expect(restored).toEqual(reference); expect(restored.scavs.some(scav => scav.id === woundedScav.id)).toBe(true);
 		expect(copy(restored)).toEqual(restored);

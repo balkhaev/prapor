@@ -1,4 +1,5 @@
 import { withoutMedical } from './legacy-health-fixture';
+import { withoutLoot } from "./legacy-loot-fixture";
 /** Remove fields unavailable in v1–11 when deriving an authentic old fixture. */
 export function withoutRaidStrategy<T>(value: T): T {
 	withoutMedical(value);
@@ -19,5 +20,5 @@ export function withoutRaidStrategy<T>(value: T): T {
 		delete report.sectorOutcome;
 		delete report.reconCompleted;
 	}
-	return value;
+	return withoutLoot(value);
 }

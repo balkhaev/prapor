@@ -36,7 +36,7 @@ async function click(button: string) {
   dock.handlers.get('click')!({ target }); await settle();
 }
 async function poll() {
-  const pending = [...timers.entries()].find(([, item]) => item.delay === 1000);
+  const pending = [...timers.entries()].find(([, item]) => item.delay === 500);
   expect(pending).toBeDefined(); timers.delete(pending![0]); pending![1].run(); await settle();
 }
 beforeEach(() => {
@@ -48,9 +48,13 @@ beforeEach(() => {
   replace('ResizeObserver', class { observe() {} disconnect() {} });
   replace('Image', class { src = ''; onload: unknown; onerror: unknown });
   replace('requestAnimationFrame', () => 1); replace('cancelAnimationFrame', () => {});
-  server = { server: { id: 'perimeter-1', name: 'Периметр 01', online: 1, capacity: 32, startedAt: time }, now: time,
-    world: { width: 32, height: 24, obstacles: [], extracts: [{ x: 2, y: 2 }] }, selfId: 'player-1',
-    self: { id: 'player-1', ammo: 60, medkits: 3, cargo: 0, stash: 0, kills: 0, respawnAt: 0, patrol: false, body: createHealth(), medicine: createMedicalInventory(), treatment: null, leaveAt: 0 },
+  server = { server: { id: 'perimeter-1', name: 'Периметр 01', online: 1, capacity: 32, startedAt: time, maps: [
+      { id: 'customs', name: 'Таможня', description: 'Терминал', theme: 'industrial', width: 48, height: 36, online: 1, npcs: 12 },
+      { id: 'sawmill', name: 'Лесопилка', description: 'Лес', theme: 'forest', width: 52, height: 40, online: 0, npcs: 12 },
+      { id: 'depot', name: 'Депо', description: 'Вагоны', theme: 'urban', width: 44, height: 36, online: 0, npcs: 12 },
+    ] }, now: time,
+    world: { id: 'customs', name: 'Таможня', description: 'Терминал', theme: 'industrial', width: 48, height: 36, obstacles: [], extracts: [{ x: 2, y: 2 }], zones: [] }, selfId: 'player-1',
+    self: { id: 'player-1', ammo: 60, medkits: 3, cargo: 0, stash: 0, kills: 0, respawnAt: 0, patrol: false, targetId: null, travelReadyAt: 0, body: createHealth(), medicine: createMedicalInventory(), treatment: null, leaveAt: 0 },
     entities: [{ id: 'player-1', name: 'Боец', kind: 'player', appearance: 0, x: 0, y: 0, health: 100, safeUntil: 0, action: 'idle' }], drops: [], events: [] };
   replace('fetch', async (url: string, options?: RequestInit) => {
     if (url.startsWith('/art/')) return Response.json({ frames: {} });

@@ -1,4 +1,4 @@
-/** Derive an authentic pre-v16 shape while retaining its paid scalar health and raid clocks. */
+/** Derive an authentic pre-v17 shape while retaining loot, paid scalar health and raid clocks. */
 export function withoutMedical<T>(value: T): T {
 	const state = value as {
 		scavs?: { health: number; status: string; body?: unknown; medicalTreatment?: unknown }[];

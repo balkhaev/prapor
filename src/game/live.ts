@@ -4,12 +4,31 @@ export const LIVE_SERVER_ID = "perimeter-1";
 export const LIVE_SERVER_NAME = "Периметр 01";
 export const LIVE_CAPACITY = 32;
 export type LivePoint = { x: number; y: number };
-export interface LiveObstacle extends LivePoint { width: number; height: number }
+export type LiveMapId = "customs" | "sawmill" | "depot";
+export type LiveTerrain = "road" | "concrete" | "forest" | "water" | "yard";
+export interface LiveObstacle extends LivePoint {
+  width: number; height: number;
+  kind?: "building" | "wall" | "container" | "barricade" | "tree";
+  label?: string;
+}
+export interface LiveZone extends LivePoint {
+  width: number; height: number; name: string; terrain: LiveTerrain; danger: 1 | 2 | 3;
+}
+export interface LiveMapSummary {
+  id: LiveMapId; name: string; description: string;
+  theme: "industrial" | "forest" | "urban";
+  width: number; height: number; online: number; npcs: number;
+}
 export interface LiveWorld {
+  id: LiveMapId;
+  name: string;
+  description: string;
+  theme: LiveMapSummary["theme"];
   width: number;
   height: number;
   obstacles: LiveObstacle[];
   extracts: LivePoint[];
+  zones: LiveZone[];
 }
 export interface LiveEntity extends LivePoint {
   id: string;
@@ -24,6 +43,8 @@ export interface LiveEntity extends LivePoint {
   limping?: boolean;
   aimUntil?: number;
   aimTargetId?: string;
+  faction?: "scavs" | "raiders";
+  role?: "patrol" | "guard" | "marksman";
 }
 export interface LiveTreatment { type: TreatmentType; part: BodyPart; startedAt: number; endsAt: number }
 export interface LivePlayer {
@@ -39,15 +60,20 @@ export interface LivePlayer {
   medicine: MedicalInventory;
   treatment: LiveTreatment | null;
   leaveAt: number;
+  targetId: string | null;
+  travelReadyAt: number;
 }
 export interface LiveDrop extends LivePoint { id: string; amount: number }
 export interface LiveEvent {
   id: string;
   at: number;
-  kind: "join" | "leave" | "combat" | "loot" | "extract" | "respawn";
+  kind: "join" | "leave" | "combat" | "loot" | "extract" | "respawn" | "travel";
   text: string;
   actorId?: string;
   targetId?: string;
+  from?: LivePoint;
+  to?: LivePoint;
+  damage?: number;
 }
 export interface LiveStatus {
   id: string;
@@ -55,6 +81,7 @@ export interface LiveStatus {
   online: number;
   capacity: number;
   startedAt: number;
+  maps: LiveMapSummary[];
 }
 export interface LiveSnapshot {
   server: LiveStatus;
@@ -69,6 +96,8 @@ export interface LiveSnapshot {
 export type LiveCommand =
   | { type: "move"; x: number; y: number }
   | { type: "attack"; targetId: string; aimed?: boolean }
+  | { type: "engage"; targetId: string | null }
+  | { type: "travel"; mapId: LiveMapId }
   | { type: "loot"; id: string }
   | { type: "heal" }
   | { type: "treat"; medicine: TreatmentType; part: BodyPart }
