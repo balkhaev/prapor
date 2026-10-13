@@ -12,6 +12,7 @@ import { EXPEDITION_BRANCHES, type AmmoType, type RunPerk } from "../src/game/sy
 import { getWeaponRouteEffect } from "../src/game/weapon-mechanics";
 import { useWeaponPlatformFixture } from "./weapon-fixtures";
 import { withoutRaidStrategy } from "./legacy-strategy-fixture";
+import { withoutLoot } from "./legacy-loot-fixture";
 
 const NOW = 1_792_000_000_000;
 const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
@@ -228,7 +229,7 @@ describe("caliber ammunition changes real paid raids", () => {
 			if (state.raids[0]?.expedition?.status === "choice") original = state;
 		}
 		expect(original).not.toBeNull();
-		const current = original!, paid = current.raids[0]!;
+		const current = withoutLoot(original!), paid = current.raids[0]!;
 		expect(paid.expedition!.reconCompleted).toBe(true);
 		delete paid.expedition!.ammunition;
 		const raw = JSON.parse(saveGame(current)); raw.schemaVersion = 12;

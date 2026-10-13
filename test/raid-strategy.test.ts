@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { withoutLoot } from "./legacy-loot-fixture";
 import {
 	advance, continueExpedition, createGame, dispatchRaid, dispatchSquadRaid, extractRaid,
 	getCargoWeight, getExpeditionChoices, getRaidChance, getRaidDuration, getRaidQuote,
@@ -173,7 +174,7 @@ describe("supplies, preparation and sector strategy", () => {
 	});
 
 	test("v11 active raids keep their paid weapon mechanics and original settlement without retroactive sector progress", () => {
-		const original = start().state;
+		const original = withoutLoot(start().state);
 		delete original.scavs[0]!.raidPlan;
 		delete original.raids[0]!.strategy;
 		delete original.raids[0]!.expedition!.ammunition;
