@@ -2,7 +2,7 @@ import { MAP_BY_ID, WEAPON_BY_ID } from "./data";
 import { TACTICS, type RaidTactic } from "./operations";
 import { GEAR_MODEL_BY_ID, EXPEDITION_BRANCHES, type ExpeditionBranch } from "./systems";
 import { MODULE_BY_ID, MODULE_SLOTS, type ModuleSlot } from "./modules";
-import { ARSENAL_SAVE_VERSION, moduleAvailableInSave, weaponAvailableInSave } from "./catalog-releases";
+import { ARSENAL_WAVE_TWO_SAVE_VERSION, moduleAvailableInSave, weaponAvailableInSave } from "./catalog-releases";
 import { RECRUIT_TRAITS } from "./recruitment";
 import { defaultScavAppearance, isScavAppearance } from "./scav-appearances";
 import { getRaidQuote, getFieldKitStock, FIELD_KITS, type FieldKit, type GameState, type Raid, type RaidReport, type Expedition } from "./engine";
@@ -173,7 +173,7 @@ function parseMember(value: unknown, version: number): SquadRaidMember {
 		weaponInstanceId: str(source.weaponInstanceId), weaponId: known(source.weaponId, WEAPON_BY_ID), weaponModules, role: source.role as SquadRaidRole,
 		seed: num(source.seed, 1, 4294967295, true), ...(Object.hasOwn(source, "outcomeSeed") ? { outcomeSeed: num(source.outcomeSeed, 1, 4294967295, true) } : {}), combat: num(source.combat, 0, 100), scouting: num(source.scouting, 0, 100), health: num(source.health, 0, 100), traitId: source.traitId === null ? null : known(source.traitId, RECRUIT_TRAITS), tactic: known(source.tactic, TACTICS) as RaidTactic, medkit: bool(source.medkit), baseChance: num(source.baseChance, .15, .97), chance: num(source.chance, .15, .97), baseDuration: num(source.baseDuration, 20, 600), loadout };
 }
-export function parseSquadRaidSnapshot(value: unknown, report = false, version = ARSENAL_SAVE_VERSION): SquadRaidSnapshot | SquadRaidReport {
+export function parseSquadRaidSnapshot(value: unknown, report = false, version = ARSENAL_WAVE_TWO_SAVE_VERSION): SquadRaidSnapshot | SquadRaidReport {
 	const source = obj(value, ["leaderRaidId", "routeSeed", "stage", "branch", "members", "bonds", "actions", "usedMedkits", ...(report ? ["outcomes"] : [])]);
 	const snapshot: SquadRaidSnapshot = { leaderRaidId: str(source.leaderRaidId), routeSeed: num(source.routeSeed, 1, 4294967295, true), stage: num(source.stage, 1, 3, true), branch: known(source.branch, EXPEDITION_BRANCHES) as ExpeditionBranch,
 		members: arr(source.members, 3, (entry) => parseMember(entry, version)), bonds: arr(source.bonds, 3, (entry) => { const bond = obj(entry, ["scavIds", "score"]); const ids = arr(bond.scavIds, 2, (id) => str(id)); if (ids.length !== 2 || ids[0]! >= ids[1]!) throw new Error("squad-bond-ids"); return { scavIds: ids as [string, string], score: num(bond.score, -60, 60, true) }; }),

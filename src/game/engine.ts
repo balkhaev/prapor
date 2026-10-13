@@ -44,7 +44,7 @@ export * from "./loot";
 export * from "./trade";
 
 export const SAVE_KEY = "prapor.save.v1";
-export const SAVE_VERSION = 17;
+export const SAVE_VERSION = 19;
 export const MAX_OFFLINE_MS = 8 * 60 * 60 * 1000;
 export const MAX_ROOM_LEVEL = 5;
 
@@ -451,7 +451,8 @@ function moduleFitReason(weapon: WeaponInstance, item: ModuleInstance): string |
 		const label = model.requiresMount === "rail-top" ? "верхней планки" : model.requiresMount === "rail-bottom" ? "нижней планки цевья"
 			: model.requiresMount === "rail-side" ? "боковой планки" : model.requiresMount === "barrel-clamp" ? "открытого ствола для хомута"
 				: model.requiresMount === "barrel-clamp-wide" ? "места для широкого хомута ствола"
-				: model.requiresMount === "dovetail" ? "ласточкиного хвоста" : model.requiresMount === "pistol-rail" ? "аксессуарного паза рамки пистолета" : `резьбы ${info.caliber}`;
+				: model.requiresMount === "dovetail" ? "ласточкиного хвоста" : model.requiresMount === "pistol-rail" ? "аксессуарного паза рамки пистолета"
+					: model.requiresMount === "receiver-bridge" ? "основания крышки ствольной коробки" : `резьбы ${info.caliber}`;
 		return `Нет крепления ${label}.`;
 	}
 	return null;
