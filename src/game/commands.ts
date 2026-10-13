@@ -1,10 +1,12 @@
-import type { ActionResult, GameState } from './engine';
+import type { ActionResult, GameState, ShelterCost } from './engine';
 
 /** Commands contain intent only. The server supplies the state, clock and RNG. */
 export interface GameCommandArguments {
   excavateShelter: [number, number]; buildRoom: [string, number, number]; upgradeRoom: [string];
   assignWorker: [string, string | null]; queueModuleProduction: [string, string];
   setRoomRecipe: [string, string | null, boolean]; cancelProduction: [string, string];
+  setProductionReserve: [ShelterCost]; setRoomStockTarget: [string, number | null];
+  setFieldKit: [string, 'none' | 'maintenance' | 'trauma']; queueFieldKitProduction: [string, 'maintenance' | 'trauma'];
   installModule: [string, string]; removeModule: [string, string]; assembleWeapon: [string];
   disassembleWeapon: [string]; sellModule: [string]; recycleModule: [string]; repairModule: [string];
   buySupplies: [string]; craftGear: [string]; equipGear: [string, string, string | null];
