@@ -1,16 +1,14 @@
-import { WEAPON_BY_ID, type WeaponCategory } from "./game/data";
+import { WEAPON_BY_ID } from "./game/data";
 import type { WeaponInstance } from "./game/engine";
 import { FACTORY_KITS, MODULE_BY_ID, RECEIVER_INFO, type ModuleModel, type ModuleSlot } from "./game/modules";
 
 import { createArmorySurface, surfaceDetail, type ArmoryMaterial as Material, type ArmoryPaint as Paint } from "./armory-surface";
 import { modularWeaponRasterDefs, modularWeaponRasterPart } from "./modular-weapon-art";
 import { weaponGripAnchor } from "./weapon-attachment";
-type Bounds = readonly [number, number, number, number];
-type Geometry = { outline: string; detail: string; material: Material; bounds: Bounds; fillRule?: "evenodd" | "nonzero"; muzzle?: { x: number; y: number }; offset?: { x: number; y: number }; railFootY?: number };
-type Profile = {
-	id: string; category: WeaponCategory; wood: boolean; bolt: boolean;
-	integral: boolean; pump: boolean; compact: boolean; barrelEnd: number;
-};
+import { classicReferenceGeometry, classicReferenceLayout } from "./weapon-reference-classic";
+import { modernReferenceGeometry, modernReferenceLayout } from "./weapon-reference-modern";
+import { compactReferenceGeometry, compactReferenceLayout } from "./weapon-reference-compact";
+import type { ReferenceBounds as Bounds, ReferenceGeometry as Geometry, ReferenceProfile as Profile } from "./weapon-reference-types";
 
 const escape = (value: string) => value.replace(/[&<>"']/g, (character) => ({
 	"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -66,6 +64,9 @@ const checkering = (x: number, y: number, width: number, height: number) => `${A
 const triggerGuard = (x: number, y: number, width = 44, height = 24) => `<path data-mechanism="trigger-guard" d="M${x} ${y}h${width}v${height - 7}q0 7-8 7h-${width - 9}q-7 0-5-8l4-${height - 8}" fill="none" stroke="#667177" stroke-width="3.3"/>${seam(`M${x + 2} ${y + 2}h${width - 5}v${height - 9}q0 5-6 5h-${width - 15}`, true)}<path data-mechanism="trigger" d="M${x + 15} ${y + 2}q-4 9 1 15l5-2q-4-5 0-13z" fill="#797d7d" stroke="#13191c" stroke-width=".9"/>`;
 const port = (x: number, y: number, width: number, height = 16) => `<path data-mechanism="ejection-port" d="M${x} ${y}h${width}v${height}h-${width}z" fill="#11171a" stroke="#626c70" stroke-width=".65"/><path d="M${x + 1} ${y + 1}h${width - 2}v3h-${width - 2}z" fill="#080f13"/><path data-mechanism="bolt" d="M${x + width * .35} ${y + height * .55}h${width * .57}v${height * .3}h-${width * .57}z" fill="#525d63"/>${seam(`M${x + width * .38} ${y + height * .56}h${width * .5}`, true)}${seam(`M${x + width - 13} ${y + 3}v${height - 5}`)}`;
 const selector = (x: number, y: number, length: number, stamped = false) => `<path data-mechanism="selector" d="M${x} ${y}h${length}l5 5h-${length + 4}z" fill="#5a6062" stroke="#161d21" stroke-width=".9"/>${fastener(x + 4, y + 3, 2.6)}${seam(`M${x + 10} ${y + 1}h${length - 10}`, true)}${stamped ? seam(`M${x + 21} ${y - 4}h7m-7 12h7`) : ""}`;
+
+const referenceTools = { fastener, vents, ribs, grain, rail, topBridge, seam, checkering, triggerGuard, port, selector };
+const referenceLayout = (gun: Profile) => classicReferenceLayout(gun) ?? modernReferenceLayout(gun) ?? compactReferenceLayout(gun);
 
 const newProfiles = new Set(["m4a1", "hk416", "p90", "mp7", "ump45", "m1911", "mcx", "scarh", "trg42"]);
 const waveProfiles = new Set(["g36", "aug", "fal", "sr25", "vector", "fiveseven", "sr2", "sr1", "glock20", "ash12", "vpo209", "svdk", "awm", "m870"]);
@@ -477,6 +478,12 @@ function mountGeometry(appearance: string, paint: Paint): Geometry {
 	return { outline: `M557 115h${width}v11h-${width}zM${light ? 566 : 585} 125h${light ? 36 : width - 36}v30h-${light ? 36 : width - 36}z`, material: light ? "steel" : "dark", bounds: [514, 110, Math.max(width + 47, 121), 51], detail: `${rail(518, 145, 113)}${rail(557, 114, width)}${rail(light ? 565 : 583, 151, light ? 40 : width - 31)}${fastener(570, 120, 3)}${fastener(548 + width, 120, 3)}${triple ? `<path d="M616 127h24v14h-24" fill="${paint.steel}"/>${vents(560, 128, 3, 7, 11, 9)}` : light ? `<path d="M572 130h21v14h-21" fill="#1e2123"/>` : `<path d="m588 128 25 15" stroke="#929597" stroke-width="2"/>`}` };
 }
 
+function falCoverGeometry(paint: Paint): Geometry {
+	return { material: "steel", bounds: [277, 103, 208, 54],
+		outline: "M283 112h196v8H283zM289 120h12v14h-12zM451 120h12v14h-12zM327 145h114v6H327z",
+		detail: `${rail(282, 108, 199)}${rail(327, 145, 114)}<path data-mechanism="fal-receiver-optic-bridge" d="M289 120h12v14h-12zM451 120h12v14h-12z" fill="${paint.dark}"/>${fastener(295, 130, 2.6)}${fastener(457, 130, 2.6)}${seam("M287 117h188", true)}` };
+}
+
 function flashlightGeometry(appearance: string, paint: Paint): Geometry {
 	const sizes: Record<string, [number, number]> = { mini: [54, 16], long: [114, 18], armored: [80, 27], wide: [75, 33], angled: [77, 20], taped: [88, 21], focus: [101, 26], scout: [70, 18] };
 	const [length, depth] = sizes[appearance] ?? sizes.mini!;
@@ -494,6 +501,13 @@ function laserGeometry(appearance: string, paint: Paint): Geometry {
 }
 
 function baseGeometry(slot: ModuleSlot, appearance: string, gun: Profile, paint: Paint): Geometry {
+	// Furniture and actions retain their source dimensions when another barrel
+	// is fitted. Only the barrel itself receives the current muzzle station.
+	const referenceGun = slot === "barrel" ? gun : profile(gun.id);
+	const reference = classicReferenceGeometry(slot, appearance, referenceGun, paint, referenceTools)
+		?? modernReferenceGeometry(slot, appearance, referenceGun, paint, referenceTools)
+		?? compactReferenceGeometry(slot, appearance, referenceGun, paint, referenceTools);
+	if (reference) return reference;
 	const pistol = gun.category === "pistol";
 	const wood = gun.wood && appearance === "factory";
 	const material: Material = wood ? "wood" : "polymer";
@@ -723,17 +737,24 @@ function installedGeometry(slot: ModuleSlot, model: ModuleModel | undefined, gun
 	// Factory parts remain the physical part that was installed. VSS and VAL
 	// share a family, but swapping their stocks must swap wood and folding steel.
 	const physical = model ? { ...moduleProfile(model), barrelEnd: gun.barrelEnd } : gun;
-	let shape = geometry(slot, model?.appearance ?? "factory", physical, paint);
-	if (slot === "mount" && model?.id === "mount-fal-bridge") shape = { ...shape, bounds: [329, 103, 328, 61], detail: `${rail(333, 108, 303)}<path data-mechanism="fal-receiver-optic-bridge" d="M334 113h12v22h-12zM481 113h13v21h-13z" fill="${paint.steel}"/>${fastener(340, 129, 3)}${fastener(487, 129, 3)}${shape.detail}` };
+	const shape = model?.id === "mount-fal-bridge" ? falCoverGeometry(paint) : geometry(slot, model?.appearance ?? "factory", physical, paint);
 	const mount = installed.mount ? MODULE_BY_ID[installed.mount.modelId] : undefined;
 	const handguard = installed.handguard ? MODULE_BY_ID[installed.handguard.modelId] : undefined;
-	const mountLift = gun.id === "p90" && mount?.appearance.startsWith("bottom-") ? 36
+	const layout = referenceLayout(gun);
+	const falCover = mount?.id === "mount-fal-bridge";
+	const dovetailShift = layout?.dovetailShift ?? (gun.integral ? -40 : 0);
+	const mountLift = falCover ? 0 : layout && mount?.appearance.startsWith("top-") ? layout.topMountLift ?? (layout.opticShift?.[1] ?? 0) - 1
+		: layout && mount?.appearance.startsWith("bottom-") ? layout.foregripShift?.[1] ?? 0
+		: gun.id === "p90" && mount?.appearance.startsWith("bottom-") ? 36
 		: newProfiles.has(gun.id) && mount?.appearance.startsWith("top-") && (gun.id === "p90" || !["factory", "rail", "carbon"].includes(handguard?.appearance ?? "")) ? -17 : 0;
-	const compactShift = gun.compact ? -35 : gun.integral ? -119 : 0;
-	const front = waveProfiles.has(gun.id) && gun.category !== "pistol" ? waveFront(gun) : gun.compact ? 601 : gun.integral ? 518 : 636;
+	const compactShift = layout?.genericMountShift ?? (gun.compact ? -35 : gun.integral ? -119 : 0);
+	const topShift = handguard?.appearance === "factory" ? layout?.factoryTopMountShift ?? layout?.topMountShift
+		: !["rail", "carbon"].includes(handguard?.appearance ?? "") ? layout?.receiverTopMountShift : layout?.topMountShift;
+	const adapterShift = falCover ? 0 : mount?.appearance.startsWith("top-") ? topShift ?? compactShift : compactShift;
+	const front = layout?.foreEnd ?? (waveProfiles.has(gun.id) && gun.category !== "pistol" ? waveFront(gun) : gun.compact ? 601 : gun.integral ? 518 : 636);
 	const barrelCenter = (front + gun.barrelEnd) / 2;
-	const sideEnd = mount ? mount.appearance.startsWith("dovetail-") ? 492 - (gun.integral ? 40 : 0) : 631 + compactShift : front - 8;
-	const directLaserCenter = gun.integral ? 476 : waveProfiles.has(gun.id) && gun.category !== "pistol" ? (front + (bullpups.has(gun.id) ? 533 : gun.id === "vector" ? 534 : gun.id === "m870" ? 527 : 487) + 2) / 2 : 538;
+	const sideEnd = falCover ? 441 : mount ? mount.appearance.startsWith("dovetail-") ? 492 + dovetailShift : 631 + adapterShift : layout?.sideRailEnd ?? front - 8;
+	const directLaserCenter = layout?.laserCenter ?? (gun.integral ? 476 : waveProfiles.has(gun.id) && gun.category !== "pistol" ? (front + (bullpups.has(gun.id) ? 533 : gun.id === "vector" ? 534 : gun.id === "m870" ? 527 : 487) + 2) / 2 : 538);
 	if (slot === "muzzle") {
 		const barrel = installed.barrel ? MODULE_BY_ID[installed.barrel.modelId] : undefined;
 		const barrelShape = geometry("barrel", barrel?.appearance ?? "factory", barrel ? { ...moduleProfile(barrel), barrelEnd: gun.barrelEnd } : gun, paint);
@@ -741,12 +762,14 @@ function installedGeometry(slot: ModuleSlot, model: ModuleModel | undefined, gun
 	}
 	if (slot === "mount") {
 		const centers: Record<string, number> = { "barrel-ring": 614.5, "barrel-dual": 616.5, "barrel-long": 612.5, "barrel-offset": 621.5 };
-		return positioned(shape, model?.appearance.startsWith("barrel-") ? barrelCenter - (centers[model.appearance] ?? 614.5) : model?.appearance.startsWith("dovetail-") ? gun.integral ? -40 : 0 : compactShift, mountLift);
+		return positioned(shape, model?.appearance.startsWith("barrel-") ? barrelCenter - (centers[model.appearance] ?? 614.5) : model?.appearance.startsWith("dovetail-") ? dovetailShift : adapterShift, mountLift);
 	}
 	if (slot === "optic" && model?.requiresMount === "rail-top" && mount?.appearance.startsWith("dovetail-")) {
 		const top: Record<string, number> = { "dovetail-low": 102, "dovetail-high": 88, "dovetail-qd": 98, "dovetail-bridge": 96 };
-		return positioned(shape, gun.integral ? -40 : 0, (top[mount.appearance] ?? 108) - (shape.railFootY ?? 110));
+		return positioned(shape, dovetailShift, (top[mount.appearance] ?? 108) - (shape.railFootY ?? 110));
 	}
+	if (slot === "optic" && model?.requiresMount === "rail-top" && layout?.opticShift) return positioned(shape, ...layout.opticShift);
+	if (slot === "foregrip" && layout?.foregripShift) return positioned(shape, ...layout.foregripShift);
 	if (slot === "optic" && gun.integral && model?.requiresMount === "rail-top") return positioned(shape, -40, 0);
 	if (slot === "foregrip" && gun.integral) return positioned(shape, -65, -2);
 	if (slot === "optic" && gun.id === "p90") return positioned(shape, 130, 0);
@@ -754,7 +777,7 @@ function installedGeometry(slot: ModuleSlot, model: ModuleModel | undefined, gun
 	if (slot === "foregrip" && gun.id === "p90") return positioned(shape, 0, 36);
 	if (slot === "foregrip" && waveProfiles.has(gun.id)) return positioned(shape, 0, gun.id === "m870" ? 10 : gun.id === "ash12" ? 6 : 0);
 	if (slot === "flashlight") return positioned(shape, (mount?.appearance.startsWith("barrel-") ? barrelCenter : sideEnd - 17) - 626.5, mount?.appearance.startsWith("barrel-") ? -27 : mountLift);
-	if (slot === "laser") return positioned(shape, (mount?.appearance.startsWith("barrel-") ? barrelCenter : mount?.appearance.startsWith("dovetail-") ? 425 - (gun.integral ? 40 : 0) : mount ? gun.integral ? 476 : 538 : directLaserCenter) - (model?.appearance === "tube" ? 548.5 : 543.5), mount?.appearance === "barrel-offset" ? 25 : mount?.appearance.startsWith("barrel-") ? 18 : mountLift);
+	if (slot === "laser") return positioned(shape, (falCover ? 385 : mount?.appearance.startsWith("barrel-") ? barrelCenter : mount?.appearance.startsWith("dovetail-") ? 425 + dovetailShift : mount ? layout ? 538 + adapterShift : gun.integral ? 476 : 538 : directLaserCenter) - (model?.appearance === "tube" ? 548.5 : 543.5), mount?.appearance === "barrel-offset" ? 25 : mount?.appearance.startsWith("barrel-") ? 18 : mountLift);
 	return shape;
 }
 
@@ -800,7 +823,7 @@ export function weaponActorArt(weapon: WeaponInstance): { svg: string; width: nu
 	const left = Math.min(370, gripX, ...parts.map(({ shape }) => shape.bounds[0])) - 4;
 	const top = Math.min(120, gripY, ...parts.map(({ shape }) => shape.bounds[1])) - 4;
 	const right = Math.max(gun.barrelEnd, ...parts.map(({ shape }) => shape.bounds[0] + shape.bounds[2])) + 4;
-	const bottom = Math.max(210, ...parts.map(({ shape }) => shape.bounds[1] + shape.bounds[3])) + 4;
+	const bottom = Math.max(210, gripY, ...parts.map(({ shape }) => shape.bounds[1] + shape.bounds[3])) + 4;
 	const width = right - left, height = bottom - top;
 	// Actor scale follows the factory gun, so adding a suppressor extends the barrel
 	// instead of shrinking the receiver, stock and every other installed part.
@@ -825,7 +848,8 @@ function moduleProfile(model: ModuleModel): Profile {
 	const modernCalibers: Record<string, string> = { "5.56x45": "m4a1", "5.7x28": "p90", "4.6x30": "mp7", ".45acp": "ump45", ".300blk": "mcx", "7.62x51": "scarh", ".338lapua": "trg42", "9x21": "sr2", "10mm": "glock20", "12.7x55": "ash12", ".366tkm": "vpo209", "9.3x64": "svdk", ".300winmag": "awm" };
 	const modernCaliber = model.calibers.map((id) => modernCalibers[id]).find(Boolean); if (modernCaliber) return profile(modernCaliber);
 	if (platform.includes("pp91") || platform.includes("kedr")) return profile("pp91");
-	if (platform.includes("pistol") || platform.includes("pm") || platform.includes("tt")) return profile("pm");
+	if (platform.includes("tt")) return profile("tt");
+	if (platform.includes("pistol") || platform.includes("pm")) return profile("pm");
 	if (platform.includes("mosin") || platform.includes("bolt")) return profile("mosin");
 	if (platform.includes("sks")) return profile("sks");
 	if (platform.includes("mp133") || platform.includes("pump")) return profile("mp133");
@@ -844,7 +868,7 @@ function moduleProfile(model: ModuleModel): Profile {
 export function moduleArt(model: ModuleModel): string {
 	const { paint, defs } = palette(paintId(model.id));
 	const physical = moduleProfile(model);
-	const shape = geometry(model.slot, model.appearance, model.slot === "barrel" ? barrelProfile(physical, model.appearance) : physical, paint);
+	const shape = model.id === "mount-fal-bridge" ? falCoverGeometry(paint) : geometry(model.slot, model.appearance, model.slot === "barrel" ? barrelProfile(physical, model.appearance) : physical, paint);
 	const [x, y, width, height] = shape.bounds;
 	const scale = Math.min(214 / width, 91 / height);
 	const translateX = 120 - (x + width / 2) * scale;

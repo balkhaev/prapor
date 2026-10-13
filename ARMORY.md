@@ -92,6 +92,54 @@ M4A1 и HK416 используют семейство AR под 5,56×45: физ
 
 Облик бокового оптического прицела опирается на профиль [ПО4×24 НПЗ](https://npzoptics.ru/catalog/dnevnye_pricely/po4h24_1/): тонкая труба, наглазник и собственная боковая опора. Для игровых переходников использованы особенности формы [Б-13 «Зенитко»](https://zenitco.ru/catalog/tyuning/kronshteyny_nad_stvolnoy_korobkoy/kronshteyn_nad_stvolnoy_korobkoy_b_13/). Это художественные ориентиры; каталог игровых модулей не заявляет совместимость реальных изделий.
 
+## Профили всего арсенала по внешним референсам
+
+После ВАЛ/ВСС переработаны остальные 37 пушек. У каждой семьи собственные коробка, мебель, подача и точки хвата. Пистолеты получили полноразмерные рукояти; P90 — верхнюю кассету и открытые окна корпуса; Vector — глубокий нижний корпус; ПКП — кожух охлаждения и ленточный короб; СВДК — трубчатый приклад. Помповые ружья сохраняют отдельную трубку подачи, а винтовки с ручным затвором — собственное шасси и рукоять затвора.
+
+Контуры деталей общие для карточки, верстака и оружия в руках. Длина сменного ствола не растягивает коробку и цевьё. Верхние и нижние переходники имеют отдельные места установки: короткое цевьё, высокая ручка G36/АШ-12 и планка коробки требуют разной посадки. Крышка FAL имеет собственные опоры на коробке и сохраняет тот же физический контур вне сборки. Магазины ТТ разрешаются по его собственной платформе, а не по профилю ПМ.
+
+Для проверки просмотрены сами фотографии и иллюстрации, а не только описания результатов поиска. Фотографии не включены в игровые файлы. Производители и авторы внешних ориентиров:
+
+| Оружие | Просмотренный источник |
+| --- | --- |
+| ТОЗ-106 | [Оригинальная фотография DTKCEKDRK](https://commons.wikimedia.org/wiki/File:Toz_106_webp.webp) |
+| МР-133 | [Заводской паспорт Ижевского механического завода, внешний вид](https://huntstime.com/page277.html), републикация Huntstime |
+| СКС | [Фотография US DoD DD-ST-85-01268](https://commons.wikimedia.org/wiki/File:AK-47_and_SKS_DD-ST-85-01268.jpg) |
+| АК-74 | [Фотография US DoD DA-ST-89-06610](https://commons.wikimedia.org/wiki/File:AK-74_DA-ST-89-06610.jpg) |
+| Сайга-12 | [Оригинальная фотография Hrd10](https://commons.wikimedia.org/wiki/File:Saiga_12K.JPG) |
+| Витязь | [Фотография Виталия Кузьмина](https://commons.wikimedia.org/wiki/File:PP-19-01_(351-02).jpg) |
+| Мосин | [Архив NPS / Springfield Armory, SPAR5832](https://commons.wikimedia.org/wiki/File:MODEL_1891_MOSIN-NAGANT_Left_Side_SPAR5832_APR,_8._2004.jpg) |
+| АКМ | [Коллекция Armémuseum](https://digitaltmuseum.se/011024370718) |
+| РПК | [Тульский музей оружия, Виталий Кузьмин](https://commons.wikimedia.org/wiki/File:Tula_State_Museum_of_Weapons_(79-40).jpg) |
+| СВД | [Оригинальная профильная фотография Hokos](https://commons.wikimedia.org/wiki/File:SVD_Dragunov.jpg) |
+| ПКП | [Фотография Виталия Кузьмина](https://commons.wikimedia.org/wiki/File:PKP_Pecheneg_(1).jpg) |
+| ВПО-209 | [Заводская фотография «Молот-Оружие», опубликованная all4shooters](https://www.all4shooters.com/ru/okhota/ruzhya/molot-oruzhiye-vpo-209-kalibra-366-tk-m-samozaryadnoye-ruzhye/) |
+| СВДК | [ЦНИИТОЧМАШ, Виталий Кузьмин](https://commons.wikimedia.org/wiki/File:Винтовки_СВДК_и_СВ-98_-_ЦНИИТОЧМАШ_01.jpg) |
+| M870 | [Remington Arms, 870 Series](https://remington-arms.com/870-series/) |
+| M4A1 | [Каталог Colt MLE 2024, стр. 24](https://www.colt.com/wp-content/uploads/2024/08/2024-Colt-MLE-Catalogweb.pdf) |
+| HK416, G36 | [Каталог Heckler & Koch 2014, стр. 24–29](https://hk-manuals.s3.amazonaws.com/files/Catalogs/Combined/HK_Combined_Catalog_2014.pdf) |
+| MCX | [Руководство SIG MCX SPEAR-LT, стр. 26](https://www.sigsauer.com/media/sigsauer/resources/OPERATORS-MANUAL-MCX-SPEAR-LT-2402988-01_REV01.pdf) |
+| TRG-42 | [Руководство Sako TRG-22/42, фигуры коробки и прикладов](https://media.sako.global/image/upload/v1691734322/TGR-2242_owner_s_manual_p8zzps.pdf) |
+| AUG | [Руководство Steyr AUG-Z-A3, рис. 1](https://www.steyr-arms.com/wp-content/uploads/2023/03/BA_STEYR_AUG-Z-A3_eng-de_1-BA-1711_EU-03.pdf) |
+| SR-25 | [Каталог Knight’s Armament 2017, SR-25 E2 APR, стр. 13](https://www.knightarmco.com/wp-content/uploads/2021/05/2017catalog-.pdf) |
+| SCAR-H | [Профильная фотография FN Herstal](https://fnherstal.com/en/security/carbines-rifles/fn-scar-h-mk2/) |
+| FAL | [Оригинальная фотография FN Herstal](https://commons.wikimedia.org/wiki/File:FN_FAL_Standard_Model_Left_Side.jpg) |
+| АШ-12 | [Оригинальная фотография Homoatrox](https://commons.wikimedia.org/wiki/File:ShAK-12_battle_rifle.jpg) |
+| AWM | [AW .338 LM, Виталий Кузьмин](https://commons.wikimedia.org/wiki/File:Accuracy_International_AW_.338_LM_4thNovSniperCompetition21.jpg) |
+| ПМ | [Архивная фотография ПМ 1982 года, журнал «Калашников»](https://www.kalashnikov.ru/mnogolikij-pm/) |
+| ТТ | [Фотография Министерства национальной обороны Польши](https://commons.wikimedia.org/wiki/File:Pistol_TT33.jpg) |
+| Кедр | [Изображения семейства «Кедр» и мебели приклада, Златмаш](https://zlatmash.ru/press/OgnestrelnoeoruzhieZlatmashaotKedradoTiReksa/) |
+| P90 | [FN Herstal, фотография P90 Tactical](https://fnherstal.com/en/defence/portable-weapons/fn-p90/) |
+| MP7, UMP-45 | [Каталог Heckler & Koch 2014, стр. 20–23](https://hk-manuals.s3.amazonaws.com/files/Catalogs/Combined/HK_Combined_Catalog_2014.pdf) |
+| M1911 | [Colt Classic Series, профиль O1911C](https://www.colt.com/product-category/commercial/pistols/classic-series/) |
+| Vector | [KRISS Vector SMG G2, заводская фотография](https://kriss-usa.com/firearms/sub-machine-guns/vector-smg-g2/) |
+| Five-seveN | [FN America, профиль USG/Mk2](https://fnamerica.com/products/pistols/fn-five-seven/) |
+| СР-2 | [Фотография Московского ОМОН, Виталий Кузьмин](https://commons.wikimedia.org/wiki/File:SR-2M_Veresk_of_the_Moscow_OMON_04.jpg) |
+| СР-1 | [Фотография Московского ОМОН, Виталий Кузьмин](https://commons.wikimedia.org/wiki/File:Пистолет_СР1М_-_Московского_ОМОНа_02.jpg) |
+| Glock 20 | [Glock G20 Gen4, профиль с габаритами](https://eu.glock.com/en/products/pistols/g20-gen4) |
+
+Референсы задают семейные пропорции: изображение MCX относится к SPEAR-LT, фотография AWM — к AW .338 LM, музейный Мосин — к M1891. Некоторые исходные снимки сделаны под углом; они использованы для узнаваемых частей, без переноса перспективы в профиль. Сложенное положение ручки FAL — художественное решение по видимому шарниру. Универсальные обвесы и добавленные опоры на игровых штатных ВПО-209, СВДК и M870 соответствуют существующим правилам игры; таблица не заявляет комплектацию или совместимость настоящих изделий.
+
 ## Вторая волна арсенала
 
 Добавлены G36, AUG, FAL, SR-25, Vector, Five-seveN, СР-2, СР-1, Glock 20, АШ-12, ВПО-209, СВДК, AWM и M870: всего 39 пушек и 934 модели деталей. 313 новых деталей имеют свои платформы, калибры, рецепты, массу, состояние и крепления. Найденная коробка открывает изготовление; детали разбираются и собираются с сохранением физических экземпляров.

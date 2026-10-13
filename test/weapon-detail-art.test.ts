@@ -5,7 +5,16 @@ import type { WeaponInstance } from "../src/game/engine";
 import { FACTORY_KITS, MODULE_BY_ID, type ModuleSlot } from "../src/game/modules";
 
 const factory = (weaponId: string): WeaponInstance => ({ id: "mechanical-detail", weaponId, durability: 100, foundAt: 0, attachments: { optic: 0, magazine: 0, stock: 0 }, modules: Object.fromEntries(Object.entries(FACTORY_KITS[weaponId]!).map(([slot, modelId]) => [slot, { id: `detail-${slot}`, modelId, durability: 100, foundAt: 0 }])) });
-const part = (svg: string, slot: ModuleSlot) => svg.match(new RegExp(`<g data-module-slot="${slot}"[^>]*>([\\s\\S]*?)</g>`))?.[1];
+const part = (svg: string, slot: ModuleSlot) => {
+	const start = svg.indexOf(`<g data-module-slot="${slot}"`); if (start < 0) return undefined;
+	const tags = /<g\b[^>]*>|<\/g>/g; tags.lastIndex = start;
+	let depth = 0;
+	for (let tag = tags.exec(svg); tag; tag = tags.exec(svg)) {
+		depth += tag[0].startsWith("</") ? -1 : 1;
+		if (depth === 0) return svg.slice(start, tags.lastIndex);
+	}
+	throw new Error(`Unclosed ${slot}`);
+};
 const outline = (svg: string) => svg.match(/<path d="([^"]+)"/)![1]!;
 
 describe("mechanical weapon illustration", () => {
@@ -15,7 +24,7 @@ describe("mechanical weapon illustration", () => {
 			const gun = factory(definition.id), model = MODULE_BY_ID[gun.modules.receiver!.modelId]!, actor = part(weaponActorArt(gun).svg, "receiver")!;
 			silhouettes.add(outline(actor));
 			expect(outline(actor), definition.id).toBe(outline(part(moduleArt(model), "receiver")!));
-			expect(actor, definition.id).toContain(`data-mechanism="${definition.id === "p90" ? "bullpup-bottom-ejection" : "ejection-port"}"`);
+			expect(actor, definition.id).toContain(`data-mechanism="${definition.id === "p90" ? "p90-bottom-ejection-port" : "ejection-port"}"`);
 			if (definition.id === "p90") expect(actor).not.toContain('data-mechanism="ejection-port"');
 			expect(actor, definition.id).toContain('data-mechanism="trigger-guard"');
 		}
@@ -27,7 +36,7 @@ describe("mechanical weapon illustration", () => {
 		for (const id of ["pm", "tt", "pp91", "vityaz", "mosin", "toz", "mp133"]) expect(part(weaponActorArt(factory(id)).svg, "barrel"), id).not.toContain('data-mechanism="gas-system"');
 		for (const id of ["mosin", "toz"]) expect(part(weaponActorArt(factory(id)).svg, "receiver"), id).toContain('data-mechanism="bolt-handle"');
 		expect(part(weaponActorArt(factory("pkp")).svg, "receiver")).toContain('data-mechanism="feed-tray"');
-		expect(part(weaponActorArt(factory("mp133")).svg, "receiver")).toContain('data-mechanism="action-release"');
+		expect(part(weaponActorArt(factory("mp133")).svg, "receiver")).toContain('data-mechanism="pump-release"');
 		const gun = factory("ak74"); delete gun.modules.barrel;
 		expect(weaponActorArt(gun).svg).not.toContain('data-mechanism="gas-system"');
 	});

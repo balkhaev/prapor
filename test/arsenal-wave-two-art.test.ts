@@ -5,6 +5,7 @@ import { WEAPONS } from "../src/game/data";
 import { FACTORY_KITS, MODULE_BY_ID, MODULE_MODELS, RECEIVER_INFO, type ModuleSlot } from "../src/game/modules";
 import { getWeaponBuildIssues, type WeaponInstance } from "../src/game/engine";
 import { MODULAR_WEAPON_ART_IDS, modularWeaponArtFamily } from "../src/modular-weapon-art";
+import { weaponGripAnchor } from "../src/weapon-attachment";
 
 const waveIds = ["g36", "aug", "fal", "sr25", "vector", "fiveseven", "sr2", "sr1", "glock20", "ash12", "vpo209", "svdk", "awm", "m870"] as const;
 const factory = (weaponId: string): WeaponInstance => ({ id: "released-visual", weaponId, durability: 100, foundAt: 0, attachments: { optic: 0, magazine: 0, stock: 0 }, modules: Object.fromEntries(Object.entries(FACTORY_KITS[weaponId]!).map(([slot, modelId]) => [slot, { id: slot, modelId, durability: 100, foundAt: 0 }])) });
@@ -27,8 +28,8 @@ describe("wave two physical weapon profiles", () => {
 	test("all polished loose profiles and factory actor assemblies retain their reviewed visual snapshots", () => {
 		// Intentional visual polish across the original and expanded catalog.
 		// Physical consistency, mounting and clipping are audited independently below.
-		expect(hash(MODULE_MODELS.map(moduleArt))).toBe("34ea2aa21310cb65108099521d2087b19cb983e865615b9fec2c54a340178793");
-		expect(hash(WEAPONS.map(({ id }) => JSON.stringify(weaponActorArt(factory(id)))))).toBe("206266b52ccbdcbee84b5b22ee374588cde50827f67aaa84e9fd237bd0090030");
+		expect(hash(MODULE_MODELS.map(moduleArt))).toBe("491f0ac1fc2b1e6fdb7a2bd258723c4bbc66c9830e48fb921ddd2c10824bb3b4");
+		expect(hash(WEAPONS.map(({ id }) => JSON.stringify(weaponActorArt(factory(id)))))).toBe("bdfd6c936f73ec3f33cd9b659671767a02d4cc5699601e24950cb8773ca3b8c2");
 	});
 
 	test("14 distinct receiver silhouettes and all factory parts use identical bench, actor and loose geometry", () => {
@@ -75,28 +76,42 @@ describe("wave two physical weapon profiles", () => {
 	test("bullpup feed lies behind the trigger while Vector feed lies ahead of its grip", () => {
 		for (const id of ["aug", "ash12"] as const) {
 			const actor = weaponActorArt(factory(id));
-			expect(part(actor.svg, "receiver")).toContain('data-mechanism="bullpup-rear-box-feed"');
-			expect(outline(part(actor.svg, "magazine"))).toMatch(/^M309 173h/);
-			expect(outline(part(actor.svg, "stock"))).toMatch(/^M\d+ 123h\d+l13 8v61l-13 11/);
-			expect(part(actor.svg, "stock")).toContain('data-mechanism="bullpup-buttpad"');
+			expect(part(actor.svg, "receiver")).toContain(`data-reference-mechanism="${id === "aug" ? "aug-integrated-stock-grip-window" : "ash12-rear-feed-long-sheet-action"}"`);
+			const grip = weaponGripAnchor(id);
+			const verifyRearNeck = (svg: string) => {
+				const neck = outline(part(svg, "magazine")).match(/^M([\d.]+) ([\d.]+)h([\d.]+)/)!;
+				expect(neck, `${id} box neck`).not.toBeNull();
+				expect(Number(neck[1]) + Number(neck[3]), `${id} feed behind grip`).toBeLessThan(grip.x);
+				expect(Number(neck[2]), `${id} neck enters action above hand`).toBeLessThan(grip.y);
+			};
+			verifyRearNeck(actor.svg);
+			const butt = outline(part(actor.svg, "stock")).match(/^M([\d.]+) ([\d.]+)h([\d.]+)/)!;
+			expect(Number(butt[1]) + Number(butt[3]), `${id} rear pad independent of gripping surface`).toBeLessThan(grip.x - 100);
+			expect(part(actor.svg, "stock")).toContain(`data-reference-mechanism="${id === "aug" ? "aug-integrated-stock-butt-plate" : "ash12-deep-rear-pad"}"`);
 			const gun = factory(id), info = RECEIVER_INFO[id]!;
 			for (const appearance of ["extended", "quick", "window", "compact"]) {
 				install(gun, `magazine-${info.platform}-${info.caliber}-${appearance}`);
-				expect(outline(part(weaponActorArt(gun).svg, "magazine"))).toMatch(/^M309 173h/);
+				verifyRearNeck(weaponActorArt(gun).svg);
 			}
 		}
 		const vector = weaponActorArt(factory("vector"));
-		expect(part(vector.svg, "receiver")).toContain('data-mechanism="vector-offset-lower-housing"');
-		expect(outline(part(vector.svg, "magazine"))).toMatch(/^M430 226h42/);
-		for (const id of ["sr2", "sr1", "glock20", "fiveseven"] as const) expect(outline(part(weaponActorArt(factory(id)).svg, "magazine"))).toMatch(/^M(?:337|341) 198h/);
+		expect(part(vector.svg, "receiver")).toContain('data-mechanism="vector-offset-grip"');
+		const vectorNeck = outline(part(vector.svg, "magazine")).match(/^M([\d.]+) ([\d.]+)h([\d.]+)/)!;
+		expect(Number(vectorNeck[1]), "Vector feed ahead of grip").toBeGreaterThan(weaponGripAnchor("vector").x);
+		for (const id of ["sr2", "sr1", "glock20", "fiveseven"] as const) {
+			const neck = outline(part(weaponActorArt(factory(id)).svg, "magazine")).match(/^M([\d.]+) ([\d.]+)h([\d.]+)/)!;
+			const grip = weaponGripAnchor(id);
+			expect(Math.abs(Number(neck[1]) + Number(neck[3]) / 2 - grip.x), `${id} feed rooted in grip`).toBeLessThan(25);
+			expect(Number(neck[2]), `${id} feed enters above hand`).toBeLessThan(grip.y);
+		}
 	});
 
 	test("the ASH carry bridge supports the optical foot at its own height", () => {
 		const gun = factory("ash12"); install(gun, "optic-longscope");
 		const actor = weaponActorArt(gun), sight = part(actor.svg, "optic"), receiver = part(actor.svg, "receiver");
 		expect(getWeaponBuildIssues(gun)).toEqual([]);
-		expect(sight).toContain('transform="translate(0 -25)"');
-		expect(receiver).toContain('d="M351 83h149v6H351z"');
+		expect(sight).toContain('transform="translate(0 -21)"');
+		expect(receiver).toContain('d="M383 87h149v6H383z"');
 		expect(sight).toBe(part(weaponBuildArt(gun), "optic"));
 	});
 
@@ -105,14 +120,17 @@ describe("wave two physical weapon profiles", () => {
 		for (const appearance of ["factory", "extended", "quick", "window", "compact"]) {
 			install(pump, appearance === "factory" ? FACTORY_KITS.m870!.magazine! : `magazine-m870-12g-${appearance}`);
 			const svg = weaponActorArt(pump).svg;
-			expect(outline(part(svg, "magazine"))).toMatch(/^M475 154h\d+v13/);
-			expect(svg).toContain('data-mechanism="m870-tube-feed"');
-			expect(svg).toContain('data-mechanism="m870-pump-fore-end"');
+			const tube = outline(part(svg, "magazine")).match(/^M([\d.]+) ([\d.]+)h([\d.]+)v([\d.]+)/)!;
+			expect(tube, "horizontal tube profile").not.toBeNull();
+			expect(Number(tube[2]), "tube lies under bore").toBeGreaterThan(139);
+			expect(Number(tube[3]), "tube is long and narrow").toBeGreaterThan(Number(tube[4]) * 5);
+			expect(svg).toContain('data-mechanism="underbarrel-feed-tube"');
+			expect(svg).toContain('data-mechanism="sliding-pump-fore-end"');
 			expect(svg).not.toContain('data-mechanism="gas-block"');
 		}
 		const bolt = factory("awm"), before = weaponActorArt(bolt);
 		install(bolt, "barrel-awm-.300winmag-long"); const after = weaponActorArt(bolt);
-		expect(after.svg).toContain('data-mechanism="awm-bolt-handle"');
+		expect(after.svg).toContain('data-reference-mechanism="awm-round-bolt-action"');
 		expect(after.svg).not.toMatch(/data-mechanism="gas-(?:block|system)"/);
 		expect(after.muzzle.x).toBeGreaterThan(before.muzzle.x);
 		expect(after.referenceWidth).toBe(before.referenceWidth);
@@ -134,7 +152,12 @@ describe("wave two physical weapon profiles", () => {
 			const gun = factory(id), info = RECEIVER_INFO[id]!;
 			install(gun, `handguard-${info.platform}-rail`); install(gun, "optic-longscope"); install(gun, "foregrip-vertical");
 			expect(getWeaponBuildIssues(gun), id).toEqual([]);
-			expect(part(weaponActorArt(gun).svg, "handguard")).toContain('data-mechanism="handguard-optic-bridge"');
+			const actor = weaponActorArt(gun), guard = part(actor.svg, "handguard");
+			// A raised receiver carry deck remains the optical contact for G36/ASH;
+			// other railed front ends provide their own continuous upper deck.
+			const opticalHost = ["g36", "ash12"].includes(id) ? part(actor.svg, "receiver") : guard;
+			expect(opticalHost, `${id} physical upper rail`).toMatch(/d="M\d+ (?:87|108)h\d+v6H\d+z"/);
+			expect(guard, `${id} physical lower rail`).toMatch(/d="M\d+ (?:16\d|17\d|18\d|190)h\d+v6H\d+z"/);
 		}
 	});
 });

@@ -196,9 +196,23 @@ describe("complete weapon side-profile audit", () => {
 			const gun = factory("toz"); install(gun, `magazine-toz-20g-${appearance}`);
 			const actor = weaponActorArt(gun), magazine = part(actor.svg, "magazine")!;
 			expect(getWeaponBuildIssues(gun)).toEqual([]);
-			expect(outline(magazine)).toMatch(/^M418 166h46v\d+h-43l-3-8z$/);
+			expect(outline(magazine)).not.toMatch(/[qQcCsS]/);
+			const [left = 0, , right = 0] = geometryBounds(magazine);
+			expect(right - left).toBeLessThan(75);
 			expect(magazine).toContain('data-mechanism="toz-straight-box-feed"');
 			expect(magazine).toBe(part(weaponBuildArt(gun), "magazine")!);
+		}
+	});
+
+	test("TT magazine upgrades retain their own feed and floorplate rather than adopting the PM profile", () => {
+		const variants = MODULE_MODELS.filter((model) => model.slot === "magazine" && !model.weaponId && model.platforms.includes("tt"));
+		expect(variants.length).toBeGreaterThanOrEqual(4);
+		for (const model of variants) {
+			const pm = MODULE_MODELS.find((item) => item.slot === "magazine" && !item.weaponId && item.platforms.includes("pm") && item.appearance === model.appearance)!;
+			const loose = part(moduleArt(model), "magazine")!, gun = factory("tt"); install(gun, model.id);
+			expect(getWeaponBuildIssues(gun)).toEqual([]);
+			expect(outline(loose), model.id).not.toBe(outline(part(moduleArt(pm), "magazine")!));
+			expect(outline(part(weaponActorArt(gun).svg, "magazine")!)).toBe(outline(loose));
 		}
 	});
 
@@ -209,7 +223,7 @@ describe("complete weapon side-profile audit", () => {
 			const magazine = part(weaponActorArt(gun).svg, "magazine")!;
 			expect(getWeaponBuildIssues(gun)).toEqual([]);
 			expect(outline(magazine)).not.toMatch(/[qQ]/);
-			expect(magazine).toContain(`data-mechanism="${id === "svd" ? "svd-tapered-box-feed" : "saiga-shotgun-box-feed"}"`);
+			expect(magazine).toContain(`data-mechanism="${id === "svd" ? "sniper-short-box-feed" : "saiga-shotgun-box-feed"}"`);
 			expect(magazine).toBe(part(weaponBuildArt(gun), "magazine")!);
 		}
 	});
@@ -253,7 +267,7 @@ describe("complete weapon side-profile audit", () => {
 		}
 		for (const model of MODULE_MODELS.filter((item) => item.appearance === "drum")) {
 			const group = part(moduleArt(model), "magazine")!, [left = 0, , right = 0] = geometryBounds(group);
-			expect(right - left).toBeLessThan(75);
+			expect(right - left, model.id).toBeLessThan(75);
 			expect(group).not.toMatch(/<circle[^>]+r="(?:11|[3-9]\d)"/);
 		}
 		const legs = outline(part(moduleArt(MODULE_BY_ID["foregrip-bipod"]!), "foregrip")!);
@@ -283,9 +297,7 @@ describe("complete weapon side-profile audit", () => {
 					const group = part(art.svg, "mount")!, foundationPath = outline(group).split(/(?=M)/)[0]!, opening = group.slice(0, group.indexOf(">") + 1);
 					const [left = 0, , right = 0] = geometryBounds(`${opening}<path d="${foundationPath}"/></g>`), [barrelDx = 0] = offset(part(art.svg, "barrel")!);
 					const barrelEnd = Math.max(...pointsForPath(outline(part(art.svg, "barrel")!)).map(([x]) => x)) + barrelDx;
-					const front = ["g36", "aug", "fal", "sr25", "vector", "sr2", "ash12", "vpo209", "svdk", "awm", "m870"].includes(definition.id)
-						? Math.max(...pointsForPath(outline(part(art.svg, "handguard")!)).map(([x]) => x))
-						: ["pp91", "toz", "p90", "mp7", "ump45"].includes(definition.id) ? 601 : 636;
+					const front = Math.max(...pointsForPath(outline(part(art.svg, "handguard")!)).map(([x]) => x));
 					expect(left, `${definition.id}/${mount.id} exposed barrel start`).toBeGreaterThanOrEqual(front);
 					expect(right, `${definition.id}/${mount.id} exposed barrel end`).toBeLessThanOrEqual(barrelEnd);
 				}
@@ -305,6 +317,59 @@ describe("complete weapon side-profile audit", () => {
 		install(gun, "handguard-ak-carbon"); install(gun, "mount-barrel-ring"); install(gun, "flashlight-long"); install(gun, "laser-precision");
 		const shortBarrel = weaponActorArt(gun); install(gun, "barrel-ak-5.45x39-long"); const longer = weaponActorArt(gun);
 		for (const slot of ["mount", "flashlight", "laser"] as const) { expect(offset(part(longer.svg, slot)!)[0]! - offset(part(shortBarrel.svg, slot)!)[0]!).toBe(20); expect(outline(part(longer.svg, slot)!)).toBe(outline(part(shortBarrel.svg, slot)!)); }
+	});
+
+	test("top and bottom adapter shoes rest on physical host rails across the reference families", () => {
+		let cases = 0;
+		const unsupported: string[] = [];
+		const adapters = MODULE_MODELS.filter((model) => model.slot === "mount" && model.requiresMount !== "receiver-bridge" && /^(top|bottom)-/.test(model.appearance));
+		for (const definition of WEAPONS.filter((item) => item.category !== "pistol" && !["vss", "asval"].includes(item.id))) {
+			const info = RECEIVER_INFO[definition.id]!;
+			const guards = MODULE_MODELS.filter((model) => model.slot === "handguard" && (model.id === FACTORY_KITS[definition.id]!.handguard || !model.weaponId && model.platforms.includes(info.platform) && model.calibers.includes(info.caliber)));
+			for (const guard of guards) for (const adapter of adapters) {
+				const gun = factory(definition.id); install(gun, guard.id); install(gun, adapter.id);
+				if (getWeaponBuildIssues(gun).length) continue;
+				cases++;
+				const art = weaponActorArt(gun), mounted = part(art.svg, "mount")!;
+				const opening = mounted.slice(0, mounted.indexOf(">") + 1), shoe = outline(mounted).split(/(?=M)/)[0]!;
+				const [left = 0, top = 0, right = 0, bottom = 0] = geometryBounds(`${opening}<path d="${shoe}"/></g>`);
+				const rails = ["receiver", "handguard"].flatMap((slot) => {
+					const host = part(art.svg, slot as ModuleSlot)!, [dx = 0, dy = 0] = offset(host);
+					return [...host.matchAll(/<path d="M(-?[\d.]+) (-?[\d.]+)h([\d.]+)v6H[-\d.]+z"/g)].map((match) => [Number(match[1]) + dx, Number(match[2]) + dy, Number(match[1]) + Number(match[3]) + dx, Number(match[2]) + 6 + dy]);
+				});
+				if (!rails.some(([x = 0, y = 0, end = 0, lower = 0]) => left >= x - .01 && right <= end + .01 && bottom >= y && top <= lower)) unsupported.push(`${definition.id}/${guard.id}/${adapter.id}: shoe ${[left, top, right, bottom]}, rails ${JSON.stringify(rails)}`);
+			}
+		}
+		expect(cases).toBeGreaterThan(300);
+		expect(unsupported).toEqual([]);
+	});
+
+	test("the FAL cover clamps onto the action and supports both long-scope rings", () => {
+		const gun = factory("fal"); install(gun, "mount-fal-bridge"); install(gun, "optic-longscope");
+		expect(getWeaponBuildIssues(gun)).toEqual([]);
+		const actor = weaponActorArt(gun), mount = part(actor.svg, "mount")!, receiver = part(actor.svg, "receiver")!;
+		expect(offset(mount)).toEqual([0, 0]);
+		expect(outline(mount)).toBe(outline(part(moduleArt(MODULE_BY_ID["mount-fal-bridge"]!), "mount")!));
+		const action = pointsForPath(outline(receiver).split(/(?=M)/)[0]!);
+		const insideAction = (x: number, y: number) => {
+			let inside = false;
+			for (let i = 0, j = action.length - 1; i < action.length; j = i++) {
+				const [xi, yi] = action[i]!, [xj, yj] = action[j]!;
+				if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+			}
+			return inside;
+		};
+		for (const shoe of outline(mount).split(/(?=M)/).slice(1, 3)) {
+			const [left = 0, , right = 0, bottom = 0] = geometryBounds(`<path d="${shoe}"/>`);
+			expect(insideAction(left + 1, bottom - 1)).toBe(true);
+			expect(insideAction(right - 1, bottom - 1)).toBe(true);
+		}
+		const sight = part(actor.svg, "optic")!;
+		for (const ring of outline(sight).split(/(?=M)/).slice(-2)) {
+			const [left = 0, , right = 0, bottom = 0] = geometryBounds(`<path d="${ring}"/>`);
+			expect(left).toBeGreaterThanOrEqual(282); expect(right).toBeLessThanOrEqual(481);
+			expect(bottom).toBeGreaterThanOrEqual(108); expect(bottom).toBeLessThanOrEqual(114);
+		}
 	});
 
 	test("all supported sights place their optical feet on the actual four dovetail adapter rails", () => {
