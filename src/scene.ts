@@ -283,6 +283,8 @@ export function createWorld(
 		private worldBounds: ShelterRect = { x: 0, y: 0, width: WIDTH, height: HEIGHT };
 		private pendingPresentation: unknown = null;
 		private presentationReady = false;
+		private restoringPresentation = false;
+		private capturingPresentation = false;
 		private viewCamera: ShelterCamera = { zoom: 1, x: 0, y: 0 };
 		private viewport: ShelterViewport = { ...initialViewport };
 		private viewportObserver: ResizeObserver | null = null;
@@ -332,9 +334,9 @@ export function createWorld(
 			this.installDragListeners();
 			this.installViewportObserver();
 			this.syncSnapshot();
-			this.presentationReady = true;
 			this.show(requestedView);
-			if (this.pendingPresentation) { const saved = this.pendingPresentation; this.pendingPresentation = null; this.restorePresentationState(saved); }
+			this.presentationReady = true;
+			if (this.pendingPresentation) this.restorePresentationState(this.pendingPresentation);
 			this.game.canvas.setAttribute("aria-hidden", "true");
 			this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
 				this.cancelScavDrag();
@@ -368,8 +370,15 @@ export function createWorld(
 
 		getCameraState(): WorldCameraState { return { ...(requestedView === "raid" && this.raidStreet ? this.raidStreet.getCameraState() : this.viewCamera), panMode: this.panMode, view: requestedView, minZoom: requestedView === "raid" ? .7 : getMinShelterZoom(this.viewport, this.worldBounds), maxZoom: 4 }; }
 		getPresentationState(): unknown {
-			if (!this.presentationReady) return this.pendingPresentation;
+			if (!this.presentationReady || this.restoringPresentation) return this.pendingPresentation;
 			const actual = snapshot();
+			// An action can save before Phaser's next frame. Update destinations and
+			// assignments at the existing feet positions; neither clock nor movement
+			// advances here. Callback-driven captures must not recursively synchronize.
+			if (!this.capturingPresentation) {
+				this.capturingPresentation = true;
+				try { this.syncShelter(actual); } finally { this.capturingPresentation = false; }
+			}
 			const actors = [...this.scavs].filter(([id, slot]) => {
 				if (actual.shelter !== this.viewState?.shelter || !slot.actor.visible) return false;
 				const scav = actual.scavs?.find((candidate) => candidate.id === id);
@@ -387,6 +396,10 @@ export function createWorld(
 			if (!value || typeof value !== "object") return;
 			if (!this.presentationReady) { this.pendingPresentation = value; return; }
 			const data = value as Record<string, unknown>; if (data.version !== 1) return;
+			// Captures triggered by camera/drag callbacks during restoration keep the
+			// queued data, rather than persisting bootstrap defaults over the saved view.
+			this.pendingPresentation = value; this.restoringPresentation = true;
+			try {
 			this.cancelScavDrag(); this.cancelCameraGesture();
 			if (snapshot().shelter !== this.viewState?.shelter) this.syncSnapshot();
 			const object = (v: unknown): Record<string, unknown> | null => v && typeof v === "object" ? v as Record<string, unknown> : null;
@@ -431,6 +444,7 @@ export function createWorld(
 			}
 			if (typeof data.raidId === "string" && data.raidId === requestedRaidId && (state.raids.some((raid) => raid.id === data.raidId) || state.history?.some((report) => report.raidId === data.raidId))) { this.selectRaid(data.raidId); this.raidStreet.restoreCamera(data.raidCamera); }
 			this.applyCamera();
+			} finally { this.restoringPresentation = false; this.pendingPresentation = null; }
 		}
 
 		selectRaid(id: string | null): void { requestedRaidId = id; this.raidStreet?.selectRaid(id); if (requestedView === "raid" && this.raidStreet) this.raidStreet.update(snapshot(), Date.now(), 0); this.applyCamera(); }
