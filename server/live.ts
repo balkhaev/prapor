@@ -2,15 +2,18 @@ import { Database } from "bun:sqlite";
 import { createHash, randomBytes, randomInt, randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { LIVE_CAPACITY, LIVE_SERVER_ID, LIVE_SERVER_NAME, type LiveCommand, type LiveDrop, type LiveEntity, type LiveEvent, type LiveMapId, type LivePlayer, type LivePoint, type LiveSnapshot, type LiveStatus, type LiveWorld } from "../src/game/live";
+import { LIVE_CAPACITY, LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT, LIVE_PENDING_CAPACITY, LIVE_SERVER_ID, LIVE_SERVER_NAME, type LiveCommand, type LiveDrop, type LiveEntity, type LiveEvent, type LiveMapId, type LivePlayer, type LivePoint, type LiveSnapshot, type LiveStatus, type LiveWorld } from "../src/game/live";
 import { hasLiveLineOfSight, isLiveWalkable, LIVE_MAPS } from "../src/game/live-maps";
+import { getRaidLootPool, LOOT_MODEL_BY_ID, type LootModel } from "../src/game/loot";
 import type { AccountService } from "./accounts";
+import { LiveEconomyError, type EconomyLoot, type LiveDelivery, type LiveEconomy, type LiveEconomyIdentity, type LiveSupplyRequest } from "./live-economy";
 
 export interface LiveOptions {
   dbPath: string;
   secureCookies?: boolean;
   allowedOrigins?: string[];
   accounts?: Pick<AccountService, "resolveLiveIdentity">;
+  economy?: LiveEconomy;
   now?: () => number;
   random?: () => number;
   /** Tests drive the same simulation explicitly, without background timers. */
@@ -32,6 +35,7 @@ interface Participant extends LiveEntity, LivePlayer {
   nextAttack: number;
   lastCombatAt: number;
   disconnectAt: number;
+  economyOwner?: string;
 }
 interface Scav extends LiveEntity {
   mapId: LiveMapId; faction: "scavs" | "raiders"; role: "patrol" | "guard" | "marksman";
@@ -40,6 +44,8 @@ interface Scav extends LiveEntity {
 }
 interface Drop extends LiveDrop { mapId: LiveMapId; expiresAt: number; source?: "supply" | "body" }
 interface MapEvent extends LiveEvent { mapId: LiveMapId }
+interface EconomyBinding { live_identity: string; owner_key: string; game_id: string }
+interface OutboxRow { id: string; identity: string; kind: "delivery" | "supply"; payload: string; message: string }
 const TICK_MS = 250, HEARTBEAT_MS = 15_000, RESPAWN_MS = 10_000, COOKIE_SECONDS = 30 * 24 * 60 * 60;
 const DEFAULT_MAP: LiveMapId = "customs", WORLD_VERSION = 2, TRAVEL_MS = 30_000, COMBAT_TRAVEL_MS = 8000;
 const maps = new Map(LIVE_MAPS.map(map => [map.id, map]));
@@ -61,6 +67,14 @@ const walkable = (mapId: LiveMapId, { x, y }: LivePoint): boolean => {
   const world = maps.get(mapId)!;
   return Number.isInteger(x) && Number.isInteger(y) && x >= 0 && y >= 0 && x < world.width && y < world.height && !terrain.get(mapId)!.has(y * world.width + x);
 };
+/** Authored danger zones select the same trophy catalog used by headquarters. */
+export function getLiveLootPool(mapId: LiveMapId, point: LivePoint): { model: LootModel; weight: number }[] {
+  const world = maps.get(mapId)!;
+  const depth = world.zones.filter(zone => point.x >= zone.x && point.x < zone.x + zone.width && point.y >= zone.y && point.y < zone.y + zone.height)
+    .reduce((danger, zone) => Math.max(danger, zone.danger), 1);
+  return getRaidLootPool(({ customs: "factory", sawmill: "forest", depot: "reserve" } as const)[mapId],
+    ({ customs: "scavenge", sawmill: "recon", depot: "combat" } as const)[mapId], depth);
+}
 
 class LiveError extends Error {
   constructor(readonly status: number, readonly code: string, readonly retryAfter?: number) { super(code); }
@@ -111,7 +125,7 @@ function commandFrom(body: Record<string, unknown>, mapId: LiveMapId): LiveComma
   }
   if (body.type === "loot" && exactKeys(body, ["type", "id"]) && typeof body.id === "string" && /^[a-zA-Z0-9_-]{1,80}$/.test(body.id)) return { type: "loot", id: body.id };
   if (body.type === "patrol" && exactKeys(body, ["type", "enabled"]) && typeof body.enabled === "boolean") return { type: "patrol", enabled: body.enabled };
-  if (["heal", "extract", "respawn"].includes(body.type) && exactKeys(body, ["type"])) return { type: body.type as "heal" | "extract" | "respawn" };
+  if (["heal", "extract", "respawn", "resupply"].includes(body.type) && exactKeys(body, ["type"])) return { type: body.type as "heal" | "extract" | "respawn" | "resupply" };
   throw new LiveError(400, "invalid_command");
 }
 
@@ -142,11 +156,21 @@ export function createLiveService(options: LiveOptions): LiveService {
     CREATE TABLE IF NOT EXISTS live_players(identity TEXT PRIMARY KEY, state TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS live_guests(token_hash TEXT PRIMARY KEY, identity TEXT NOT NULL, expires_at INTEGER NOT NULL);
     CREATE INDEX IF NOT EXISTS live_guest_expiry ON live_guests(expires_at);
-    CREATE TABLE IF NOT EXISTS live_world(id INTEGER PRIMARY KEY CHECK(id=1), state TEXT NOT NULL);`);
+    CREATE TABLE IF NOT EXISTS live_world(id INTEGER PRIMARY KEY CHECK(id=1), state TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS live_game_owners(owner_key TEXT PRIMARY KEY, game_id TEXT NOT NULL, live_identity TEXT NOT NULL UNIQUE);
+    CREATE TABLE IF NOT EXISTS live_economy_outbox(id TEXT PRIMARY KEY, identity TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL, message TEXT NOT NULL, acknowledged INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0);
+    CREATE INDEX IF NOT EXISTS live_outbox_pending ON live_economy_outbox(acknowledged,identity);`);
+  if (!db.query<{ name: string }, []>("PRAGMA table_info(live_economy_outbox)").all().some(column => column.name === "attempts"))
+    db.exec("ALTER TABLE live_economy_outbox ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0");
   const players = new Map<string, Participant>(), scavs = new Map<string, Scav>(), drops = new Map<string, Drop>();
   const lootCooldowns = new Map<string, number>();
   const lootKey = (mapId: LiveMapId, point: LivePoint): string => `${mapId}:${point.x}:${point.y}`;
-  let startedAt = now(), events: MapEvent[] = [], closed = false, failed = false, lastSave = now(), lastTick = now(), lastCleanup = now();
+  let startedAt = now(), events: MapEvent[] = [], closed = false, failed = false, lastSave = now(), lastTick = now(), lastCleanup = now(), lastEconomy = -Infinity;
+  let prepared: OutboxRow[] = [], preparedBindings: EconomyBinding[] = [];
+  const byOwner = db.query<EconomyBinding, [string]>("SELECT owner_key,game_id,live_identity FROM live_game_owners WHERE owner_key=?");
+  const byLive = db.query<EconomyBinding, [string]>("SELECT owner_key,game_id,live_identity FROM live_game_owners WHERE live_identity=?");
+  const pendingRows = db.query<OutboxRow, [string]>("SELECT id,identity,kind,payload,message FROM live_economy_outbox WHERE identity=? AND acknowledged=0 ORDER BY rowid");
+  const insertOutbox = db.query("INSERT INTO live_economy_outbox(id,identity,kind,payload,message) VALUES(?,?,?,?,?)");
   const readGuest = db.query<{ identity: string }, [string, number]>("SELECT identity FROM live_guests WHERE token_hash=? AND expires_at>?");
   const savePlayer = db.query("INSERT INTO live_players(identity,state) VALUES(?,?) ON CONFLICT(identity) DO UPDATE SET state=excluded.state");
   const saveWorld = db.query("INSERT INTO live_world(id,state) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET state=excluded.state");
@@ -158,6 +182,9 @@ export function createLiveService(options: LiveOptions): LiveService {
     if (player.identity !== identity) throw new Error("Invalid stored live player");
     player.mapId = mapFrom(player.mapId) ?? DEFAULT_MAP;
     if (!walkable(player.mapId, player)) Object.assign(player, pickPoint(player.mapId, true));
+    const binding = byLive.get(identity);
+    if (binding) { player.economyOwner = binding.owner_key; player.gameId = binding.game_id; }
+    if (options.economy) player.lootItems ??= [];
     player.targetId = null; player.travelReadyAt ??= 0; player.lastCombatAt ??= 0; player.disconnectAt = 0;
     player.online = false; player.destination = null; player.patrol = false; player.action = player.health <= 0 ? "downed" : "idle";
     return player;
@@ -191,9 +218,70 @@ export function createLiveService(options: LiveOptions): LiveService {
   const persist = (): void => {
     db.transaction(() => {
       for (const player of players.values()) savePlayer.run(player.identity, JSON.stringify(player));
+      for (const binding of preparedBindings) db.query("INSERT INTO live_game_owners(owner_key,game_id,live_identity) VALUES(?,?,?)").run(binding.owner_key, binding.game_id, binding.live_identity);
+      for (const row of prepared) insertOutbox.run(row.id, row.identity, row.kind, row.payload, row.message);
       saveWorld.run(JSON.stringify({ version: WORLD_VERSION, startedAt, scavs: [...scavs.values()], drops: [...drops.values()], events, lootCooldowns: [...lootCooldowns] }));
     })();
+    prepared = []; preparedBindings = [];
     lastSave = now();
+  };
+  const prepare = (player: Participant, kind: OutboxRow["kind"], payload: LiveDelivery | LiveSupplyRequest): void => {
+    if (kind === "delivery" && pendingRows.all(player.identity).filter(row => row.kind === "delivery").length + prepared.filter(row => row.identity === player.identity && row.kind === "delivery").length >= LIVE_PENDING_CAPACITY)
+      throw new LiveError(409, "delivery_pending_full");
+    prepared.push({ id: payload.id, identity: player.identity, kind, payload: JSON.stringify(payload),
+      message: kind === "delivery" ? "Груз ожидает место на складе убежища." : "Пополнение ожидает подтверждения убежища." });
+  };
+  const prepareDelivery = (player: Participant): void => {
+    if (!options.economy) { player.stash += player.cargo; player.cargo = 0; return; }
+    const money = player.cargo + player.stash, items = player.lootItems ?? [];
+    if (!money && !items.length) return;
+    if (!player.economyOwner || !player.gameId) throw new LiveError(401, "join_required");
+    prepare(player, "delivery", { id: randomUUID(), owner: player.economyOwner, gameId: player.gameId, createdAt: now(), money, items: structuredClone(items) });
+    // The parcel and this withdrawal are saved in the same live database transaction.
+    player.cargo = 0; player.stash = 0; player.lootItems = [];
+  };
+  const flushEconomy = (): void => {
+    if (!options.economy) return;
+    const rows = db.query<OutboxRow, []>("SELECT id,identity,kind,payload,message FROM live_economy_outbox WHERE acknowledged=0 ORDER BY attempts,rowid LIMIT 64").all();
+    for (const row of rows) {
+      // Rotate failures durably; a full warehouse cannot starve other players' parcels.
+      db.query("UPDATE live_economy_outbox SET attempts=attempts+1 WHERE id=? AND acknowledged=0").run(row.id);
+      const payload = JSON.parse(row.payload) as LiveDelivery | LiveSupplyRequest;
+      let receipt: { ammo: number; medkits: number; message: string } | undefined, message: string;
+      try {
+        if (row.kind === "delivery") {
+          const delivery = options.economy.deliver(payload as LiveDelivery);
+          message = delivery.message;
+          if (!delivery.ok) { db.query("UPDATE live_economy_outbox SET message=? WHERE id=? AND acknowledged=0").run(message, row.id); continue; }
+        } else {
+          receipt = options.economy.supply(payload as LiveSupplyRequest); message = receipt.message;
+          const requested = payload as LiveSupplyRequest;
+          if (!Number.isInteger(receipt.ammo) || !Number.isInteger(receipt.medkits) || receipt.ammo < 0 || receipt.medkits < 0 || receipt.ammo > requested.ammo || receipt.medkits > requested.medkits)
+            throw new Error("Invalid headquarters supply receipt");
+        }
+      } catch (error) {
+        // Transport/game availability failures leave the durable parcel for the next tick.
+        if (!(error instanceof LiveEconomyError) && !(error instanceof Error)) throw error;
+        db.query("UPDATE live_economy_outbox SET message=? WHERE id=? AND acknowledged=0").run("Убежище временно недоступно; груз и запрос сохранены.", row.id);
+        continue;
+      }
+      const loaded = players.get(row.identity), original = loaded ?? loadPlayer(row.identity);
+      if (!original) throw new Error("Pending economy owner has no persistent live player");
+      const updated = structuredClone(original);
+      if (receipt) {
+        if (updated.ammo + receipt.ammo > 60 || updated.medkits + receipt.medkits > 2) throw new Error("Supply would exceed live capacity");
+        updated.ammo += receipt.ammo; updated.medkits += receipt.medkits;
+      }
+      updated.economyMessage = message;
+      // A retry after an accepted game debit reuses the receipt; applying it and acknowledging it are atomic here.
+      db.transaction(() => {
+        const changed = db.query("UPDATE live_economy_outbox SET acknowledged=1,message=? WHERE id=? AND acknowledged=0").run(message, row.id);
+        if (changed.changes !== 1) throw new Error("Economy parcel changed during acknowledgement");
+        savePlayer.run(updated.identity, JSON.stringify(updated));
+      })();
+      if (loaded) Object.assign(loaded, updated);
+    }
+    lastEconomy = now();
   };
   const spawnScav = (mapId: LiveMapId, index: number, id = `scav-${mapId}-${index}`): Scav => {
     const spawn = maps.get(mapId)!.npcSpawns[index % maps.get(mapId)!.npcSpawns.length]!;
@@ -210,9 +298,21 @@ export function createLiveService(options: LiveOptions): LiveService {
       home: { ...spawn.point }, route: spawn.route.length ? spawn.route.map(point => ({ ...point })) : [{ ...spawn.point }], routeIndex: Math.max(0, spawn.route.findIndex(point => point.x === spawn.point.x && point.y === spawn.point.y)), spawnIndex: index,
       health: point ? 100 : 0, action: point ? "idle" : "downed", safeUntil: 0, respawnAt: point ? 0 : now() + 1000, nextMove: now() + 750, nextAttack: now() + 1000 };
   };
-  const addDrop = (mapId: LiveMapId, point: LivePoint, amount: number, source: Drop["source"] = "body"): void => {
+  const rollItems = (mapId: LiveMapId, point: LivePoint): EconomyLoot[] => {
+    const pool = getLiveLootPool(mapId, point), total = pool.reduce((sum, entry) => sum + entry.weight, 0);
+    const count = random() < .35 ? 2 : 1, result: EconomyLoot[] = [];
+    for (let index = 0; index < count; index++) {
+      let roll = random() * total;
+      const model = (pool.find(entry => (roll -= entry.weight) < 0) ?? pool.at(-1)!).model;
+      result.push({ id: randomUUID(), modelId: model.id, foundAt: now() });
+    }
+    return result;
+  };
+  const addDrop = (mapId: LiveMapId, point: LivePoint, amount: number, source: Drop["source"] = "body", items?: EconomyLoot[]): void => {
     const id = randomUUID();
-    drops.set(id, { mapId, id, x: point.x, y: point.y, amount, source, expiresAt: now() + 120_000 });
+    const generated = options.economy && items === undefined ? rollItems(mapId, point) : items;
+    drops.set(id, { mapId, id, x: point.x, y: point.y, amount: generated && items === undefined ? 0 : amount,
+      ...(generated ? { items: structuredClone(generated) } : {}), source, expiresAt: now() + 120_000 });
   };
   const stored = db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get();
   if (stored) {
@@ -248,9 +348,13 @@ export function createLiveService(options: LiveOptions): LiveService {
       online: [...players.values()].filter(player => player.online && player.mapId === map.id).length, npcs: [...scavs.values()].filter(scav => scav.mapId === map.id && scav.health > 0).length })) });
   const snapshot = (player: Participant): LiveSnapshot => ({
     server: status(), now: now(), world: worldFor(player.mapId), selfId: player.id,
-    self: { id: player.id, ammo: player.ammo, medkits: player.medkits, cargo: player.cargo, stash: player.stash, kills: player.kills, respawnAt: player.respawnAt, patrol: player.patrol, targetId: player.targetId, travelReadyAt: player.travelReadyAt },
+    self: { id: player.id, ammo: player.ammo, medkits: player.medkits, cargo: player.cargo, stash: player.stash, kills: player.kills, respawnAt: player.respawnAt, patrol: player.patrol, targetId: player.targetId, travelReadyAt: player.travelReadyAt,
+      ...(options.economy ? { gameId: player.gameId, lootItems: structuredClone(player.lootItems ?? []),
+        pendingDelivery: pendingRows.all(player.identity).filter(row => row.kind === "delivery").map(row => {
+          const parcel = JSON.parse(row.payload) as LiveDelivery; return { items: parcel.items, money: parcel.money, message: row.message };
+        }), economyMessage: player.economyMessage ?? "Находки с выхода поступают в убежище; пополнение расходует его запасы." } : {}) },
     entities: [...players.values()].filter(other => other.online && other.mapId === player.mapId).map(publicEntity).concat([...scavs.values()].filter(scav => scav.mapId === player.mapId).map(publicEntity)),
-    drops: [...drops.values()].filter(drop => drop.mapId === player.mapId).map(drop => ({ id: drop.id, x: drop.x, y: drop.y, amount: drop.amount })),
+    drops: [...drops.values()].filter(drop => drop.mapId === player.mapId).map(drop => ({ id: drop.id, x: drop.x, y: drop.y, amount: drop.amount, ...(drop.items ? { items: structuredClone(drop.items) } : {}) })),
     events: events.filter(item => item.mapId === player.mapId).slice(-40).map(({ mapId: _mapId, ...item }) => item),
   });
   const lineOfSight = (mapId: LiveMapId, a: LivePoint, b: LivePoint): boolean => hasLiveLineOfSight(maps.get(mapId)!, a, b);
@@ -279,8 +383,11 @@ export function createLiveService(options: LiveOptions): LiveService {
   const down = (target: Participant | Scav, attacker: Participant | Scav): void => {
     target.health = 0; target.action = "downed"; target.respawnAt = now() + RESPAWN_MS;
     const amount = "cargo" in target ? target.cargo : 25 + Math.floor(random() * 26);
-    if (amount > 0) addDrop(target.mapId, target, amount);
-    if ("cargo" in target) { target.cargo = 0; target.destination = null; target.patrol = false; target.targetId = null; }
+    if ("cargo" in target) {
+      if (amount > 0 || target.lootItems?.length) addDrop(target.mapId, target, amount, "body", target.lootItems ?? []);
+      target.cargo = 0; if (options.economy) target.lootItems = [];
+      target.destination = null; target.patrol = false; target.targetId = null;
+    } else if (amount > 0) addDrop(target.mapId, target, amount);
     if ("kills" in attacker) attacker.kills++;
   };
   const rangeOf = (entity: Participant | Scav): number => entity.kind === "player" || "role" in entity && entity.role === "marksman" ? 7 : 5;
@@ -300,20 +407,28 @@ export function createLiveService(options: LiveOptions): LiveService {
     event(attacker.mapId, "combat", target.health <= 0 ? `${attacker.name} победил ${target.name}.` : `${attacker.name} стреляет в ${target.name}.`, attacker.id, target.id,
       { from: { x: attacker.x, y: attacker.y }, to: { x: target.x, y: target.y }, damage });
   };
+  const canCarry = (player: Participant, drop: Drop): boolean => {
+    const items = [...(player.lootItems ?? []), ...(drop.items ?? [])];
+    return player.cargo + drop.amount <= 500 && items.length <= LIVE_LOOT_CAPACITY
+      && items.reduce((sum, item) => sum + LOOT_MODEL_BY_ID[item.modelId]!.weight, 0) <= LIVE_LOOT_WEIGHT + 1e-9;
+  };
   const loot = (player: Participant, id: string): void => {
     const drop = drops.get(id);
     if (!drop || drop.mapId !== player.mapId || drop.expiresAt <= now()) throw new LiveError(409, "loot_unavailable");
     if (distance(player, drop) > 1.5) throw new LiveError(409, "loot_out_of_range");
-    if (player.cargo + drop.amount > 500) throw new LiveError(409, "cargo_full");
+    if (!canCarry(player, drop)) throw new LiveError(409, "cargo_full");
     drops.delete(id); player.cargo += drop.amount;
+    if (drop.items?.length) player.lootItems = [...(player.lootItems ?? []), ...structuredClone(drop.items)];
     if (drop.source === "supply") lootCooldowns.set(lootKey(player.mapId, drop), now() + 30_000);
-    event(player.mapId, "loot", `${player.name} забрал груз: ${drop.amount}.`, player.id);
+    event(player.mapId, "loot", drop.items?.length ? `${player.name} забрал: ${drop.items.map(item => LOOT_MODEL_BY_ID[item.modelId]!.label).join(", ")}${drop.amount ? ` и ${drop.amount} ₽` : ""}.` : `${player.name} забрал груз: ${drop.amount}.`, player.id);
   };
   const respawn = (player: Participant): void => {
     if (player.health > 0) throw new LiveError(409, "already_alive");
     if (player.respawnAt > now()) throw new LiveError(409, "respawn_not_ready");
     const point = pickPoint(player.mapId, true);
-    player.x = point.x; player.y = point.y; player.health = 100; player.ammo = 60; player.medkits = 2; player.cargo = 0;
+    player.x = point.x; player.y = point.y; player.health = 100; player.cargo = 0;
+    if (!options.economy) { player.ammo = 60; player.medkits = 2; }
+    else player.lootItems = [];
     player.respawnAt = 0; player.safeUntil = now() + 5000; player.destination = null; player.action = "idle"; player.nextAttack = 0; player.targetId = null; player.patrol = false;
     event(player.mapId, "respawn", `${player.name} вернулся в район «${maps.get(player.mapId)!.name}».`, player.id);
   };
@@ -323,7 +438,7 @@ export function createLiveService(options: LiveOptions): LiveService {
     if (time - lastCleanup >= 60_000) {
       for (const [key, value] of limits) if (value.expires <= time) limits.delete(key);
       db.query("DELETE FROM live_guests WHERE expires_at<=?").run(time);
-      db.query("DELETE FROM live_players WHERE identity LIKE 'guest:%' AND identity NOT IN (SELECT identity FROM live_guests)").run();
+      db.query("DELETE FROM live_players WHERE identity LIKE 'guest:%' AND identity NOT IN (SELECT identity FROM live_guests) AND identity NOT IN (SELECT live_identity FROM live_game_owners) AND identity NOT IN (SELECT identity FROM live_economy_outbox WHERE acknowledged=0)").run();
       lastCleanup = time;
     }
     let bucket = limits.get(key);
@@ -412,7 +527,7 @@ export function createLiveService(options: LiveOptions): LiveService {
           if (player.nextAttack <= now()) attack(player, target);
           continue;
         }
-        const drop = [...drops.values()].filter(drop => drop.mapId === player.mapId && drop.amount + player.cargo <= 500).sort((a, b) => distance(player, a) - distance(player, b))[0];
+        const drop = [...drops.values()].filter(drop => drop.mapId === player.mapId && canCarry(player, drop)).sort((a, b) => distance(player, a) - distance(player, b))[0];
         if (drop && distance(player, drop) <= 1.5) { loot(player, drop.id); player.destination = null; }
         if (!player.destination) player.destination = drop ?? pickPoint(player.mapId);
       }
@@ -429,7 +544,9 @@ export function createLiveService(options: LiveOptions): LiveService {
     if (closed || failed) return;
     try {
       if (now() - lastTick >= TICK_MS) { simulate(); lastTick = now(); }
-      if (now() - lastSave >= 1000) persist();
+      const retryEconomy = Boolean(options.economy) && now() - lastEconomy >= 1000;
+      if (now() - lastSave >= 1000 || retryEconomy) persist();
+      if (retryEconomy) flushEconomy();
     } catch (error) { failed = true; console.error("Live simulation stopped after a storage or simulation error:", error); }
   };
   const tokenFrom = (request: Request): string | null => {
@@ -438,7 +555,7 @@ export function createLiveService(options: LiveOptions): LiveService {
     const token = cookies[0]!.slice(cookieName.length + 1);
     return /^[a-zA-Z0-9_-]{43}$/.test(token) ? token : null;
   };
-  const identityFrom = (request: Request): { identity: string; name?: string } | null => {
+  const legacyIdentityFrom = (request: Request): { identity: string; name?: string } | null => {
     const account = options.accounts?.resolveLiveIdentity(request);
     const assertedAccount = request.headers.get("x-prapor-account");
     if (account) {
@@ -449,10 +566,32 @@ export function createLiveService(options: LiveOptions): LiveService {
     const token = tokenFrom(request), guest = token ? readGuest.get(hashToken(token), now()) : null;
     return guest ? { identity: guest.identity } : null;
   };
+  const identityFrom = (request: Request, joining = false): { identity: string; name?: string; economy?: LiveEconomyIdentity } | null => {
+    if (!options.economy) return legacyIdentityFrom(request);
+    let economy: LiveEconomyIdentity;
+    try { economy = options.economy.resolve(request); }
+    catch (error) { if (error instanceof LiveEconomyError) throw new LiveError(error.status, error.code); throw error; }
+    const legacy = legacyIdentityFrom(request), owner = byOwner.get(economy.key);
+    if (owner && owner.game_id !== economy.gameId) throw new LiveError(401, "game_identity_changed");
+    if (legacy) {
+      const bound = byLive.get(legacy.identity);
+      if (bound && (bound.owner_key !== economy.key || bound.game_id !== economy.gameId) || owner && owner.live_identity !== legacy.identity)
+        throw new LiveError(401, "game_identity_changed");
+    }
+    const identity = owner?.live_identity ?? (legacy && (players.has(legacy.identity) || readPlayer.get(legacy.identity)) ? legacy.identity : economy.key);
+    if (!owner) {
+      if (!joining) throw new LiveError(401, "join_required");
+      const bound = byLive.get(identity);
+      if (bound && (bound.owner_key !== economy.key || bound.game_id !== economy.gameId)) throw new LiveError(401, "game_identity_changed");
+      preparedBindings.push({ owner_key: economy.key, game_id: economy.gameId, live_identity: identity });
+    }
+    return { identity, name: economy.name, economy };
+  };
   const currentPlayer = (request: Request): Participant => {
     const identity = identityFrom(request), player = identity ? players.get(identity.identity) : null;
     if (!player || !player.online || player.disconnectAt > 0) throw new LiveError(401, "join_required");
     if (request.headers.get("x-prapor-live") !== player.id) throw new LiveError(401, "live_identity_changed");
+    if (identity?.economy && (player.gameId !== identity.economy.gameId || player.economyOwner !== identity.economy.key)) throw new LiveError(401, "game_identity_changed");
     return player;
   };
   const doCommand = (player: Participant, command: LiveCommand): void => {
@@ -477,13 +616,13 @@ export function createLiveService(options: LiveOptions): LiveService {
       if (!maps.get(player.mapId)!.extracts.some(exit => distance(player, exit) <= 1.5)) throw new LiveError(409, "extract_out_of_range");
       if (player.travelReadyAt > now()) throw new LiveError(409, "travel_cooldown");
       if (player.lastCombatAt > now() - COMBAT_TRAVEL_MS) throw new LiveError(409, "in_combat");
-      const point = pickPoint(command.mapId, true), previous = player.mapId, amount = player.cargo;
+      const point = pickPoint(command.mapId, true), previous = player.mapId, amount = player.cargo, itemCount = player.lootItems?.length ?? 0;
       // Both the cargo deposit and map transfer commit with one server transaction.
-      player.stash += amount; player.cargo = 0; player.mapId = command.mapId; Object.assign(player, point);
+      prepareDelivery(player); player.mapId = command.mapId; Object.assign(player, point);
       player.destination = null; player.patrol = false; player.targetId = null; player.action = "idle";
       player.travelReadyAt = now() + TRAVEL_MS; player.safeUntil = now() + 5000;
       event(previous, "travel", `${player.name} отправился в район «${maps.get(command.mapId)!.name}».`, player.id);
-      event(player.mapId, "travel", `${player.name} прибыл из района «${maps.get(previous)!.name}»${amount ? ` и сохранил груз: ${amount}` : ""}.`, player.id);
+      event(player.mapId, "travel", `${player.name} прибыл из района «${maps.get(previous)!.name}»${amount || itemCount ? `; ${itemCount ? `находки: ${itemCount}, ` : ""}груз: ${amount} ₽ отправлен в убежище` : ""}.`, player.id);
     }
     if (command.type === "loot") loot(player, command.id);
     if (command.type === "heal") {
@@ -493,9 +632,24 @@ export function createLiveService(options: LiveOptions): LiveService {
     }
     if (command.type === "extract") {
       if (!maps.get(player.mapId)!.extracts.some(exit => distance(player, exit) <= 1.5)) throw new LiveError(409, "extract_out_of_range");
-      const amount = player.cargo; player.stash += amount; player.cargo = 0; player.ammo = 60; player.medkits = 2;
+      if (options.economy && player.lastCombatAt > now() - COMBAT_TRAVEL_MS) throw new LiveError(409, "in_combat");
+      const amount = player.cargo + (options.economy ? player.stash : 0), itemCount = player.lootItems?.length ?? 0;
+      prepareDelivery(player);
+      if (!options.economy) { player.ammo = 60; player.medkits = 2; }
       player.destination = null; player.patrol = false; player.targetId = null;
-      event(player.mapId, "extract", amount ? `${player.name} сохранил груз: ${amount}.` : `${player.name} пополнил боекомплект на выходе.`, player.id);
+      event(player.mapId, "extract", options.economy ? `${player.name} отправил в убежище: ${itemCount} находок и ${amount} ₽.`
+        : amount ? `${player.name} сохранил груз: ${amount}.` : `${player.name} пополнил боекомплект на выходе.`, player.id);
+    }
+    if (command.type === "resupply") {
+      if (!options.economy) throw new LiveError(409, "economy_unavailable");
+      if (!maps.get(player.mapId)!.extracts.some(exit => distance(player, exit) <= 1.5)) throw new LiveError(409, "extract_out_of_range");
+      if (player.lastCombatAt > now() - COMBAT_TRAVEL_MS) throw new LiveError(409, "in_combat");
+      if (pendingRows.all(player.identity).some(row => row.kind === "supply")) throw new LiveError(409, "supply_pending");
+      const ammo = 60 - player.ammo, medkits = 2 - player.medkits;
+      if (!ammo && !medkits) throw new LiveError(409, "already_supplied");
+      if (!player.economyOwner || !player.gameId) throw new LiveError(401, "join_required");
+      prepare(player, "supply", { id: randomUUID(), owner: player.economyOwner, gameId: player.gameId, createdAt: now(), ammo, medkits });
+      player.economyMessage = "Пополнение из убежища ожидает подтверждения.";
     }
     if (command.type === "patrol") { player.patrol = command.enabled; player.destination = null; player.targetId = null; }
   };
@@ -517,7 +671,7 @@ export function createLiveService(options: LiveOptions): LiveService {
         const body = await readJson(request);
         if (!exactKeys(body, []) && !(exactKeys(body, ["mapId"]) && mapFrom(body.mapId))) throw new LiveError(400, "invalid_request");
         limit(`join:${ipKey}`, 120);
-        let identity = identityFrom(request), token: string | undefined;
+        let identity = identityFrom(request, true), token: string | undefined;
         let player = identity ? players.get(identity.identity) ?? loadPlayer(identity.identity) : undefined;
         if (!player?.online && status().online >= LIVE_CAPACITY) throw new LiveError(503, "server_full");
         if (!identity) {
@@ -533,20 +687,23 @@ export function createLiveService(options: LiveOptions): LiveService {
           players.set(player.identity, player);
         }
         players.set(player.identity, player);
+        if (identity.economy) { player.economyOwner = identity.economy.key; player.gameId = identity.economy.gameId; player.lootItems ??= []; }
         if (identity.name) player.name = identity.name;
         if (!player.online) {
           if (player.health > 0 && occupied(player.mapId, player, player.id)) { const point = pickPoint(player.mapId, true); player.x = point.x; player.y = point.y; }
           event(player.mapId, "join", `${player.name} вышел в район «${maps.get(player.mapId)!.name}».`, player.id);
         }
-        player.online = true; player.disconnectAt = 0; player.heartbeat = now(); persist();
+        player.online = true; player.disconnectAt = 0; player.heartbeat = now(); persist(); flushEconomy();
         return response(snapshot(player), 200, token ? { "Set-Cookie": `${cookieName}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${COOKIE_SECONDS}${secure ? "; Secure" : ""}` } : {});
       }
-      const player = currentPlayer(request);
+      let player = currentPlayer(request);
       limit(`player:${player.id}`, 600);
       if (path === "/api/live/state") { player.heartbeat = now(); return response(snapshot(player)); }
       const body = await readJson(request);
-      // Re-read identity after asynchronous body intake; logout or recovery revokes old requests.
-      if (currentPlayer(request).id !== player.id) throw new LiveError(401, "live_identity_changed");
+      // A slow body can outlive eviction/rejoin: refresh both ownership and the actual mutable instance.
+      const current = currentPlayer(request);
+      if (current.id !== player.id) throw new LiveError(401, "live_identity_changed");
+      player = current;
       player.heartbeat = now();
       if (path === "/api/live/leave") {
         if (!exactKeys(body, [])) throw new LiveError(400, "invalid_request");
@@ -562,14 +719,14 @@ export function createLiveService(options: LiveOptions): LiveService {
         persist(); return response({ ok: true });
       }
       limit(`action:${player.id}`, 180);
-      doCommand(player, commandFrom(body, player.mapId)); persist();
+      doCommand(player, commandFrom(body, player.mapId)); persist(); flushEconomy();
       return response(snapshot(player));
     } catch (error) {
-      if (error instanceof LiveError) return response({ code: error.code }, error.status, error.retryAfter ? { "Retry-After": String(error.retryAfter) } : {});
+      if (error instanceof LiveError) { preparedBindings = []; prepared = []; return response({ code: error.code }, error.status, error.retryAfter ? { "Retry-After": String(error.retryAfter) } : {}); }
       failed = true; console.error("Live request failed:", error); return response({ code: "service_unavailable" }, 503);
     }
   };
-  persist();
+  persist(); flushEconomy();
   const timer = options.automaticTicks === false ? undefined : setInterval(tick, TICK_MS);
   timer?.unref();
   return { fetch: fetchApi, tick, healthy: () => { try { return !closed && !failed && Boolean(db.query("SELECT 1 AS ready").get()); } catch { return false; } }, close: () => {
