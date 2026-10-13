@@ -199,6 +199,7 @@ describe("achievement decisions use real sortie and inventory events", () => {
 
 	test("lighten uses a less powerful ready build that really shortens the same sortie by five percent", () => {
 		let state = campaign(), gun = primaryGun(state);
+		mount(state, gun, "barrel-sks-7.62x39-long");
 		mount(state, gun, "handguard-sks-rail");
 		mount(state, gun, "optic-scope");
 		mount(state, gun, "foregrip-vertical");
@@ -213,6 +214,7 @@ describe("achievement decisions use real sortie and inventory events", () => {
 		gun = primaryGun(state);
 		expect(removeModule(state, gun.id, "foregrip").ok).toBe(true);
 		mount(state, gun, "handguard-sks-light");
+		mount(state, gun, "barrel-sks-7.62x39-short");
 		expect(getWeaponStats(gun).ready).toBe(true);
 		expect(getWeaponStats(gun).power).toBeLessThan(heavyPower);
 		expect(getRaidQuote(state, state.scavs[0]!, MAP_BY_ID.courtyard!).duration).toBeLessThanOrEqual(heavyDuration * .95);
@@ -226,6 +228,7 @@ describe("achievement decisions use real sortie and inventory events", () => {
 		const state = campaign(), gun = factoryGun(state, "ak74");
 		expect(equipWeapon(state, state.scavs[0]!.id, gun.id).ok).toBe(true);
 		mount(state, gun, "handguard-ak-rail");
+		mount(state, gun, "barrel-ak-5.45x39-fluted");
 		mount(state, gun, "optic-scope");
 		mount(state, gun, "foregrip-vertical");
 		const historicalDuration = getRaidQuote(state, state.scavs[0]!, MAP_BY_ID.courtyard!).duration;
@@ -235,6 +238,7 @@ describe("achievement decisions use real sortie and inventory events", () => {
 		state.base.radio = 5;
 		const sameContextDuration = getRaidQuote(state, state.scavs[0]!, MAP_BY_ID.courtyard!).duration;
 		mount(state, gun, "optic-dovetail");
+		mount(state, gun, "barrel-ak-5.45x39-heavy");
 		const currentDuration = getRaidQuote(state, state.scavs[0]!, MAP_BY_ID.courtyard!).duration;
 		expect(getWeaponStats(gun).power).toBeLessThan(oldPower);
 		expect(currentDuration).toBeLessThanOrEqual(historicalDuration * .95);
@@ -246,12 +250,14 @@ describe("achievement decisions use real sortie and inventory events", () => {
 	test("changing tactics cannot turn a slower lower-power rebuild into lighten", () => {
 		const state = campaign(), gun = primaryGun(state);
 		mount(state, gun, "handguard-sks-rail");
+		mount(state, gun, "barrel-sks-7.62x39-fluted");
 		mount(state, gun, "optic-reflex");
 		const historicalDuration = getRaidQuote(state, state.scavs[0]!, MAP_BY_ID.courtyard!).duration;
 		const oldPower = getWeaponStats(gun).power;
 		expect(setRaidTactic(state, state.scavs[0]!.id, "bold").ok).toBe(true);
 		const sameContextDuration = getRaidQuote(state, state.scavs[0]!, MAP_BY_ID.courtyard!).duration;
 		expect(removeModule(state, gun.id, "optic").ok).toBe(true);
+		mount(state, gun, "barrel-sks-7.62x39-heavy");
 		const currentDuration = getRaidQuote(state, state.scavs[0]!, MAP_BY_ID.courtyard!).duration;
 		expect(getWeaponStats(gun).power).toBeLessThan(oldPower);
 		expect(currentDuration).toBeLessThanOrEqual(historicalDuration * .95);
@@ -262,6 +268,7 @@ describe("achievement decisions use real sortie and inventory events", () => {
 
 	test("replacing the receiver cannot reuse the previous physical build's lighten chain", () => {
 		const state = campaign(), gun = primaryGun(state);
+		mount(state, gun, "barrel-sks-7.62x39-long");
 		mount(state, gun, "handguard-sks-rail");
 		mount(state, gun, "optic-scope");
 		mount(state, gun, "foregrip-vertical");
@@ -269,6 +276,7 @@ describe("achievement decisions use real sortie and inventory events", () => {
 		expect(removeModule(state, gun.id, "optic").ok).toBe(true);
 		expect(removeModule(state, gun.id, "foregrip").ok).toBe(true);
 		mount(state, gun, "handguard-sks-light");
+		mount(state, gun, "barrel-sks-7.62x39-short");
 		mount(state, gun, "receiver-sks");
 		expect(gun.modules.receiver!.id).not.toBe(originalReceiver);
 		expect(dispatchRaid(state, state.scavs[0]!.id, "courtyard", state.lastUpdated).ok).toBe(true);

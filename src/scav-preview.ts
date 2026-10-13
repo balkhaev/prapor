@@ -1,5 +1,6 @@
 import Phaser from "phaser";
-import { PERSONALITY_BY_ID, WEAPONS } from "./game/data";
+import "./module-catalog.css";
+import { MAPS, PERSONALITY_BY_ID, WEAPONS } from "./game/data";
 import { getWeaponStats, type WeaponInstance } from "./game/engine";
 import { FACTORY_KITS, MODULE_BY_ID, MODULE_MODELS, MODULE_SLOTS, MODULE_SLOT_LABELS, RECEIVER_INFO, getResolvedModuleMounts, modulePlatformLabel, type ModuleInstance, type ModuleModel, type ModuleSlot } from "./game/modules";
 import { moduleArt, weaponBuildArt } from "./armory-art";
@@ -8,6 +9,8 @@ import { GEAR_MODELS } from "./game/systems";
 import { SCAV_EQUIPMENT_ATLASES } from "./scav-gear-art";
 import { SCAV_APPEARANCES } from "./game/scav-appearances";
 import { ScavEquipment } from "./scav-equipment";
+import { TACTICS, type RaidTactic } from "./game/operations";
+import { weaponMechanicsPanel, weaponStatSummary } from "./weapon-mechanics-ui";
 import type { ScavVisualLoadout } from "./scav-loadout";
 import { SCAV_ORIGIN, SCAV_POSES, SCAV_REFERENCE_HEIGHT, scavFrame, scavTexture, scavTorsoAnchor, scavHeadAnchor, type ScavDirection } from "./scav-isometric";
 
@@ -28,6 +31,11 @@ const closeup = document.querySelector<HTMLElement>("#weapon-closeup")!;
 const buildParts = document.querySelector<HTMLElement>("#build-parts")!;
 const inspectionName = document.querySelector<HTMLElement>("#inspection-name")!, inspectionMeta = document.querySelector<HTMLElement>("#inspection-meta")!;
 const inspectionStats = document.querySelector<HTMLElement>("#inspection-stats")!, inspectionPart = document.querySelector<HTMLElement>("#inspection-part")!;
+const inspectionMechanics = document.querySelector<HTMLElement>("#inspection-mechanics")!;
+const inspectionMap = select("inspection-map"), inspectionTactic = select("inspection-tactic");
+for (const map of MAPS) inspectionMap.add(new Option(map.name, map.id));
+for (const [tactic, info] of Object.entries(TACTICS)) inspectionTactic.add(new Option(info.label, tactic));
+inspectionTactic.value = "balanced";
 const inspectionZoomButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-inspection-zoom]"));
 const inspectionFit = document.querySelector<HTMLButtonElement>("#inspection-fit")!, inspectionHighlight = document.querySelector<HTMLButtonElement>("#inspection-highlight")!;
 const library = document.querySelector<HTMLDetailsElement>("#module-library")!;
@@ -79,12 +87,15 @@ function renderInspection(weapon: WeaponInstance | null): void {
 	inspectionName.textContent = weapon ? WEAPONS.find((model) => model.id === weapon.weaponId)!.name : "Без оружия";
 	if (!weapon) {
 		inspectionMeta.textContent = "Выбери основу оружия в примерке";
-		buildParts.replaceChildren(); inspectionStats.replaceChildren(); inspectionPart.replaceChildren(); inspectionPart.hidden = true;
+		buildParts.replaceChildren(); inspectionStats.replaceChildren(); inspectionPart.replaceChildren(); inspectionMechanics.replaceChildren(); inspectionPart.hidden = true;
+		inspectionMap.disabled = true; inspectionTactic.disabled = true;
 		return;
 	}
 	const info = RECEIVER_INFO[weapon.weaponId]!, stats = getWeaponStats(weapon);
 	inspectionMeta.textContent = `${modulePlatformLabel(info.platform)} · ${info.caliber} · ${stats.ready ? "Сборка готова" : "Сборка не завершена"}`;
-	inspectionStats.innerHTML = [["Вес", `${stats.weight.toFixed(2)} кг`], ["Урон", String(Math.round(stats.damage))], ["Удобство", String(Math.round(stats.ergonomics))], ["Отдача ↓", String(Math.round(stats.recoil))], ["Надёжность", `${Math.round(stats.reliability)}%`], ["Расход патронов", `×${Number(stats.ammoMultiplier.toFixed(2))}`]].map(([label, value]) => `<span>${label}<strong>${value}</strong></span>`).join("");
+	inspectionMap.disabled = false; inspectionTactic.disabled = false;
+	inspectionStats.innerHTML = weaponStatSummary(weapon).map(([label, value]) => `<span>${label}<strong>${value}</strong></span>`).join("");
+	inspectionMechanics.innerHTML = weaponMechanicsPanel(weapon, inspectionMap.value, inspectionTactic.value as RaidTactic);
 	buildParts.innerHTML = MODULE_DISPLAY_SLOTS.map((slot) => {
 		const modelId = weapon.modules[slot]?.modelId, model = modelId ? MODULE_BY_ID[modelId] : undefined;
 		return `<li><button type="button" data-inspect-slot="${slot}" class="${model ? "" : "empty-part"}" aria-pressed="${slot === inspectedSlot}"><small>${MODULE_SLOT_LABELS[slot]}</small><strong>${escape(model?.label ?? (info.requiredSlots.includes(slot) ? "Нужна для сборки" : "Не установлено"))}</strong></button></li>`;
@@ -114,6 +125,7 @@ function setInspectionZoom(zoom: number): void {
 for (const button of inspectionZoomButtons) button.addEventListener("click", () => setInspectionZoom(Number(button.dataset.inspectionZoom)));
 inspectionFit.addEventListener("click", () => { setInspectionZoom(1); closeup.scrollLeft = 0; closeup.scrollTop = 0; });
 inspectionHighlight.addEventListener("click", () => { highlightInspection = !highlightInspection; renderInspection(selectedWeapon()); });
+for (const input of [inspectionMap, inspectionTactic]) input.addEventListener("change", () => renderInspection(selectedWeapon()));
 function inspectSlot(slot: string | undefined): void {
 	if (!slot || !MODULE_SLOTS.includes(slot as ModuleSlot)) return;
 	inspectedSlot = slot as ModuleSlot; highlightInspection = true;
@@ -130,7 +142,7 @@ function renderLibrary(weapon: WeaponInstance | null): void {
 	moduleCards.innerHTML = models.slice(0, libraryLimit).map((model) => {
 		const installed = weapon?.modules[model.slot]?.modelId === model.id, reason = fittingReason(model, weapon);
 		const stat = (label: string, value: number) => value ? `${label} ${value > 0 ? "+" : ""}${value}` : "";
-		const metrics = [`Вес ${model.stats.weight.toFixed(2)} кг`, stat("Урон", model.stats.damage), stat("Удобство", model.stats.ergonomics), stat("Отдача", model.stats.recoil)].filter(Boolean).join(" · ");
+		const metrics = ["При 100% состояния", `Вес ${model.stats.weight.toFixed(2)} кг`, stat("Мощь", model.stats.damage), stat("Эргономика", model.stats.ergonomics), stat("Отдача", model.stats.recoil), stat("Надёжность", model.stats.reliability), model.stats.ammoMultiplier !== 1 ? `Расход ×${model.stats.ammoMultiplier.toFixed(2)}` : ""].filter(Boolean).join(" · ");
 		return `<article class="module-card ${installed ? "installed" : ""}">${moduleArt(model)}<h3>${escape(model.label)}</h3><p>${escape(model.description)}</p><p class="module-metrics">${escape(metrics)}</p><button type="button" data-try-module="${model.id}" ${reason || installed ? "disabled" : ""}>${installed ? "Установлено" : "Примерить"}</button>${reason ? `<small>${escape(reason)}</small>` : ""}</article>`;
 	}).join("") || '<p class="library-help">Под этот фильтр деталей нет. Измени поиск или тип детали.</p>';
 	libraryMore.hidden = models.length <= libraryLimit;

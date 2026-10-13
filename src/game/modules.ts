@@ -282,6 +282,41 @@ for (const part of lasers) {
 		stats: stats({ weight: part.weight, damage: part.damage, ergonomics: part.ergonomics, recoil: part.recoil, reliability: part.reliability }),
 	});
 }
+// Sights, lights and feed systems improve the relevant encounter rather than
+// inflating universal firepower as well as their new contextual advantages.
+const opticUse: Record<string, string> = {
+	reflex: "Коллиматор облегчает ближнее наведение.", micro: "Лёгкий коллиматор для быстрого ближнего наведения.",
+	holo: "Голографический прицел помогает в тесноте.", "dovetail-reflex": "Боковой коллиматор помогает в ближнем бою.",
+	scope: "Оптика 4× помогает на дальнем рубеже, но мешает в тесноте.", dovetail: "Боковая оптика для дальнего рубежа; неудобна в тесноте.",
+	prism: "Призматический прицел помогает на дистанции с небольшим штрафом в тесноте.",
+	scout: "Лёгкая разведывательная оптика для среднего и дальнего рубежа.", longscope: "Дальняя оптика усиливает дозор ценой веса и ближнего наведения.",
+};
+const magazineUse: Record<string, string> = {
+	quick: "Быстрая перезарядка помогает в бою; лёгкий магазин экономит патроны.",
+	extended: "Ёмкий магазин сокращает паузы в бою, но увеличивает расход и вес.",
+	drum: "Барабан сокращает паузы в бою; большой расход, вес и дополнительный износ подачи.",
+	compact: "Компактный магазин облегчает оружие и экономит патроны; частые перезарядки мешают в бою.",
+	window: "Контроль запаса через окно помогает вовремя перезаряжаться.",
+};
+for (const part of MODULE_MODELS) {
+	const contextual = ["optic", "magazine", "flashlight", "laser"].includes(part.slot) || (part.slot === "muzzle" && part.appearance.includes("suppressor"));
+	if (!contextual) continue;
+	part.stats.damage = 0;
+	if (part.slot === "laser") part.stats.recoil = 0;
+	if (part.appearance === "factory") continue;
+	const use = part.slot === "optic" ? opticUse[part.appearance]
+		: part.slot === "magazine" ? magazineUse[part.appearance]
+		: part.slot === "flashlight" ? "Свет помогает осматривать тёмные участки; на разведке выдаёт позицию. Днём бонуса освещения нет."
+		: part.slot === "laser" ? "Лазер помогает ближнему наведению; на дальнем рубеже польза мала."
+		: "Глушитель помогает скрытности на тайниках и разведке, но повышает износ; напористое движение ослабляет бонус.";
+	const signed = (value: number) => `${value > 0 ? "+" : ""}${value}`;
+	const details = [`Вес ${part.stats.weight.toFixed(2)} кг`,
+		part.stats.ergonomics ? `удобство ${signed(part.stats.ergonomics)}` : "",
+		part.stats.recoil ? `отдача ${signed(part.stats.recoil)}` : "",
+		part.stats.reliability ? `надёжность ${signed(part.stats.reliability)}` : "",
+		part.stats.ammoMultiplier !== 1 ? `расход патронов ×${part.stats.ammoMultiplier}` : ""].filter(Boolean).join(", ");
+	part.description = `${use ?? "Тактическая деталь для своей задачи."} ${details}. Совместимость зависит от платформы, калибра и крепления.`;
+}
 export const MODULE_BY_ID: Record<string, ModuleModel> = Object.fromEntries(MODULE_MODELS.map((item) => [item.id, item]));
 
 /** Only real, rooted connections expose rails: an adapter cannot support itself. */

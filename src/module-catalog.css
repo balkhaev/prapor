@@ -33,5 +33,30 @@
 .module-card-art{background:radial-gradient(ellipse at center,#424b37,#2a3429);border-color:#71825a55;border-radius:4px;aspect-ratio:2.2/1}
 .module-card-art .module-art{max-width:260px;max-height:125px}
 .bench-build-mounts>span{background:#2a3425;border-color:#626d51;color:#ccd1bb}
+.module-traits-condition{display:block;margin:10px 0 -5px;font-size:10px;color:#bac7a9}
+.weapon-mechanics{margin:17px 0;padding:17px 15px;border:1px solid #6b715d;border-radius:6px;background:#292f27}
+.weapon-mechanics-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px}
+.weapon-mechanics-kicker{display:block;font-size:10px;color:#a9b296;line-height:1.5}
+.weapon-mechanics h3{margin:4px 0 0;color:#e2dfc8;font-size:15px;line-height:1.5}
+.weapon-wear{flex-shrink:0;text-align:right;font:11px "IBM Plex Mono",monospace;color:#d6cfb4;line-height:1.8}
+.weapon-wear small{display:block;color:#a7b196;font:10px Manrope,sans-serif}
+.weapon-mechanics-context{margin:10px 0;color:#b9c0aa;font-size:11px;line-height:1.7}
+.weapon-mechanics-features{margin:12px 0;padding-left:17px;font-size:11px;line-height:1.8;color:#c5cbb6}
+.weapon-mechanics-features li+li{margin-top:4px}
+.weapon-route-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:13px 0 10px}
+.weapon-route-effect{min-width:0;border-top:1px solid #636c554f;padding-top:10px}
+.weapon-route-effect>span{display:block;color:#bec7ad;font-size:11px;line-height:1.6}
+.weapon-route-effect>strong{display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;margin:5px 0 7px;color:#dddcc8;font:16px "IBM Plex Mono",monospace;line-height:1.5}
+.weapon-route-effect .stat-after{font-size:11px;white-space:nowrap}
+.weapon-route-effect>small{display:block;color:#aab59b;font-size:10px;line-height:1.65;overflow-wrap:anywhere}
+.weapon-mechanics .better{color:#bed49e}
+.weapon-mechanics .worse{color:#dfb99b}
+.weapon-mechanics-note{margin:12px 0 0;color:#a4ae94;font-size:10px;line-height:1.75}
+.weapon-detail .weapon-route-grid{grid-template-columns:1fr}
+.weapon-detail .weapon-route-effect{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 8px}
+.weapon-detail .weapon-route-effect>small{grid-column:1/-1}
+.weapon-detail .weapon-mechanics-head{flex-wrap:wrap}
+.weapon-detail .weapon-wear{text-align:left}
+@media(max-width:640px){.weapon-mechanics{padding:14px 12px}.weapon-mechanics-head{flex-wrap:wrap}.weapon-wear{text-align:left}.weapon-route-grid{grid-template-columns:1fr}.weapon-route-effect{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 8px}.weapon-route-effect>strong{font-size:15px}.weapon-route-effect>small{grid-column:1/-1;font-size:11px}.weapon-mechanics-context,.weapon-mechanics-features{font-size:12px}.weapon-mechanics-note{font-size:11px}.module-traits-condition{font-size:11px}}
 @media(max-width:1000px){.module-filters{grid-template-columns:repeat(3,minmax(0,1fr))}.module-search{grid-column:1/-1}}
 @media(max-width:640px){.module-filters{grid-template-columns:repeat(2,minmax(0,1fr))}.module-catalog-tools{align-items:flex-start}.module-catalog-tools>span{font-size:11px}.module-catalog-tools .text-button{font-size:11px}.module-catalog-pagination{gap:9px}.module-catalog-pagination .button{min-width:100px}.bench-build-mounts{font-size:11px}.bench-slots{grid-template-columns:repeat(2,minmax(0,1fr))}.workbench-stage{min-height:165px;padding:14px 3px}.bench-current .module-art,.bench-candidate-preview .module-art{max-height:140px}.module-card-art{aspect-ratio:2.6/1}}
