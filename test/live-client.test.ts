@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { LiveApiError, liveRequest, readLiveSnapshot, readLiveStatus, shouldRejoinLivePresence } from '../src/live-client';
-import type { LiveSnapshot } from '../src/game/live';
+import { LIVE_TERRAIN_CODES, type LiveSnapshot } from '../src/game/live';
 import { getLiveMap } from '../src/game/live-maps';
 import { createHealth, createMedicalInventory } from '../src/game/health';
 
@@ -74,6 +74,53 @@ describe('live wire parser', () => {
     expect(() => readLiveSnapshot(update)).toThrow(LiveApiError);
     expect(() => readLiveSnapshot(update, { ...full.world, version: 'stale' })).toThrow(LiveApiError);
     expect(() => readLiveSnapshot({ ...full, worldVersion: 'different' })).toThrow(LiveApiError);
+    const revision = structuredClone(full); revision.world.version = revision.worldVersion = 'perimeter-g2-new-geometry';
+    expect(readLiveSnapshot(revision, full.world).world.version).toBe(revision.worldVersion);
+    const { world: _revisionWorld, ...revisionDelta } = revision;
+    expect(() => readLiveSnapshot(revisionDelta, full.world)).toThrow(LiveApiError);
+  });
+  test('preserves organic terrain and path geometry in full and cached snapshots while accepting legacy worlds', () => {
+    const full = fixture();
+    full.world.terrainRows = Array.from({ length: full.world.height }, (_, y) => Array.from({ length: full.world.width }, (_, x) => Object.keys(LIVE_TERRAIN_CODES)[(x + y) % 9]).join(''));
+    full.world.paths = [
+      { id: 'road', name: 'Тракт', kind: 'road', width: 4, points: [{ x: 6, y: 6 }, { x: 29, y: 24 }, { x: 89, y: 58 }] },
+      { id: 'trail', name: 'Лесная тропа', kind: 'trail', width: 1.5, points: [{ x: 29, y: 24 }, { x: 95, y: 18 }] },
+      { id: 'rail', name: 'Ветка депо', kind: 'rail', width: 2, points: [{ x: 6, y: 121 }, { x: 53, y: 71 }] },
+      { id: 'river', name: 'Река', kind: 'river', width: 5, points: [{ x: 113, y: 0 }, { x: 87, y: 45 }] },
+    ];
+    full.world.obstacles.push({ x: 111, y: 1, width: 2, height: 3, kind: 'water' });
+    full.world.zones.push({ x: 0, y: 0, width: 3, height: 3, name: 'Берег', terrain: 'sand', danger: 1 });
+    const parsed = readLiveSnapshot(full);
+    expect(parsed).toEqual(full); expect(parsed.world.terrainRows).not.toBe(full.world.terrainRows);
+    const { world: _world, ...update } = full;
+    expect(readLiveSnapshot(update, parsed.world)).toEqual(full);
+    const legacy = fixture(); delete legacy.world.terrainRows; delete legacy.world.paths;
+    expect(readLiveSnapshot(legacy)).toEqual(legacy);
+  });
+  test('rejects malformed terrain rasters and unbounded or duplicate organic paths', () => {
+    const edits: Array<(value: LiveSnapshot) => void> = [
+      value => { value.world.terrainRows!.pop(); },
+      value => { value.world.terrainRows![0] = 'g'.repeat(value.world.width - 1); },
+      value => { value.world.terrainRows![0] = '?'.repeat(value.world.width); },
+      value => { Object.assign(value.world, { terrainRows: Array.from({ length: value.world.height }, () => Array(value.world.width).fill('g')) }); },
+      value => { value.world.paths!.push({ ...value.world.paths![0]! }); },
+      value => { Object.assign(value.world.paths![0]!, { kind: 'teleport' }); },
+      value => { value.world.paths![0]!.width = 0; },
+      value => { value.world.paths![0]!.width = Number.POSITIVE_INFINITY; },
+      value => { value.world.paths![0]!.points = [{ x: 1, y: 1 }]; },
+      value => { value.world.paths![0]!.points[0]!.x = value.world.width; },
+      value => { value.world.paths![0]!.points[0]!.y = -1; },
+      value => { value.world.paths![0]!.points = Array.from({ length: 257 }, () => ({ x: 1, y: 1 })); },
+      value => { value.world.paths = Array.from({ length: 129 }, (_, index) => ({ ...value.world.paths![0]!, id: `path-${index}` })); },
+      value => { Object.assign(value.world.obstacles[0]!, { kind: 'lava' }); },
+      value => { Object.assign(value.world.zones[0]!, { terrain: 'private-loot' }); },
+    ];
+    for (const edit of edits) {
+      const value = fixture();
+      value.world.terrainRows = Array.from({ length: value.world.height }, () => 'g'.repeat(value.world.width));
+      value.world.paths = [{ id: 'road', name: 'Тракт', kind: 'road', width: 3, points: [{ x: 1, y: 1 }, { x: 60, y: 45 }] }];
+      edit(value); expect(() => readLiveSnapshot(value)).toThrow(LiveApiError);
+    }
   });
   test('validates districts, purpose, visibility chunks and server search deadlines', () => {
     const full = fixture(); full.self.searching = { id: 'drop-1', readyAt: 5000 };

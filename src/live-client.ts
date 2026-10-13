@@ -1,4 +1,4 @@
-import { LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT, type EconomyLoot, type LiveCommand, type LiveDrop, type LiveEntity, type LiveEvent, type LiveContainerKind, type LiveDistrict, type LiveDistrictId, type LiveMapSummary, type LivePlayer, type LivePurpose, type LiveSnapshot, type LiveStatus, type LiveWorld } from './game/live';
+import { LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT, LIVE_TERRAIN_CODES, type EconomyLoot, type LiveCommand, type LiveDrop, type LiveEntity, type LiveEvent, type LiveContainerKind, type LiveDistrict, type LiveDistrictId, type LiveMapSummary, type LivePlayer, type LivePurpose, type LiveSnapshot, type LiveStatus, type LiveWorld } from './game/live';
 import { readEconomyLootItems } from './game/live-loot';
 import { BODY_PARTS, parseHealth, parseMedicalInventory, type BodyPart, type TreatmentType } from './game/health';
 
@@ -103,8 +103,21 @@ export function readLiveStatus(value: unknown): LiveStatus {
 
 /** Only immutable, versioned geometry may be reused between server responses. */
 export function readLiveWorld(source: unknown): LiveWorld {
-  if (!record(source) || source.id !== 'perimeter' || !text(source.name, 80) || !text(source.description, 500) || !['industrial', 'forest', 'urban', 'mixed'].includes(source.theme as string) || !integer(source.width, 2, 256) || !integer(source.height, 2, 256) || !text(source.version, 128) || !text(source.seed, 128) || !integer(source.generatorVersion, 1, 1_000_000) || !integer(source.chunkSize, 1, 128) || !Array.isArray(source.obstacles) || source.obstacles.length > 512 || !Array.isArray(source.extracts) || !source.extracts.length || source.extracts.length > 64 || !Array.isArray(source.zones) || source.zones.length > 128 || !Array.isArray(source.districts) || source.districts.length !== 4 || !Array.isArray(source.pois) || source.pois.length > 256 || !Array.isArray(source.containers) || source.containers.length > 512) return invalid();
+  if (!record(source) || source.id !== 'perimeter' || !text(source.name, 80) || !text(source.description, 500) || !['industrial', 'forest', 'urban', 'mixed'].includes(source.theme as string) || !integer(source.width, 2, 256) || !integer(source.height, 2, 256) || !text(source.version, 128) || !text(source.seed, 128) || !integer(source.generatorVersion, 1, 1_000_000) || !integer(source.chunkSize, 1, 128) || !Array.isArray(source.obstacles) || source.obstacles.length > 4096 || !Array.isArray(source.extracts) || !source.extracts.length || source.extracts.length > 64 || !Array.isArray(source.zones) || source.zones.length > 1000 || !Array.isArray(source.districts) || source.districts.length !== 4 || !Array.isArray(source.pois) || source.pois.length > 256 || !Array.isArray(source.containers) || source.containers.length > 512) return invalid();
   const bounds = { width: source.width, height: source.height };
+  const terrainRows = source.terrainRows === undefined ? undefined : (() => {
+    if (!Array.isArray(source.terrainRows) || source.terrainRows.length !== bounds.height || !source.terrainRows.every(row => typeof row === 'string' && row.length === bounds.width && [...row].every(code => Object.hasOwn(LIVE_TERRAIN_CODES, code)))) return invalid();
+    return [...source.terrainRows] as string[];
+  })();
+  const paths: LiveWorld['paths'] = source.paths === undefined ? undefined : (() => {
+    if (!Array.isArray(source.paths) || source.paths.length > 128) return invalid();
+    const parsed = source.paths.map(path => {
+      if (!record(path) || !text(path.id) || !text(path.name, 80) || !['road', 'trail', 'rail', 'river'].includes(path.kind as string) || !number(path.width, .1, Math.max(bounds.width, bounds.height)) || !Array.isArray(path.points) || path.points.length < 2 || path.points.length > 256) return invalid();
+      return { id: path.id, name: path.name, kind: path.kind as NonNullable<LiveWorld['paths']>[number]['kind'], width: path.width, points: path.points.map(location => point(location, bounds) ? { x: location.x, y: location.y } : invalid()) };
+    });
+    if (new Set(parsed.map(path => path.id)).size !== parsed.length) return invalid();
+    return parsed;
+  })();
   const districts = source.districts.map(district => readDistrict(district, bounds));
   if (new Set(districts.map(district => district.id)).size !== 4) return invalid();
   const pois: LiveWorld['pois'] = source.pois.map(poi => {
@@ -118,11 +131,11 @@ export function readLiveWorld(source: unknown): LiveWorld {
     return { x: container.x, y: container.y, id: container.id, poiId: container.poiId, kind: container.kind, lootTable: container.lootTable as LiveWorld['containers'][number]['lootTable'], searchMs: container.searchMs };
   });
   if (new Set(containers.map(container => container.id)).size !== containers.length) return invalid();
-  return { ...bounds, id: source.id, name: source.name, description: source.description, theme: source.theme as LiveWorld['theme'], version: source.version, seed: source.seed, generatorVersion: source.generatorVersion, chunkSize: source.chunkSize, districts, pois, containers, obstacles: source.obstacles.map(obstacle => {
-    if (!rectangle(obstacle, bounds) || !(obstacle.kind === undefined || ['building', 'wall', 'container', 'barricade', 'tree'].includes(obstacle.kind as string)) || !(obstacle.label === undefined || text(obstacle.label, 80))) return invalid();
+  return { ...bounds, id: source.id, name: source.name, description: source.description, theme: source.theme as LiveWorld['theme'], version: source.version, seed: source.seed, generatorVersion: source.generatorVersion, chunkSize: source.chunkSize, districts, pois, containers, ...(terrainRows ? { terrainRows } : {}), ...(paths ? { paths } : {}), obstacles: source.obstacles.map(obstacle => {
+    if (!rectangle(obstacle, bounds) || !(obstacle.kind === undefined || ['building', 'wall', 'container', 'barricade', 'tree', 'water'].includes(obstacle.kind as string)) || !(obstacle.label === undefined || text(obstacle.label, 80))) return invalid();
     return { x: obstacle.x, y: obstacle.y, width: obstacle.width, height: obstacle.height, ...(obstacle.kind ? { kind: obstacle.kind as LiveWorld['obstacles'][number]['kind'] } : {}), ...(obstacle.label ? { label: obstacle.label as string } : {}) };
   }), extracts: source.extracts.map(extract => point(extract, bounds) && integer(extract.x) && integer(extract.y) ? { x: extract.x, y: extract.y } : invalid()), zones: source.zones.map(zone => {
-    if (!rectangle(zone, bounds) || !text(zone.name, 80) || !['road', 'concrete', 'forest', 'water', 'yard'].includes(zone.terrain as string) || !integer(zone.danger, 1, 3)) return invalid();
+    if (!rectangle(zone, bounds) || !text(zone.name, 80) || !Object.values(LIVE_TERRAIN_CODES).includes(zone.terrain as LiveWorld['zones'][number]['terrain']) || !integer(zone.danger, 1, 3)) return invalid();
     return { x: zone.x, y: zone.y, width: zone.width, height: zone.height, name: zone.name, terrain: zone.terrain as LiveWorld['zones'][number]['terrain'], danger: zone.danger as 1 | 2 | 3 };
   }) };
 }

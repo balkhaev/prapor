@@ -5,6 +5,7 @@ import { dirname } from "node:path";
 import { LIVE_CAPACITY, LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT, LIVE_MEDICAL_CAPACITY, LIVE_PENDING_CAPACITY, LIVE_SERVER_ID, LIVE_SERVER_NAME, liveMedicalSupplyNeeded, type LiveCommand, type LiveDistrictId, type LiveDrop, type LiveEntity, type LiveEvent, type LiveMapId, type LivePlayer, type LivePoint, type LivePurpose, type LiveSnapshot, type LiveStatus, type LiveWorld } from "../src/game/live";
 import { LIVE_MAPS } from "../src/game/live-maps";
 import { createLiveNavigation } from "./live-navigation";
+import { migratedContainerAnchor, migratedLootCooldownKey } from "./live-world-migration";
 import { BODY_PARTS, BODY_PART_LABELS, TREATMENT_DURATION_MS, TREATMENT_LABELS, advanceBleeding, applyHit, canTreat, completeTreatment, createHealth, createMedicalInventory, healthPercent, injuryEffects, isAlive, isStable, parseHealth, parseMedicalInventory, selectTreatment, type BodyPart, type HealthState, type TreatmentType } from "../src/game/health";
 import { getRaidLootPool, type LootModel } from "../src/game/loot";
 import { getLiveLootDefinition, getLiveLootWeight, readEconomyLootItems } from '../src/game/live-loot';
@@ -426,9 +427,20 @@ export function createLiveService(options: LiveOptions): LiveService {
       scav.health = isAlive(scav.body) ? healthPercent(scav.body) : 0;
       scavs.set(scav.id, scav);
     }
+    const claimedAnchors = new Set<string>(), currentWorld = maps.get(DEFAULT_MAP)!;
     for (const drop of world.drops) {
-      if (drop.source === "supply" && (world.version !== WORLD_VERSION || world.geometryVersion !== maps.get(DEFAULT_MAP)!.version)) continue;
       if (drop.items) drop.items = readEconomyLootItems(drop.items, LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT);
+      // A geometry revision moves existing cycles; it never rolls replacements for their contents.
+      if (drop.source === "supply" && drop.containerId) {
+        const anchor = migratedContainerAnchor(currentWorld, drop.containerId);
+        if (anchor && !claimedAnchors.has(anchor.id)) {
+          Object.assign(drop, { mapId: DEFAULT_MAP, x: anchor.x, y: anchor.y, containerId: anchor.id, containerKind: anchor.kind });
+          if (drop.expiresAt > now()) claimedAnchors.add(anchor.id);
+        } else {
+          // Retired/duplicate anchors become loose cargo with the same drop and item identities.
+          delete drop.containerId; delete drop.containerKind; drop.source = "body";
+        }
+      } else if (drop.source === "supply" && (world.version !== WORLD_VERSION || world.geometryVersion !== currentWorld.version)) drop.source = "body";
       if (drop.mapId !== DEFAULT_MAP) Object.assign(drop, translateLegacy(drop, drop.mapId));
       drop.mapId = mapFrom(drop.mapId) ?? DEFAULT_MAP;
       if (!walkable(drop.mapId, drop)) Object.assign(drop, nearestFree(drop, districtAt(drop)));
@@ -436,7 +448,10 @@ export function createLiveService(options: LiveOptions): LiveService {
     }
     if (world.version === WORLD_VERSION && world.geometryVersion === maps.get(DEFAULT_MAP)!.version) {
       events = world.events.slice(-120).map(item => ({ ...item, mapId: DEFAULT_MAP }));
-      for (const [key, ready] of world.lootCooldowns ?? []) if (ready > now()) lootCooldowns.set(key, ready);
+    }
+    for (const [previousKey, ready] of world.lootCooldowns ?? []) if (Number.isFinite(ready) && ready > now()) {
+      const key = migratedLootCooldownKey(currentWorld, previousKey);
+      if (key) lootCooldowns.set(key, Math.max(ready, lootCooldowns.get(key) ?? 0));
     }
   }
   for (const map of LIVE_MAPS) {

@@ -6,6 +6,8 @@ export const SHELTER_ROOM_WIDTH = 172;
 export const SHELTER_ROOM_HEIGHT = 100;
 export const SHELTER_COLUMN_STRIDE = 192;
 export const SHELTER_ROW_STRIDE = 132;
+/** The cutaway cabins include a 41 px ridge and a chimney cap at 49.1 px. */
+export const SHELTER_BUILDING_MAX_VISUAL_HEIGHT = 50;
 const ORIGIN_X = 307;
 const ORIGIN_Y = 57;
 const DEPTH_ORIGIN = 100;
@@ -33,6 +35,13 @@ export function shelterRectPolygon(rect: ShelterRect): ShelterPoint[] {
 		{ x: rect.x + rect.width, y: rect.y + rect.height },
 		{ x: rect.x, y: rect.y + rect.height },
 	].map(projectShelterPoint);
+}
+
+/** One visual hull for hover and drag hits, including eaves, chimney and porch. */
+export function shelterBuildingHitPolygon(rect: ShelterRect): ShelterPoint[] {
+	const ground = shelterRectPolygon({ x: rect.x - 5, y: rect.y - 6, width: rect.width + 10, height: rect.height + 24 });
+	const roof = ground.map((point) => ({ x: point.x, y: point.y - SHELTER_BUILDING_MAX_VISUAL_HEIGHT }));
+	return [roof[0]!, roof[1]!, ground[1]!, ground[2]!, ground[3]!, roof[3]!];
 }
 
 /** A camera/overlay rectangle encloses the diamond; pointer hits still use its inverse projection. */

@@ -19,10 +19,16 @@ export type LiveMapId = "perimeter";
 export type LiveDistrictId = "customs" | "sawmill" | "depot" | "village";
 export type LivePurpose = "pvp" | "pve" | "loot" | "quests";
 export type LiveContainerKind = "duffel" | "jacket" | "toolbox" | "medbag" | "cabinet" | "crate";
-export type LiveTerrain = "road" | "concrete" | "forest" | "water" | "yard";
+export type LiveTerrain = "road" | "concrete" | "forest" | "water" | "yard" | "grass" | "path" | "rail" | "sand";
+/** Static geometry only. Row codes keep the 128² ground layer compact on first join. */
+export const LIVE_TERRAIN_CODES = { r: "road", c: "concrete", f: "forest", w: "water", y: "yard", g: "grass", p: "path", t: "rail", s: "sand" } as const satisfies Record<string, LiveTerrain>;
+export interface LiveLandscapePath {
+  id: string; name: string; kind: "road" | "trail" | "rail" | "river";
+  width: number; points: LivePoint[];
+}
 export interface LiveObstacle extends LivePoint {
   width: number; height: number;
-  kind?: "building" | "wall" | "container" | "barricade" | "tree";
+  kind?: "building" | "wall" | "container" | "barricade" | "tree" | "water";
   label?: string;
 }
 export interface LiveZone extends LivePoint {
@@ -50,6 +56,9 @@ export interface LiveWorld {
   districts: LiveDistrict[];
   pois: LivePoi[];
   containers: LiveContainerAnchor[];
+  /** Older world/fixture contracts can omit these; generated V2 worlds always provide both. */
+  terrainRows?: string[];
+  paths?: LiveLandscapePath[];
 }
 export interface LiveDistrict extends LivePoint {
   id: LiveDistrictId; name: string; description: string;

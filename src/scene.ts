@@ -12,7 +12,7 @@ import { getShelterTerritoryCell, getShelterCorridorSegments, getShelterOpenGrou
 import { advanceScavAnimation, createScavAnimation, type ScavAnimationState } from "./shelter-animation";
 import { SCAV_DIRECTIONS, SCAV_ORIGIN, SCAV_REFERENCE_HEIGHT, scavAppearance, scavAttachment, scavAvailableAppearance, scavDirection, scavFrame, scavPreloadAppearances, scavTexture, scavTorsoAnchor, scavHeadAnchor, type ScavDirection, type ScavPose } from "./scav-isometric";
 import { advanceShelterStationClock, getShelterProductionPresentation, type ProductionPresentation } from "./shelter-production";
-import { projectShelterPoint, unprojectShelterPoint, projectShelterBounds, shelterRectPolygon, shelterRoomPolygon, shelterRoomPosition, shelterRoomRect } from "./shelter-isometric";
+import { projectShelterPoint, unprojectShelterPoint, projectShelterBounds, shelterBuildingHitPolygon, shelterRectPolygon, shelterRoomPolygon, shelterRoomPosition, shelterRoomRect } from "./shelter-isometric";
 import { paintIsometricRoom, paintIsometricProduction } from "./shelter-isometric-art";
 import { RaidStreetRenderer } from "./raid-scene";
 import { getShelterLandscape, paintShelterLandscape, paintShelterDecoration } from "./shelter-landscape";
@@ -644,12 +644,7 @@ export function createWorld(
 			const visual = projectShelterPoint(point);
 			// Cabins are upright above their footprint; their roofs are draggable too.
 			return [...shelter.rooms].sort((a, b) => projectShelterPoint(getRoomPosition(b)).y - projectShelterPoint(getRoomPosition(a)).y)
-				.find((room) => {
-					const corners = shelterRectPolygon(roomRect(room)), roof = corners.map((p) => ({ x: p.x, y: p.y - 28 }));
-					return Phaser.Geom.Polygon.Contains(new Phaser.Geom.Polygon(corners), visual.x, visual.y)
-						|| Phaser.Geom.Polygon.Contains(new Phaser.Geom.Polygon(roof), visual.x, visual.y)
-						|| Phaser.Geom.Polygon.Contains(new Phaser.Geom.Polygon([corners[1]!, corners[2]!, corners[3]!, roof[3]!, roof[2]!, roof[1]!]), visual.x, visual.y);
-				}) ?? null;
+				.find((room) => Phaser.Geom.Polygon.Contains(new Phaser.Geom.Polygon(shelterBuildingHitPolygon(roomRect(room))), visual.x, visual.y)) ?? null;
 		}
 
 		private buildingAllowed(): boolean {
@@ -1128,10 +1123,11 @@ export function createWorld(
 			cell.productLabel.setPosition(at.x, at.y - 63); cell.feedback.setPosition(front.x, front.y - 23);
 			cell.lamp.setPosition(at.x, at.y + 5); cell.root.setDepth(cell.room ? at.y - 20 : -999_999_999);
 			if (cell.room) {
-				const corners = shelterRectPolygon(rect), roof = corners.map((point) => ({ x: point.x, y: point.y - 28 }));
-				const hit = [roof[0]!, roof[1]!, corners[1]!, corners[2]!, corners[3]!, roof[3]!], bounds = projectShelterBounds(rect);
-				cell.zone.setPosition(bounds.x, bounds.y - 28).setSize(bounds.width, bounds.height + 28).setDepth(cell.root.depth + .1);
-				cell.zone.setInteractive(new Phaser.Geom.Polygon(hit.map((point) => ({ x: point.x - bounds.x, y: point.y - bounds.y + 28 }))), Phaser.Geom.Polygon.Contains);
+				const hit = shelterBuildingHitPolygon(rect);
+				const x = Math.min(...hit.map((point) => point.x)), y = Math.min(...hit.map((point) => point.y));
+				const width = Math.max(...hit.map((point) => point.x)) - x, height = Math.max(...hit.map((point) => point.y)) - y;
+				cell.zone.setPosition(x, y).setSize(width, height).setDepth(cell.root.depth + .1);
+				cell.zone.setInteractive(new Phaser.Geom.Polygon(hit.map((point) => ({ x: point.x - x, y: point.y - y }))), Phaser.Geom.Polygon.Contains);
 				cell.zone.input!.cursor = cell.room.status === "ready" ? "grab" : "pointer";
 			}
 		}
