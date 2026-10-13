@@ -2904,7 +2904,17 @@ function updateGameFeedback(quiet = false) {
 		if (feedback.events.some((event) => event.cue === "complete" || event.cue === "return")) pulseResourceGains(feedback.gains);
 	}
 }
-const simulationTimer=setInterval(()=>{if(!document.hidden&&!accountChanging&&serverReady&&!gameCommandPending)void refreshServerProgress();if(deferredRender&&!interacting())render();},1000);
+let nextServerReconnect = 0;
+const simulationTimer = setInterval(() => {
+	if (!document.hidden && !accountChanging && !gameCommandPending) {
+		if (serverReady) void refreshServerProgress();
+		else if (Date.now() >= nextServerReconnect) {
+			nextServerReconnect = Date.now() + 3000;
+			void initializeAccount();
+		}
+	}
+	if (deferredRender && !interacting()) render();
+}, 1000);
 document.addEventListener('visibilitychange',()=>{if(document.hidden){cancelWorkerPlacement(false,true);world?.cancelCameraGesture();persist();}else if(!accountChanging&&serverReady)void refreshServerProgress();});
 window.addEventListener('pagehide',flushAndReleaseSave);window.addEventListener('beforeunload',persist);window.addEventListener('pageshow',event=>{if(event.persisted)void refreshServerProgress();});
 for (const type of ['click','change','input','toggle','pointerup']) document.addEventListener(type, scheduleSessionSave);
