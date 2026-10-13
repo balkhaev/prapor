@@ -9,6 +9,8 @@ import "./flea.css";
 import "./boss.css";
 import { bossRoster, readBossPreparation, bossRaidProgress, bossReportReceipt } from "./boss-ui";
 import "./territory.css";
+import "./territory-life.css";
+import { createTerritoryLife, type TerritoryLifeController } from "./territory-life";
 import { territorySummary, territoryBuildings, territoryPlan, buildingCatalogue, buildingCatalogueReason, buildingPlacementControls, buildingRelocationControls, type BuildingPlacement } from "./territory-ui";
 import { getTerritoryPlanPoint } from "./territory-plan-input";
 import {
@@ -309,6 +311,7 @@ let achievementNoticeSchedule: ReturnType<typeof setTimeout> | null = null;
 const freshAchievements = new Set<string>();
 let deferredRender = false;
 let world: ReturnType<typeof createWorld> | null = null;
+let territoryLife: TerritoryLifeController | null = null;
 let liveMode: ReturnType<typeof createLiveMode> | null = null;
 const gameSound = createGameSound();
 let toastTimer: ReturnType<typeof setTimeout>;
@@ -1500,6 +1503,7 @@ function setOverlayState() {
 	}
 	const drawer = document.querySelector<HTMLElement>(".inspector"); if (drawer) drawer.inert = modalOpen;
 	document.body.classList.toggle("overlay-open", modalOpen || drawerOpen || toolsOpen || mobileContext);
+	territoryLife?.refresh();
 }
 function closeModal() {
 	barterDraft = null;
@@ -2376,6 +2380,7 @@ document.addEventListener("click", async (event) => {
 		closeInspector();
 		toolOrigin = target;
 		page = target.dataset.page as Page;
+		if (page === "base") setView("base");
 		render();
 		if(page==='flea')void refreshFleaMarket();
 		if (page === 'achievements') { dismissAchievementNotice(); acknowledgeAchievementScreen(); }
@@ -3214,6 +3219,9 @@ world = createWorld(
 		onShelterRoom: (id) => { if (canWorldInteract()) openShelterRoom(id); },
 		onBuildSite: ({ column, row }) => { if (canWorldInteract()) openShelterSite(column, row); } }
 );
+territoryLife = createTerritoryLife({ getHost: () => page === "base" ? document.querySelector<HTMLElement>("[data-territory-plan]") : null,
+	getPeople: () => world?.getShelterPeople() ?? [], reducedMotion: window.matchMedia("(prefers-reduced-motion: reduce)").matches });
+territoryLife.refresh();
 const readyContracts = () =>
 	CONTRACTS.filter(
 		(contract) =>
@@ -3277,6 +3285,7 @@ const responsiveContext = () => {
 };
 window.addEventListener("resize", responsiveContext);
 import.meta.hot?.dispose(() => {
+	territoryLife?.destroy();
 	liveMode?.destroy();
 	dismissAchievementNotice();
 	window.removeEventListener('hashchange', captureAccountEmailLink);
