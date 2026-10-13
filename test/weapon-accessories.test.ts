@@ -96,7 +96,7 @@ describe("rooted weapon accessory connections", () => {
 		expect(gun.modules.flashlight).toBe(light);
 		expect(gun.modules.laser).toBe(laser);
 		expect(gun.modules.foregrip!.modelId).toBe("foregrip-stubby");
-		expect(getWeaponStats(gun).damage).toBe(base.damage + 2);
+		expect(getWeaponStats(gun).damage).toBe(base.damage);
 		expect(getWeaponStats(gun).ammoMultiplier).toBe(base.ammoMultiplier);
 		expect(parseSave(saveGame(state))).toEqual(state);
 	});

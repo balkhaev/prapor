@@ -79,6 +79,7 @@ function v7(state: GameState) {
 	const raw = JSON.parse(saveGame(state));
 	raw.schemaVersion = 7;
 	delete raw.social; delete raw.achievements;
+	for (const raid of raw.raids) if (raid.expedition) delete raid.expedition.weaponMechanics;
 	return raw;
 }
 
@@ -593,6 +594,7 @@ describe("save migration and social provenance", () => {
 		expect(queueModuleProduction(original, workshop.id, "factory-sks-stock", original.lastUpdated).ok).toBe(true);
 		expect(dispatchRaid(original, runner.id, "courtyard", original.lastUpdated).ok).toBe(true);
 		advance(original, original.lastUpdated + 1_000);
+		for (const raid of original.raids) if (raid.expedition) delete raid.expedition.weaponMechanics;
 		const raw = v7(original), migrated = parseSave(JSON.stringify(raw))!;
 		expect(migrated).not.toBeNull();
 		expect(v7(migrated)).toEqual(raw);

@@ -30,9 +30,11 @@ import { getSquadRaidQuote, getRaidGroup, createSquadRaidSnapshot, planSquadRaid
 export * from "./squad-raids";
 import { createAchievementState, parseAchievementState, validateAchievementState, rebaseAchievementClock, noteAchievementBuild, noteAchievementTransfer, noteAchievementInstalled, noteAchievementDispatch, noteAchievementCheckpoint, noteAchievementContinue, noteAchievementExtract, noteAchievementRaidFinished, noteAchievementLoot, noteAchievementSupply, prepareAchievementPayment, noteAchievementPaid, prepareAchievementCraft, noteAchievementCrafted, prepareAchievementRecycle, noteAchievementRecycled, creditAchievementWork, noteAchievementUpgrade, noteAchievementUpgradeDone, noteAchievementAssignment, noteAchievementSocialDecision, noteAchievementJobDone, noteAchievementCancelled, pruneAchievementPeople, pruneAchievementInventory, type AchievementState } from "./achievements";
 export * from "./achievements";
+import { getWeaponMechanics, getWeaponRouteEffect, type WeaponRaidSnapshot } from "./weapon-mechanics";
+export * from "./weapon-mechanics";
 
 export const SAVE_KEY = "prapor.save.v1";
-export const SAVE_VERSION = 10;
+export const SAVE_VERSION = 11;
 export const MAX_OFFLINE_MS = 8 * 60 * 60 * 1000;
 export const MAX_ROOM_LEVEL = 5;
 
@@ -75,6 +77,8 @@ export interface Expedition {
 	trail: RaidReport["events"];
 	legacyLoot: boolean;
 	gunCombatBonus: number;
+	/** Absent on pre-mechanics expeditions, which retain their original rules. */
+	weaponMechanics?: WeaponRaidSnapshot;
 }
 export interface Raid {
 	id: string;
@@ -385,6 +389,13 @@ export function getModuleDefinition(item: ModuleInstance) {
 	if (!model) throw new Error("Неизвестная оружейная деталь");
 	return model;
 }
+export function getModuleEffectiveStats(item: ModuleInstance) {
+	const stats = getModuleDefinition(item).stats, condition = item.durability < 10 ? 0 : clamp(item.durability, 0, 100) / 100;
+	// Wear removes a part's benefits, never its physical drawbacks. Lower recoil is a benefit.
+	const effect = (value: number, lowerIsBetter = false) => (lowerIsBetter ? value < 0 : value > 0) ? condition ? value * condition : 0 : value;
+	return { damage: effect(stats.damage), ergonomics: effect(stats.ergonomics), recoil: effect(stats.recoil, true),
+		reliability: effect(stats.reliability), weight: stats.weight, ammoMultiplier: stats.ammoMultiplier };
+}
 function moduleFitReason(weapon: WeaponInstance, item: ModuleInstance): string | null {
 	const model = getModuleDefinition(item), info = RECEIVER_INFO[weapon.weaponId]!;
 	if (model.slot === "receiver" && model.weaponId !== weapon.weaponId) return "Эта ствольная коробка относится к другой пушке. Собери её отдельно.";
@@ -419,16 +430,16 @@ export function getWeaponStats(weapon: WeaponInstance) {
 	const baseErgo = { pistol: 70, shotgun: 45, smg: 60, rifle: 50, sniper: 40 }[definition.category];
 	const legacy = weapon.modules.receiver?.legacyAttachments ?? { optic: 0, magazine: 0, stock: 0 };
 	let damage = definition.power + legacy.optic * 4 + legacy.magazine * 3 + legacy.stock * 3;
-	let ergonomics = baseErgo, recoil = baseRecoil, reliability = definition.reliability, weight = 0, ammoMultiplier = 1;
+	let ergonomics = baseErgo, recoil = baseRecoil, reliability = definition.reliability - (100 - clamp(weapon.durability, 0, 100)) * 0.2, weight = 0, ammoMultiplier = 1;
 	for (const part of Object.values(weapon.modules)) {
-		const model = getModuleDefinition(part), condition = part.durability / 100;
-		damage += model.stats.damage * condition; ergonomics += model.stats.ergonomics * condition;
-		recoil += model.stats.recoil * condition; reliability += model.stats.reliability * condition;
-		weight += model.stats.weight; ammoMultiplier *= model.stats.ammoMultiplier;
+		const model = getModuleDefinition(part), effective = getModuleEffectiveStats(part);
+		damage += effective.damage; ergonomics += effective.ergonomics;
+		recoil += effective.recoil; reliability += effective.reliability;
+		weight += effective.weight; ammoMultiplier *= effective.ammoMultiplier;
 		if (model.slot !== "receiver" && RECEIVER_INFO[weapon.weaponId]!.requiredSlots.includes(model.slot)) reliability -= (100 - part.durability) * 0.025;
 	}
 	const issues = getWeaponBuildIssues(weapon), ready = issues.length === 0 && weapon.durability >= 10;
-	return { damage: Math.max(1, Math.round(damage)), power: issues.some((issue) => issue.startsWith("Нет детали")) ? 0 : Math.round(Math.max(1, damage) * (0.35 + weapon.durability * 0.0065)),
+	return { damage: Math.max(1, Math.round(damage)), power: ready ? Math.round(Math.max(1, damage) * (0.35 + weapon.durability * 0.0065)) : 0,
 		ergonomics: Math.round(clamp(ergonomics, 0, 100)), recoil: Math.round(clamp(recoil, 0, 100)), reliability: Math.round(clamp(reliability, 10, 100)),
 		weight: Math.round(weight * 100) / 100, ammoMultiplier, ready, issues };
 }
@@ -1002,10 +1013,12 @@ export function getRaidChance(
 	);
 	if (!weapon || !getWeaponStats(weapon).ready || scav.health < 25) return 0;
 	const personality = getPersonality(scav);
-	const reliability = getWeaponStats(weapon).reliability / 100;
+	const weaponStats = getWeaponStats(weapon);
+	const reliability = weaponStats.reliability / 100;
 	return clamp(
 		0.76 +
 			getWeaponPower(weapon) / 360 +
+			getWeaponRouteEffect(weapon, map.id, "scavenge", scav.tactic, weaponStats).bonus +
 			scav.combat / 800 +
 			scav.scouting / 900 +
 			(scav.level - 1) * 0.008 +
@@ -1174,6 +1187,9 @@ function startRaid(state: GameState, scav: Scav, map: RaidMap, now: number, isAu
 	if (reason) return fail(reason);
 	const quote = frozenQuote ?? getRaidQuote(state, scav, map);
 	const stats = getLoadoutStats(state, scav);
+	const weapon = state.weapons.find((item) => item.id === scav.weaponInstanceId)!;
+	const weaponStats = getWeaponStats(weapon);
+	const weaponEffect = getWeaponRouteEffect(weapon, map.id, "scavenge", scav.tactic, weaponStats);
 	const armor = state.gearItems.find((item) => item.id === scav.loadout.armorItemId);
 	const helmet = state.gearItems.find((item) => item.id === scav.loadout.helmetItemId);
 	const pack = state.gearItems.find((item) => item.id === scav.loadout.backpackItemId);
@@ -1187,11 +1203,12 @@ function startRaid(state: GameState, scav: Scav, map: RaidMap, now: number, isAu
 		seed: takeSeed(state), isAuto, tactic: scav.tactic,
 		armorLevel: scav.gear.armor, backpackLevel: scav.gear.backpack,
 		expedition: { stage: 1, status: "travel", branch: "scavenge", cargo: { money: 0, supplies: emptySupplies(), weaponIds: [], modules: [] },
-			legacyLoot: false, gunCombatBonus: (60 - getWeaponStats(state.weapons.find((item) => item.id === scav.weaponInstanceId)!).recoil) / 1000,
+			legacyLoot: false, gunCombatBonus: (60 - weaponStats.recoil) / 1000,
+			weaponMechanics: { power: weaponStats.power, reliability: weaponStats.reliability, firstBonus: weaponEffect.bonus, wearMultiplier: getWeaponMechanics(weapon).wearMultiplier },
 			perks: [], offers: [], discoveries: [], autoDepth: isAuto ? scav.autoRaid.maxDepth : 1,
 			baseChance: quote.chance, baseDuration: quote.duration, capacity: stats.capacity,
-			trail: [{ at: now, label: "Выход · этап 1", text: `${scav.name} вышел в «${map.name}». ${TACTICS[scav.tactic].label}: ${quote.money} ₽, ${quote.ammo} патронов${quote.intel ? `, ${quote.intel} разведданных` : ""}${quote.medicine ? ", аптечка" : ""}.`, kind: "neutral" }],
-			ammoMultiplier: getWeaponRole(state.weapons.find((item) => item.id === scav.weaponInstanceId)!).ammoMultiplier * getWeaponStats(state.weapons.find((item) => item.id === scav.weaponInstanceId)!).ammoMultiplier * stats.ammoMultiplier,
+			trail: [{ at: now, label: "Выход · этап 1", text: `${scav.name} вышел в «${map.name}». ${TACTICS[scav.tactic].label}: ${quote.money} ₽, ${quote.ammo} патронов${quote.intel ? `, ${quote.intel} разведданных` : ""}${quote.medicine ? ", аптечка" : ""}. Оружие: ${getWeaponMechanics(weapon).label}; ${weaponEffect.environment.label.toLowerCase()}.`, kind: "neutral" }],
+			ammoMultiplier: getWeaponRole(weapon).ammoMultiplier * weaponStats.ammoMultiplier * stats.ammoMultiplier,
 			loadout: { armorModelId: armor?.modelId ?? "none", armorCondition: armor?.durability ?? 0,
 				helmetModelId: helmet?.modelId ?? null, helmetCondition: helmet?.durability ?? 0,
 				packModelId: pack?.modelId ?? "none", packCondition: pack?.durability ?? 0,
@@ -1593,8 +1610,14 @@ function getIndividualExpeditionChoices(state: GameState, raid: Raid, selectedPe
 		const ammo = Math.max(1, Math.ceil(map.ammoCost * TACTICS[raid.tactic].ammoMultiplier * definition.ammoMultiplier
 			* expedition.ammoMultiplier * (expedition.loadout.ammoType === "piercing" ? 1.65 : 1)) + (perks.includes("pathfinder") ? 1 : 0));
 		const intel = map.intelCost + (branch === "recon" ? 1 : 0);
+		const currentStats = weapon ? getWeaponStats(weapon) : null;
+		const snapshot = expedition.weaponMechanics;
+		const mechanicalBonus = snapshot && weapon && currentStats
+			? (currentStats.power - snapshot.power) / 360 + (currentStats.reliability - snapshot.reliability) / 1000
+				+ getWeaponRouteEffect(weapon, map.id, branch, raid.tactic, currentStats).bonus - snapshot.firstBonus
+			: branch === "combat" ? expedition.gunCombatBonus : 0;
 		const chance = clamp(expedition.baseChance - (stage - 1) * 0.09 + definition.chanceBonus
-			+ (branch === "combat" ? expedition.gunCombatBonus : 0)
+			+ mechanicalBonus
 			+ (weapon ? getWeaponRole(weapon).branches[branch] ?? 0 : 0)
 			+ (perks.includes("careful") ? 0.06 : 0) - (perks.includes("haggler") ? 0.04 : 0), 0.15, 0.97);
 		const duration = Math.max(20, Math.round(expedition.baseDuration * (1 + (stage - 1) * 0.16)
@@ -1736,7 +1759,7 @@ function reachCheckpoint(state: GameState, raid: Raid, now: number, party?: { in
 		expedition.trail.push({ at: now, label: `Отряд · этап ${expedition.stage}`, text: actions.map((action) => action.text).join(" ").slice(0, 400), kind: actions.some((action) => action.kind === "hesitation") ? "danger" : "neutral" });
 	}
 	weapon.durability = Math.max(0, weapon.durability - Math.ceil((5 + random() * (7 + map.danger * 8) + expedition.stage * 2)
-		* (expedition.perks.includes("gunsmith") ? 0.5 : 1)));
+		* (expedition.perks.includes("gunsmith") ? 0.5 : 1) * (expedition.weaponMechanics?.wearMultiplier ?? 1)));
 	if (weapon.modules.receiver) weapon.modules.receiver.durability = weapon.durability;
 	if (!expedition.legacyLoot) for (const [slot, part] of Object.entries(weapon.modules)) if (slot !== "receiver") part.durability = Math.max(0, part.durability - (expedition.perks.includes("gunsmith") ? 1 : 2 + expedition.stage));
 	wearEquippedGear(state, scav, expedition.stage, !success);
@@ -2310,7 +2333,7 @@ function parseEvents(value: unknown, max: number): RaidReport["events"] {
 function parseExpedition(value: unknown, version: number): Expedition | null {
 	if (value === null) return null;
 	const source = record(value);
-	fields(source, ["stage", "status", "branch", "cargo", "perks", "offers", "discoveries", "loadout", "autoDepth", "baseChance", "baseDuration", "capacity", "ammoMultiplier", "trail", ...(version >= 4 ? ["legacyLoot", "gunCombatBonus"] : [])]);
+	fields(source, ["stage", "status", "branch", "cargo", "perks", "offers", "discoveries", "loadout", "autoDepth", "baseChance", "baseDuration", "capacity", "ammoMultiplier", "trail", ...(version >= 4 ? ["legacyLoot", "gunCombatBonus"] : []), ...(version >= 11 ? ["weaponMechanics"] : [])]);
 	const loadout = record(source.loadout);
 	fields(loadout, ["armorModelId", "armorCondition", "helmetModelId", "helmetCondition", "packModelId", "packCondition", "ammoType", "medkit"]);
 	if (source.status !== "travel" && source.status !== "choice") throw new Error("checkpoint-status");
@@ -2332,6 +2355,11 @@ function parseExpedition(value: unknown, version: number): Expedition | null {
 		loadout: { armorModelId, armorCondition: number(loadout.armorCondition, 100), helmetModelId, helmetCondition, packModelId, packCondition: number(loadout.packCondition, 100), ammoType: loadout.ammoType, medkit: bool(loadout.medkit) },
 		autoDepth: number(source.autoDepth, 3, 1, true), baseChance: number(source.baseChance, 1), baseDuration: number(source.baseDuration, 600, 20),
 		capacity: number(source.capacity, version >= 6 ? 50 : 42, version >= 6 ? 8 : 10), ammoMultiplier: number(source.ammoMultiplier, 4, 0.2), trail: parseEvents(source.trail, 9) };
+	if (version >= 11 && Object.hasOwn(source, "weaponMechanics")) {
+		const snapshot = record(source.weaponMechanics);
+		fields(snapshot, ["power", "reliability", "firstBonus", "wearMultiplier"]);
+		expedition.weaponMechanics = { power: number(snapshot.power, 250, 0, true), reliability: number(snapshot.reliability, 100, 10, true), firstBonus: number(snapshot.firstBonus, .12, -.12), wearMultiplier: number(snapshot.wearMultiplier, 1.4, .85) };
+	}
 	unique(expedition.perks); unique(expedition.offers); unique(expedition.discoveries);
 	if (expedition.perks.length !== expedition.stage - 1 || expedition.offers.some((perk) => expedition.perks.includes(perk))
 		|| (expedition.status === "choice" && expedition.stage < 3 ? expedition.offers.length !== 2 : expedition.offers.length !== 0)
@@ -2637,7 +2665,7 @@ export function parseSave(raw: string): GameState | null {
 	try {
 		if (typeof raw !== "string" || raw.length > 1_000_000) return null;
 		const source = record(JSON.parse(raw));
-		if (source.schemaVersion !== 1 && source.schemaVersion !== 2 && source.schemaVersion !== 3 && source.schemaVersion !== 4 && source.schemaVersion !== 5 && source.schemaVersion !== 6 && source.schemaVersion !== 7 && source.schemaVersion !== 8 && source.schemaVersion !== 9 && source.schemaVersion !== SAVE_VERSION) return null;
+		if (source.schemaVersion !== 1 && source.schemaVersion !== 2 && source.schemaVersion !== 3 && source.schemaVersion !== 4 && source.schemaVersion !== 5 && source.schemaVersion !== 6 && source.schemaVersion !== 7 && source.schemaVersion !== 8 && source.schemaVersion !== 9 && source.schemaVersion !== 10 && source.schemaVersion !== SAVE_VERSION) return null;
 		const version = source.schemaVersion;
 		fields(source, ["schemaVersion", "createdAt", "lastUpdated", "money", "supplies", "xp", "level", "base", "scavs", "weapons", "raids", "history", "claimedContracts", "discoveredWeapons", "stats", "clock", "rng", "nextId", ...(version >= 3 ? ["gearItems", "blueprints"] : []), ...(version >= 4 ? ["modules"] : []), ...(version >= 5 ? ["shelter"] : []), ...(version >= 6 ? ["recruitment"] : []), ...(version >= 7 ? ["memorials"] : []), ...(version >= 8 ? ["social"] : []), ...(version >= 9 ? ["achievements"] : [])]);
 		const base = record(source.base);
