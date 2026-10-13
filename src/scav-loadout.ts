@@ -2,15 +2,17 @@ import type { Raid, WeaponInstance } from "./game/engine";
 import { WEAPON_BY_ID } from "./game/data";
 import { FACTORY_KITS, MODULE_SLOTS, type ModuleInstance } from "./game/modules";
 import { GEAR_MODEL_BY_ID, type GearItem, type Loadout } from "./game/systems";
+import type { GearEquipmentSlot } from "./game/operations";
 import { isScavAppearance } from "./game/scav-appearances";
 
 export interface ScavVisualLoadout {
 	armorModelId: string | null;
+	helmetModelId?: string | null;
 	packModelId: string | null;
 	weapon: WeaponInstance | null;
 }
 
-function gearModel(modelId: string | null | undefined, slot: "armor" | "backpack"): string | null {
+function gearModel(modelId: string | null | undefined, slot: GearEquipmentSlot): string | null {
 	return modelId && Object.hasOwn(GEAR_MODEL_BY_ID, modelId) && GEAR_MODEL_BY_ID[modelId]!.slot === slot ? modelId : null;
 }
 
@@ -25,9 +27,11 @@ export function getScavVisualLoadout(
 	weapons: readonly WeaponInstance[] = []
 ): ScavVisualLoadout {
 	const armor = scav.loadout?.armorItemId ? gearItems.find((item) => item.id === scav.loadout!.armorItemId) : undefined;
+	const helmet = scav.loadout?.helmetItemId ? gearItems.find((item) => item.id === scav.loadout!.helmetItemId) : undefined;
 	const pack = scav.loadout?.backpackItemId ? gearItems.find((item) => item.id === scav.loadout!.backpackItemId) : undefined;
 	return {
 		armorModelId: gearModel(armor?.modelId, "armor"),
+		helmetModelId: gearModel(helmet?.modelId, "helmet"),
 		packModelId: gearModel(pack?.modelId, "backpack"),
 		weapon: scav.weaponInstanceId ? knownWeapon(weapons.find((item) => item.id === scav.weaponInstanceId)) : null,
 	};
@@ -39,6 +43,7 @@ export function getRaidVisualLoadout(raid: Raid, weapon: WeaponInstance | null):
 	return {
 		armorModelId: loadout ? gearModel(loadout.armorModelId, "armor")
 			: Number.isInteger(raid.armorLevel) && raid.armorLevel > 0 ? raid.armorLevel === 1 ? "light_vest" : "plate_armor" : null,
+		helmetModelId: gearModel(loadout?.helmetModelId, "helmet"),
 		packModelId: loadout ? gearModel(loadout.packModelId, "backpack")
 			: Number.isInteger(raid.backpackLevel) && raid.backpackLevel > 0 ? raid.backpackLevel === 1 ? "scout_pack" : "cargo_pack" : null,
 		weapon: weapon?.id === raid.weaponInstanceId ? knownWeapon(weapon) : null,
@@ -46,6 +51,9 @@ export function getRaidVisualLoadout(raid: Raid, weapon: WeaponInstance | null):
 }
 
 const HOSTILE_WEAPONS = ["pm", "pp91", "sks", "mp133", "ak74", "mosin"] as const;
+const HOSTILE_ARMOR = [null, "padded_vest", "light_vest", "patrol_armor", "plate_armor", "assault_armor", "heavy_armor"] as const;
+const HOSTILE_HELMETS = [null, "steel_helmet", "kevlar_helmet", "tactical_helmet", "visor_helmet"] as const;
+const HOSTILE_PACKS = [null, "canvas_pack", "scout_pack", "patrol_pack", "cargo_pack", "expedition_pack", "frame_pack"] as const;
 
 /** Ambient enemies receive independent visual props, never inventory or gameplay IDs. */
 export function getHostileVisualLoadout(appearance: number): ScavVisualLoadout {
@@ -60,8 +68,9 @@ export function getHostileVisualLoadout(appearance: number): ScavVisualLoadout {
 		}
 	}
 	return {
-		armorModelId: [null, "light_vest", "plate_armor", "light_vest"][visualId % 4]!,
-		packModelId: [null, "scout_pack", "cargo_pack"][Math.floor(visualId / 4) % 3]!,
+		armorModelId: HOSTILE_ARMOR[visualId % HOSTILE_ARMOR.length]!,
+		helmetModelId: HOSTILE_HELMETS[Math.floor(visualId / 2) % HOSTILE_HELMETS.length]!,
+		packModelId: HOSTILE_PACKS[Math.floor(visualId / 3) % HOSTILE_PACKS.length]!,
 		weapon: { id: `visual-hostile-${visualId}-${weaponId}`, weaponId, durability: 100,
 			attachments: { optic: 0, magazine: 0, stock: 0 }, foundAt: 0, modules },
 	};

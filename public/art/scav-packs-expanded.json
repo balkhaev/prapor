@@ -1,0 +1,348 @@
+{
+  "frames": {
+    "canvas_pack-se": {
+      "frame": {
+        "x": 58,
+        "y": 53,
+        "w": 210,
+        "h": 238
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 151,
+        "y": 137,
+        "w": 210,
+        "h": 238
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "canvas_pack-sw": {
+      "frame": {
+        "x": 357,
+        "y": 52,
+        "w": 217,
+        "h": 239
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 148,
+        "y": 136,
+        "w": 217,
+        "h": 239
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "canvas_pack-ne": {
+      "frame": {
+        "x": 684,
+        "y": 61,
+        "w": 207,
+        "h": 232
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 152,
+        "y": 140,
+        "w": 207,
+        "h": 232
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "canvas_pack-nw": {
+      "frame": {
+        "x": 992,
+        "y": 57,
+        "w": 196,
+        "h": 236
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 158,
+        "y": 138,
+        "w": 196,
+        "h": 236
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "patrol_pack-se": {
+      "frame": {
+        "x": 57,
+        "y": 346,
+        "w": 213,
+        "h": 243
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 150,
+        "y": 134,
+        "w": 213,
+        "h": 243
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "patrol_pack-sw": {
+      "frame": {
+        "x": 355,
+        "y": 345,
+        "w": 222,
+        "h": 243
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 145,
+        "y": 134,
+        "w": 222,
+        "h": 243
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "patrol_pack-ne": {
+      "frame": {
+        "x": 664,
+        "y": 348,
+        "w": 240,
+        "h": 246
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 136,
+        "y": 133,
+        "w": 240,
+        "h": 246
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "patrol_pack-nw": {
+      "frame": {
+        "x": 995,
+        "y": 340,
+        "w": 235,
+        "h": 253
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 138,
+        "y": 130,
+        "w": 235,
+        "h": 253
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "expedition_pack-se": {
+      "frame": {
+        "x": 58,
+        "y": 620,
+        "w": 206,
+        "h": 246
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 153,
+        "y": 133,
+        "w": 206,
+        "h": 246
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "expedition_pack-sw": {
+      "frame": {
+        "x": 361,
+        "y": 621,
+        "w": 214,
+        "h": 245
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 149,
+        "y": 134,
+        "w": 214,
+        "h": 245
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "expedition_pack-ne": {
+      "frame": {
+        "x": 665,
+        "y": 609,
+        "w": 220,
+        "h": 269
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 146,
+        "y": 122,
+        "w": 220,
+        "h": 269
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "expedition_pack-nw": {
+      "frame": {
+        "x": 997,
+        "y": 615,
+        "w": 216,
+        "h": 262
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 148,
+        "y": 125,
+        "w": 216,
+        "h": 262
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "frame_pack-se": {
+      "frame": {
+        "x": 45,
+        "y": 888,
+        "w": 235,
+        "h": 290
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 138,
+        "y": 111,
+        "w": 235,
+        "h": 290
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "frame_pack-sw": {
+      "frame": {
+        "x": 348,
+        "y": 888,
+        "w": 236,
+        "h": 291
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 138,
+        "y": 110,
+        "w": 236,
+        "h": 291
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "frame_pack-ne": {
+      "frame": {
+        "x": 667,
+        "y": 888,
+        "w": 236,
+        "h": 303
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 138,
+        "y": 104,
+        "w": 236,
+        "h": 303
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "frame_pack-nw": {
+      "frame": {
+        "x": 981,
+        "y": 887,
+        "w": 235,
+        "h": 304
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 138,
+        "y": 104,
+        "w": 235,
+        "h": 304
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    }
+  },
+  "meta": {
+    "image": "scav-packs-expanded.png",
+    "size": {
+      "w": 1254,
+      "h": 1254
+    },
+    "scale": "1",
+    "directions": [
+      "se",
+      "sw",
+      "ne",
+      "nw"
+    ],
+    "equipmentHeightByModel": {
+      "canvas_pack": 237.0,
+      "patrol_pack": 244.5,
+      "expedition_pack": 254.0,
+      "frame_pack": 297.0
+    },
+    "origin": {
+      "x": 256,
+      "y": 256
+    }
+  }
+}

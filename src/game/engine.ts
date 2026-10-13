@@ -10,8 +10,8 @@ import {
 	type Supplies,
 	type WeaponDefinition,
 } from "./data";
-import { GEAR_LABELS, MAX_GEAR_LEVEL, TACTICS, type GearSlot, type RaidTactic } from "./operations";
-export { GEAR_LABELS, MAX_GEAR_LEVEL, TACTICS, type GearSlot, type RaidTactic } from "./operations";
+import { GEAR_LABELS, MAX_GEAR_LEVEL, TACTICS, type GearSlot, type GearEquipmentSlot, type RaidTactic } from "./operations";
+export { GEAR_LABELS, GEAR_EQUIPMENT_LABELS, MAX_GEAR_LEVEL, TACTICS, type GearSlot, type GearEquipmentSlot, type RaidTactic } from "./operations";
 import { BLUEPRINTS, EXPEDITION_BRANCHES, GEAR_MODEL_BY_ID, MARKET_OFFERS, RUN_PERKS, WEAPON_ROLES, type AmmoType, type Cargo, type ExpeditionBranch, type GearItem, type Loadout, type RunPerk } from "./systems";
 export * from "./systems";
 import { FACTORY_KITS, MODULE_BY_ID, MODULE_MODELS, MODULE_SLOTS, MODULE_SLOT_LABELS, modulePlatformLabel, RECEIVER_INFO, type ModuleInstance, type ModuleSlot } from "./modules";
@@ -60,7 +60,7 @@ export interface Scav {
 export interface Expedition {
 	stage: number; status: "travel" | "choice"; branch: ExpeditionBranch;
 	cargo: Cargo; perks: RunPerk[]; offers: RunPerk[]; discoveries: string[];
-	loadout: { armorModelId: string; armorCondition: number; packModelId: string; packCondition: number; ammoType: AmmoType; medkit: boolean };
+	loadout: { armorModelId: string; armorCondition: number; helmetModelId?: string | null; helmetCondition?: number; packModelId: string; packCondition: number; ammoType: AmmoType; medkit: boolean };
 	autoDepth: number;
 	baseChance: number; baseDuration: number; capacity: number; ammoMultiplier: number;
 	trail: RaidReport["events"];
@@ -278,7 +278,7 @@ function createScav(
 		raids: 0,
 		tactic: "balanced",
 		gear: { armor: 0, backpack: 0 },
-		loadout: { armorItemId: null, backpackItemId: null, ammoType: "standard", medkit: false },
+		loadout: { armorItemId: null, helmetItemId: null, backpackItemId: null, ammoType: "standard", medkit: false },
 		assignment: null,
 		profile: neutralScavProfile(),
 		autoRaid: { mapId: "courtyard", enabled: false, minHealth: 70, runs: 0, waitingReason: null, maxDepth: 1 },
@@ -794,11 +794,12 @@ export function isAttachmentCompatible(weapon: WeaponInstance, attachment: Attac
 }
 export function getLoadoutStats(state: GameState, scav: Scav) {
 	const armor = state.gearItems.find((item) => item.id === scav.loadout.armorItemId);
+	const helmet = state.gearItems.find((item) => item.id === scav.loadout.helmetItemId);
 	const pack = state.gearItems.find((item) => item.id === scav.loadout.backpackItemId);
 	const weapon = state.weapons.find((item) => item.id === scav.weaponInstanceId);
-	const weight = (armor ? getGearModel(armor).weight : 0) + (pack ? getGearModel(pack).weight : 0) + (weapon ? getWeaponStats(weapon).weight : 0) + (scav.loadout.medkit ? 1 : 0);
+	const weight = (armor ? getGearModel(armor).weight : 0) + (helmet ? getGearModel(helmet).weight : 0) + (pack ? getGearModel(pack).weight : 0) + (weapon ? getWeaponStats(weapon).weight : 0) + (scav.loadout.medkit ? 1 : 0);
 	const profile = getScavProfileEffects(scav);
-	return { weight, protection: scav.gear.armor * 0.012 + (armor ? getGearModel(armor).protection * armor.durability / 100 : 0),
+	return { weight, protection: scav.gear.armor * 0.012 + (armor ? getGearModel(armor).protection * armor.durability / 100 : 0) + (helmet ? getGearModel(helmet).protection * helmet.durability / 100 : 0),
 		capacity: (pack ? 10 + (getGearModel(pack).capacity - 10) * (0.6 + pack.durability * 0.004) : 10) + scav.gear.backpack * 2 + profile.capacity,
 		speedMultiplier: 1 + weight * 0.017, ammoMultiplier: (1 + Math.max(0, weight - 5) * 0.025) * profile.ammo };
 }
@@ -840,11 +841,11 @@ export function craftGear(state: GameState, modelId: string): ActionResult {
 	state.gearItems.push({ id: id(state, "gear"), modelId, durability: 100 });
 	return ok(`${model.label} собран. Выдай предмет бойцу.`);
 }
-export function equipGear(state: GameState, scavId: string, slot: GearSlot, itemId: string | null): ActionResult {
+export function equipGear(state: GameState, scavId: string, slot: GearEquipmentSlot, itemId: string | null): ActionResult {
 	const scav = state.scavs.find((item) => item.id === scavId);
-	if (!scav || !["armor", "backpack"].includes(slot)) return fail("Боец или слот не найден.");
+	if (!scav || !["armor", "helmet", "backpack"].includes(slot)) return fail("Боец или слот не найден.");
 	if (scav.status === "raiding") return fail("Снаряжение нельзя сменить во время рейда.");
-	const key = slot === "armor" ? "armorItemId" : "backpackItemId";
+	const key = slot === "armor" ? "armorItemId" : slot === "helmet" ? "helmetItemId" : "backpackItemId";
 	if (itemId === null) { scav.loadout[key] = null; return ok("Предмет возвращён на стойку."); }
 	const item = state.gearItems.find((gear) => gear.id === itemId);
 	if (!item || getGearModel(item).slot !== slot) return fail("Предмет не подходит этому слоту.");
@@ -859,7 +860,7 @@ export function getGearRepairCost(item: GearItem): UpgradeCost {
 	return { money: Math.ceil(model.money * (100 - item.durability) / 180), scrap: Math.ceil((100 - item.durability) / 15) };
 }
 function gearInRaid(state: GameState, item: GearItem): boolean {
-	return state.scavs.some((scav) => scav.status === "raiding" && [scav.loadout.armorItemId, scav.loadout.backpackItemId].includes(item.id));
+	return state.scavs.some((scav) => scav.status === "raiding" && [scav.loadout.armorItemId, scav.loadout.helmetItemId, scav.loadout.backpackItemId].includes(item.id));
 }
 export function repairGear(state: GameState, itemId: string): ActionResult {
 	const item = state.gearItems.find((gear) => gear.id === itemId);
@@ -879,7 +880,7 @@ export function recycleGear(state: GameState, itemId: string): ActionResult {
 	const amount = getGearRecycleYield(item);
 	if (state.supplies.scrap + amount > getSupplyCapacity(state).scrap) return fail("Нет места для деталей.");
 	state.gearItems = state.gearItems.filter((gear) => gear.id !== item.id);
-	for (const scav of state.scavs) for (const key of ["armorItemId", "backpackItemId"] as const) if (scav.loadout[key] === item.id) scav.loadout[key] = null;
+	for (const scav of state.scavs) for (const key of ["armorItemId", "helmetItemId", "backpackItemId"] as const) if (scav.loadout[key] === item.id) scav.loadout[key] = null;
 	state.supplies.scrap += amount;
 	return ok(`Разобрано: +${amount} деталей.`);
 }
@@ -1084,6 +1085,7 @@ function startRaid(state: GameState, scav: Scav, map: RaidMap, now: number, isAu
 	const quote = getRaidQuote(state, scav, map);
 	const stats = getLoadoutStats(state, scav);
 	const armor = state.gearItems.find((item) => item.id === scav.loadout.armorItemId);
+	const helmet = state.gearItems.find((item) => item.id === scav.loadout.helmetItemId);
 	const pack = state.gearItems.find((item) => item.id === scav.loadout.backpackItemId);
 	const raid: Raid = {
 		id: id(state, "raid"), scavId: scav.id, scavName: scav.name, mapId: map.id,
@@ -1101,6 +1103,7 @@ function startRaid(state: GameState, scav: Scav, map: RaidMap, now: number, isAu
 			trail: [{ at: now, label: "Выход · этап 1", text: `${scav.name} вышел в «${map.name}». ${TACTICS[scav.tactic].label}: ${quote.money} ₽, ${quote.ammo} патронов${quote.intel ? `, ${quote.intel} разведданных` : ""}${quote.medicine ? ", аптечка" : ""}.`, kind: "neutral" }],
 			ammoMultiplier: getWeaponRole(state.weapons.find((item) => item.id === scav.weaponInstanceId)!).ammoMultiplier * getWeaponStats(state.weapons.find((item) => item.id === scav.weaponInstanceId)!).ammoMultiplier * stats.ammoMultiplier,
 			loadout: { armorModelId: armor?.modelId ?? "none", armorCondition: armor?.durability ?? 0,
+				helmetModelId: helmet?.modelId ?? null, helmetCondition: helmet?.durability ?? 0,
 				packModelId: pack?.modelId ?? "none", packCondition: pack?.durability ?? 0,
 				ammoType: scav.loadout.ammoType, medkit: scav.loadout.medkit } },
 	};
@@ -1523,9 +1526,9 @@ function fitCargo(cargo: Cargo, capacity: number) {
 	while (getCargoWeight(cargo) > capacity && cargo.modules.length > 0) cargo.modules.pop();
 }
 function wearEquippedGear(state: GameState, scav: Scav, stage: number, failed: boolean) {
-	for (const key of ["armorItemId", "backpackItemId"] as const) {
+	for (const key of ["armorItemId", "helmetItemId", "backpackItemId"] as const) {
 		const item = state.gearItems.find((gear) => gear.id === scav.loadout[key]);
-		if (item) item.durability = Math.max(0, item.durability - (key === "armorItemId" ? 4 + stage * 2 + (failed ? 8 : 0) : 3 + stage));
+		if (item) item.durability = Math.max(0, item.durability - (key === "backpackItemId" ? 3 + stage : 4 + stage * 2 + (failed ? 8 : 0)));
 	}
 }
 /** Resolve a checkpoint exactly once. A successful manual checkpoint remains an active raid. */
@@ -1548,7 +1551,8 @@ function reachCheckpoint(state: GameState, raid: Raid, now: number): RaidReport 
 	}
 	const discoveriesText = expedition.discoveries.slice(discoveriesBefore).map((blueprint) => BLUEPRINTS[blueprint]!.label).join(", ");
 	const armor = ownValue(GEAR_MODEL_BY_ID, expedition.loadout.armorModelId);
-	const protection = (armor?.protection ?? 0) * expedition.loadout.armorCondition / 100;
+	const helmet = expedition.loadout.helmetModelId ? ownValue(GEAR_MODEL_BY_ID, expedition.loadout.helmetModelId) : undefined;
+	const protection = (armor?.protection ?? 0) * expedition.loadout.armorCondition / 100 + (helmet?.protection ?? 0) * (expedition.loadout.helmetCondition ?? 0) / 100;
 	const injury = TACTICS[raid.tactic].injuryMultiplier * (1 - raid.armorLevel * 0.1) * (1 - protection * 2)
 		* (expedition.perks.includes("fieldMedic") ? 0.5 : 1) * (expedition.loadout.medkit ? 0.75 : 1);
 	weapon.durability = Math.max(0, weapon.durability - Math.ceil((5 + random() * (7 + map.danger * 8) + expedition.stage * 2)
@@ -1664,7 +1668,7 @@ function finishExpedition(state: GameState, raid: Raid, success: boolean, now: n
 		}
 		if (report.lostScav) {
 			state.scavs = state.scavs.filter((item) => item.id !== scav.id); state.stats.lostScavs++;
-			state.gearItems = state.gearItems.filter((item) => ![scav.loadout.armorItemId, scav.loadout.backpackItemId].includes(item.id));
+			state.gearItems = state.gearItems.filter((item) => ![scav.loadout.armorItemId, scav.loadout.helmetItemId, scav.loadout.backpackItemId].includes(item.id));
 		}
 		report.description = `Выход сорван на этапе ${expedition.stage}. Невынесенный груз потерян. ${report.lostScav ? "Боец пропал." : report.lostWeapon ? "Боец вернулся без оружия." : "Боец вернулся раненым."}`;
 	}
@@ -2046,9 +2050,10 @@ function parseGear(value: unknown): GearItem {
 }
 function parseLoadout(value: unknown): Loadout {
 	const source = record(value);
-	fields(source, ["armorItemId", "backpackItemId", "ammoType", "medkit"]);
+	fields(source, ["armorItemId", "helmetItemId", "backpackItemId", "ammoType", "medkit"]);
 	if (source.ammoType !== "standard" && source.ammoType !== "piercing") throw new Error("ammo-type");
 	return { armorItemId: source.armorItemId === null ? null : string(source.armorItemId),
+		helmetItemId: source.helmetItemId === undefined || source.helmetItemId === null ? null : string(source.helmetItemId),
 		backpackItemId: source.backpackItemId === null ? null : string(source.backpackItemId),
 		ammoType: source.ammoType, medkit: bool(source.medkit) };
 }
@@ -2070,12 +2075,16 @@ function parseExpedition(value: unknown, version: number): Expedition | null {
 	const source = record(value);
 	fields(source, ["stage", "status", "branch", "cargo", "perks", "offers", "discoveries", "loadout", "autoDepth", "baseChance", "baseDuration", "capacity", "ammoMultiplier", "trail", ...(version >= 4 ? ["legacyLoot", "gunCombatBonus"] : [])]);
 	const loadout = record(source.loadout);
-	fields(loadout, ["armorModelId", "armorCondition", "packModelId", "packCondition", "ammoType", "medkit"]);
+	fields(loadout, ["armorModelId", "armorCondition", "helmetModelId", "helmetCondition", "packModelId", "packCondition", "ammoType", "medkit"]);
 	if (source.status !== "travel" && source.status !== "choice") throw new Error("checkpoint-status");
 	if (loadout.ammoType !== "standard" && loadout.ammoType !== "piercing") throw new Error("ammo-type");
 	const armorModelId = loadout.armorModelId === "none" ? "none" : known(loadout.armorModelId, GEAR_MODEL_BY_ID);
+	const helmetModelId = loadout.helmetModelId === undefined || loadout.helmetModelId === null ? null : known(loadout.helmetModelId, GEAR_MODEL_BY_ID);
+	const helmetCondition = loadout.helmetCondition === undefined ? 0 : number(loadout.helmetCondition, 100);
 	const packModelId = loadout.packModelId === "none" ? "none" : known(loadout.packModelId, GEAR_MODEL_BY_ID);
 	if (armorModelId !== "none" && ownValue(GEAR_MODEL_BY_ID, armorModelId)?.slot !== "armor") throw new Error("armor-slot");
+	if (helmetModelId !== null && ownValue(GEAR_MODEL_BY_ID, helmetModelId)?.slot !== "helmet") throw new Error("helmet-slot");
+	if (helmetModelId === null && helmetCondition !== 0) throw new Error("helmet-condition");
 	if (packModelId !== "none" && ownValue(GEAR_MODEL_BY_ID, packModelId)?.slot !== "backpack") throw new Error("pack-slot");
 	const expedition: Expedition = { stage: number(source.stage, 3, 1, true), status: source.status,
 		branch: known(source.branch, EXPEDITION_BRANCHES) as ExpeditionBranch, cargo: parseCargo(source.cargo, version),
@@ -2083,9 +2092,9 @@ function parseExpedition(value: unknown, version: number): Expedition | null {
 		perks: array(source.perks, 2, (value) => known(value, RUN_PERKS) as RunPerk),
 		offers: array(source.offers, 2, (value) => known(value, RUN_PERKS) as RunPerk),
 		discoveries: array(source.discoveries, Object.keys(BLUEPRINTS).length, (value) => known(value, BLUEPRINTS)),
-		loadout: { armorModelId, armorCondition: number(loadout.armorCondition, 100), packModelId, packCondition: number(loadout.packCondition, 100), ammoType: loadout.ammoType, medkit: bool(loadout.medkit) },
+		loadout: { armorModelId, armorCondition: number(loadout.armorCondition, 100), helmetModelId, helmetCondition, packModelId, packCondition: number(loadout.packCondition, 100), ammoType: loadout.ammoType, medkit: bool(loadout.medkit) },
 		autoDepth: number(source.autoDepth, 3, 1, true), baseChance: number(source.baseChance, 1), baseDuration: number(source.baseDuration, 600, 20),
-		capacity: number(source.capacity, version >= 6 ? 46 : 40, version >= 6 ? 8 : 10), ammoMultiplier: number(source.ammoMultiplier, 4, 0.2), trail: parseEvents(source.trail, 9) };
+		capacity: number(source.capacity, version >= 6 ? 50 : 42, version >= 6 ? 8 : 10), ammoMultiplier: number(source.ammoMultiplier, 4, 0.2), trail: parseEvents(source.trail, 9) };
 	unique(expedition.perks); unique(expedition.offers); unique(expedition.discoveries);
 	if (expedition.perks.length !== expedition.stage - 1 || expedition.offers.some((perk) => expedition.perks.includes(perk))
 		|| (expedition.status === "choice" && expedition.stage < 3 ? expedition.offers.length !== 2 : expedition.offers.length !== 0)
@@ -2274,7 +2283,7 @@ function parseScav(value: unknown, version: number): Scav {
 		raids: number(source.raids, 1e9, 0, true),
 		tactic: version === 1 ? "balanced" : known(source.tactic, TACTICS) as RaidTactic,
 		gear,
-		loadout: version >= 3 ? parseLoadout(source.loadout) : { armorItemId: null, backpackItemId: null, ammoType: "standard", medkit: false },
+		loadout: version >= 3 ? parseLoadout(source.loadout) : { armorItemId: null, helmetItemId: null, backpackItemId: null, ammoType: "standard", medkit: false },
 		assignment: version >= 5 && source.assignment !== null ? string(source.assignment) : null,
 		profile: version >= 6 ? parseScavProfile(source.profile) : neutralScavProfile(),
 		autoRaid,
@@ -2453,7 +2462,7 @@ export function parseSave(raw: string): GameState | null {
 				scav.weaponInstanceId ? [scav.weaponInstanceId] : []
 			)
 		);
-		unique(state.scavs.flatMap((scav) => [scav.loadout.armorItemId, scav.loadout.backpackItemId].filter((value): value is string => value !== null)));
+		unique(state.scavs.flatMap((scav) => [scav.loadout.armorItemId, scav.loadout.helmetItemId, scav.loadout.backpackItemId].filter((value): value is string => typeof value === "string")));
 		unique(state.scavs.flatMap((scav) => scav.profile.candidateId ? [scav.profile.candidateId] : []));
 		if (state.recruitment.board.some((candidate) => state.scavs.some((scav) => scav.profile.candidateId === candidate.id))) throw new Error("recruit-already-hired");
 		if (
@@ -2492,9 +2501,9 @@ export function parseSave(raw: string): GameState | null {
 				throw new Error("health-status");
 			const workplaces = state.shelter.rooms.filter((room) => room.workerIds.includes(scav.id));
 			if (scav.assignment === null ? workplaces.length !== 0 : workplaces.length !== 1 || workplaces[0]!.id !== scav.assignment || scav.status === "raiding") throw new Error("worker-owner");
-			for (const [key, slot] of [["armorItemId", "armor"], ["backpackItemId", "backpack"]] as const) {
+			for (const [key, slot] of [["armorItemId", "armor"], ["helmetItemId", "helmet"], ["backpackItemId", "backpack"]] as const) {
 				const gearId = scav.loadout[key];
-				if (gearId !== null && !state.gearItems.some((item) => item.id === gearId && getGearModel(item).slot === slot)) throw new Error("gear-owner");
+				if (gearId != null && !state.gearItems.some((item) => item.id === gearId && getGearModel(item).slot === slot)) throw new Error("gear-owner");
 			}
 		}
 		for (const raid of state.raids) {
@@ -2519,9 +2528,11 @@ export function parseSave(raw: string): GameState | null {
 			if (raid.expedition) {
 				const scav = state.scavs.find((item) => item.id === raid.scavId)!;
 				const armor = state.gearItems.find((item) => item.id === scav.loadout.armorItemId);
+				const helmet = state.gearItems.find((item) => item.id === scav.loadout.helmetItemId);
 				const pack = state.gearItems.find((item) => item.id === scav.loadout.backpackItemId);
 				const loadout = raid.expedition.loadout;
 				if (loadout.armorModelId !== (armor?.modelId ?? "none") || loadout.packModelId !== (pack?.modelId ?? "none")
+					|| (loadout.helmetModelId ?? null) !== (helmet?.modelId ?? null)
 					|| loadout.ammoType !== scav.loadout.ammoType || loadout.medkit !== scav.loadout.medkit
 					|| raid.expedition.discoveries.some((blueprint) => !state.blueprints.includes(blueprint))
 					|| (raid.isAuto && raid.expedition.status === "choice")) throw new Error("raid-loadout");

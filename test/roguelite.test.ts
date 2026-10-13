@@ -298,10 +298,13 @@ describe("checkpoint expeditions", () => {
 		const initial = createGame(NOW);
 		expect(craftGear(initial, "light_vest").ok).toBe(true);
 		const lostGearId = initial.gearItems.at(-1)!.id;
+		expect(craftGear(initial, "steel_helmet").ok).toBe(true);
+		const lostHelmetId = initial.gearItems.at(-1)!.id;
 		expect(craftGear(initial, "scout_pack").ok).toBe(true);
 		const safeGearId = initial.gearItems.at(-1)!.id;
 		const scavId = initial.scavs[0]!.id;
 		expect(equipGear(initial, scavId, "armor", lostGearId).ok).toBe(true);
+		expect(equipGear(initial, scavId, "helmet", lostHelmetId).ok).toBe(true);
 		expect(dispatchRaid(initial, scavId, "courtyard", NOW).ok).toBe(true);
 		initial.raids[0]!.chance = 1;
 		advance(initial, initial.raids[0]!.endsAt);
@@ -322,6 +325,7 @@ describe("checkpoint expeditions", () => {
 		expect(lethal!.history[0]!.money).toBe(0);
 		expect(lethal!.scavs.some((scav) => scav.id === scavId)).toBe(false);
 		expect(lethal!.gearItems.some((item) => item.id === lostGearId)).toBe(false);
+		expect(lethal!.gearItems.some((item) => item.id === lostHelmetId)).toBe(false);
 		expect(lethal!.gearItems.some((item) => item.id === safeGearId)).toBe(true);
 		expect(lethal!.blueprints).toContain("route:courtyard");
 		expect(lethal!.blueprints).toContain("plate_armor");
@@ -332,6 +336,7 @@ describe("checkpoint expeditions", () => {
 		expect(loaded.state.stats.raidsCompleted).toBe(1);
 		expect(loaded.state.scavs.some((scav) => scav.id === scavId)).toBe(false);
 		expect(loaded.state.gearItems.some((item) => item.id === lostGearId)).toBe(false);
+		expect(loaded.state.gearItems.some((item) => item.id === lostHelmetId)).toBe(false);
 		expect(parseSave(saveGame(loaded.state))).not.toBeNull();
 	});
 

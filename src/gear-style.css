@@ -1,0 +1,9 @@
+.logistics-card .gear-illustration {
+	display: block;
+	width: 100%;
+	height: 108px;
+	margin: 12px 0 16px;
+	padding: 8px;
+	border-radius: 8px;
+	background: radial-gradient(ellipse at center, #3c4630 0, #172119 75%);
+}

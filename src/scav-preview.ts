@@ -2,19 +2,25 @@ import Phaser from "phaser";
 import { PERSONALITY_BY_ID, WEAPONS } from "./game/data";
 import type { WeaponInstance } from "./game/engine";
 import { FACTORY_KITS, MODULE_BY_ID, MODULE_MODELS, MODULE_SLOTS, RECEIVER_INFO, type ModuleInstance, type ModuleSlot } from "./game/modules";
+import { GEAR_MODELS } from "./game/systems";
+import { SCAV_EQUIPMENT_ATLASES } from "./scav-gear-art";
 import { SCAV_APPEARANCES } from "./game/scav-appearances";
 import { ScavEquipment } from "./scav-equipment";
 import type { ScavVisualLoadout } from "./scav-loadout";
-import { SCAV_ORIGIN, SCAV_POSES, SCAV_REFERENCE_HEIGHT, scavFrame, scavTexture, scavTorsoAnchor, type ScavDirection } from "./scav-isometric";
+import { SCAV_ORIGIN, SCAV_POSES, SCAV_REFERENCE_HEIGHT, scavFrame, scavTexture, scavTorsoAnchor, scavHeadAnchor, type ScavDirection } from "./scav-isometric";
 
 const gallery = document.querySelector<HTMLElement>("#gallery")!;
 const status = document.querySelector<HTMLElement>("#load-status")!;
 const select = (id: string) => document.querySelector<HTMLSelectElement>(`#${id}`)!;
-const controls = { direction: select("direction"), pose: select("pose"), armor: select("armor"), pack: select("pack"), carry: select("carry"), weapon: select("weapon"), optic: select("optic"), muzzle: select("muzzle") };
+const controls = { direction: select("direction"), pose: select("pose"), armor: select("armor"), helmet: select("helmet"), pack: select("pack"), carry: select("carry"), weapon: select("weapon") };
+const moduleControls = Object.fromEntries(MODULE_SLOTS.map((slot) => [slot, select(slot)])) as Record<ModuleSlot, HTMLSelectElement>;
+const resetWeapon = document.querySelector<HTMLButtonElement>("#reset-weapon")!;
+const weaponSummary = document.querySelector<HTMLElement>("#weapon-summary")!;
 type Point = { x: number; y: number };
 type Model = { id: number; root: Phaser.GameObjects.Container; body: Phaser.GameObjects.Container; poses: Phaser.GameObjects.Image[]; equipment: ScavEquipment; name: Phaser.GameObjects.Text; personality: Phaser.GameObjects.Text; badge: Phaser.GameObjects.Text };
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 const part = (modelId: string, slot: ModuleSlot): ModuleInstance => ({ id: `preview-${modelId}-${slot}`, modelId, durability: 100, foundAt: 0 });
+const weaponBuilds = new Map<string, WeaponInstance>();
 
 /** This page owns only demonstration props; it never creates or loads game state. */
 function factoryWeapon(weaponId: string): WeaponInstance {
@@ -26,15 +32,18 @@ function factoryWeapon(weaponId: string): WeaponInstance {
 	return { id: `preview-${weaponId}`, weaponId, durability: 100, attachments: { optic: 0, magazine: 0, stock: 0 }, foundAt: 0, modules };
 }
 
-function compatibleOptions(slot: "optic" | "muzzle", weapon: WeaponInstance) {
+function compatibleOptions(slot: ModuleSlot, weapon: WeaponInstance) {
 	const info = RECEIVER_INFO[weapon.weaponId]!;
-	const mounts = Object.values(weapon.modules).flatMap((item) => MODULE_BY_ID[item.modelId]?.providesMounts ?? []);
+	const mounts = Object.entries(weapon.modules).filter(([installedSlot]) => installedSlot !== slot).flatMap(([, item]) => MODULE_BY_ID[item!.modelId]?.providesMounts ?? []);
 	return MODULE_MODELS.filter((model) => model.slot === slot && (!model.weaponId || model.weaponId === weapon.weaponId)
 		&& (model.platforms.includes("*") || model.platforms.includes(info.platform))
 		&& (model.calibers.includes("*") || model.calibers.includes(info.caliber))
-		&& (!model.requiresMount || mounts.includes(model.requiresMount))).slice(0, 4);
+		&& (!model.requiresMount || mounts.includes(model.requiresMount)));
 }
 
+for (const [input, slot] of [[controls.armor, "armor"], [controls.helmet, "helmet"], [controls.pack, "backpack"]] as const) {
+	for (const model of GEAR_MODELS.filter((model) => model.slot === slot)) input.add(new Option(model.label, model.id));
+}
 for (const weapon of WEAPONS) controls.weapon.add(new Option(weapon.name, weapon.id));
 controls.weapon.value = "ak74";
 const roster = document.querySelector<HTMLOListElement>("#accessible-roster")!;
@@ -44,26 +53,51 @@ for (const look of SCAV_APPEARANCES) {
 	roster.append(item);
 }
 
-let selectedLoadout: ScavVisualLoadout = { armorModelId: null, packModelId: null, weapon: null };
-function updateSelections(rebuildOptions = false): void {
-	const weapon = controls.weapon.value ? factoryWeapon(controls.weapon.value) : null;
-	if (rebuildOptions) for (const slot of ["optic", "muzzle"] as const) {
-		const input = controls[slot], previous = input.value;
-		input.replaceChildren(new Option(slot === "optic" ? "Без прицела" : "Без насадки", ""));
+let selectedLoadout: ScavVisualLoadout = { armorModelId: null, helmetModelId: null, packModelId: null, weapon: null };
+function selectedWeapon(): WeaponInstance | null {
+	const weaponId = controls.weapon.value;
+	if (!weaponId) return null;
+	if (!weaponBuilds.has(weaponId)) weaponBuilds.set(weaponId, factoryWeapon(weaponId));
+	return weaponBuilds.get(weaponId)!;
+}
+function refreshModuleControls(weapon: WeaponInstance | null): void {
+	if (weapon) for (const slot of MODULE_SLOTS) {
+		const installed = weapon.modules[slot];
+		if (installed && !compatibleOptions(slot, weapon).some((model) => model.id === installed.modelId)) delete weapon.modules[slot];
+	}
+	for (const slot of MODULE_SLOTS) {
+		const input = moduleControls[slot];
+		input.replaceChildren(new Option("Не установлено", ""));
 		if (weapon) for (const model of compatibleOptions(slot, weapon)) input.add(new Option(model.label, model.id));
-		input.value = [...input.options].some((option) => option.value === previous) ? previous : "";
+		input.value = weapon?.modules[slot]?.modelId ?? "";
 		input.disabled = !weapon || input.options.length < 2;
 	}
-	if (weapon) for (const slot of ["optic", "muzzle"] as const) {
-		const modelId = controls[slot].value;
-		if (modelId && compatibleOptions(slot, weapon).some((model) => model.id === modelId)) weapon.modules[slot] = part(modelId, slot);
-	}
-	selectedLoadout = { armorModelId: controls.armor.value || null, packModelId: controls.pack.value || null, weapon };
-	const direction = controls.direction.selectedOptions[0]!.textContent;
-	gallery.setAttribute("aria-label", `32 диких. ${direction}. ${controls.pose.selectedOptions[0]!.textContent}. ${controls.armor.selectedOptions[0]!.textContent}. ${controls.pack.selectedOptions[0]!.textContent}. ${controls.weapon.selectedOptions[0]!.textContent}.`);
+	resetWeapon.disabled = !weapon;
+}
+function updateSelections(rebuildOptions = false): void {
+	const weapon = selectedWeapon();
+	if (rebuildOptions) refreshModuleControls(weapon);
+	selectedLoadout = { armorModelId: controls.armor.value || null, helmetModelId: controls.helmet.value || null, packModelId: controls.pack.value || null, weapon };
+	const missing = weapon ? RECEIVER_INFO[weapon.weaponId]!.requiredSlots.filter((slot) => !weapon.modules[slot]) : [];
+	const count = weapon ? Object.keys(weapon.modules).length : 0;
+	weaponSummary.textContent = !weapon ? "Без оружия" : missing.length ? `Неполная сборка · установлено ${count} / 8 деталей` : `Текущая сборка · установлено ${count} / 8 деталей`;
+	const labels = [controls.direction, controls.pose, controls.armor, controls.helmet, controls.pack, controls.weapon].map((input) => input.selectedOptions[0]!.textContent);
+	gallery.setAttribute("aria-label", `32 диких. ${labels.join(". ")}. ${weaponSummary.textContent}.`);
 }
 updateSelections(true);
 for (const [name, input] of Object.entries(controls)) input.addEventListener("change", () => updateSelections(name === "weapon"));
+for (const slot of MODULE_SLOTS) moduleControls[slot].addEventListener("change", () => {
+	const weapon = selectedWeapon();
+	if (!weapon) return;
+	const modelId = moduleControls[slot].value;
+	if (modelId && compatibleOptions(slot, weapon).some((model) => model.id === modelId)) weapon.modules[slot] = part(modelId, slot);
+	else delete weapon.modules[slot];
+	updateSelections(true);
+});
+resetWeapon.addEventListener("click", () => {
+	if (controls.weapon.value) weaponBuilds.set(controls.weapon.value, factoryWeapon(controls.weapon.value));
+	updateSelections(true);
+});
 
 class ScavPreview extends Phaser.Scene {
 	private models: Model[] = [];
@@ -76,7 +110,7 @@ class ScavPreview extends Phaser.Scene {
 	constructor() { super("ScavPreview"); }
 	preload(): void {
 		for (const look of SCAV_APPEARANCES) this.load.atlas(scavTexture(look.id), `/art/scav-isometric-${look.id}.png`, `/art/scav-isometric-${look.id}.json`);
-		this.load.atlas("scav-equipment", "/art/scav-equipment.png", "/art/scav-equipment.json");
+		for (const atlas of SCAV_EQUIPMENT_ATLASES) this.load.atlas(atlas.key, `/art/${atlas.basename}.png`, `/art/${atlas.basename}.json`);
 		this.load.on(Phaser.Loader.Events.PROGRESS, (progress: number) => { status.textContent = `Загружаем модели · ${Math.round(progress * 100)}%`; });
 	}
 	create(): void {
@@ -126,7 +160,8 @@ class ScavPreview extends Phaser.Scene {
 		for (const model of this.models) {
 			model.poses.forEach((image, index) => image.setFrame(scavFrame(SCAV_POSES[index]!, direction)).setVisible(weights[index]! > .001).setAlpha(weights[index]!));
 			const torso = scavTorsoAnchor(model.poses.map((image) => ({ weight: image.visible ? image.alpha : 0, torso: (image.frame.customData as { custom?: { torso?: Point } }).custom?.torso })));
-			model.equipment.update(model.poses.length ? selectedLoadout : { armorModelId: null, packModelId: null, weapon: null }, direction, { working: pose === "work", mode: controls.carry.value as "held" | "slung" | "none", torso });
+			const head = scavHeadAnchor(model.poses.map((image) => ({ weight: image.visible ? image.alpha : 0, head: (image.frame.customData as { custom?: { head?: Point } }).custom?.head })));
+			model.equipment.update(model.poses.length ? selectedLoadout : { armorModelId: null, helmetModelId: null, packModelId: null, weapon: null }, direction, { working: pose === "work", mode: controls.carry.value as "held" | "slung" | "none", torso, head });
 		}
 	}
 }

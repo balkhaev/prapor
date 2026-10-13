@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#17221b" />
-    <meta name="description" content="Все дикие Прапора: примерка оружия, бронежилетов и рюкзаков с четырёх сторон." />
+    <meta name="description" content="Все дикие Прапора: примерка брони, шлемов, рюкзаков и собственной сборки оружия с четырёх сторон." />
     <title>Прапор · Дикие и экипировка</title>
     <style>
       @font-face { font-family: Manrope; src: url('/fonts/manrope.ttf') format('truetype'); font-display: swap; }
@@ -20,12 +20,17 @@
       a { color: #d4c499; text-decoration: none; }
       .back { flex-shrink: 0; margin-top: 23px; padding: 10px 14px; border: 1px solid #53604a; border-radius: 7px; font-size: 12px; }
       .back:hover { background: #2c3829; }
-      .controls { display: grid; grid-template-columns: repeat(5, minmax(110px, 1fr)); gap: 12px; padding: 17px 19px; background: #243024; border: 1px solid #45503d; border-radius: 10px; }
+      .controls { display: grid; grid-template-columns: repeat(6, minmax(110px, 1fr)); gap: 12px; padding: 17px 19px; background: #243024; border: 1px solid #45503d; border-radius: 10px; }
       label { display: flex; flex-direction: column; gap: 6px; color: #b4bea9; font-size: 11px; font-weight: 650; }
       select { min-width: 0; width: 100%; height: 37px; padding: 0 28px 0 10px; color: #eee6cf; background: #182319; border: 1px solid #576149; border-radius: 5px; font: 12px Manrope, sans-serif; }
       select:disabled { color: #899580; border-color: #3f4b39; opacity: .8; }
-      a:focus-visible, select:focus-visible { outline: 2px solid #e7c381; outline-offset: 4px; }
+      a:focus-visible, select:focus-visible, button:focus-visible { outline: 2px solid #e7c381; outline-offset: 4px; }
       .weapon-field { grid-column: 1 / 3; }
+      .build-controls { margin-top: 12px; grid-template-columns: repeat(4, minmax(130px, 1fr)); }
+      .build-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 18px 3px 0; }
+      .build-header p { margin: 0; color: #aeb8a5; font-size: 12px; line-height: 1.5; }
+      .build-header button { padding: 9px 12px; color: #eee6cf; background: #283426; border: 1px solid #576149; border-radius: 5px; font: 11px Manrope, sans-serif; cursor: pointer; }
+      .build-header button:disabled { opacity: .55; cursor: default; }
       .gallery-heading { display: flex; justify-content: space-between; align-items: center; margin: 22px 3px 12px; gap: 20px; }
       .gallery-heading p { margin: 0; color: #8d9b83; font: 11px 'IBM Plex Mono', monospace; }
       .gallery-heading strong { color: #d6cfaf; font-weight: 500; }
@@ -33,30 +38,40 @@
       #gallery canvas { display: block; width: 100%; }
       .note { margin: 17px 3px 0; color: #8b9780; font-size: 11px; line-height: 1.6; }
       .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
-      @media (max-width: 850px) { main { padding: 22px 22px 20px; } .controls { grid-template-columns: repeat(3, minmax(100px, 1fr)); } .weapon-field { grid-column: auto; } .back { margin-top: 0; } .heading { gap: 14px; } }
-      @media (max-width: 520px) { main { padding: 20px 16px; } .heading { flex-direction: column-reverse; gap: 18px; margin-bottom: 19px; } .back { padding: 7px 10px; } .controls { grid-template-columns: repeat(2, minmax(90px, 1fr)); gap: 10px; padding: 13px; } .weapon-field { grid-column: 1 / 3; } .gallery-heading { margin-top: 18px; } .intro { font-size: 12px; } }
+      @media (max-width: 850px) { main { padding: 22px 22px 20px; } .controls { grid-template-columns: repeat(3, minmax(100px, 1fr)); } .build-controls { grid-template-columns: repeat(2, minmax(100px, 1fr)); } .weapon-field { grid-column: auto; } .back { margin-top: 0; } .heading { gap: 14px; } }
+      @media (max-width: 520px) { main { padding: 20px 16px; } .heading { flex-direction: column-reverse; gap: 18px; margin-bottom: 19px; } .back { padding: 7px 10px; } .controls { grid-template-columns: repeat(2, minmax(90px, 1fr)); gap: 10px; padding: 13px; } .weapon-field { grid-column: 1 / 3; } .build-header { align-items: flex-start; } .gallery-heading { margin-top: 18px; } .intro { font-size: 12px; } }
     </style>
   </head>
   <body>
     <main>
       <header class="heading">
-        <div><p class="eyebrow">Прапор / Личное дело</p><h1>Дикие · модели и экипировка</h1><p class="intro">32 разных характера и внешности. Примерьте защиту, рюкзак и оружие — изменения сразу видны на каждом бойце.</p></div>
+        <div><p class="eyebrow">Прапор / Личное дело</p><h1>Дикие · модели и экипировка</h1><p class="intro">32 разных характера и внешности. Примерьте броню, шлем, рюкзак и соберите оружие по деталям — изменения сразу видны на каждом бойце.</p></div>
         <a class="back" href="/">← В убежище</a>
       </header>
       <form class="controls" aria-label="Примерка снаряжения" onsubmit="return false">
         <label>Ракурс<select id="direction"><option value="se">Спереди · справа</option><option value="sw">Спереди · слева</option><option value="ne">Сзади · справа</option><option value="nw">Сзади · слева</option></select></label>
         <label>Поза<select id="pose"><option value="idle">Стоит</option><option value="walk">Идёт</option><option value="work" selected>Готовность</option></select></label>
-        <label>Защита<select id="armor"><option value="">Без бронежилета</option><option value="light_vest">Лёгкий бронежилет</option><option value="plate_armor">Плитник</option></select></label>
-        <label>Рюкзак<select id="pack"><option value="">Без рюкзака</option><option value="scout_pack">Рюкзак разведчика</option><option value="cargo_pack">Грузовой рюкзак</option></select></label>
+        <label>Броня<select id="armor"><option value="">Без бронежилета</option></select></label>
+        <label>Шлем<select id="helmet"><option value="">Без шлема</option></select></label>
+        <label>Рюкзак<select id="pack"><option value="">Без рюкзака</option></select></label>
         <label>Как носить<select id="carry"><option value="held">В руках</option><option value="slung">На ремне</option><option value="none">Убрать оружие</option></select></label>
-        <label class="weapon-field">Оружие<select id="weapon"><option value="">Без оружия</option></select></label>
-        <label>Прицел<select id="optic"><option value="">Без прицела</option></select></label>
-        <label>Дульная насадка<select id="muzzle"><option value="">Без насадки</option></select></label>
+        <label class="weapon-field">Основа оружия<select id="weapon"><option value="">Без оружия</option></select></label>
+      </form>
+      <div class="build-header"><p id="weapon-summary" role="status" aria-live="polite">Текущая сборка оружия</p><button id="reset-weapon" type="button">Штатная сборка</button></div>
+      <form class="controls build-controls" aria-label="Детали текущей сборки оружия" onsubmit="return false">
+        <label>Ствольная коробка<select id="receiver"></select></label>
+        <label>Ствол<select id="barrel"></select></label>
+        <label>Цевьё<select id="handguard"></select></label>
+        <label>Приклад<select id="stock"></select></label>
+        <label>Магазин<select id="magazine"></select></label>
+        <label>Прицел<select id="optic"></select></label>
+        <label>Дульная насадка<select id="muzzle"></select></label>
+        <label>Рукоять<select id="foregrip"></select></label>
       </form>
       <div class="gallery-heading"><p><strong>Состав · 32 бойца</strong></p><p id="load-status" role="status" aria-live="polite">Загружаем модели…</p></div>
       <section id="gallery" role="img" aria-label="Все 32 диких в выбранной экипировке и ракурсе"></section>
       <ol id="accessible-roster" class="sr-only" aria-label="Список бойцов"></ol>
-      <p class="note">Одежда, защита, рюкзак и оружие меняются независимо. Примерка не изменяет бойцов или снаряжение в убежище.</p>
+      <p class="note">Броня, шлем, рюкзак и детали оружия меняются независимо. Для прицела, рукояти и дульной насадки нужны подходящие крепления. Примерка не изменяет бойцов или снаряжение в убежище.</p>
     </main>
     <script type="module" src="/src/scav-preview.ts"></script>
   </body>

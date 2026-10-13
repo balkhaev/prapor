@@ -1,0 +1,348 @@
+{
+  "frames": {
+    "padded_vest-se": {
+      "frame": {
+        "x": 69,
+        "y": 52,
+        "w": 215,
+        "h": 244
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 148,
+        "y": 134,
+        "w": 215,
+        "h": 244
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "padded_vest-sw": {
+      "frame": {
+        "x": 375,
+        "y": 51,
+        "w": 212,
+        "h": 247
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 150,
+        "y": 132,
+        "w": 212,
+        "h": 247
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "padded_vest-ne": {
+      "frame": {
+        "x": 676,
+        "y": 56,
+        "w": 210,
+        "h": 238
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 151,
+        "y": 137,
+        "w": 210,
+        "h": 238
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "padded_vest-nw": {
+      "frame": {
+        "x": 970,
+        "y": 55,
+        "w": 216,
+        "h": 239
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 148,
+        "y": 136,
+        "w": 216,
+        "h": 239
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "patrol_armor-se": {
+      "frame": {
+        "x": 56,
+        "y": 338,
+        "w": 233,
+        "h": 265
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 140,
+        "y": 124,
+        "w": 233,
+        "h": 265
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "patrol_armor-sw": {
+      "frame": {
+        "x": 365,
+        "y": 337,
+        "w": 236,
+        "h": 265
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 138,
+        "y": 124,
+        "w": 236,
+        "h": 265
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "patrol_armor-ne": {
+      "frame": {
+        "x": 668,
+        "y": 343,
+        "w": 236,
+        "h": 260
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 138,
+        "y": 126,
+        "w": 236,
+        "h": 260
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "patrol_armor-nw": {
+      "frame": {
+        "x": 970,
+        "y": 340,
+        "w": 240,
+        "h": 266
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 136,
+        "y": 123,
+        "w": 240,
+        "h": 266
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "assault_armor-se": {
+      "frame": {
+        "x": 53,
+        "y": 639,
+        "w": 235,
+        "h": 247
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 138,
+        "y": 132,
+        "w": 235,
+        "h": 247
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "assault_armor-sw": {
+      "frame": {
+        "x": 358,
+        "y": 639,
+        "w": 241,
+        "h": 247
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 136,
+        "y": 132,
+        "w": 241,
+        "h": 247
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "assault_armor-ne": {
+      "frame": {
+        "x": 661,
+        "y": 644,
+        "w": 242,
+        "h": 243
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 135,
+        "y": 134,
+        "w": 242,
+        "h": 243
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "assault_armor-nw": {
+      "frame": {
+        "x": 973,
+        "y": 646,
+        "w": 244,
+        "h": 241
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 134,
+        "y": 136,
+        "w": 244,
+        "h": 241
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "heavy_armor-se": {
+      "frame": {
+        "x": 50,
+        "y": 891,
+        "w": 240,
+        "h": 297
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 136,
+        "y": 108,
+        "w": 240,
+        "h": 297
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "heavy_armor-sw": {
+      "frame": {
+        "x": 358,
+        "y": 892,
+        "w": 241,
+        "h": 296
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 136,
+        "y": 108,
+        "w": 241,
+        "h": 296
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "heavy_armor-ne": {
+      "frame": {
+        "x": 657,
+        "y": 895,
+        "w": 251,
+        "h": 291
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 130,
+        "y": 110,
+        "w": 251,
+        "h": 291
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    },
+    "heavy_armor-nw": {
+      "frame": {
+        "x": 963,
+        "y": 894,
+        "w": 254,
+        "h": 293
+      },
+      "rotated": false,
+      "trimmed": true,
+      "spriteSourceSize": {
+        "x": 129,
+        "y": 110,
+        "w": 254,
+        "h": 293
+      },
+      "sourceSize": {
+        "w": 512,
+        "h": 512
+      }
+    }
+  },
+  "meta": {
+    "image": "scav-armor-expanded.png",
+    "size": {
+      "w": 1254,
+      "h": 1254
+    },
+    "scale": "1",
+    "directions": [
+      "se",
+      "sw",
+      "ne",
+      "nw"
+    ],
+    "equipmentHeightByModel": {
+      "padded_vest": 241.5,
+      "patrol_armor": 265.0,
+      "assault_armor": 245.0,
+      "heavy_armor": 294.5
+    },
+    "origin": {
+      "x": 256,
+      "y": 256
+    }
+  }
+}

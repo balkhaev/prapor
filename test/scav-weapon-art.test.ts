@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { weaponActorArt } from "../src/armory-art";
+import { weaponActorArt, weaponBuildArt } from "../src/armory-art";
 import { getWeaponBuildIssues, type WeaponInstance } from "../src/game/engine";
 import { WEAPONS } from "../src/game/data";
 import { FACTORY_KITS, MODULE_BY_ID, type ModuleInstance, type ModuleSlot } from "../src/game/modules";
@@ -23,6 +23,7 @@ describe("modular weapons carried by scav actors", () => {
 			const art = weaponActorArt(weapon);
 			expect([art.width, art.height, art.grip.x, art.grip.y, art.muzzle.x, art.muzzle.y].every(Number.isFinite)).toBe(true);
 			expect(art.width).toBeGreaterThan(0); expect(art.height).toBeGreaterThan(0);
+			expect(art.referenceWidth).toBe(art.width);
 			for (const anchor of [art.grip, art.muzzle]) {
 				expect(anchor.x).toBeGreaterThanOrEqual(0); expect(anchor.x).toBeLessThanOrEqual(art.width);
 				expect(anchor.y).toBeGreaterThanOrEqual(0); expect(anchor.y).toBeLessThanOrEqual(art.height);
@@ -69,10 +70,69 @@ describe("modular weapons carried by scav actors", () => {
 		expect(suppressed.svg).not.toBe(withOptic.svg);
 		expect(suppressed.svg).toContain('data-module-slot="muzzle"');
 		expect(suppressed.width).toBeGreaterThan(withOptic.width);
+		expect(suppressed.referenceWidth).toBe(plain.referenceWidth);
 		expect(suppressed.muzzle.x - suppressed.grip.x).toBeGreaterThan(withOptic.muzzle.x - withOptic.grip.x + 70);
 		expect(suppressed.muzzle.x).toBeLessThan(suppressed.width);
 		expect(JSON.stringify(weapon)).toBe(suppressedBefore);
 		delete weapon.modules.optic; delete weapon.modules.muzzle;
 		expect(weaponActorArt(weapon)).toEqual(plain);
+	});
+
+	test("the current build uses identical installed geometry on the bench and the carried gun, with no factory substitutes", () => {
+		const weapon = factoryGun("sks");
+		for (const modelId of ["handguard-sks-rail", "barrel-sks-7.62x39-long", "stock-sks-tactical", "magazine-sks-7.62x39-extended", "foregrip-vertical", "muzzle-7.62x39-suppressor", "optic-scope"]) replacePart(weapon, modelId);
+		const actor = weaponActorArt(weapon), bench = weaponBuildArt(weapon);
+		const group = (svg: string, slot: ModuleSlot) => svg.match(new RegExp(`<g data-module-slot="${slot}"[^>]*>([\\s\\S]*?)</g>`))?.[1];
+		for (const slot of Object.keys(weapon.modules) as ModuleSlot[]) {
+			expect(group(actor.svg, slot)).toBeDefined();
+			expect(group(actor.svg, slot)).toBe(group(bench, slot));
+			const copy = structuredClone(weapon); delete copy.modules[slot];
+			expect(weaponActorArt(copy).svg).not.toContain(`data-module-slot="${slot}"`);
+		}
+		const factory = weaponActorArt(factoryGun("sks"));
+		expect(actor.referenceWidth).toBe(factory.referenceWidth);
+		// This is the same physical scale used by the character: longer builds retain
+		// their receiver size and move the muzzle farther from the gripping hand.
+		const distance = (art: ReturnType<typeof weaponActorArt>) => (art.muzzle.x - art.grip.x) / art.referenceWidth;
+		expect(distance(actor)).toBeGreaterThan(distance(factory));
+		replacePart(weapon, "barrel-sks-7.62x39-short");
+		const short = weaponActorArt(weapon);
+		expect(short.referenceWidth).toBe(actor.referenceWidth);
+		expect(distance(short)).toBeLessThan(distance(actor));
+		const empty = factoryGun("sks"); empty.modules = {};
+		expect(weaponActorArt(empty).svg).not.toContain("data-module-slot=");
+	});
+
+	test("stock and magazine upgrades remain visibly different on compact guns, pistols and belt-fed guns", () => {
+		for (const weaponId of ["pp91", "toz", "asval"]) {
+			const weapon = factoryGun(weaponId), before = weaponActorArt(weapon);
+			const platform = weaponId === "pp91" ? "kedr" : weaponId === "asval" ? "val" : "toz";
+			replacePart(weapon, `stock-${platform}-tactical`);
+			expect(weaponActorArt(weapon).svg).not.toBe(before.svg);
+		}
+		for (const [weaponId, platform, caliber] of [["pm", "pm", "9x18"], ["mosin", "mosin", "7.62x54"], ["pkp", "pkp", "7.62x54"], ["mp133", "mp133", "12g"]]) {
+			const weapon = factoryGun(weaponId!), before = weaponActorArt(weapon);
+			replacePart(weapon, `magazine-${platform}-${caliber}-extended`);
+			const extended = weaponActorArt(weapon);
+			expect(extended.svg).not.toBe(before.svg);
+			replacePart(weapon, `magazine-${platform}-${caliber}-quick`);
+			const quick = weaponActorArt(weapon);
+			expect(quick.svg).not.toBe(before.svg); expect(quick.svg).not.toBe(extended.svg);
+			expect(quick.referenceWidth).toBe(before.referenceWidth);
+		}
+	});
+
+	test("carried and bench wear follows visible condition buckets for the whole gun and individual parts", () => {
+		const weapon = factoryGun("ak74"), pristine = weaponActorArt(weapon), pristineBench = weaponBuildArt(weapon);
+		weapon.durability = 79;
+		const worn = weaponActorArt(weapon), wornBench = weaponBuildArt(weapon);
+		expect(worn.svg).not.toBe(pristine.svg); expect(wornBench).not.toBe(pristineBench);
+		weapon.durability = 61;
+		expect(weaponActorArt(weapon)).toEqual(worn); expect(weaponBuildArt(weapon)).toBe(wornBench);
+		weapon.modules.stock!.durability = 19;
+		const damagedStock = weaponActorArt(weapon), stockBench = weaponBuildArt(weapon);
+		expect(damagedStock.svg).not.toBe(worn.svg); expect(stockBench).not.toBe(wornBench);
+		weapon.modules.stock!.durability = 1;
+		expect(weaponActorArt(weapon)).toEqual(damagedStock); expect(weaponBuildArt(weapon)).toBe(stockBench);
 	});
 });

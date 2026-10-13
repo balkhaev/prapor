@@ -1,6 +1,6 @@
 import { WEAPON_BY_ID, type WeaponCategory } from "./game/data";
 import type { WeaponInstance } from "./game/engine";
-import { MODULE_BY_ID, RECEIVER_INFO, type ModuleModel, type ModuleSlot } from "./game/modules";
+import { FACTORY_KITS, MODULE_BY_ID, RECEIVER_INFO, type ModuleModel, type ModuleSlot } from "./game/modules";
 
 type Material = "steel" | "dark" | "wood" | "polymer" | "rubber" | "glass";
 type Bounds = readonly [number, number, number, number];
@@ -16,6 +16,7 @@ const escape = (value: string) => value.replace(/[&<>"']/g, (character) => ({
 })[character]!);
 const paintId = (value: string) => `armory-${value.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 100)}`;
 const slots: ModuleSlot[] = ["receiver", "barrel", "handguard", "stock", "magazine", "optic", "muzzle", "foregrip"];
+const drawOrder: readonly ModuleSlot[] = ["stock", "barrel", "magazine", "receiver", "handguard", "foregrip", "muzzle", "optic"];
 const labels: Record<ModuleSlot, string> = {
 	receiver: "Ствольная коробка", barrel: "Ствол", handguard: "Цевьё", stock: "Приклад",
 	magazine: "Магазин", optic: "Прицел", muzzle: "Дульное устройство", foregrip: "Рукоятка",
@@ -66,7 +67,7 @@ function geometry(slot: ModuleSlot, appearance: string, gun: Profile, paint: Pai
 		}
 		case "stock": {
 			if (pistol) return { outline: "M144 149h173v17H177l-25 41h-17z", detail: "", material: "steel", bounds: [132, 145, 186, 67] };
-			if (appearance === "folding" || gun.id === "toz" || gun.id === "pp91" || gun.id === "asval") return { outline: "M116 147h196l15 10v14H139v48h-22z", material: "steel", bounds: [109, 142, 219, 80], detail: `<path d="M142 167h149l-145 34" fill="none" stroke="#7a856e" stroke-width="8"/><path d="M125 149v65" stroke="#acb49b" stroke-width="2"/><path d="M111 191h14v31h-14z" fill="${paint.rubber}"/>${fastener(309, 156, 4)}<path d="M287 160h18v8h-18" fill="#0d2113"/>` };
+			if (appearance === "folding" || (appearance === "factory" && ["toz", "pp91", "asval"].includes(gun.id))) return { outline: "M116 147h196l15 10v14H139v48h-22z", material: "steel", bounds: [109, 142, 219, 80], detail: `<path d="M142 167h149l-145 34" fill="none" stroke="#7a856e" stroke-width="8"/><path d="M125 149v65" stroke="#acb49b" stroke-width="2"/><path d="M111 191h14v31h-14z" fill="${paint.rubber}"/>${fastener(309, 156, 4)}<path d="M287 160h18v8h-18" fill="#0d2113"/>` };
 			if (appearance === "tactical" || appearance === "light") return { outline: "M111 150h177l34-5v24h-45l-14 50H112z", material: "polymer", bounds: [105, 136, 222, 87], detail: `<path d="M193 140h125v12H193z" fill="${paint.steel}"/><path d="M130 164h88v23h-84z" fill="#17271a"/><path d="M238 159h33l-12 50h-30z" fill="${paint.rubber}"/><path d="M113 151h12v70h-12z" fill="${paint.rubber}"/>${ribs(132, 197, 12, 13, 7)}${fastener(259, 173, 4)}<path d="M142 155h66" stroke="#a2a783" stroke-width="2" opacity=".65"/>` };
 			if (gun.id === "vss" || gun.id === "svd") return { outline: "M104 148q28-9 70-3l88 2 57-8v25l-38 17-15 44h-46l-28-32-74 29h-16z M148 161l50 1 31 38h23l16-30-15-10-45-1-54 17z", material: "wood", bounds: [98, 140, 221, 89], detail: `${grain(123, 153, 127, 20)}<path d="M103 173h12v52h-12z" fill="${paint.rubber}"/>${fastener(242, 211, 3)}${fastener(301, 153, 3)}<path d="M153 148h99" stroke="#dbb279" stroke-width="2" opacity=".4"/>` };
 			return { outline: "M106 148 211 134h52l61 12v23h-52l-38 15-108 39h-24z", material, bounds: [97, 131, 229, 96], detail: `<path d="M109 151 213 138h46l58 12v5h-59l-39-4-109 19z" fill="#d9b584" opacity="${wood ? ".28" : ".16"}"/>${wood ? grain(128, 159, 127, 37) : ribs(163, 154, 10, 32)}<path d="M100 169h13l9 55h-18z" fill="${paint.rubber}"/><path d="m207 168 26-2-28 14-65 25" stroke="#302d23" stroke-width="2" fill="none" opacity=".4"/>${fastener(281, 155, 3)}<path d="M132 193h16v5h-16" fill="#4c5842"/>` };
@@ -86,10 +87,10 @@ function geometry(slot: ModuleSlot, appearance: string, gun: Profile, paint: Pai
 		case "magazine": {
 			const extended = appearance === "extended";
 			const quick = appearance === "quick";
-			if (pistol) return { outline: `M346 194h43l-${extended ? 13 : 6} ${extended ? 58 : 34}h-44z`, detail: `<path d="m349 208 30 1m-33 9 30 1" stroke="#65725e" stroke-width="2"/>${extended ? ribs(342, 226, 5, 20, 6) : ""}<path d="M${extended ? 330 : 335} ${extended ? 246 : 225}h48v7h-48z" fill="${paint.rubber}"/>`, material: "dark", bounds: [327, 192, 65, extended ? 64 : 44] };
-			if (gun.pump) return { outline: `M468 154h${extended ? 273 : 228}v10H468z`, material: "steel", bounds: [465, 152, extended ? 279 : 234, 17], detail: `<path d="M477 156h${extended ? 252 : 207}" stroke="#929e88" stroke-width="1.5"/><path d="M${extended ? 733 : 688} 153v12" stroke="#14281a" stroke-width="3"/>` };
-			if (gun.id === "mosin" || (gun.id === "sks" && !extended)) return { outline: "M407 165h58l-7 36h-37l-14-13z", material: "dark", bounds: [404, 162, 64, 43], detail: `<path d="M416 174h42l-5 21h-29z" fill="#58654c"/><path d="M421 182h29m-29 6h27" stroke="#273e29" stroke-width="2"/>${fastener(439, 194, 2)}` };
-			if (gun.id === "pkp") return { outline: "M408 167h105v72H408z", material: "polymer", bounds: [405, 164, 111, 80], detail: `<path d="M410 173h102v9H410" fill="#889279" opacity=".3"/>${ribs(421, 187, 9, 43, 10)}<path d="M408 239h109v5H408" fill="${paint.dark}"/>${fastener(420, 177)}${fastener(504, 177)}` };
+			if (pistol) return { outline: `M346 194h43l-${extended ? 13 : 6} ${extended ? 58 : 34}h-44z`, detail: `<path d="m349 208 30 1m-33 9 30 1" stroke="#65725e" stroke-width="2"/>${extended ? ribs(342, 226, 5, 20, 6) : ""}<path d="M${extended ? 330 : 335} ${extended ? 246 : 225}h48v7h-48z" fill="${paint.rubber}"/>${quick ? `<path d="M347 229v17h21v-17" fill="none" stroke="#8d997d" stroke-width="6"/>` : ""}`, material: "dark", bounds: [327, 192, 65, extended ? 64 : quick ? 57 : 44] };
+			if (gun.pump) { const length = extended ? 273 : quick ? 202 : 228; return { outline: `M468 154h${length}v10H468z`, material: "steel", bounds: [465, 152, length + 6, 17], detail: `<path d="M477 156h${length - 21}" stroke="#929e88" stroke-width="1.5"/><path d="M${length + 460} 153v12" stroke="#14281a" stroke-width="3"/>` }; }
+			if (gun.id === "mosin" || (gun.id === "sks" && !extended)) { const depth = extended ? 58 : 36; return { outline: `M407 165h58l-7 ${depth}h-37l-14-13z`, material: "dark", bounds: [404, 162, 64, depth + (quick ? 22 : 7)], detail: `<path d="M416 174h42l-5 ${depth - 15}h-29z" fill="#58654c"/><path d="M421 182h29m-29 6h27" stroke="#273e29" stroke-width="2"/>${fastener(439, 165 + depth - 7, 2)}${quick ? `<path d="M425 199v15h21v-15" fill="none" stroke="#8d997d" stroke-width="6"/>` : ""}` }; }
+			if (gun.id === "pkp") { const depth = extended ? 93 : quick ? 54 : 72; return { outline: `M408 167h105v${depth}H408z`, material: "polymer", bounds: [405, 164, 111, depth + 8], detail: `<path d="M410 173h102v9H410" fill="#889279" opacity=".3"/>${ribs(421, 187, 9, depth - 29, 10)}<path d="M408 ${167 + depth}h109v5H408" fill="${paint.dark}"/>${fastener(420, 177)}${fastener(504, 177)}${quick ? `<path d="M417 181h86v11h-86z" fill="#9e9471"/>` : ""}` }; }
 			if (gun.id === "pp91" || gun.category === "smg") return { outline: `M420 166h41l${extended ? 5 : 3} ${extended ? 85 : 63}h-43z`, material: "dark", bounds: [416, 163, 57, extended ? 96 : 74], detail: `<path d="m430 174 2 ${extended ? 66 : 46}m15-${extended ? 66 : 46} 2 ${extended ? 66 : 46}" stroke="#78856b" stroke-width="2"/><path d="M419 ${extended ? 248 : 226}h49v8h-49" fill="${paint.rubber}"/>${quick ? `<path d="M433 230v16h21v-16" stroke="#7d886b" stroke-width="6" fill="none"/>` : ""}` };
 			const depth = extended ? 94 : 73;
 			return { outline: `M419 166h48q-2 ${depth * .52} 31 ${depth - 10}l-32 20q-43-32-47-${depth + 10}z`, material: gun.id === "akm" && appearance === "factory" ? "wood" : "polymer", bounds: [415, 163, 89, depth + 30], detail: `<path d="M429 173h27q0 ${depth * .55} 29 ${depth - 11}l-15 9q-35-29-41-${depth - 2}z" fill="#a0a584" opacity=".28"/><path d="m434 186q4 ${depth * .57} 31 ${depth - 18}m-19-${depth - 19}q4 ${depth * .48} 23 ${depth - 23}" fill="none" stroke="#263d29" stroke-width="3"/><path d="m464 ${depth + 172} 37-22 5 7-37 23z" fill="${paint.rubber}"/>${quick ? `<path d="m474 ${depth + 174} 11 11 25-16-9-13" stroke="#9da080" stroke-width="6" fill="none"/>` : ""}${fastener(444, 180, 2)}` };
@@ -116,6 +117,9 @@ function renderPart(shape: Geometry, paint: Paint, slot: ModuleSlot, installed: 
 	return `<g data-module-slot="${slot}" class="weapon-part${selected ? " weapon-part--selected" : ""}"><path d="${shape.outline}" fill="${paint[shape.material]}" stroke="#0c1b10" stroke-width="2" fill-rule="evenodd"/>${shape.detail}<path d="${shape.outline}" fill="url(#${paint.prefix}-wear)" opacity="${wear.toFixed(2)}" fill-rule="evenodd"/>${selected ? `<path d="${shape.outline}" fill="none" stroke="#e5bb77" stroke-width="2.5" stroke-opacity=".9" fill-rule="evenodd" filter="url(#${paint.prefix}-glow)"/>` : ""}</g>`;
 }
 
+const visibleCondition = (durability: number) => Number.isFinite(durability) ? Math.floor(Math.max(0, Math.min(100, durability)) / 20) * 20 : 0;
+const installedCondition = (weapon: WeaponInstance, partCondition = 100) => Math.min(visibleCondition(weapon.durability), visibleCondition(partCondition));
+
 /** The silhouette is assembled from the actual installed parts; it is never a weapon thumbnail. */
 export function weaponBuildArt(weapon: WeaponInstance, selectedSlot?: ModuleSlot): string {
 	const baseGun = profile(weapon.weaponId);
@@ -124,13 +128,12 @@ export function weaponBuildArt(weapon: WeaponInstance, selectedSlot?: ModuleSlot
 	const barrelAppearance = installed.barrel ? MODULE_BY_ID[installed.barrel.modelId]?.appearance : undefined;
 	const gun = { ...baseGun, barrelEnd: baseGun.barrelEnd + (barrelAppearance === "long" ? 40 : barrelAppearance === "short" ? -55 : 0) };
 	const required = RECEIVER_INFO[weapon.weaponId]?.requiredSlots ?? ["receiver", "barrel", "magazine"];
-	const drawOrder: ModuleSlot[] = ["stock", "barrel", "magazine", "receiver", "handguard", "foregrip", "muzzle", "optic"];
 	const partArt = drawOrder.map((slot) => {
 		const instance = installed[slot];
 		const model = instance ? MODULE_BY_ID[instance.modelId] : undefined;
 		if (!model && !required.includes(slot) && selectedSlot !== slot) return "";
 		const shape = geometry(slot, slot === "barrel" ? "factory" : model?.appearance ?? "factory", gun, paint);
-		return renderPart(shape, paint, slot, Boolean(model), selectedSlot === slot, instance?.durability);
+		return renderPart(shape, paint, slot, Boolean(model), selectedSlot === slot, installedCondition(weapon, instance?.durability));
 	}).join("");
 	const title = WEAPON_BY_ID[weapon.weaponId]?.name ?? "Оружие";
 	const missing = required.filter((slot) => !installed[slot]);
@@ -139,12 +142,12 @@ export function weaponBuildArt(weapon: WeaponInstance, selectedSlot?: ModuleSlot
 }
 
 /** The carried weapon uses the very same installed-part geometry as the workbench. */
-export function weaponActorArt(weapon: WeaponInstance): { svg: string; width: number; height: number; grip: { x: number; y: number }; muzzle: { x: number; y: number } } {
+export function weaponActorArt(weapon: WeaponInstance): { svg: string; width: number; height: number; referenceWidth: number; grip: { x: number; y: number }; muzzle: { x: number; y: number } } {
 	const base = profile(weapon.weaponId), installed = weapon.modules;
 	const barrel = installed.barrel ? MODULE_BY_ID[installed.barrel.modelId]?.appearance : undefined;
 	const gun = { ...base, barrelEnd: base.barrelEnd + (barrel === "long" ? 40 : barrel === "short" ? -55 : 0) };
 	const { paint, defs } = palette(paintId(weapon.id));
-	const parts = (["stock", "barrel", "magazine", "receiver", "handguard", "foregrip", "muzzle", "optic"] as ModuleSlot[]).flatMap((slot) => {
+	const parts = drawOrder.flatMap((slot) => {
 		const instance = installed[slot], model = instance ? MODULE_BY_ID[instance.modelId] : undefined;
 		return model ? [{ shape: geometry(slot, slot === "barrel" ? "factory" : model.appearance, gun, paint), slot, instance }] : [];
 	});
@@ -153,9 +156,16 @@ export function weaponActorArt(weapon: WeaponInstance): { svg: string; width: nu
 	const right = Math.max(gun.barrelEnd, ...parts.map(({ shape }) => shape.bounds[0] + shape.bounds[2])) + 4;
 	const bottom = Math.max(210, ...parts.map(({ shape }) => shape.bounds[1] + shape.bounds[3])) + 4;
 	const width = right - left, height = bottom - top;
+	// Actor scale follows the factory gun, so adding a suppressor extends the barrel
+	// instead of shrinking the receiver, stock and every other installed part.
+	const factoryBounds = drawOrder.flatMap((slot) => {
+		const modelId = FACTORY_KITS[weapon.weaponId]?.[slot], model = modelId ? MODULE_BY_ID[modelId] : undefined;
+		return model ? [geometry(slot, model.appearance, base, paint).bounds] : [];
+	});
+	const referenceWidth = Math.max(base.barrelEnd, ...factoryBounds.map((bounds) => bounds[0] + bounds[2])) - Math.min(370, ...factoryBounds.map((bounds) => bounds[0])) + 8;
 	const muzzlePart = parts.find(({ slot }) => slot === "muzzle");
 	const muzzleX = muzzlePart ? muzzlePart.shape.bounds[0] + muzzlePart.shape.bounds[2] - 10 : gun.barrelEnd;
-	return { svg: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${left} ${top} ${width} ${height}">${defs}<g stroke-linejoin="round" stroke-linecap="round">${parts.map(({ shape, slot, instance }) => renderPart(shape, paint, slot, true, false, instance?.durability)).join("")}</g></svg>`, width, height,
+	return { svg: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${left} ${top} ${width} ${height}">${defs}<g stroke-linejoin="round" stroke-linecap="round">${parts.map(({ shape, slot, instance }) => renderPart(shape, paint, slot, true, false, installedCondition(weapon, instance?.durability))).join("")}</g></svg>`, width, height, referenceWidth,
 		grip: { x: 410 - left, y: 175 - top }, muzzle: { x: muzzleX - left, y: 138 - top } };
 }
 
