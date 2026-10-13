@@ -553,8 +553,10 @@ function updateFleaDraftPreview() {
     if(submit)submit.disabled=gameCommandPending||fleaView.loading||!fleaView.market||Boolean(reason);
     const note=panel.querySelector<HTMLElement>('[data-flea-order-reason]');
     if(note)note.textContent=reason??(!fleaView.market?'Сначала обнови барахолку.':'Лот разместится после нажатия.');
-    const guide=panel.querySelector<HTMLElement>('.flea-guide strong'), quantity=readFleaInteger(fleaView.draft.quantity,10_000)??1;
-    if(guide)guide.textContent=`${n(getTradeQuote(state,{...fleaView.draft.ref,quantity}).guidePrice)} ₽`;
+    const guide=panel.querySelector<HTMLElement>('.flea-guide strong'), quantity=readFleaInteger(fleaView.draft.quantity,10_000), quote=quantity===null?null:getTradeQuote(state,{...fleaView.draft.ref,quantity});
+    if(guide)guide.textContent=quote?.asset?`${n(quote.guidePrice)} ₽`:'—';
+    const useGuide=panel.querySelector<HTMLButtonElement>('[data-action="flea-use-guide"]');
+    if(useGuide)useGuide.disabled=!quote?.asset;
 }
 async function refreshServerProgress(): Promise<boolean> {
     try {
@@ -2272,7 +2274,9 @@ document.addEventListener("click", async (event) => {
 			if(!fleaView.draft)break;
 			const quantity=readFleaInteger(fleaView.draft.quantity,10_000);
 			if(quantity===null){toast('Укажи целое количество.',false);break;}
-			fleaView.draft.price=String(getTradeQuote(state,{...fleaView.draft.ref,quantity}).guidePrice);render();break;
+			const quote=getTradeQuote(state,{...fleaView.draft.ref,quantity});
+			if(!quote.asset){toast(quote.reason??'Партия недоступна.',false);break;}
+			fleaView.draft.price=String(quote.guidePrice);render();break;
 		}
 		case 'flea-list':{
 			if(!fleaView.draft)break;

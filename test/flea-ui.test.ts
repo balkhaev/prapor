@@ -36,6 +36,13 @@ test('quantity exceeds owned stock and fee shortage remain visible without chang
   expect(fleaPage(state,view({draft}))).toContain('Для размещения нужно');expect(draft.price).toBe('500');
   expect(readFleaOrder(state,{...draft,quantity:'100'})?.reason).toContain('Недостаточно');expect(saveGame(state)).toBe(before);
 });
+test('unavailable supply party never labels the unit guide as the whole listing value',()=>{
+  const state=createGame(NOW),draft={ref:{kind:'supply' as const,id:'ammo',quantity:1},quantity:'10',price:'100'};
+  const available=fleaPage(state,view({draft}));expect(available).toContain('Ориентир за весь лот</span><strong>65 ₽</strong>');
+  const unavailable=fleaPage(state,view({draft:{...draft,quantity:'9999'}}));expect(unavailable).toContain('Ориентир за весь лот</span><strong>—</strong>');expect(unavailable).toContain('data-action="flea-use-guide" disabled');expect(unavailable).toContain('Недостаточно предметов');
+  expect(fleaPage(state,view({draft:{...draft,quantity:'2.5'}}))).toContain('Ориентир за весь лот</span><strong>—</strong>');
+  expect(fleaPricePreview(state,view({draft:{...draft,quantity:'9999'}}))).toContain('К получению');
+});
 test('market explains real party quantity, protects own escrow and escapes user-facing text',()=>{
   const state=createGame(NOW),unsafe=listing({label:'<img src=x onerror=boom>'});
   const html=fleaPage(state,view({tab:'market',market:market([unsafe])}));
@@ -51,6 +58,16 @@ test('catalog covers every named item, utility, weight and sector depth; legacy 
   expect(html).toContain('Разбор:');expect(html).toContain('₽ за кг');expect(html).toContain('От 3-го этапа');expect(html).toContain('24 ТРОФЕЯ');
   const restored=readGameSession({version:1,page:'flea',flea:{tab:'mine',search:'x'.repeat(200),kind:'loot'}},state);expect(restored.page).toBe('flea');expect(restored.flea.search).toHaveLength(160);expect(restored.flea.tab).toBe('mine');
   expect(readGameSession({version:1,flea:{tab:'constructor',kind:'__proto__',draft:{price:999}}},state).flea).toEqual({tab:'inventory',search:'',kind:'all'});expect(saveGame(state)).toBe(before);
+});
+test('cancelled offer shows only the spent listing fee, while sold offers distinguish payable and received money',()=>{
+  const state=createGame(NOW),cancelled=listing({owner:true,status:'cancelled'});
+  const html=fleaPage(state,view({tab:'mine',market:market([],[cancelled])}));
+  expect(html).toContain('Отменён · предмет возвращён');expect(html).toContain('Сбор за размещение 2 ₽ уплачен и не возвращается.');
+  expect(html).not.toContain('к получению 95');expect(html).not.toContain('комиссия при продаже');expect(html).not.toContain('data-action="flea-claim"');expect(html).not.toContain('data-action="flea-buy"');expect(html).not.toContain('data-action="flea-cancel"');
+  const sold=listing({owner:true,status:'sold',soldAt:NOW+1,claimable:true});
+  expect(fleaPage(state,view({tab:'mine',market:market([],[sold])}))).toContain('комиссия удержана 5 ₽ · к получению 95 ₽');
+  const claimed={...sold,claimedAt:NOW+2,claimable:false};
+  const paid=fleaPage(state,view({tab:'mine',market:market([],[claimed])}));expect(paid).toContain('комиссия удержана 5 ₽ · получено 95 ₽');expect(paid).not.toContain('data-action="flea-claim"');
 });
 test('named receipts use actual cargo and delivery, and separately describe overflow money and losses',()=>{
   const state=lootGame(),item=state.lootItems![0]!;
