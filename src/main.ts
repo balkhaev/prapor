@@ -7,7 +7,7 @@ import "./raid-strategy.css";
 import "./shelter-logistics.css";
 import "./flea.css";
 import "./territory.css";
-import { territorySummary, territoryPlan, buildingCatalogue, buildingCatalogueReason, buildingPlacementControls, buildingRelocationControls, type BuildingPlacement } from "./territory-ui";
+import { territorySummary, territoryBuildings, territoryPlan, buildingCatalogue, buildingCatalogueReason, buildingPlacementControls, buildingRelocationControls, type BuildingPlacement } from "./territory-ui";
 import {
 	ATTACHMENT_LABELS,
 	CATEGORY_LABELS,
@@ -1731,7 +1731,8 @@ function commandOverview(summary = getCommandSummary(state)) {
 	return `${gameplayFocus(getGameplayGuidance(state))}${nextSteps ? `<div class="gameplay-attention"><span class="eyebrow">Оплаченная работа ждёт</span>${nextSteps}</div>` : ""}<div class="command-overview-head"><span class="eyebrow">Дела базы</span><strong>${counts}</strong><small>${summary.freeWorkers} свободных бойцов${summary.counts.building ? ` · ${summary.counts.building} строек` : ""}${state.shelter.expansions.length ? ` · участков в подготовке: ${state.shelter.expansions.length}` : ""}</small></div><div class="command-system-grid">${tools}</div>`;
 }
 function renderShelter() {
-	panel.innerHTML = `${territorySummary(state)}<section class="shelter-sites"><div class="shelter-sites-head"><h2>План базы</h2><span class="eyebrow">ПОСТРОЙКИ И ЗЕМЛЯ</span></div>${territoryPlan(state, selectedRoomId)}<p class="field-hint">Выбери постройку для управления и переноса. Участки за периметром можно присоединять к базе.</p></section><div class="section-head"><h2>Построить на базе</h2><span class="muted">Место выбираешь на территории</span></div>${buildingCatalogue(state)}${productionReserveEditor(state, "base", productionReserveDraft)}${fieldKitStockPanel(state)}${discoveriesSection()}`;
+	const planOpen = Boolean(buildingPlacement) || Boolean(panel.querySelector<HTMLDetailsElement>(".territory-layout-tools")?.open);
+	panel.innerHTML = `${territorySummary(state)}<div class="section-head"><h2>Постройки во дворе</h2><span class="muted">Выбери здание для управления</span></div>${territoryBuildings(state, selectedRoomId)}<details class="territory-layout-tools" ${planOpen ? "open" : ""}><summary><span>Планировка и расширение<small>Места для строительства и новая земля</small></span><b>+</b></summary>${territoryPlan(state, selectedRoomId)}<p class="field-hint">Выбери свободное место или присоедини землю за оградой. При размещении сетка помогает проверить площадь постройки.</p></details><div class="section-head"><h2>Построить на базе</h2><span class="muted">Место выбираешь на территории</span></div>${buildingCatalogue(state)}${productionReserveEditor(state, "base", productionReserveDraft)}${fieldKitStockPanel(state)}${discoveriesSection()}`;
 }
 function buildSitePanel(column: number, row: number) {
 	const open = getShelterSites(state.shelter).some(site => site.column === column && site.row === row);

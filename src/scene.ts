@@ -13,8 +13,9 @@ import { advanceScavAnimation, createScavAnimation, type ScavAnimationState } fr
 import { SCAV_DIRECTIONS, SCAV_ORIGIN, SCAV_REFERENCE_HEIGHT, scavAppearance, scavAttachment, scavAvailableAppearance, scavDirection, scavFrame, scavPreloadAppearances, scavTexture, scavTorsoAnchor, scavHeadAnchor, type ScavDirection, type ScavPose } from "./scav-isometric";
 import { advanceShelterStationClock, getShelterProductionPresentation, type ProductionPresentation } from "./shelter-production";
 import { projectShelterPoint, unprojectShelterPoint, projectShelterBounds, shelterRoomPolygon, shelterRoomPosition, shelterRoomRect } from "./shelter-isometric";
-import { paintIsometricRoom, paintIsometricLand, paintIsometricProduction } from "./shelter-isometric-art";
+import { paintIsometricRoom, paintIsometricProduction } from "./shelter-isometric-art";
 import { RaidStreetRenderer } from "./raid-scene";
+import { getShelterLandscape, paintShelterLandscape, paintShelterDecoration } from "./shelter-landscape";
 
 export interface WorldSnapshot {
 	base: Record<string, number>;
@@ -306,7 +307,7 @@ export function createWorld(
 		private nativeEvents = new AbortController();
 		private viewState: WorldSnapshot | null = null;
 		private terrain!: Phaser.GameObjects.Graphics;
-		private exteriorProps: Phaser.GameObjects.Image[] = [];
+		private exteriorProps: Phaser.GameObjects.Graphics[] = [];
 		private perimeterFences: Phaser.GameObjects.Graphics[] = [];
 		private layoutSignature = "";
 		private worldBounds: ShelterRect = { x: 0, y: 0, width: WIDTH, height: HEIGHT };
@@ -596,6 +597,13 @@ export function createWorld(
 			const placement = this.buildingPlacement;
 			if (!placement || requestedView !== "base") return;
 			const state = snapshot(), shelter = state.shelter ?? { rooms: [] }, sites = getShelterSites(shelter);
+			// The underlying placement grid is a temporary tool, never the ordinary landscape.
+			for (const site of sites) {
+				const occupant = getShelterRoomAt(shelter, site.column, site.row);
+				if (occupant && occupant.id !== placement.roomId) continue;
+				const corners = shelterRoomPolygon(site.column, site.row);
+				line(this.placementGhost, [...corners, corners[0]!], 0xc8d9ab, .8, .26);
+			}
 			const paint = (site: ShelterSite, pinned: boolean) => {
 				let valid = true;
 				for (let column = site.column; column < site.column + placement.width; column++) for (let row = site.row; row < site.row + placement.height; row++) {
@@ -865,7 +873,7 @@ export function createWorld(
 			const frontier = getShelterFrontier(shelter), expansions = shelter.expansions ?? [];
 			const all = [...sites, ...frontier, ...expansions];
 			const buildings = roomBuildings(shelter.rooms);
-			const signature = `${sites.map((p) => `${p.column}:${p.row}`).join(";")}|${expansions.map((p) => `${p.column}:${p.row}`).join(";")}|${shelter.rooms.map((room) => `${room.id}:${room.column}:${room.row}:${room.rotation ?? 0}`).join(";")}`;
+			const signature = `${sites.map((p) => `${p.column}:${p.row}`).join(";")}|${expansions.map((p) => `${p.column}:${p.row}`).join(";")}|${shelter.rooms.map((room) => `${room.id}:${room.type}:${room.column}:${room.row}:${room.rotation ?? 0}`).join(";")}`;
 			if (signature === this.layoutSignature) return;
 			const first = !this.layoutSignature; this.layoutSignature = signature;
 			this.worldBounds = getShelterWorldBounds(sites, [...frontier, ...expansions]);
@@ -873,67 +881,47 @@ export function createWorld(
 			const keys = new Set(all.map((p) => `${p.column}:${p.row}`));
 			for (const [key, cell] of this.cells) if (!keys.has(key)) { cell.root.destroy(true); cell.chrome.destroy(true); cell.zone.destroy(); this.cells.delete(key); }
 			for (const p of all) if (!this.cells.has(`${p.column}:${p.row}`)) this.createCell(p.column, p.row);
+			const landscape = getShelterLandscape(sites, buildings, expansions);
 			const g = this.terrain; g.clear();
-			const quad = (x: number, y: number, width: number, height: number) => [{ x, y }, { x: x + width, y }, { x: x + width, y: y + height }, { x, y: y + height }].map(projectShelterPoint);
-			g.fillStyle(0x1b2d23).fillRect(this.worldBounds.x, this.worldBounds.y, this.worldBounds.width, this.worldBounds.height);
-			const left = Math.min(...sites.map((p) => cellPosition(p.column, p.row).x)) - 40;
-			const right = Math.max(...sites.map((p) => cellPosition(p.column, p.row).x)) + 212;
-			// A street and gate lead into an outdoor compound; adjoining land grows the yard.
-			polygon(g, quad(left, 38, right - left, 79), 0x343c39);
-			polygon(g, quad(left, 117, right - left, 31), 0x7b8172);
-			for (let x = left; x < right; x += 38) {
-				line(g, [{ x, y: 78 }, { x: x + 19, y: 78 }].map(projectShelterPoint), 0xc9c19a, 2, .6);
-				line(g, [{ x, y: 118 }, { x, y: 148 }].map(projectShelterPoint), 0x4b594d, .8, .45);
+			paintShelterLandscape(g, landscape, this.worldBounds);
+			for (const prop of this.exteriorProps) prop.destroy(); this.exteriorProps = [];
+			for (const decoration of landscape.decorations) {
+				const art = this.add.graphics().setDepth(projectShelterPoint(decoration.point).y);
+				paintShelterDecoration(art, decoration);
+				this.baseLayer.add(art); this.exteriorProps.push(art);
 			}
-			const street = projectShelterPoint({ x: 380, y: 54 });
-			const streetLabel = this.baseCaption; streetLabel.setPosition(street.x, street.y - 24).setOrigin(.5).setText("УЛИЦА · ВЫХОД В РЕЙД").setFontSize(10).setVisible(true).setDepth(10_000_000);
-			for (const site of sites) {
-				const p = cellPosition(site.column, site.row);
-				polygon(g, quad(p.x - 10, p.y - 16, 192, 132), (site.column + site.row) % 2 ? 0x506347 : 0x4b5e42);
-			}
-			for (const segment of getShelterCorridorSegments(sites, buildings)) {
-				line(g, [segment.from, segment.to].map(projectShelterPoint), 0x8c8d72, 7, .68);
-				line(g, [segment.from, segment.to].map(projectShelterPoint), 0xbbb696, .5, .32);
-			}
-			const has = (column: number, row: number) => sites.some((p) => p.column === column && p.row === row);
 			for (const fence of this.perimeterFences) fence.destroy(); this.perimeterFences = [];
-			for (const site of sites) {
-				const p = cellPosition(site.column, site.row);
-				const edge = (a: Point, b: Point, rear = false) => {
-					const aa = projectShelterPoint(a), bb = projectShelterPoint(b), height = 16;
-					const room = getShelterRoomAt(shelter, site.column, site.row);
-					const rect = room ? roomRect(room) : null;
-					const groundDepth = (aa.y + bb.y) / 2;
-					const depth = rear && rect ? Math.min(groundDepth, projectShelterPoint({ x: rect.x + rect.width / 2, y: rect.y + 18 }).y - 20.1) : groundDepth;
+			for (const edge of landscape.perimeter) {
+				const start = projectShelterPoint(edge.from), end = projectShelterPoint(edge.to), height = 19;
+				const panels = Math.max(1, Math.ceil(Math.hypot(end.x - start.x, end.y - start.y) / 38));
+				const rear = edge.side === "north" || edge.side === "west";
+				// Each connected panel has a local depth so a long perimeter cannot cross a cabin or worker.
+				for (let i = 0; i < panels; i++) {
+					const logicalPoint = (fraction: number) => ({ x: edge.from.x + (edge.to.x - edge.from.x) * fraction, y: edge.from.y + (edge.to.y - edge.from.y) * fraction });
+					const from = logicalPoint(i / panels), to = logicalPoint((i + 1) / panels);
+					const aa = projectShelterPoint(from), bb = projectShelterPoint(to), groundDepth = (aa.y + bb.y) / 2;
+					let depth = rear ? groundDepth - 35 : groundDepth;
+					if (rear) for (const building of buildings) {
+						const rect = shelterRoomRect(building.column, building.row, building.width, building.height);
+						const adjacent = edge.side === "north"
+							? Math.abs(rect.y - 16 - from.y) < .001 && to.x > rect.x - 5 && from.x < rect.x + rect.width + 5
+							: Math.abs(rect.x - 10 - from.x) < .001 && to.y > rect.y - 5 && from.y < rect.y + rect.height + 5;
+						if (adjacent) depth = Math.min(depth, projectShelterPoint({ x: rect.x + rect.width / 2, y: rect.y + 18 }).y - 20.1);
+					}
 					const fence = this.add.graphics().setDepth(depth);
 					this.baseLayer.add(fence); this.perimeterFences.push(fence);
-					polygon(fence, [aa, bb, { x: bb.x, y: bb.y - height }, { x: aa.x, y: aa.y - height }], 0x9baa85, .13);
-					for (const lift of [2, height]) line(fence, [{ x: aa.x, y: aa.y - lift }, { x: bb.x, y: bb.y - lift }], 0xb0b696, 1.2, .8);
-					for (let step = 0; step <= 1; step += .125) {
-						const at = { x: aa.x + (bb.x - aa.x) * step, y: aa.y + (bb.y - aa.y) * step };
-						line(fence, [{ x: at.x, y: at.y - 1 }, { x: at.x, y: at.y - height + 2 }], 0x7f916e, .6, .8);
+					polygon(fence, [aa, bb, { x: bb.x, y: bb.y - height }, { x: aa.x, y: aa.y - height }], 0x5c705e, .15);
+					for (const lift of [3, height]) line(fence, [{ x: aa.x, y: aa.y - lift }, { x: bb.x, y: bb.y - lift }], 0xa5ad87, 1.3, .75);
+					for (const at of [aa, ...(i === panels - 1 ? [bb] : [])]) {
+						line(fence, [{ x: at.x, y: at.y + 1 }, { x: at.x, y: at.y - height - 2 }], 0x536852, 2.4, .9);
+						line(fence, [{ x: at.x - 1, y: at.y - height - 2 }, { x: at.x + 1, y: at.y - height - 2 }], 0xa0ac8b, 2, .9);
 					}
-				};
-				if (!has(site.column - 1, site.row)) edge({ x: p.x - 10, y: p.y - 16 }, { x: p.x - 10, y: p.y + 116 }, true);
-				if (!has(site.column + 1, site.row)) edge({ x: p.x + 182, y: p.y - 16 }, { x: p.x + 182, y: p.y + 116 });
-				if (!has(site.column, site.row + 1)) edge({ x: p.x - 10, y: p.y + 116 }, { x: p.x + 182, y: p.y + 116 });
-				if (!has(site.column, site.row - 1)) {
-					if (site.row === 0 && site.column === 1) {
-						edge({ x: p.x - 10, y: p.y - 16 }, { x: p.x + 56, y: p.y - 16 }, true);
-						edge({ x: p.x + 116, y: p.y - 16 }, { x: p.x + 182, y: p.y - 16 }, true);
-					} else edge({ x: p.x - 10, y: p.y - 16 }, { x: p.x + 182, y: p.y - 16 }, true);
+					line(fence, [{ x: aa.x, y: aa.y - 5 }, { x: bb.x, y: bb.y - height + 4 }], 0x91a180, .6, .32);
+					line(fence, [{ x: aa.x, y: aa.y - height + 4 }, { x: bb.x, y: bb.y - 5 }], 0x91a180, .6, .32);
 				}
 			}
-			for (const prop of this.exteriorProps) prop.destroy(); this.exteriorProps = [];
-			if (this.textures.exists("raid-props")) for (const prop of [{ x: 114, y: 74, frame: "car", width: 60 }, { x: 753, y: 119, frame: "crates", width: 27 }]) {
-				const at = projectShelterPoint(prop), image = this.add.image(at.x, at.y, "raid-props", prop.frame).setOrigin(.5, 1).setDepth(at.y);
-				image.setScale(prop.width / image.width); this.baseLayer.add(image); this.exteriorProps.push(image);
-			}
-			for (const x of [56, 790]) {
-				const at = projectShelterPoint({ x, y: 126 });
-				line(g, [{ x: at.x, y: at.y }, { x: at.x, y: at.y - 37 }, { x: at.x + 8, y: at.y - 37 }], 0x798a70, 2);
-				g.fillStyle(0xe0d19e).fillEllipse(at.x + 8, at.y - 36, 8, 3);
-			}
+			const street = projectShelterPoint({ x: 390, y: 52 });
+			this.baseCaption.setPosition(street.x, street.y - 24).setOrigin(.5).setText("УЛИЦА · ВЫХОД В РЕЙД").setFontSize(9).setAlpha(.65).setVisible(true).setDepth(10_000_000);
 			this.applyCamera();
 			this.paintBuildingPlacement();
 		}
@@ -992,29 +980,36 @@ export function createWorld(
 			const building = cell.room && cell.room.status !== "ready";
 			let tint = selected || hovered ? C.light : building ? C.gold : cell.room ? ROOM_STYLE[cell.room.type]?.color ?? 0x899a7c : 0x788b71;
 			cell.label.setAlpha(cell.room || selected || hovered ? 1 : .6).setVisible(Boolean(cell.room || selected || hovered || cell.expansion));
-			cell.status.setAlpha(cell.room || selected || hovered ? 1 : .5);
+			cell.status.setVisible(Boolean(cell.expansion || selected || hovered || cell.working || building));
+			cell.status.setAlpha(selected || hovered || cell.working || building ? 1 : .5);
 			if (this.drag) {
 				const reason = cell.room ? this.assignmentReason(this.drag.scavId, cell.room.id) : "Сначала построй комнату";
 				const target = cell.room ? this.drag.roomId === cell.room.id : this.drag.cellKey === `${cell.column}:${cell.row}`; tint = reason ? 0xcc7f6d : 0xa6d193;
 				polygon(cell.frame, corners, tint, target ? .23 : .07);
 				line(cell.frame, [...corners, corners[0]!], tint, target ? 3 : 1.3, target ? 1 : .65); return;
 			}
-			if (selected || hovered) polygon(cell.frame, corners, tint, selected ? .12 : .05);
-			line(cell.frame, [...corners, corners[0]!], tint, selected ? 2.5 : 1, selected || hovered ? 1 : cell.room ? .3 : .12);
+			if (!selected && !hovered) return;
+			if (!cell.room && !this.buildingPlacement) {
+				const p = cellPosition(cell.column, cell.row), at = projectShelterPoint({ x: p.x + 86, y: p.y + 50 });
+				cell.frame.fillStyle(tint, selected ? .14 : .08).fillEllipse(at.x, at.y, 72, 29);
+				cell.frame.lineStyle(1, tint, .5).strokeEllipse(at.x, at.y, 72, 29);
+				return;
+			}
+			polygon(cell.frame, corners, tint, selected ? .08 : .04);
+			line(cell.frame, [...corners, corners[0]!], tint, selected ? 1.8 : 1, selected ? .7 : .4);
 		}
 
 		private paintRoom(cell: ShelterCell): void {
 			cell.art.clear();
 			if (!isRoomOrigin(cell)) return;
-			if (cell.open) paintIsometricRoom(cell.art, cell.column, cell.row, cell.room);
-			else {
-				paintIsometricLand(cell.art, cell.column, cell.row, false);
-				const corners = shelterRoomPolygon(cell.column, cell.row);
-				polygon(cell.art, corners, 0x8b9274, cell.expansion ? .28 : .09);
-				line(cell.art, [...corners, corners[0]!], 0xb5b994, 1, .35);
+			if (cell.room) paintIsometricRoom(cell.art, cell.column, cell.row, cell.room);
+			else if (cell.expansion) {
 				const p = cellPosition(cell.column, cell.row), at = projectShelterPoint({ x: p.x + 86, y: p.y + 50 });
-				line(cell.art, [{ x: at.x - 7, y: at.y + 6 }, { x: at.x + 5, y: at.y - 8 }], 0xd8bd87, 2);
-				line(cell.art, [{ x: at.x - 2, y: at.y - 8 }, { x: at.x + 11, y: at.y - 1 }], 0xb7c3a2, 3);
+				cell.art.fillStyle(0xb19767, .18).fillEllipse(at.x, at.y, 82, 30);
+				for (const offset of [-26, 26]) {
+					line(cell.art, [{ x: at.x + offset, y: at.y + 4 }, { x: at.x + offset, y: at.y - 13 }], 0xb79458, 2);
+				}
+				line(cell.art, [{ x: at.x - 26, y: at.y - 8 }, { x: at.x + 26, y: at.y - 8 }], 0xe4bf6f, 2, .8);
 			}
 			const style = ROOM_STYLE[cell.room?.type ?? "workshop"]!;
 			cell.label.setText(cell.room ? `${style.label} · ${cell.room.level || ""}` : cell.open ? "СВОБОДНАЯ ЗЕМЛЯ" : cell.expansion ? "РАСШИРЕНИЕ" : "ЗА ОГРАДОЙ").setFontSize(cell.room ? 11 : 9).setColor(cell.room ? "#fff1dc" : "#afc0a4");
@@ -1026,8 +1021,8 @@ export function createWorld(
 			const rect = cell.room ? roomRect(cell.room) : shelterRoomRect(cell.column, cell.row);
 			const at = projectShelterPoint({ x: rect.x + rect.width / 2, y: rect.y + 18 });
 			const front = projectShelterPoint({ x: rect.x + rect.width / 2, y: rect.y + rect.height - 7 });
-			cell.label.setPosition(at.x, at.y - 23); cell.status.setPosition(front.x, front.y - 4);
-			cell.productLabel.setPosition(at.x, at.y - 39); cell.feedback.setPosition(front.x, front.y - 23);
+			cell.label.setPosition(at.x, at.y - 43); cell.status.setPosition(front.x, front.y - 4);
+			cell.productLabel.setPosition(at.x, at.y - 63); cell.feedback.setPosition(front.x, front.y - 23);
 			cell.lamp.setPosition(at.x, at.y + 5); cell.root.setDepth(cell.room ? at.y - 20 : -999_999_999);
 		}
 
