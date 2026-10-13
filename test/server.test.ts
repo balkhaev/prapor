@@ -3,6 +3,8 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHandler, readServerOptions } from "../server/handler";
+import { createGameService } from "../server/game";
+import type { AccountService } from "../server/accounts";
 
 let directory: string;
 let handler: ReturnType<typeof createHandler>;
@@ -49,6 +51,23 @@ describe("standalone production serving", () => {
   test("health is available independently from DevHub", async () => {
     const response = await handler(new Request("http://localhost/health"));
     expect(await response.json()).toEqual({ ok: true });
+  });
+
+  test("authoritative game routes precede the account catch-all and participate in production health", async () => {
+    const origin = "https://game.delopusk.ru";
+    const accounts: AccountService = { fetch: async request => new URL(request.url).pathname.startsWith("/api/") ? Response.json({ code: "not_found" }, { status: 404 }) : null,
+      resolveLiveIdentity: () => null, healthy: () => true, close: () => {} };
+    const game = createGameService({ dbPath: ":memory:", secureCookies: true, allowedOrigins: [origin] });
+    const combined = createHandler(directory, accounts, undefined, game);
+    try {
+      const joined = await combined(new Request(`${origin}/api/game/join`, { method: "POST", headers: { origin, "content-type": "application/json" }, body: "{}" }));
+      expect(joined.status).toBe(200);
+      const snapshot = await joined.json() as { identity: { id: string }; state: { money: number } };
+      expect(snapshot.identity.id).toBeString(); expect(snapshot.state.money).toBeGreaterThan(0);
+      expect((await combined(new Request(`${origin}/health`))).status).toBe(200);
+      game.close();
+      expect((await combined(new Request(`${origin}/health`))).status).toBe(503);
+    } finally { game.close(); }
   });
 
   test("only HOST and PORT configure production; invalid ports fail fast", () => {
