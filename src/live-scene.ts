@@ -36,7 +36,7 @@ export class LiveScene {
   private terrain: LiveTerrain[] = [];
   private overviewTerrain: HTMLCanvasElement | null = null;
   private terrainTexture: HTMLCanvasElement | null = null;
-  private terrainColor: Record<LiveTerrain, readonly [number, number, number]> = { road: [80, 86, 78], concrete: [111, 115, 101], forest: [49, 70, 47], water: [43, 73, 76], yard: [96, 98, 69], grass: [75, 91, 53], path: [139, 127, 87], rail: [89, 91, 81], sand: [158, 150, 112] };
+  private terrainColor: Record<LiveTerrain, readonly [number, number, number]> = { road: [80, 86, 78], concrete: [96, 103, 87], forest: [49, 70, 47], water: [43, 73, 76], yard: [91, 97, 68], grass: [75, 91, 53], path: [128, 121, 84], rail: [89, 91, 81], sand: [139, 136, 98] };
 
   constructor(private host: HTMLElement, private command: (command: LiveCommand) => void, private select: (id: string) => void) {
     const context = this.canvas.getContext('2d');
@@ -169,22 +169,45 @@ export class LiveScene {
       const district = world.districts.find(district => x >= district.x && x < district.x + district.width && y >= district.y && y < district.y + district.height);
       this.terrain.push(zone?.terrain ?? (district?.theme === 'forest' ? 'forest' : district?.theme === 'industrial' ? 'yard' : 'concrete'));
     }
-    const texture = document.createElement('canvas'), resolution = 6;
+    const texture = document.createElement('canvas'), resolution = 8;
     texture.width = world.width * resolution; texture.height = world.height * resolution;
     const ground = texture.getContext('2d');
     if (ground) {
       const pixels = ground.createImageData(texture.width, texture.height);
       const phase = [...world.seed].reduce((hash, char) => (Math.imul(hash, 31) + char.charCodeAt(0)) | 0, 0) / 65536;
+      const borderBlend = (fraction: number) => {
+        const t = clamp((.4 - Math.min(fraction, 1 - fraction)) / .4, 0, 1);
+        return t * t * (3 - 2 * t) * .5;
+      };
+      const colorAt = (x: number, y: number) => this.terrainColor[this.terrain[clamp(y, 0, world.height - 1) * world.width + clamp(x, 0, world.width - 1)]!];
       for (let y = 0; y < texture.height; y++) for (let x = 0; x < texture.width; x++) {
-        const wx = x / resolution, wy = y / resolution, terrain = this.terrain[Math.floor(wy) * world.width + Math.floor(wx)]!, rgb = this.terrainColor[terrain];
+        const wx = (x + .5) / resolution, wy = (y + .5) / resolution, cellX = Math.floor(wx), cellY = Math.floor(wy);
+        const terrain = this.terrain[cellY * world.width + cellX]!, rgb = this.terrainColor[terrain];
+        const fx = wx - cellX, fy = wy - cellY, blendX = borderBlend(fx), blendY = borderBlend(fy);
+        const neighborX = cellX + (fx < .5 ? -1 : 1), neighborY = cellY + (fy < .5 ? -1 : 1);
+        const edgeX = colorAt(neighborX, cellY), edgeY = colorAt(cellX, neighborY), corner = colorAt(neighborX, neighborY);
         const field = Math.sin(wx * .13 + wy * .04 + phase) * 4 + Math.sin(wy * .16 - wx * .06 + phase * 2) * 3;
         const grain = ((Math.imul(x + 31, 19349663) ^ Math.imul(y + 77, 73856093)) >>> 0) % 11 - 5;
         const shade = terrain === 'water' ? Math.sin(wx * .48 - wy * .25 + phase) * 3 + grain * .2 : field + grain * (terrain === 'concrete' || terrain === 'road' ? .4 : .65);
         const index = (y * texture.width + x) * 4;
-        pixels.data[index] = rgb[0] + shade; pixels.data[index + 1] = rgb[1] + shade; pixels.data[index + 2] = rgb[2] + shade; pixels.data[index + 3] = 255;
+        for (let channel = 0; channel < 3; channel++) pixels.data[index + channel] = (rgb[channel]! * (1 - blendX) + edgeX[channel]! * blendX) * (1 - blendY)
+          + (edgeY[channel]! * (1 - blendX) + corner[channel]! * blendX) * blendY + shade;
+        const edge = clamp(Math.min(wx, wy, world.width - wx, world.height - wy) / .4, 0, 1);
+        pixels.data[index + 3] = 255 * edge * edge * (3 - 2 * edge);
       }
       ground.putImageData(pixels, 0, 0);
-      ground.save(); ground.scale(resolution, resolution); this.paintLandscape(world, ground); ground.restore();
+      ground.save(); ground.scale(resolution, resolution);
+      // Flat flecks and short blades add undergrowth texture without collision scenery.
+      for (let y = 0; y < world.height; y++) for (let x = 0; x < world.width; x++) {
+        const terrain = this.terrain[y * world.width + x]!;
+        if (!['grass', 'forest', 'yard'].includes(terrain)) continue;
+        const hash = (Math.imul(x + 59, 73856093) ^ Math.imul(y + 83, 19349663)) >>> 0;
+        if (hash % 3) continue;
+        const px = x + .2 + (hash % 101) / 170, py = y + .2 + ((hash >>> 9) % 101) / 170;
+        ground.strokeStyle = terrain === 'forest' ? '#91a26e33' : '#b3bb7d33'; ground.lineWidth = .04;
+        ground.beginPath(); ground.moveTo(px - .11, py + .09); ground.lineTo(px - .04, py - .05); ground.moveTo(px + .03, py + .1); ground.lineTo(px + .04, py - .09); ground.moveTo(px + .09, py + .1); ground.lineTo(px + .15, py + .02); ground.stroke();
+      }
+      this.paintLandscape(world, ground); ground.restore();
     }
     this.terrainTexture = texture;
     const overview = document.createElement('canvas'); overview.width = (world.width + world.height) * 4; overview.height = (world.width + world.height) * 2;
