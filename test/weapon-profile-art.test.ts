@@ -121,6 +121,76 @@ describe("complete weapon side-profile audit", () => {
 		expect(viewport(weaponBuildArt(factory("pm")))[2]!).toBeLessThan(viewport(weaponBuildArt(factory("ak74")))[2]! * .6);
 	});
 
+	test("VSS and VAL retain the reference furniture, short fore-end and distinct horizontal-rib box feeds", () => {
+		const stocks = MODULE_MODELS.filter((model) => model.slot === "stock" && model.platforms.includes("val"));
+		const magazines = MODULE_MODELS.filter((model) => model.slot === "magazine" && model.platforms.includes("val"));
+		let cases = 0;
+		for (const id of ["vss", "asval"]) for (const stock of stocks) for (const magazine of magazines) {
+			const gun = factory(id); install(gun, stock.id); install(gun, magazine.id);
+			const actor = weaponActorArt(gun), bench = weaponBuildArt(gun);
+			expect(getWeaponBuildIssues(gun)).toEqual([]);
+			for (const model of [stock, magazine]) {
+				expect(outline(part(actor.svg, model.slot)!)).toBe(outline(part(moduleArt(model), model.slot)!));
+				expect(part(actor.svg, model.slot)).toBe(part(bench, model.slot));
+			}
+			const receiver = part(actor.svg, "receiver")!, guard = receiver.match(/data-mechanism="trigger-guard" d="([^"]+)"/)![1]!;
+			const receiverEnd = Math.max(...pointsForPath(outline(receiver)).map(([x]) => x));
+			const feedStart = pointsForPath(outline(part(actor.svg, "magazine")!))[0]!;
+			const guardEnd = Math.max(...pointsForPath(guard).map(([x]) => x));
+			expect(receiver).not.toContain('data-hardware="val-family-grip"');
+			expect(feedStart[0]).toBeGreaterThan(guardEnd);
+			expect(feedStart[0] - guardEnd).toBeLessThan(12);
+			expect(receiverEnd).toBeLessThan(450);
+			expect(part(actor.svg, "handguard")).toContain('data-mechanism="val-short-fore-end"');
+			const handguardEnd = Math.max(...pointsForPath(outline(part(actor.svg, "handguard")!)).map(([x]) => x));
+			const barrelEnd = Math.max(...pointsForPath(outline(part(actor.svg, "barrel")!)).map(([x]) => x));
+			expect(barrelEnd - handguardEnd).toBeGreaterThan(215);
+			if (magazine.appearance !== "drum") expect(part(actor.svg, "magazine")).toContain('data-hardware="val-horizontal-magazine-rib"');
+			expectInside(actor.svg, `${id}/${stock.id}/${magazine.id}`); expectInside(bench, `${id}/${stock.id}/${magazine.id}/bench`);
+			cases++;
+		}
+		expect(cases).toBe(98);
+		const vss = weaponActorArt(factory("vss")), val = weaponActorArt(factory("asval"));
+		expect(outline(part(vss.svg, "stock")!).split(/(?=M)/)).toHaveLength(3); // Two open wooden windows.
+		expect(part(val.svg, "stock")).toContain('data-mechanism="val-tubular-folding-frame"');
+		expect(geometryBounds(part(vss.svg, "magazine")!)[3]!).toBeLessThan(geometryBounds(part(vss.svg, "stock")!)[3]! - 5);
+		expect(geometryBounds(part(val.svg, "magazine")!)[3]!).toBeGreaterThan(geometryBounds(part(vss.svg, "magazine")!)[3]! + 35);
+	});
+
+	test("direct dovetail scope keeps its slim stepped tube and integrated receiver shoe without a rail or generic rings", () => {
+		for (const id of ["vss", "asval", "ak74", "svd"]) {
+			const gun = factory(id); install(gun, "optic-dovetail");
+			const actor = weaponActorArt(gun), scope = part(actor.svg, "optic")!, bounds = geometryBounds(scope);
+			expect(getWeaponBuildIssues(gun)).toEqual([]);
+			expect(scope).toContain('data-mechanism="slim-dovetail-scope"');
+			expect(scope).toContain('data-hardware="pso-side-shoe"');
+			expect(scope).toContain('data-hardware="corrugated-eyecup"');
+			expect(scope).not.toContain('data-hardware="scope-ring"');
+			expect(scope).not.toMatch(/h[\d.]+v6H/);
+			expect(bounds[2]! - bounds[0]!).toBeGreaterThan(240);
+			expect(bounds[2]! - bounds[0]!).toBeLessThan(250);
+			expect(outline(scope)).toBe(outline(part(moduleArt(MODULE_BY_ID["optic-dovetail"]!), "optic")!));
+			expect(scope).toBe(part(weaponBuildArt(gun), "optic")!);
+			expectInside(actor.svg, `${id}/direct-dovetail`);
+		}
+	});
+
+	test("every VAL foregrip and rail optic contacts its shortened fore-end's real attachment bridge", () => {
+		for (const id of ["vss", "asval"]) for (const model of MODULE_MODELS.filter((item) => item.slot === "foregrip" || item.slot === "optic" && item.requiresMount === "rail-top")) {
+			const gun = factory(id); install(gun, "handguard-val-carbon"); install(gun, model.id);
+			const actor = weaponActorArt(gun), foundation = part(actor.svg, "handguard")!, group = part(actor.svg, model.slot)!;
+			const rails = [...foundation.matchAll(/<path d="M(-?[\d.]+) (-?[\d.]+)h([\d.]+)v6H[-\d.]+z"/g)].map((match) => [Number(match[1]), Number(match[2]), Number(match[1]) + Number(match[3]), Number(match[2]) + 6]);
+			const [dx = 0, dy = 0] = offset(group), paths = outline(group).split(/(?=M)/);
+			const feet = model.slot === "foregrip" ? [pointsForPath(paths[0]!).slice(0, 3)] : (["scope", "longscope", "scout", "prism"].includes(model.appearance) ? paths.slice(-2) : paths.slice(0, 1)).map(pointsForPath);
+			for (const points of feet) {
+				const left = Math.min(...points.map(([x]) => x)) + dx, right = Math.max(...points.map(([x]) => x)) + dx;
+				const top = Math.min(...points.map(([, y]) => y)) + dy, bottom = Math.max(...points.map(([, y]) => y)) + dy;
+				expect(rails.some(([x = 0, y = 0, end = 0, lower = 0]) => left >= x - .01 && right <= end + .01 && bottom >= y && top <= lower), `${id}/${model.id} true fore-end contact`).toBe(true);
+			}
+			expect(getWeaponBuildIssues(gun)).toEqual([]); expectInside(actor.svg, `${id}/${model.id}`);
+		}
+	});
+
 	test("TOZ box upgrades keep a straight feed profile rather than an assault-rifle curve", () => {
 		for (const appearance of ["extended", "quick", "window", "compact"]) {
 			const gun = factory("toz"); install(gun, `magazine-toz-20g-${appearance}`);

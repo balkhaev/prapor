@@ -50,8 +50,10 @@ describe("mechanical weapon illustration", () => {
 		const val = factory("asval"), vss = factory("vss"), originalValStock = part(weaponActorArt(val).svg, "stock")!;
 		const originalVssStock = part(weaponActorArt(vss).svg, "stock")!;
 		const receiver = part(weaponActorArt(val).svg, "receiver")!;
-		expect(outline(receiver)).toEndWith("v39H323z");
-		expect(receiver).not.toContain('d="M341 171h29l-11 42h-26z"');
+		expect(receiver).toContain('data-mechanism="val-compact-action"');
+		expect(receiver).not.toContain('data-hardware="val-family-grip"');
+		expect(originalValStock).toContain('data-hardware="val-family-grip"');
+		expect(originalVssStock).toContain('data-mechanism="vss-two-window-furniture"');
 		val.modules.stock = { ...vss.modules.stock!, id: "borrowed-vss-furniture" };
 		vss.modules.stock = { ...factory("asval").modules.stock!, id: "borrowed-val-furniture" };
 		expect(part(weaponActorArt(val).svg, "stock")).toBe(originalVssStock);

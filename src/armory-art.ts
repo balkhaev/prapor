@@ -72,6 +72,50 @@ const waveProfiles = new Set(["g36", "aug", "fal", "sr25", "vector", "fiveseven"
 const bullpups = new Set(["aug", "ash12"]);
 const waveFront = (gun: Profile) => gun.id === "vector" ? 585 : gun.compact ? 601 : gun.id === "awm" || gun.id === "svdk" ? 701 : 636;
 
+// VSS and VAL furniture shares one action interface. Its grip belongs to the
+// stock chassis, so donor furniture never leaves a second grip on the action.
+const valGrip = "M311 159h30l8 17-14 59h-32l14-64-6-12z";
+const valGripDetail = (paint: Paint) => `<path data-hardware="val-family-grip" d="${valGrip}" fill="${paint.dark}"/><path d="M319 177h20l-11 52h-18z" fill="${paint.rubber}"/>${checkering(318, 185, 17, 35)}${fastener(330, 170, 2.2)}`;
+
+function valStockGeometry(gun: Profile, appearance: string, paint: Paint): Geometry {
+	const wood = appearance === "padded" || appearance === "factory" && gun.id === "vss";
+	const woodBody = appearance === "padded" ? "M97 149h30v-8h132q9 0 9 8v-1l29-12h16v28l28 12-14 49h-30l-11-7H97z" : "M107 151h117q32 0 73-15h16v28l28 12-14 49h-30l-11-7H109q-5 0-5-6v-56q0-5 3-5z";
+	const windows = "M130 166h61q18 0 18 14l-7 25q-3 8-15 8h-49q-13 0-13-14v-20q0-13 5-13zM237 165h52q15 0 15 13l-6 24q-3 11-16 11h-44q-13 0-13-12l3-22q1-14 9-14z";
+	if (wood) return { material: "wood", fillRule: "evenodd", bounds: [97, 131, 254, 104], outline: `${woodBody}${windows}`, detail: `<path data-mechanism="vss-two-window-furniture" d="M112 155h112q35 0 76-14" fill="none" stroke="#d3aa77" stroke-width="1.1" opacity=".6"/>${grain(126, 152, 164, 6)}<path data-hardware="vss-wood-grain" d="M127 216q40-2 80 0t85 0" fill="none" stroke="#d0a36b" stroke-width=".9" opacity=".32"/>${seam("M213 170l-3 33M230 170l-5 33", true)}<path d="M101 151h11v74h-11z" fill="${paint.rubber}"/>${ribs(104, 157, 2, 61, 4)}${fastener(304, 148, 2.5)}${fastener(317, 170, 2.2)}${seam("M310 185l-8 26", true)}${appearance === "padded" ? `<path data-hardware="vss-padded-cheek" d="M127 141h132q9 0 9 8v9H128z" fill="${paint.rubber}"/><path d="M97 149h12v79H96z" fill="${paint.rubber}"/>${ribs(98, 156, 2, 64, 4)}` : ""}` };
+	const frame = appearance === "factory" || appearance === "folding";
+	if (frame) return { material: "dark", fillRule: "evenodd", bounds: [99, 133, 256, 107], outline: `M110 148l185-5 19-7v22l-42 5-111 52q-18 8-52 8zM120 159v52q23-1 38-8l111-51z${valGrip}`, detail: `<path data-mechanism="val-tubular-folding-frame" d="M118 152l173-5M120 216q19 0 36-8l113-53" fill="none" stroke="#7b8a91" stroke-width="1.2" opacity=".48"/><path d="M105 150h13v74h-13z" fill="${paint.rubber}"/><path d="M201 150h10l5 28-9 5z" fill="${paint.dark}"/><path data-hardware="val-stock-hinge" d="M294 139h19v24h-19z" fill="${paint.dark}"/>${fastener(304, 149, 3)}${seam("M299 141v19", true)}${valGripDetail(paint)}${appearance === "folding" ? `<path d="M285 135h20v6h-20z" fill="${paint.steel}"/>${fastener(291, 137, 1.8)}` : ""}` };
+	const precision = appearance === "precision", skeleton = appearance === "skeleton", light = appearance === "light";
+	const body = precision ? "M106 148h78v-15h82v14h46v18h-41l-25 61h-130zM134 165h85l-14 42h-71z"
+		: skeleton ? "M110 150h79l22-9h103v22h-73l-38 61h-84zM129 164h81l-28 43h-53z"
+		: light ? "M126 153h93l13-8h82v18h-67l-34 51h-78zM146 166h62l-20 29h-42z"
+		: "M112 151h81l23-9h98v22h-69l-36 59h-89zM136 165h73l-23 39h-50z";
+	return { material: skeleton ? "steel" : "polymer", fillRule: "evenodd", bounds: [98, precision ? 125 : 132, 258, precision ? 115 : 108], outline: `${body}${valGrip}`, detail: `<path data-hardware="val-family-stock-chassis" d="M282 145h31v19h-31z" fill="${paint.steel}"/>${fastener(303, 151, 3)}${seam("M128 155h58l31-9h59", true)}<path d="M${light ? 128 : 108} 154h11v${light ? 62 : 72}h-11z" fill="${paint.rubber}"/>${precision ? `<path d="M181 128h89v17h-89z" fill="${paint.rubber}"/>${fastener(215, 219, 3)}${seam("M142 216h54", true)}` : `${fastener(196, 155, 2.3)}${seam("M147 215h35", true)}`}${valGripDetail(paint)}` };
+}
+
+function valMagazineGeometry(gun: Profile, appearance: string, paint: Paint): Geometry {
+	const depth = appearance === "extended" ? 113 : appearance === "compact" ? 27 : appearance === "factory" && gun.id === "vss" ? 31 : 87;
+	const quick = appearance === "quick", window = appearance === "window", drum = appearance === "drum";
+	if (drum) return { material: "dark", fillRule: "nonzero", bounds: [395, 172, 73, 128], outline: "M400 176h44l5 35h-44zM399 211h51q10 0 10 10v61q0 10-10 10h-43q-10 0-10-10v-61q0-10 2-10z", detail: `<path data-mechanism="val-box-feed-neck" d="M404 180h35l4 23h-35z" fill="${paint.steel}"/>${ribs(407, 222, 6, 53, 8)}${seam("M402 215h46M404 287h46", true)}${fastener(452, 224, 2.5)}` };
+	const bottom = 176 + depth, shift = depth <= 31 ? 7 : depth === 87 ? 12 : 22;
+	const outline = `M400 176h44l3 23q0 ${depth - 32} ${shift} ${depth - 23}l-42 7q-7-${depth * .4} -${shift + 5}-${depth - 7}z${quick ? `M${417 + shift} ${bottom + 8}h19v11h-19zM${421 + shift} ${bottom + 11}h11v5h-11z` : ""}`;
+	const horizontal = Array.from({ length: Math.max(2, Math.floor((depth - 21) / 9)) }, (_, i) => {
+		const y = 196 + i * 9, x = 407 + (y - 196) / depth * shift;
+		return `<path data-hardware="val-horizontal-magazine-rib" d="M${x.toFixed(2)} ${y}h30v3h-30z" fill="#303a40" stroke="#879398" stroke-width=".55"/>`;
+	}).join("");
+	return { material: "dark", bounds: [394, 172, 62 + shift, depth + (quick ? 27 : 17)], outline, detail: `<path data-mechanism="val-box-feed-neck" d="M402 179h40l2 10h-41z" fill="${paint.steel}"/>${seam("M404 183h35", true)}${horizontal}${window ? `<path d="M423 195h10l${shift - 2} ${depth - 28}-10 3z" fill="#16292e" stroke="#8f9b9e" stroke-width=".7"/>${Array.from({ length: Math.floor((depth - 28) / 9) }, (_, i) => `<path d="M${424 + i * 1.2} ${202 + i * 9}h8" stroke="#b6a176" stroke-width="2"/>`).join("")}` : ""}<path d="M${405 + shift} ${bottom + 4}l42-7 1 6-43 7z" fill="${paint.rubber}"/>${seam(`M${409 + shift} ${bottom + 6}l34-6`, true)}${quick ? `<path d="M${417 + shift} ${bottom + 8}v11h19v-14" fill="none" stroke="#89989e" stroke-width="4"/>` : ""}` };
+}
+
+function valBarrelGeometry(gun: Profile, appearance: string, paint: Paint): Geometry {
+	const end = gun.barrelEnd, heavy = appearance === "heavy", upper = heavy ? 126 : 129, lower = heavy ? 160 : 157;
+	return { material: "dark", bounds: [438, 111, end - 433, lower - 105], muzzle: { x: end, y: 143 }, outline: `M442 ${upper}h${end - 449}q7 0 7 7v${lower - upper - 14}q0 7-7 7H442z`, detail: `<path data-mechanism="val-integral-cylinder" d="M518 ${upper + 4}h${end - 530}" fill="none" stroke="#a3afb4" stroke-width="1.3" opacity=".52"/>${seam(`M522 ${lower - 4}h${end - 535}`)}${seam(`M520 ${upper}v${lower - upper}M${end - 15} ${upper}v${lower - upper}M${end - 11} ${upper + 1}v${lower - upper - 2}`)}<path data-mechanism="front-sight" d="M${end - 22} ${upper}v-13h12v13M${end - 19} ${upper - 13}v-4h6v4" fill="${paint.dark}"/>${fastener(end - 16, upper - 7, 1.7)}<path data-mechanism="rear-sight" d="M521 ${upper}v-12h32l8 9v3z" fill="${paint.dark}"/>${seam(`M527 ${upper - 8}h23`, true)}${appearance === "fluted" ? Array.from({ length: 3 }, (_, i) => seam(`M555 ${135 + i * 7}h${end - 584}`, i === 0)).join("") : ""}${heavy ? `<path d="M525 126h11v34h-11z" fill="${paint.steel}"/>${seam("M528 128v30", true)}` : ""}` };
+}
+
+function valHandguardGeometry(appearance: string, paint: Paint): Geometry {
+	const railed = appearance === "rail" || appearance === "carbon", bottom = railed || appearance === "vented";
+	const outline = appearance === "light" ? "M448 127h62v30l-62 13z" : appearance === "wood" ? "M446 123h65q5 0 5 5v28l-70 17z" : appearance === "vented" ? "M444 120h72v37l-72 18zM455 136h13v20h-13zM479 133h14v18h-14z" : appearance === "carbon" ? "M445 123q0-5 7-5h56q9 0 9 10v28l-72 18z" : appearance === "rail" ? "M444 119h72v41l-72 17zM453 135h14v18h-14zM478 132h15v17h-15z" : "M444 119h71l3 7v32l-74 18z";
+	return { material: appearance === "wood" ? "wood" : appearance === "carbon" ? "carbon" : appearance === "vented" ? "steel" : "polymer", fillRule: "evenodd", bounds: [railed ? 331 : bottom ? 432 : 440, railed ? 105 : 115, railed ? 213 : bottom ? 112 : 82, bottom ? 82 : 67], outline, detail: `<path data-mechanism="val-short-fore-end" d="M450 124h59v30l-59 15" fill="none" stroke="#919ea3" stroke-width=".8" opacity=".52"/>${appearance === "wood" ? grain(450, 139, 55, 17) : appearance === "factory" || appearance === "light" ? checkering(455, 133, 48, 20) : ""}${railed ? `${rail(335, 108, 182)}<path data-hardware="val-receiver-bridge-support" d="M432 114h13v15h-13zM506 114h10v12h-10z" fill="${paint.steel}"/>${rail(449, 145, 60)}` : ""}${bottom ? `<path data-hardware="val-bottom-bridge-support" d="M436 165h9v10h-9zM503 156h12v19h-12z" fill="${paint.steel}"/>${rail(436, 174, 104)}` : ""}${fastener(451, 153, 2.1)}${fastener(510, 136, 2.1)}${seam("M513 125v30", true)}` };
+}
+
 /** Additional silhouettes remain code-native; generated assets only supply paint. */
 function waveReceiverGeometry(gun: Profile, paint: Paint): Geometry | undefined {
 	if (!waveProfiles.has(gun.id)) return undefined;
@@ -293,13 +337,13 @@ function receiverGeometry(gun: Profile, paint: Paint): Geometry {
 		<path data-mechanism="rear-sight" d="M331 101h14v7h-14z" fill="#20272b"/>${seam("M383 153h17v8h-17")}${fastener(349, 163, 2)}` };
 	if (gun.integral) {
 		const val = gun.id === "asval";
-		return { material: "dark", bounds: [317, 103, 183, 119], outline: val
-			? "M323 124q10-15 25-15h109l34 16v39H323z"
-			: "M322 124q10-17 29-17h102l38 18v37H337l-15-14z",
-			detail: `${seam("M348 111h106l33 17", true)}${port(402, 128, 63, 19)}<path data-mechanism="charging-handle" d="M448 136h41v7h-21l-9 6h-10z" fill="#70797d"/>
-			${seam("M328 150h73M330 158h158")}${triggerGuard(374, 166, 43, 23)}${selector(347, 149, 35)}${fastener(331, 135, 2.5)}${fastener(476, 154, 2.6)}
-			${val ? `<path d="M319 130h10v24h-10z" fill="${paint.steel}"/>${fastener(324, 137, 3)}` : `<path data-mechanism="stock-tang" d="M324 151h30v9h-30z" fill="${paint.steel}"/>${fastener(343, 155, 2.4)}${seam("M335 112v36")}`}
-			<path data-mechanism="rear-sight" d="M477 114h15v10h-15z" fill="#252c31"/>` };
+		return { material: "dark", bounds: [304, 112, 145, 94], outline: val
+			? "M310 131q0-13 14-13h117l4 5v48l-45 13v-11h-90z"
+			: "M309 133q0-15 17-15h115l4 6v47l-45 13v-11h-91z",
+			detail: `<path data-mechanism="val-compact-action" d="M315 135h121" fill="none" stroke="#7b898f" stroke-width="1"/>${seam("M328 121h109M315 167h81", true)}${port(391, 126, 49, 17)}<path data-mechanism="charging-handle" d="M349 143l12-9h30v6h-25l-11 10h-9z" fill="#46565f"/>
+			${seam("M317 151h34M360 147h80")}${triggerGuard(350, 173, 43, 28)}${selector(348, 152, 35)}${fastener(319, 151, 2.3)}${fastener(433, 163, 2.3)}
+			<path data-mechanism="val-magazine-well" d="M398 173h46v8l-44 8z" fill="${paint.dark}"/>${seam("M403 178h36", true)}<path data-mechanism="val-dovetail-seat" d="M314 156h32v5h-32z" fill="${paint.steel}"/>
+			${val ? `<path data-mechanism="val-stock-hinge-seat" d="M306 139h9v26h-9z" fill="${paint.steel}"/>${fastener(311, 146, 2.5)}` : `<path data-mechanism="stock-tang" d="M307 145h9v19h-9z" fill="${paint.steel}"/>${seam("M338 120v14")}`}<path data-mechanism="magazine-catch" d="M391 183h8l-5 13h-7z" fill="${paint.steel}"/>` };
 	}
 	if (gun.id === "svd") return { material: "dark", bounds: [316, 104, 185, 112], outline: "M323 121l23-12h114l31 17v35H324z",
 		detail: `<path data-mechanism="dust-cover" d="M346 112h111l24 13H333z" fill="${paint.steel}"/>${seam("M350 115h104l21 8", true)}${port(390, 129, 77, 18)}
@@ -417,8 +461,8 @@ function mountGeometry(appearance: string, paint: Paint): Geometry {
 	if (appearance === "pistol-bridge") return { material: "steel", bounds: [406, 103, 231, 68], outline: "M424 114h18v41h79v-11h18v25H424z", detail: `${rail(410, 108, 157)}${rail(518, 145, 113)}${fastener(430, 157, 3)}${fastener(530, 158, 3)}${seam("M429 119v37h86", true)}<path data-hardware="pistol-bridge-frame-shoe" d="M431 152h29v9h-29z" fill="${paint.dark}"/>` };
 	if (appearance.startsWith("dovetail-")) {
 		const high = appearance === "dovetail-high", bridge = appearance === "dovetail-bridge", qd = appearance === "dovetail-qd";
-		const top = high ? 79 : bridge ? 87 : qd ? 93 : 97, width = bridge ? 147 : high ? 105 : qd ? 124 : 113;
-		return { outline: `M387 132h27V${top}h${width}v10H425v30h-38zM420 139h215v7H420z`, material: "steel", bounds: [383, top - 4, 257, 155 - top], detail: `${rail(412, top - 2, width)}${rail(518, 145, 113)}<path d="M393 136h27v6h-27" fill="${paint.dark}"/>${fastener(403, 136, 4)}${fastener(438, top + 4, 3)}${high ? `<path d="M417 99h20v14h-20" fill="${paint.dark}"/>` : ""}${bridge ? `<path d="M533 97v26h-20v-16" fill="none" stroke="#2f3234" stroke-width="8"/>${fastener(526, 119, 3)}` : ""}${qd ? `<path d="M418 137h30l10 6-11 4h-30z" fill="${paint.rubber}"/>${fastener(444, 142, 3)}` : ""}` };
+		const top = high ? 88 : bridge ? 96 : qd ? 98 : 102, width = bridge ? 166 : high ? 150 : qd ? 155 : 149;
+		return { outline: `M352 ${top + 4}h${width - 4}v7l-36 18h-19v22h-83v-22h-13zM370 ${top + 14}h${width - 35}l-18 9h-${width - 70}z`, material: "steel", fillRule: "evenodd", bounds: [345, top - 3, width + 14, 161 - top], detail: `${rail(350, top, width)}<path data-hardware="dovetail-thin-web-adapter" d="M360 ${top + 11}l14 14h55l34-14" fill="none" stroke="#87959b" stroke-width=".8" opacity=".6"/><path data-hardware="dovetail-receiver-shoe" d="M357 137h74v16h-74z" fill="${paint.dark}"/>${rail(400, 145, 92)}${fastener(367, 143, 3.1)}${fastener(425, 143, 2.5)}<path data-hardware="dovetail-lock-lever" d="M373 145h40l8 4-6 5h-41z" fill="${qd ? paint.rubber : paint.steel}"/>${fastener(410, 149, 2.2)}${bridge ? `<path d="M475 116h12v16h-12z" fill="${paint.steel}"/>${fastener(481, 129, 2.2)}` : ""}` };
 	}
 	if (appearance.startsWith("barrel-")) {
 		const dual = appearance === "barrel-dual", long = appearance === "barrel-long", offset = appearance === "barrel-offset";
@@ -460,6 +504,7 @@ function baseGeometry(slot: ModuleSlot, appearance: string, gun: Profile, paint:
 		case "laser": return laserGeometry(appearance, paint);
 		case "receiver": return receiverGeometry(gun, paint);
 		case "stock": {
+			if (gun.integral) return valStockGeometry(gun, appearance, paint);
 			const wave = waveStockGeometry(gun, appearance, paint); if (wave) return wave;
 			const modern = modernStockGeometry(gun, appearance, paint); if (modern) return modern;
 			const chassis = classicUpgradeStockGeometry(gun, appearance, paint); if (chassis) return chassis;
@@ -474,15 +519,16 @@ function baseGeometry(slot: ModuleSlot, appearance: string, gun: Profile, paint:
 			return { outline: "M106 148 211 134h52l61 12v23h-52l-38 15-108 39h-24z", material, bounds: [97, 131, 229, 96], detail: `<path d="M109 151 213 138h46l58 12v5h-59l-39-4-109 19z" fill="#d9b584" opacity="${wood ? ".28" : ".16"}"/>${wood ? grain(128, 159, 127, 37) : ribs(163, 154, 10, 32)}<path d="M100 169h13l9 55h-18z" fill="${paint.rubber}"/><path d="m207 168 26-2-28 14-65 25" stroke="#302d23" stroke-width="2" fill="none" opacity=".4"/>${fastener(281, 155, 3)}<path d="M132 193h16v5h-16" fill="#4b4e50"/>` };
 		}
 		case "barrel": {
+			if (gun.integral) return valBarrelGeometry(gun, appearance, paint);
 			if (appearance === "heavy" || appearance === "fluted") return machinedBarrelGeometry(gun, appearance);
 			if (pistol) {
 				const start = Math.min(550, end - 18);
 				return { outline: `M${start} 128h${end - start}v13h-${end - start}z`, detail: `<path d="M${start + 3} 130h${end - start - 5}" stroke="#bcbfc1" stroke-width="2" opacity=".7"/><path d="M${end - 7} 127v15" stroke="#181b1d" stroke-width="2"/>`, material: "dark", muzzle: { x: end, y: 134.5 }, bounds: [start - 2, 125, end - start + 5, 20] };
 			}
-			if (gun.integral) return { outline: `M486 128h${end - 486}q8 0 8 8v14q0 8-8 8H486z`, detail: `<path d="M491 132h${end - 491}" stroke="#b3b6b8" stroke-opacity=".42" stroke-width="2"/><path d="M${end - 18} 129v28m-5-28v28m-157-28v28" stroke="#202325" stroke-width="3"/>${vents(586, 141, 7, 4, 4, 12)}<path d="M${end - 12} 153h14" stroke="#56595b" stroke-width="2"/>`, material: "dark", muzzle: { x: end, y: 143 }, bounds: [483, 126, end - 474, 35] };
 			return serviceBarrelGeometry(gun, paint);
 		}
 		case "handguard": {
+			if (gun.integral) return valHandguardGeometry(appearance, paint);
 			const wave = waveHandguardGeometry(gun, appearance, paint); if (wave) return wave;
 			if (pistol) return { outline: "M475 145h77v10h-77z", detail: rail(478, 149, 71), material: "dark", bounds: [473, 143, 82, 19] };
 			const right = gun.compact ? 601 : gun.integral ? 578 : 636;
@@ -515,6 +561,7 @@ function baseGeometry(slot: ModuleSlot, appearance: string, gun: Profile, paint:
 			return { outline: `M483 132h${right - 498}l15 9v32H487l-8-12z`, material: appearance === "rail" ? "dark" : material, bounds: [appearance === "rail" ? 371 : 475, appearance === "rail" ? 103 : 119, right - (appearance === "rail" ? 366 : 470), appearance === "rail" ? 80 : 60], detail: `${appearance === "rail" ? `${topBridge(right)}${rail(518, 145, right - 526)}` : ""}<path d="M487 135h${right - 502}l10 6H486z" fill="#d2c099" opacity="${wood ? ".32" : ".18"}"/>${appearance === "rail" ? `${rail(486, 125, right - 490)}${rail(493, 172, right - 501)}${vents(492, 143, Math.floor((right - 505) / 17), 10, 12)}` : wood ? `${grain(492, 153, right - 504, 19)}${vents(494, 136, Math.floor((right - 510) / 20), 9, 6, 20)}` : `${vents(492, 143, Math.floor((right - 508) / (light ? 24 : 16)), light ? 16 : 8, 12, light ? 24 : 16)}${ribs(491, 163, Math.floor((right - 505) / 8), 9, 8)}`}${gun.pump ? `<path d="M485 169h${right - 490}v10H485z" fill="${paint.steel}"/>${ribs(486, 138, 15, 34, 9)}` : ""}${fastener(488, 163, 2.6)}${fastener(right - 10, 162, 2.6)}` };
 		}
 		case "magazine": {
+			if (gun.integral) return valMagazineGeometry(gun, appearance, paint);
 			const wave = waveMagazineGeometry(gun, appearance, paint); if (wave) return wave;
 			const modern = modernMagazineGeometry(gun, appearance, paint);
 			if (modern) {
@@ -565,6 +612,7 @@ function baseGeometry(slot: ModuleSlot, appearance: string, gun: Profile, paint:
 		case "optic": {
 			// All optics are right-facing orthographic side views. Lens surfaces
 			// are edge strips; sight windows and reticles are not visible side-on.
+			if (appearance === "dovetail") return { material: "dark", bounds: [249, 66, 254, 77], outline: "M254 77h12l4 4h39v-3h24v5l45 5h12l4-10h60l6 3h36v25h-40l-6 3h-57l-4-9h-12l-44 5v5h-25v-3h-39l-4 4h-12zM372 108h14v16h-14zM325 122h66v15h-66zM325 112h39v11h-39z", detail: `<path data-mechanism="slim-dovetail-scope" d="M271 85h39M338 88l40 4M398 83h92" fill="none" stroke="#a0adb3" stroke-width="1.2" opacity=".56"/><path data-hardware="corrugated-eyecup" d="M255 77v34M263 80v28M271 82v24" fill="none" stroke="#73828a" stroke-width="2.3"/>${ribs(278, 84, 5, 20, 5)}${seam("M313 79v30M330 82v24M394 81v26M453 82v24M487 82v24")}<path data-hardware="scope-elevation-turret" d="M409 79V70h18v9M405 68h26v5h-26z" fill="${paint.steel}"/>${ribs(407, 69, 5, 4, 5)}<path data-hardware="scope-windage-block" d="M410 87h23v17h-23z" fill="${paint.steel}"/>${fastener(421, 95, 6)}<path data-hardware="pso-side-shoe" d="M326 124h64v12h-64z" fill="${paint.steel}"/>${fastener(377, 129, 2.1)}<path data-hardware="pso-battery-housing" d="M325 113h38v8h-38z" fill="${paint.steel}"/>${ribs(326, 114, 3, 6, 4)}${seam("M342 114v6M354 114v6M373 111v11", true)}<path d="M351 131h27l7 4h-34z" fill="${paint.dark}"/>` };
 			if (appearance === "micro") return { outline: "M397 100h65v10h-65zM409 79h34l12 9v12h-47z", material: "dark", bounds: [393, 74, 73, 40], detail: `<path d="M414 81h27l9 8v6h-36z" fill="${paint.polymer}"/><path d="M451 87v12" stroke="#919496" stroke-width="2"/>${fastener(429, 87, 4)}${fastener(453, 104, 2.5)}<path d="M412 76h12v6h-12" fill="${paint.steel}"/>` };
 			if (appearance === "holo") return { outline: "M383 96h111v14H383zM391 95V60l8-10h46l12 15v30zM457 78h31v18h-31z", material: "dark", bounds: [379, 46, 120, 68], detail: `<path d="M399 58h41l9 11v20h-50z" fill="${paint.polymer}" stroke="#808385" stroke-width="1.4"/><path d="M450 64v28" stroke="#8c8f91" stroke-width="2"/><path d="M463 81h18v12h-18" fill="${paint.rubber}"/>${ribs(465, 83, 3, 8, 5)}<path d="M403 75h30v9h-30" fill="#c3ba8e" opacity=".65"/>${fastener(418, 65, 3)}${fastener(480, 104, 3)}<path d="M390 101h14v5h-14" fill="${paint.steel}"/>` };
 			if (appearance === "prism") return { outline: "M380 70h76l18-14h28v42h-26l-20-9h-76zM393 89h12v21h-12zM450 89h12v21h-12z", material: "dark", bounds: [376, 51, 131, 64], detail: `<path d="M381 74h73l19-14h25" fill="none" stroke="#a2a5a7" stroke-width="2" opacity=".5"/><path d="M420 70V55h19v15" fill="${paint.steel}"/>${ribs(419, 54, 4, 9, 5)}<path d="M501 61v32" stroke="#888b8d" stroke-width="2"/><path d="M376 70v19M385 70v19" stroke="#16191b" stroke-width="3"/>${rail(388, 106, 82)}${fastener(398, 101, 3)}${fastener(456, 101, 3)}` };
@@ -595,6 +643,7 @@ function baseGeometry(slot: ModuleSlot, appearance: string, gun: Profile, paint:
 
 function fittedHardware(slot: ModuleSlot, appearance: string, gun: Profile, paint: Paint): string {
 	if (slot === "optic") {
+		if (appearance === "dovetail") return "";
 		if (["scope", "dovetail", "scout", "longscope"].includes(appearance)) {
 			const rings = appearance === "longscope" ? [369, 479, 66, 19, 13] : appearance === "scout" ? [418, 473, 76, 16, 10] : [385, 456, 69, 22, 10];
 			const [rear = 385, front = 456, y = 69, depth = 22, width = 10] = rings;
@@ -617,7 +666,7 @@ function fittedHardware(slot: ModuleSlot, appearance: string, gun: Profile, pain
 		return `<path data-hardware="adjustment-cap" d="M${appearance === "tube" ? 543 : 537} 143h8v5h-8z" fill="${paint.steel}"/>${seam("M528 166h14", true)}${seam(`M522 ${y + 6}h7v5h-7`)}${appearance === "tube" ? "" : `<path data-hardware="warning-plate" d="M544 ${y + 6}h8v4h-8z" fill="#b1a27c" opacity=".5"/>`}`;
 	}
 	if (slot === "mount") {
-		if (appearance.startsWith("dovetail-")) return `${seam("M390 133h18v10h-18", true)}<path data-hardware="locking-shoe" d="M421 138h24v6h-24z" fill="${paint.dark}"/>${fastener(433, 141, 1.7)}${seam("M445 140h55", true)}`;
+		if (appearance.startsWith("dovetail-")) return `${seam("M361 138h64", true)}<path data-hardware="locking-shoe" d="M375 137h32v7h-32z" fill="${paint.dark}"/>${fastener(390, 140, 1.7)}`;
 		if (appearance.startsWith("barrel-")) {
 			const x = appearance === "barrel-long" ? 579 : appearance === "barrel-dual" ? 589 : 599, width = appearance === "barrel-long" ? 67 : appearance === "barrel-dual" ? 55 : appearance === "barrel-offset" ? 45 : 31;
 			return `${seam(`M${x + 2} 140h${width - 4}`)}${seam(`M${x + 4} 126h${width - 8}`, true)}${fastener(x + width / 2, 129, 1.7)}<path data-hardware="clamp-gap" d="M${x + 2} 150h${width - 4}v2h-${width - 4}z" fill="#131c21"/>`;
@@ -648,15 +697,8 @@ function fittedOpticProportions(shape: Geometry, appearance: string): Geometry {
 
 function geometry(slot: ModuleSlot, appearance: string, gun: Profile, paint: Paint): Geometry {
 	const shape = baseGeometry(slot, appearance, gun, paint);
-	// The folding VAL furniture includes its grip chassis. Keep that real part
-	// when transferred to the compatible VSS action, whose wooden grip is absent.
-	if (slot === "stock" && gun.id === "asval" && appearance === "factory") {
-		shape.outline += "M339 164h39l-14 54h-37l12-54z";
-		shape.bounds = [109, 142, 273, 85];
-		shape.detail += `<path data-hardware="val-folding-stock-grip" d="M339 164h39l-14 54h-37l12-54z" fill="${paint.dark}"/><path d="M341 171h29l-11 42h-26z" fill="${paint.rubber}"/>${checkering(341, 181, 23, 25)}`;
-	}
 	const detailed = { ...shape, detail: shape.detail + fittedHardware(slot, appearance, gun, paint) };
-	return slot === "optic" ? fittedOpticProportions(detailed, appearance) : detailed;
+	return slot === "optic" && appearance !== "dovetail" ? fittedOpticProportions(detailed, appearance) : detailed;
 }
 
 function renderPart(shape: Geometry, paint: Paint, slot: ModuleSlot, installed: boolean, selected: boolean, durability = 100, seed?: string): string {
@@ -687,11 +729,11 @@ function installedGeometry(slot: ModuleSlot, model: ModuleModel | undefined, gun
 	const handguard = installed.handguard ? MODULE_BY_ID[installed.handguard.modelId] : undefined;
 	const mountLift = gun.id === "p90" && mount?.appearance.startsWith("bottom-") ? 36
 		: newProfiles.has(gun.id) && mount?.appearance.startsWith("top-") && (gun.id === "p90" || !["factory", "rail", "carbon"].includes(handguard?.appearance ?? "")) ? -17 : 0;
-	const compactShift = gun.compact ? -35 : gun.integral ? -58 : 0;
-	const front = waveProfiles.has(gun.id) && gun.category !== "pistol" ? waveFront(gun) : gun.compact ? 601 : gun.integral ? 578 : 636;
+	const compactShift = gun.compact ? -35 : gun.integral ? -119 : 0;
+	const front = waveProfiles.has(gun.id) && gun.category !== "pistol" ? waveFront(gun) : gun.compact ? 601 : gun.integral ? 518 : 636;
 	const barrelCenter = (front + gun.barrelEnd) / 2;
-	const sideEnd = mount ? 631 + (mount.appearance.startsWith("dovetail-") ? 0 : compactShift) : front - 8;
-	const directLaserCenter = waveProfiles.has(gun.id) && gun.category !== "pistol" ? (front + (bullpups.has(gun.id) ? 533 : gun.id === "vector" ? 534 : gun.id === "m870" ? 527 : 487) + 2) / 2 : 538;
+	const sideEnd = mount ? mount.appearance.startsWith("dovetail-") ? 492 - (gun.integral ? 40 : 0) : 631 + compactShift : front - 8;
+	const directLaserCenter = gun.integral ? 476 : waveProfiles.has(gun.id) && gun.category !== "pistol" ? (front + (bullpups.has(gun.id) ? 533 : gun.id === "vector" ? 534 : gun.id === "m870" ? 527 : 487) + 2) / 2 : 538;
 	if (slot === "muzzle") {
 		const barrel = installed.barrel ? MODULE_BY_ID[installed.barrel.modelId] : undefined;
 		const barrelShape = geometry("barrel", barrel?.appearance ?? "factory", barrel ? { ...moduleProfile(barrel), barrelEnd: gun.barrelEnd } : gun, paint);
@@ -699,20 +741,20 @@ function installedGeometry(slot: ModuleSlot, model: ModuleModel | undefined, gun
 	}
 	if (slot === "mount") {
 		const centers: Record<string, number> = { "barrel-ring": 614.5, "barrel-dual": 616.5, "barrel-long": 612.5, "barrel-offset": 621.5 };
-		return positioned(shape, model?.appearance.startsWith("barrel-") ? barrelCenter - (centers[model.appearance] ?? 614.5) : model?.appearance.startsWith("dovetail-") ? 0 : compactShift, mountLift);
+		return positioned(shape, model?.appearance.startsWith("barrel-") ? barrelCenter - (centers[model.appearance] ?? 614.5) : model?.appearance.startsWith("dovetail-") ? gun.integral ? -40 : 0 : compactShift, mountLift);
 	}
 	if (slot === "optic" && model?.requiresMount === "rail-top" && mount?.appearance.startsWith("dovetail-")) {
-		const top: Record<string, number> = { "dovetail-low": 95, "dovetail-high": 77, "dovetail-qd": 91, "dovetail-bridge": 85 };
-		// Both optical rings must sit inside the adapter's actual rail. The
-		// short adapters begin at x412, beyond the receiver's ordinary optic foot.
-		return positioned(shape, mount.appearance === "dovetail-bridge" ? 35 : 33, (top[mount.appearance] ?? 108) - (shape.railFootY ?? 110));
+		const top: Record<string, number> = { "dovetail-low": 102, "dovetail-high": 88, "dovetail-qd": 98, "dovetail-bridge": 96 };
+		return positioned(shape, gun.integral ? -40 : 0, (top[mount.appearance] ?? 108) - (shape.railFootY ?? 110));
 	}
+	if (slot === "optic" && gun.integral && model?.requiresMount === "rail-top") return positioned(shape, -40, 0);
+	if (slot === "foregrip" && gun.integral) return positioned(shape, -65, -2);
 	if (slot === "optic" && gun.id === "p90") return positioned(shape, 130, 0);
 	if (slot === "optic" && gun.id === "ash12") return positioned(shape, 0, -25);
 	if (slot === "foregrip" && gun.id === "p90") return positioned(shape, 0, 36);
 	if (slot === "foregrip" && waveProfiles.has(gun.id)) return positioned(shape, 0, gun.id === "m870" ? 10 : gun.id === "ash12" ? 6 : 0);
 	if (slot === "flashlight") return positioned(shape, (mount?.appearance.startsWith("barrel-") ? barrelCenter : sideEnd - 17) - 626.5, mount?.appearance.startsWith("barrel-") ? -27 : mountLift);
-	if (slot === "laser") return positioned(shape, (mount?.appearance.startsWith("barrel-") ? barrelCenter : mount ? 538 : directLaserCenter) - (model?.appearance === "tube" ? 548.5 : 543.5), mount?.appearance === "barrel-offset" ? 25 : mount?.appearance.startsWith("barrel-") ? 18 : mountLift);
+	if (slot === "laser") return positioned(shape, (mount?.appearance.startsWith("barrel-") ? barrelCenter : mount?.appearance.startsWith("dovetail-") ? 425 - (gun.integral ? 40 : 0) : mount ? gun.integral ? 476 : 538 : directLaserCenter) - (model?.appearance === "tube" ? 548.5 : 543.5), mount?.appearance === "barrel-offset" ? 25 : mount?.appearance.startsWith("barrel-") ? 18 : mountLift);
 	return shape;
 }
 

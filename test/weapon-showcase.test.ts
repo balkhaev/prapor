@@ -16,6 +16,11 @@ test("all 39 field presets use real compatible modules and retain the factory id
 		for (const [slot,part] of Object.entries(field.modules)) expect(String(MODULE_BY_ID[part.modelId]!.slot)).toBe(slot);
 		expect(field.modules.flashlight && field.modules.laser).toBeFalsy();
 		if (["pistol","smg","shotgun"].includes(definition.category)) expect(field.modules.optic && MODULE_BY_ID[field.modules.optic.modelId]!.appearance).not.toBe("longscope");
+		if (["vss","asval"].includes(definition.id)) {
+			for (const slot of ["stock","barrel","handguard","magazine"] as const) expect(field.modules[slot]!.modelId).toBe(factory.modules[slot]!.modelId);
+			expect(MODULE_BY_ID[field.modules.optic!.modelId]!.appearance).toBe("dovetail");
+			expect(field.modules.mount).toBeUndefined();
+		}
 		expect(JSON.stringify(factory)).toBe(before); expect(createWeaponShowcaseBuild(definition.id,"field")).toEqual(field);
 	}
 	expect(() => createWeaponShowcaseBuild("__proto__")).toThrow();
