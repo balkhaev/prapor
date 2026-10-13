@@ -4,7 +4,8 @@ import type { ShelterPoint } from "./shelter-motion";
 
 export const SHELTER_ROOM_WIDTH = 172;
 export const SHELTER_ROOM_HEIGHT = 100;
-const ROOM_COLUMNS = [40, 220, 448, 628] as const;
+export const SHELTER_COLUMN_STRIDE = 192;
+export const SHELTER_ROW_STRIDE = 132;
 const ORIGIN_X = 307;
 const ORIGIN_Y = 57;
 const DEPTH_ORIGIN = 100;
@@ -43,7 +44,7 @@ export function projectShelterBounds(rect: ShelterRect): ShelterRect {
 }
 
 export function shelterRoomPosition(column: number, row: number): ShelterPoint {
-	return { x: ROOM_COLUMNS[column] ?? ROOM_COLUMNS[0], y: 148 + row * 111 };
+	return { x: 40 + column * SHELTER_COLUMN_STRIDE, y: 148 + row * SHELTER_ROW_STRIDE };
 }
 
 /** Ground corners run clockwise from the room's rear corner, in absolute projected world pixels. */

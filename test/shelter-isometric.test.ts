@@ -7,10 +7,12 @@ import {
 	projectShelterBounds, projectShelterPoint, SHELTER_ROOM_HEIGHT, SHELTER_ROOM_WIDTH,
 	shelterRoomPolygon, shelterRoomPosition, unprojectShelterPoint,
 } from "../src/shelter-isometric";
-import { clientToShelterPoint, getShelterCell, planShelterRoute } from "../src/shelter-motion";
+import { getShelterLayoutCell, getShelterWalkingRoute } from "../src/shelter-layout";
+import { clientToShelterPoint } from "../src/shelter-motion";
 
 const roomRect = (column: number, row: number) => ({ ...shelterRoomPosition(column, row), width: SHELTER_ROOM_WIDTH, height: SHELTER_ROOM_HEIGHT });
 const center = (rect: { x: number; y: number; width: number; height: number }) => ({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
+const sites = Array.from({ length: 12 }, (_, index) => ({ column: index % 4, row: Math.floor(index / 4) }));
 function expectPoint(actual: { x: number; y: number }, expected: { x: number; y: number }) {
 	expect(actual.x).toBeCloseTo(expected.x, 8);
 	expect(actual.y).toBeCloseTo(expected.y, 8);
@@ -36,7 +38,7 @@ describe("isometric shelter presentation", () => {
 		for (let row = 0; row < 3; row++) for (let column = 0; column < 4; column++) {
 			const rect = roomRect(column, row), logical = center(rect), polygon = shelterRoomPolygon(column, row);
 			expectPoint(unprojectShelterPoint(projectShelterPoint(logical)), logical);
-			expect(getShelterCell(unprojectShelterPoint(projectShelterPoint(logical)))).toEqual({ column, row });
+			expect(getShelterLayoutCell(unprojectShelterPoint(projectShelterPoint(logical)))).toEqual({ column, row });
 			const bounds = projectShelterBounds(rect);
 			expectPoint(center(bounds), projectShelterPoint(logical));
 			expect(bounds.width).toBeCloseTo(bounds.height * 2, 8);
@@ -47,7 +49,7 @@ describe("isometric shelter presentation", () => {
 				expect(corner.y).toBeGreaterThanOrEqual(bounds.y - 1e-7);
 				expect(corner.y).toBeLessThanOrEqual(bounds.y + bounds.height + 1e-7);
 			}
-			const from = { x: 112, y: 129 }, route = planShelterRoute(from, { x: rect.x + 86, y: rect.y + 80 }), before = structuredClone(route);
+			const from = { x: 112, y: 129 }, route = getShelterWalkingRoute(from, { x: rect.x + 86, y: rect.y + 80 }, sites), before = structuredClone(route);
 			for (const point of [from, ...route]) expectPoint(unprojectShelterPoint(projectShelterPoint(point)), point);
 			expect(route).toEqual(before);
 		}
@@ -61,13 +63,13 @@ describe("isometric shelter presentation", () => {
 				{ x: bounds.x + bounds.width, y: bounds.y + bounds.height }, { x: bounds.x, y: bounds.y + bounds.height },
 			]) {
 				// An overlapping bounding box may cover a neighboring diamond, but never this room's floor.
-				expect(getShelterCell(unprojectShelterPoint(corner))).not.toEqual({ column, row });
+					expect(getShelterLayoutCell(unprojectShelterPoint(corner))).not.toEqual({ column, row });
 			}
 		}
 		for (const logical of [
 			{ x: 0, y: 0 }, { x: 420, y: 300 }, { x: 216, y: 200 }, { x: 440, y: 390 },
-			{ x: 624, y: 300 }, { x: 100, y: 253 }, { x: 100, y: 365 }, { x: 825, y: 500 },
-		]) expect(getShelterCell(unprojectShelterPoint(projectShelterPoint(logical)))).toBeNull();
+			{ x: 612, y: 300 }, { x: 100, y: 253 }, { x: 100, y: 400 }, { x: 805, y: 500 },
+		]) expect(getShelterLayoutCell(unprojectShelterPoint(projectShelterPoint(logical)))).toBeNull();
 	});
 
 	test("all room targets compose with focus, zoom, pan and scaled client coordinates in every stage aspect", () => {
@@ -89,7 +91,7 @@ describe("isometric shelter presentation", () => {
 					expect(pointer).not.toBeNull();
 					const restored = unprojectShelterPoint(viewportToShelter(pointer!, camera, viewport));
 					expectPoint(restored, logical);
-					expect(getShelterCell(restored)).toEqual({ column, row });
+					expect(getShelterLayoutCell(restored)).toEqual({ column, row });
 				}
 			}
 		}
