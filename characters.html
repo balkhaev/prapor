@@ -46,7 +46,7 @@
       .inspection-zoom { display: flex; gap: 3px; }
       #weapon-closeup { position: relative; overflow: auto; max-height: 430px; border: 1px solid #4b5246; border-radius: 5px; background: radial-gradient(ellipse at 50% 42%, #394137 0, #252b25 65%, #202620 100%); scrollbar-color: #6c7263 #202620; scrollbar-width: thin; }
       .inspection-canvas { width: var(--inspection-width, 100%); min-height: 270px; display: grid; align-items: center; padding: 22px 15px; }
-      #weapon-closeup .weapon-build-art { display: block; width: 100%; height: auto; max-width: none; }
+      #weapon-closeup .weapon-build-art { display: block; width: 100%; height: auto; max-width: none; max-height: calc(var(--inspection-art-height, 386px) * var(--inspection-zoom, 1)); }
       #weapon-closeup [data-module-slot] { cursor: pointer; }
       #weapon-closeup:focus-visible { outline: 2px solid #b3a47c; outline-offset: 3px; }
       .inspection-guide { margin: 9px 0 16px; color: #8e9788; font-size: 10px; line-height: 1.7; }
@@ -66,6 +66,23 @@
       .inspection-part p { margin: 5px 0; color: #a7b29b; font-size: 11px; line-height: 1.8; }
       .inspection-part .part-fit { color: #c0c5b4; font: 10px 'IBM Plex Mono', monospace; }
       .inspection-part.empty-inspection { grid-template-columns: 1fr; }
+      .showcase-controls { display: flex; align-items: end; flex-wrap: wrap; gap: 14px; margin: 17px 0; }
+      .showcase-presets { display: flex; gap: 5px; }
+      .showcase-presets button { min-height: 37px; padding: 8px 12px; border: 1px solid #576149; border-radius: 5px; background: #283126; color: #b8c3aa; font: 11px Manrope, sans-serif; cursor: pointer; }
+      .showcase-presets button[aria-pressed=true] { border-color: #ab9c75; background: #3a4030; color: #eee4c8; }
+      .showcase-controls label { min-width: 175px; }
+      .showcase-count { margin: 0 0 11px; color: #aab69d; font-size: 11px; }
+      .showcase-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; }
+      .showcase-card { min-width: 0; padding: 12px; background: #252d25; border: 1px solid #4e5c46; border-radius: 7px; }
+      .showcase-card.selected { border-color: #a69771; }
+      .showcase-card h3 { margin: 0; color: #e2dfcf; font-size: 13px; }
+      .showcase-card p { margin: 6px 0; color: #a6b29a; font: 10px 'IBM Plex Mono', monospace; line-height: 1.6; }
+      .showcase-art { display: grid; align-items: center; height: 145px; padding: 12px 3px; margin: 12px 0; border-radius: 4px; background: radial-gradient(ellipse at center,#354036,#202922); }
+      .showcase-art .weapon-build-art { width: 100%; height: 100%; min-height: 0; }
+      .showcase-card button { width: 100%; padding: 9px; background: #2c382b; border: 1px solid #647455; border-radius: 4px; color: #d9dfc6; font: 11px Manrope,sans-serif; cursor: pointer; }
+      .showcase-help { color: #aeb8a5; font-size: 11px; line-height: 1.7; }
+      @media(max-width:850px) { .showcase-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+      @media(max-width:520px) { .showcase-grid { grid-template-columns:1fr; } .showcase-controls label { flex:1; } .showcase-art { height:155px; } }
       .module-library { margin: 24px 0 14px; }
       .library-controls { display: grid; grid-template-columns: 180px minmax(160px, 1fr) auto; align-items: end; gap: 12px; margin: 18px 0 12px; }
       .library-controls input[type=search] { width: 100%; height: 37px; padding: 0 10px; background: #182319; color: #eee6cf; border: 1px solid #576149; border-radius: 5px; font: 12px Manrope, sans-serif; }
@@ -96,6 +113,7 @@
       @media (max-width: 520px) { .library-controls { grid-template-columns: 1fr; } .module-card { padding: 10px; } }
       @media (max-width: 850px) { .build-parts { grid-template-columns: repeat(3, minmax(0, 1fr)); } .inspection-title strong { font-size: 14px; } .inspection-canvas { min-height: 220px; } }
       @media (max-width: 520px) { .weapon-inspection { padding: 14px 12px; } .inspection-toolbar { gap: 10px; } .inspection-actions { gap: 5px; } .inspection-actions button { padding: 7px 8px; min-height: 36px; } .inspection-canvas { min-height: 155px; padding: 20px 7px; } #weapon-closeup { max-height: 280px; } .inspection-stats { gap: 14px; } .build-parts { grid-template-columns: repeat(2, minmax(0, 1fr)); } .inspection-part { grid-template-columns: 100px minmax(0, 1fr); gap: 12px; } .inspection-part h3 { font-size: 12px; } }
+      @media(max-width:520px) { #weapon-closeup { --inspection-art-height: 238px; } }
     </style>
   </head>
   <body>
@@ -133,6 +151,19 @@
         <div id="inspection-ammunition" aria-live="polite" aria-label="Пачки и выбор боеприпасов"></div>
         <ul class="build-parts" id="build-parts" aria-label="Детали сборки"></ul>
         <div class="inspection-part empty-inspection" id="inspection-part"></div>
+      </details>
+      <details class="weapon-inspection" id="weapon-showcase">
+        <summary>Сравнить все пушки · <span id="showcase-total"></span> платформ</summary>
+        <div class="showcase-controls">
+          <div class="showcase-presets" role="group" aria-label="Сборки для сравнения">
+            <button type="button" data-showcase-preset="factory" aria-pressed="true">Штатные</button>
+            <button type="button" data-showcase-preset="field" aria-pressed="false">Полевые сборки</button>
+          </div>
+          <label>Класс оружия<select id="showcase-category"><option value="all">Все классы</option><option value="pistol">Пистолеты</option><option value="smg">Пистолеты-пулемёты</option><option value="rifle">Автоматы и карабины</option><option value="shotgun">Дробовики</option><option value="sniper">Винтовки</option></select></label>
+        </div>
+        <p class="showcase-help">Сравни силуэты и посадку деталей. Полевые сборки подобраны под роль оружия; любую можно примерить и изменить по отдельным модулям.</p>
+        <p class="showcase-count" id="showcase-count" role="status" aria-live="polite"></p>
+        <div class="showcase-grid" id="showcase-cards"></div>
       </details>
       <div class="gallery-heading"><p><strong>Состав · 32 бойца</strong></p><p id="load-status" role="status" aria-live="polite">Загружаем модели…</p></div>
       <section id="gallery" role="img" aria-label="Все 32 диких в выбранной экипировке и ракурсе"></section>

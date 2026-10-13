@@ -24,10 +24,11 @@ const structural = (svg: string) => [...svg.split("<defs>")[0]!.matchAll(/<(?:pa
 const hash = (values: string[]) => createHash("sha256").update(JSON.stringify(values)).digest("hex");
 
 describe("wave two physical weapon profiles", () => {
-	test("released 621 loose profiles and 25 factory actor assemblies remain byte-for-byte stable", () => {
-		// Independently recorded from committed dcfa432 before the wave-two renderer edits.
-		expect(hash(MODULE_MODELS.slice(0, 621).map(moduleArt))).toBe("025481b1967d9f1c31f6eb0a4cbc13e62ca29d77d3c348251c2458f5718a6c03");
-		expect(hash(WEAPONS.slice(0, 25).map(({ id }) => JSON.stringify(weaponActorArt(factory(id)))))).toBe("aac15dc22ddee7ee8516f0b7b13f0f45488171abb7a2b11eed967da1c5d15767");
+	test("all polished loose profiles and factory actor assemblies retain their reviewed visual snapshots", () => {
+		// Intentional visual polish across the original and expanded catalog.
+		// Physical consistency, mounting and clipping are audited independently below.
+		expect(hash(MODULE_MODELS.map(moduleArt))).toBe("866271bdae3b04a79806affef8c4fb72159d8295db70c0d52d3bbb62f92aa69d");
+		expect(hash(WEAPONS.map(({ id }) => JSON.stringify(weaponActorArt(factory(id)))))).toBe("cc57c4634b0cb40312a8139e423e01822e09a03c592c9752f868c409ab35eb5a");
 	});
 
 	test("14 distinct receiver silhouettes and all factory parts use identical bench, actor and loose geometry", () => {
@@ -76,7 +77,7 @@ describe("wave two physical weapon profiles", () => {
 			const actor = weaponActorArt(factory(id));
 			expect(part(actor.svg, "receiver")).toContain('data-mechanism="bullpup-rear-box-feed"');
 			expect(outline(part(actor.svg, "magazine"))).toMatch(/^M309 173h/);
-			expect(outline(part(actor.svg, "stock"))).toMatch(/^M\d+ 123h\d+v80/);
+			expect(outline(part(actor.svg, "stock"))).toMatch(/^M\d+ 123h\d+l13 8v61l-13 11/);
 			expect(part(actor.svg, "stock")).toContain('data-mechanism="bullpup-buttpad"');
 			const gun = factory(id), info = RECEIVER_INFO[id]!;
 			for (const appearance of ["extended", "quick", "window", "compact"]) {
@@ -88,6 +89,15 @@ describe("wave two physical weapon profiles", () => {
 		expect(part(vector.svg, "receiver")).toContain('data-mechanism="vector-offset-lower-housing"');
 		expect(outline(part(vector.svg, "magazine"))).toMatch(/^M430 226h42/);
 		for (const id of ["sr2", "sr1", "glock20", "fiveseven"] as const) expect(outline(part(weaponActorArt(factory(id)).svg, "magazine"))).toMatch(/^M(?:337|341) 198h/);
+	});
+
+	test("the ASH carry bridge supports the optical foot at its own height", () => {
+		const gun = factory("ash12"); install(gun, "optic-longscope");
+		const actor = weaponActorArt(gun), sight = part(actor.svg, "optic"), receiver = part(actor.svg, "receiver");
+		expect(getWeaponBuildIssues(gun)).toEqual([]);
+		expect(sight).toContain('transform="translate(0 -25)"');
+		expect(receiver).toContain('d="M351 83h149v6H351z"');
+		expect(sight).toBe(part(weaponBuildArt(gun), "optic"));
 	});
 
 	test("pump tubes stay under the bore; bolt chassis never acquires a gas action", () => {

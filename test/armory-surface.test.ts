@@ -49,6 +49,15 @@ describe("physical weapon finishes", () => {
 		expect(svg.length).toBeLessThan(1900);
 	});
 
+	test("directional light shapes the same solid outlines and leaves openings transparent", () => {
+		const svg = surfaceDetail(panel), defs = createArmorySurface(panel.prefix).defs;
+		expect(svg).toContain(`data-surface-light="steel" d="${panel.outline}"`);
+		expect(svg).toContain(`fill="url(#${panel.prefix}-surface-light)"`);
+		expect(defs).toContain(`id="${panel.prefix}-surface-light"`);
+		expect(svg).toContain('fill-rule="evenodd"'); expect(defs).not.toContain("<filter");
+		expect(surfaceDetail({ ...panel, material:"glass" })).not.toContain("data-surface-light");
+	});
+
 	test("current and candidate parts sharing a weapon ID retain separate clipping masks", () => {
 		const before = surfaceDetail(panel);
 		const candidate = surfaceDetail({ ...panel, outline: "M10 20h60v60H10z", bounds: [10, 20, 60, 60] });

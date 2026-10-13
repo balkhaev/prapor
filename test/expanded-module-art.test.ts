@@ -84,12 +84,15 @@ describe("expanded physical weapon module geometry", () => {
 		const weapon = factoryGun("rpk");
 		for (const id of ["barrel-rpk-7.62x39-long", "handguard-rpk-carbon", "stock-rpk-precision", "magazine-rpk-7.62x39-drum", "optic-longscope", "muzzle-7.62x39-suppressor", "foregrip-bipod"]) install(weapon, MODULE_BY_ID[id]!);
 		expect(getWeaponBuildIssues(weapon)).toEqual([]);
-		const actor = weaponActorArt(weapon), bench = weaponBuildArt(weapon), [, , benchWidth, benchHeight] = viewport(bench);
-		expect(benchWidth!).toBeGreaterThan(900); expect(benchHeight!).toBeGreaterThanOrEqual(300);
+		const actor = weaponActorArt(weapon), bench = weaponBuildArt(weapon), [benchLeft = 0, benchTop = 0, benchWidth = 0, benchHeight = 0] = viewport(bench);
+		const factoryBench = viewport(weaponBuildArt(factoryGun("rpk")));
+		expect(benchWidth!).toBeGreaterThan(factoryBench[2]!); expect(benchHeight!).toBeGreaterThan(factoryBench[3]!);
 		const [left, top] = viewport(actor.svg);
-		expect(left!).toBeLessThan(91); expect(top!).toBeLessThan(27);
-		expect(actor.width).toBeGreaterThan(actor.referenceWidth); expect(actor.height).toBeGreaterThan(250);
-		expect(actor.muzzle.x + left!).toBeLessThan(benchWidth!);
+		const factoryActor = weaponActorArt(factoryGun("rpk"));
+		expect(left!).toBeLessThan(viewport(factoryActor.svg)[0]!); expect(top!).toBeLessThan(viewport(factoryActor.svg)[1]!);
+		expect(actor.width).toBeGreaterThan(actor.referenceWidth); expect(actor.height).toBeGreaterThan(factoryActor.height);
+		expect(actor.muzzle.x + left!).toBeGreaterThan(benchLeft); expect(actor.muzzle.x + left!).toBeLessThan(benchLeft + benchWidth);
+		expect(actor.muzzle.y + top!).toBeGreaterThan(benchTop); expect(actor.muzzle.y + top!).toBeLessThan(benchTop + benchHeight);
 		for (const slot of Object.keys(weapon.modules) as ModuleSlot[]) expect(part(actor.svg, slot)).toBe(part(bench, slot));
 	});
 

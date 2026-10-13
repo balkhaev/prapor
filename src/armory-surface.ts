@@ -24,6 +24,7 @@ export function createArmorySurface(prefix: string): { paint: ArmoryPaint; defs:
 		<pattern id="${prefix}-polymer-surface" width="23" height="19" patternUnits="userSpaceOnUse"><path d="M4 5h1M15 13h1M20 3h1" stroke="#a8aa9b" stroke-width=".6"/><path d="M8 14h1M17 6h1" stroke="#182019" stroke-width=".6"/></pattern>
 		<pattern id="${prefix}-rubber-surface" width="19" height="17" patternUnits="userSpaceOnUse"><path d="M3 3h1M12 11h1" stroke="#83907e" stroke-width=".7"/><path d="M7 13h1M16 5h1" stroke="#101910" stroke-width=".7"/></pattern>
 		<pattern id="${prefix}-wood-surface" width="143" height="37" patternUnits="userSpaceOnUse"><path d="M-3 7q27-3 53 0t53 0t53 0M-9 23q39 4 71 0t71 0" fill="none" stroke="#b19673" stroke-width=".55"/><path d="M-4 10q30-3 55 0t55 0t55 0M6 31q28-3 56 0t56 0" fill="none" stroke="#39281f" stroke-width=".55"/></pattern>
+		<linearGradient id="${prefix}-surface-light" x1="0" y1="0" x2=".12" y2="1"><stop stop-color="#dce7e1" stop-opacity=".16"/><stop offset=".2" stop-color="#dce7e1" stop-opacity=".025"/><stop offset=".44" stop-color="#091113" stop-opacity="0"/><stop offset=".76" stop-color="#091113" stop-opacity=".08"/><stop offset="1" stop-color="#091113" stop-opacity=".3"/></linearGradient>
 	</defs>` };
 }
 
@@ -69,7 +70,10 @@ export function surfaceDetail({ prefix, slot, material, outline, bounds, fillRul
 	const clipping = `clip-path="url(#${clip})"`;
 	const texture = material === "carbon" || material === "glass" ? "" : `<path d="${xml(outline)}" fill="url(#${prefix}-${material}-surface)" opacity="${material === "wood" ? ".33" : ".18"}" fill-rule="${fillRule}"/>`;
 	const scuffOpacity = metallic ? .045 + wear * .34 : .025 + wear * .2;
-	const edgeOpacity = metallic ? .07 + wear * .31 : .035 + wear * .16;
+	const edgeOpacity = metallic ? .14 + wear * .25 : .07 + wear * .13;
+	// The same soft light shapes bitmap paint and native materials without
+	// brightening openings or blurring the installed mechanical detail.
+	const lighting = material === "glass" ? "" : `<path data-surface-light="${xml(material)}" d="${xml(outline)}" fill="url(#${prefix}-surface-light)" opacity="${material === "rubber" ? ".5" : ".85"}" fill-rule="${fillRule}"/>`;
 	const dust = wear > .1 ? `<path d="M${number(x + width * .1)} ${number(y + height * .88)}q${number(width * .2)} ${number(height * .04)} ${number(width * .42)} 0t${number(width * .4)} 0" ${clipping} fill="none" stroke="#988b72" stroke-width="${number(Math.min(2, height * .045))}" opacity="${(wear * .12).toFixed(2)}"/>` : "";
-	return `<defs><clipPath id="${clip}"><path d="${xml(outline)}" fill-rule="${fillRule}" clip-rule="${fillRule}"/></clipPath></defs>${texture}<path d="${xml(outline)}" ${clipping} fill="none" stroke="${metallic ? "#b3b9b2" : "#a69f88"}" stroke-width=".8" opacity="${edgeOpacity.toFixed(2)}"/><path d="${marks}" ${clipping} fill="none" stroke="${metallic ? "#bdc2b7" : "#b4ab94"}" stroke-width="${metallic ? ".65" : ".55"}" opacity="${scuffOpacity.toFixed(2)}"/>${dust}`;
+	return `<defs><clipPath id="${clip}"><path d="${xml(outline)}" fill-rule="${fillRule}" clip-rule="${fillRule}"/></clipPath></defs>${lighting}${texture}<path d="${xml(outline)}" ${clipping} fill="none" stroke="${metallic ? "#b3b9b2" : "#a69f88"}" stroke-width=".8" opacity="${edgeOpacity.toFixed(2)}"/><path d="${marks}" ${clipping} fill="none" stroke="${metallic ? "#bdc2b7" : "#b4ab94"}" stroke-width="${metallic ? ".65" : ".55"}" opacity="${scuffOpacity.toFixed(2)}"/>${dust}`;
 }

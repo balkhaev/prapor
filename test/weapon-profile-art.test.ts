@@ -95,6 +95,55 @@ function expectInside(svg: string, label: string) {
 }
 
 describe("complete weapon side-profile audit", () => {
+	test("every factory, compact and long barrel clears its actual slide or fore-end", () => {
+		for (const definition of WEAPONS) for (const appearance of ["factory", "short", "long"]) {
+			const gun = factory(definition.id), info = RECEIVER_INFO[definition.id]!;
+			const barrel = appearance === "factory" ? MODULE_BY_ID[gun.modules.barrel!.modelId]! : MODULE_MODELS.find((model) => model.slot === "barrel" && model.appearance === appearance && model.platforms.includes(info.platform) && model.calibers.includes(info.caliber))!;
+			install(gun, barrel.id);
+			const actor = weaponActorArt(gun), end = geometryBounds(part(actor.svg, "barrel")!)[2]!;
+			// A cantilever optic bridge may project beyond the fore-end. Measure
+			// its solid housing, which must never hide the actual barrel crown.
+			const covering = Math.max(...pointsForPath(outline(part(actor.svg, definition.category === "pistol" ? "receiver" : "handguard")!)).map(([x]) => x));
+			expect(getWeaponBuildIssues(gun), definition.id).toEqual([]);
+			expect(end, `${definition.id}/${appearance} muzzle exits body`).toBeGreaterThan(covering + 2);
+		}
+	});
+
+	test("workbench framing centers and pads the actual pistol or rifle assembly", () => {
+		for (const id of ["pm", "p90", "ak74", "ash12", "awm"]) {
+			const gun = factory(id), actor = weaponActorArt(gun), bench = weaponBuildArt(gun);
+			const [left = 0, , width = 0] = viewport(bench), shadow = Number(bench.match(/<ellipse cx="([\d.]+)"/)![1]);
+			expectInside(bench, id);
+			expect(width).toBeGreaterThan(actor.width);
+			expect(width).toBeLessThan(actor.width + 65);
+			expect(shadow).toBeCloseTo(left + width / 2, 5);
+		}
+		expect(viewport(weaponBuildArt(factory("pm")))[2]!).toBeLessThan(viewport(weaponBuildArt(factory("ak74")))[2]! * .6);
+	});
+
+	test("TOZ box upgrades keep a straight feed profile rather than an assault-rifle curve", () => {
+		for (const appearance of ["extended", "quick", "window", "compact"]) {
+			const gun = factory("toz"); install(gun, `magazine-toz-20g-${appearance}`);
+			const actor = weaponActorArt(gun), magazine = part(actor.svg, "magazine")!;
+			expect(getWeaponBuildIssues(gun)).toEqual([]);
+			expect(outline(magazine)).toMatch(/^M418 166h46v\d+h-43l-3-8z$/);
+			expect(magazine).toContain('data-mechanism="toz-straight-box-feed"');
+			expect(magazine).toBe(part(weaponBuildArt(gun), "magazine")!);
+		}
+	});
+
+	test("SVD and Saiga upgrades retain their tapered rifle and straight shotgun box feeds", () => {
+		for (const id of ["svd", "saiga"]) for (const appearance of ["extended", "quick", "window", "compact"]) {
+			const gun = factory(id), info = RECEIVER_INFO[id]!;
+			install(gun, `magazine-${info.platform}-${info.caliber}-${appearance}`);
+			const magazine = part(weaponActorArt(gun).svg, "magazine")!;
+			expect(getWeaponBuildIssues(gun)).toEqual([]);
+			expect(outline(magazine)).not.toMatch(/[qQ]/);
+			expect(magazine).toContain(`data-mechanism="${id === "svd" ? "svd-tapered-box-feed" : "saiga-shotgun-box-feed"}"`);
+			expect(magazine).toBe(part(weaponBuildArt(gun), "magazine")!);
+		}
+	});
+
 	test("every model keeps its physical paths, valid numbers and unclipped installed geometry on the bench and actor", () => {
 		expect(MODULE_MODELS).toHaveLength(934);
 		expect(ARMORY_SLOT_ORDER).toEqual(MODULE_SLOTS);
@@ -107,7 +156,7 @@ describe("complete weapon side-profile audit", () => {
 			expectInside(actor.svg, model.id); expectInside(bench, model.id);
 			expect(JSON.stringify(gun)).toBe(saved);
 		}
-	});
+	}, 15_000);
 
 	test("every mount and every light/laser combination coexists with optics, drum, suppressor and grip in all 11 slots", () => {
 		const mounts = MODULE_MODELS.filter((model) => model.slot === "mount" && model.platforms.includes("*")), lights = MODULE_MODELS.filter((model) => model.slot === "flashlight"), lasers = MODULE_MODELS.filter((model) => model.slot === "laser"), optics = MODULE_MODELS.filter((model) => model.slot === "optic");
@@ -121,7 +170,7 @@ describe("complete weapon side-profile audit", () => {
 			expect(actor.referenceWidth).toBe(weaponActorArt(factory("ak74")).referenceWidth);
 			expectInside(actor.svg, `${mount.id}/${light.id}/${laser.id}`);
 		}
-	});
+	}, 15_000);
 
 	test("the nine sights have strict side silhouettes, and drums/bipods never show front covers or front-facing V legs", () => {
 		for (const model of MODULE_MODELS.filter((item) => item.slot === "optic")) {

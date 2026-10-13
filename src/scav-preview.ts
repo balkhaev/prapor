@@ -5,6 +5,7 @@ import { getWeaponStats, type WeaponInstance } from "./game/engine";
 import { FACTORY_KITS, MODULE_BY_ID, MODULE_MODELS, MODULE_SLOTS, MODULE_SLOT_LABELS, RECEIVER_INFO, getResolvedModuleMounts, modulePlatformLabel, type ModuleInstance, type ModuleModel, type ModuleSlot } from "./game/modules";
 import { moduleArt, weaponBuildArt } from "./armory-art";
 import { modularWeaponArtFamily, modularWeaponArtRevision, preloadModularWeaponArt } from "./modular-weapon-art";
+import { createWeaponShowcaseBuild, weaponShowcasePairArt, type WeaponShowcasePreset } from "./weapon-showcase";
 import { MODULE_DISPLAY_SLOTS, moduleFitsWeaponFamily, moduleModelMatches, moduleMountLabel, moduleSlotHint } from "./module-catalog";
 import { GEAR_MODELS } from "./game/systems";
 import { SCAV_EQUIPMENT_ATLASES } from "./scav-gear-art";
@@ -53,6 +54,44 @@ const escape = (value: string) => value.replace(/[&<>"']/g, (character) => ({ "&
 type Point = { x: number; y: number };
 type Model = { id: number; root: Phaser.GameObjects.Container; body: Phaser.GameObjects.Container; poses: Phaser.GameObjects.Image[]; equipment: ScavEquipment; name: Phaser.GameObjects.Text; personality: Phaser.GameObjects.Text; badge: Phaser.GameObjects.Text };
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const showcase = document.querySelector<HTMLDetailsElement>("#weapon-showcase")!, showcaseCards = document.querySelector<HTMLElement>("#showcase-cards")!;
+const showcaseCategory = select("showcase-category"), showcaseCount = document.querySelector<HTMLElement>("#showcase-count")!;
+let showcasePreset: WeaponShowcasePreset = "factory", showcaseGeneration = 0;
+document.querySelector<HTMLElement>("#showcase-total")!.textContent = String(WEAPONS.length);
+function buildMaterialFamilies(weapon: WeaponInstance): string[] {
+	return [weapon.weaponId, ...Object.values(weapon.modules).flatMap((instance) => {
+		const model = MODULE_BY_ID[instance.modelId], family = model ? modularWeaponArtFamily(model) : undefined;
+		return family ? [family] : [];
+	})];
+}
+function renderShowcase(loadMaterials = true): void {
+	if (!showcase.open) return;
+	const definitions = WEAPONS.filter(weapon => showcaseCategory.value === "all" || weapon.category === showcaseCategory.value);
+	const builds = definitions.map(weapon => createWeaponShowcaseBuild(weapon.id,showcasePreset));
+	showcaseCount.textContent = `${definitions.length} платформ · ${showcasePreset === "factory" ? "штатные комплекты" : "полевые сборки"}`;
+	showcaseCards.innerHTML = builds.map((weapon,index) => {
+		const definition = definitions[index]!, info = RECEIVER_INFO[weapon.weaponId]!;
+		return `<article class="showcase-card${controls.weapon.value === weapon.weaponId ? " selected" : ""}"><h3>${escape(definition.name)}</h3><p>${escape(modulePlatformLabel(info.platform))} · ${escape(info.caliber)} · ${Object.keys(weapon.modules).length} деталей</p><div class="showcase-art">${weaponShowcasePairArt(weapon.weaponId)[showcasePreset]}</div><button type="button" data-showcase-weapon="${weapon.weaponId}" aria-label="Примерить ${escape(definition.name)}">Примерить сборку</button></article>`;
+	}).join("");
+	if (!loadMaterials) return;
+	const generation = ++showcaseGeneration, revision = modularWeaponArtRevision();
+	void preloadModularWeaponArt(builds.flatMap(buildMaterialFamilies)).then(() => { if (generation === showcaseGeneration && modularWeaponArtRevision() !== revision) renderShowcase(false); });
+}
+showcase.addEventListener("toggle",() => { if (showcase.open) renderShowcase(); else ++showcaseGeneration; });
+showcaseCategory.addEventListener("change",() => renderShowcase());
+for (const button of document.querySelectorAll<HTMLButtonElement>("[data-showcase-preset]")) button.addEventListener("click",() => {
+	showcasePreset = button.dataset.showcasePreset as WeaponShowcasePreset;
+	for (const control of document.querySelectorAll<HTMLButtonElement>("[data-showcase-preset]")) control.setAttribute("aria-pressed",String(control === button));
+	renderShowcase();
+});
+showcaseCards.addEventListener("click",event => {
+	const id = (event.target as Element | null)?.closest<HTMLButtonElement>("[data-showcase-weapon]")?.dataset.showcaseWeapon;
+	if (!id || !WEAPONS.some(weapon => weapon.id === id)) return;
+	controls.weapon.value = id; weaponBuilds.set(id,createWeaponShowcaseBuild(id,showcasePreset));
+	inspectedSlot = undefined; highlightInspection = false; updateSelections(true); preloadSelectedBuildArt();
+	document.querySelector<HTMLDetailsElement>("#weapon-inspection")!.open = true;
+	closeup.scrollIntoView({ behavior:reducedMotion ? "instant" : "smooth", block:"center" });
+});
 const part = (modelId: string, slot: ModuleSlot): ModuleInstance => ({ id: `preview-${modelId}-${slot}`, modelId, durability: 100, foundAt: 0 });
 const weaponBuilds = new Map<string, WeaponInstance>();
 
@@ -129,6 +168,7 @@ function setInspectionZoom(zoom: number): void {
 	const centerX = (closeup.scrollLeft + closeup.clientWidth / 2) / Math.max(1, closeup.scrollWidth), centerY = (closeup.scrollTop + closeup.clientHeight / 2) / Math.max(1, closeup.scrollHeight);
 	inspectionZoom = zoom;
 	closeup.style.setProperty("--inspection-width", `${zoom * 100}%`);
+	closeup.style.setProperty("--inspection-zoom", String(zoom));
 	for (const button of inspectionZoomButtons) button.setAttribute("aria-pressed", String(Number(button.dataset.inspectionZoom) === zoom));
 	closeup.scrollLeft = centerX * closeup.scrollWidth - closeup.clientWidth / 2;
 	closeup.scrollTop = centerY * closeup.scrollHeight - closeup.clientHeight / 2;
@@ -163,13 +203,17 @@ function renderLibrary(weapon: WeaponInstance | null): void {
 	const models = MODULE_MODELS.filter((model) => moduleModelMatches(model, { slot: librarySlot.value as ModuleSlot | "all", rarity: "all", platform: "all", search: librarySearch.value })
 		&& (!libraryCompatible.checked || !weapon || moduleFitsWeaponFamily(model, weapon.weaponId)));
 	libraryCount.textContent = `${models.length} моделей по фильтру · показано ${Math.min(libraryLimit, models.length)} · всего ${MODULE_MODELS.length}`;
-	moduleCards.innerHTML = models.slice(0, libraryLimit).map((model) => {
+	const visible = models.slice(0,libraryLimit);
+	moduleCards.innerHTML = visible.map((model) => {
 		const installed = weapon?.modules[model.slot]?.modelId === model.id, reason = fittingReason(model, weapon);
 		const stat = (label: string, value: number) => value ? `${label} ${value > 0 ? "+" : ""}${value}` : "";
 		const metrics = ["При 100% состояния", `Вес ${model.stats.weight.toFixed(2)} кг`, stat("Мощь", model.stats.damage), stat("Эргономика", model.stats.ergonomics), stat("Отдача", model.stats.recoil), stat("Надёжность", model.stats.reliability), model.stats.ammoMultiplier !== 1 ? `Расход ×${model.stats.ammoMultiplier.toFixed(2)}` : ""].filter(Boolean).join(" · ");
 		return `<article class="module-card ${installed ? "installed" : ""}">${moduleArt(model)}<h3>${escape(model.label)}</h3><p>${escape(model.description)}</p><p class="module-metrics">${escape(metrics)}</p><button type="button" data-try-module="${model.id}" ${reason || installed ? "disabled" : ""}>${installed ? "Установлено" : "Примерить"}</button>${reason ? `<small>${escape(reason)}</small>` : ""}</article>`;
 	}).join("") || '<p class="library-help">Под этот фильтр деталей нет. Измени поиск или тип детали.</p>';
 	libraryMore.hidden = models.length <= libraryLimit;
+	const families = visible.flatMap(model => { const family = modularWeaponArtFamily(model); return family ? [family] : []; });
+	const revision = modularWeaponArtRevision();
+	void preloadModularWeaponArt(families).then(() => { if (library.open && modularWeaponArtRevision() !== revision) renderLibrary(selectedWeapon()); });
 }
 
 document.querySelector<HTMLElement>("#library-total")!.textContent = String(MODULE_MODELS.length);
@@ -183,6 +227,7 @@ moduleCards.addEventListener("click", (event) => {
 	if (!model || !weapon || fittingReason(model, weapon)) return;
 	weapon.modules[model.slot] = part(model.id, model.slot); inspectedSlot = model.slot; highlightInspection = true;
 	updateSelections(true);
+	preloadSelectedBuildArt();
 });
 
 for (const [input, slot] of [[controls.armor, "armor"], [controls.helmet, "helmet"], [controls.pack, "backpack"]] as const) {
@@ -246,16 +291,13 @@ function updateSelections(rebuildOptions = false): void {
 	gallery.setAttribute("aria-label", `32 диких. ${labels.join(". ")}. ${weaponSummary.textContent}.`);
 	renderInspection(weapon);
 	renderLibrary(weapon);
+	renderShowcase(false);
 }
 updateSelections(true);
 function preloadSelectedBuildArt(): void {
 	const weapon = selectedWeapon(); if (!weapon) return;
 	const revision = modularWeaponArtRevision(weapon);
-	const families = Object.values(weapon.modules).flatMap((instance) => {
-		const model = MODULE_BY_ID[instance.modelId], family = model ? modularWeaponArtFamily(model) : undefined;
-		return family ? [family] : [];
-	});
-	void preloadModularWeaponArt([weapon.weaponId, ...families]).then(() => {
+	void preloadModularWeaponArt(buildMaterialFamilies(weapon)).then(() => {
 		if (selectedWeapon() === weapon && modularWeaponArtRevision(weapon) !== revision) updateSelections(false);
 	});
 }
