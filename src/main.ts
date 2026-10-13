@@ -3036,7 +3036,7 @@ document.addEventListener("keydown", (event) => {
 		event.preventDefault(); nudgeBuildingPlacement(event.key === "ArrowLeft" ? -distance : event.key === "ArrowRight" ? distance : 0, event.key === "ArrowUp" ? -distance : event.key === "ArrowDown" ? distance : 0); return;
 	}
 	if (buildingPlacement && !buildingPlacementBusy && event.key === "Escape") { event.preventDefault(); cancelBuildingPlacement(); if (page !== "home") closeTools(); return; }
-	if (buildingPlacement && !buildingPlacementBusy && event.key.toLowerCase() === "r" && !(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLSelectElement)) {
+	if (buildingPlacement && !buildingPlacementBusy && !event.repeat && !event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === "r" && !(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLSelectElement)) {
 		event.preventDefault(); buildingPlacement.facing = (((buildingPlacement.facing ?? 0) + 1) % 4) as 0 | 1 | 2 | 3; paintBuildingPlacement(); return;
 	}
 	if (workerPlacement?.mode === "keyboard" && event.key === "Tab") {

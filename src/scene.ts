@@ -957,7 +957,7 @@ export function createWorld(
 			}, { ...options, passive: false });
 			window.addEventListener("keydown", (event) => {
 				if (event.key === "Escape" && (this.drag || this.gesture || this.buildingGesture || this.panGesture)) { event.preventDefault(); this.cancelScavDrag(); this.cancelBuildingDrag(); this.cancelCameraGesture(); }
-				if (!event.defaultPrevented && !event.repeat && event.key.toLowerCase() === "r" && this.buildingAllowed() && !(event.target instanceof Element && event.target.closest("input,textarea,select,[contenteditable=true]"))) {
+				if (!event.defaultPrevented && !event.repeat && !event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === "r" && this.buildingAllowed() && !(event.target instanceof Element && event.target.closest("input,textarea,select,[contenteditable=true]"))) {
 					const drag = this.buildingGesture;
 					if (drag?.active) {
 						event.preventDefault(); drag.facing = ((drag.facing + 1) % 4) as 0 | 1 | 2 | 3;
