@@ -44,9 +44,9 @@ function inspect(world: LiveMapDefinition): void {
   }
   for (const district of world.districts) {
     const pois = world.pois.filter(poi => poi.districtId === district.id);
-    expect(pois).toHaveLength(8);
+    expect(pois).toHaveLength(12);
     expect(pois.some(poi => poi.danger === 3)).toBe(true);
-    expect(world.containers.filter(container => pois.some(poi => poi.id === container.poiId))).toHaveLength(32);
+    expect(world.containers.filter(container => pois.some(poi => poi.id === container.poiId))).toHaveLength(48);
     // Count actual walking steps to the first find, including doors and detours.
     for (const spawn of district.spawns) {
       const distances = new Int32Array(blocked.length).fill(-1), frontier = [spawn.y * world.width + spawn.x]; distances[frontier[0]!] = 0;
@@ -84,6 +84,49 @@ function inspect(world: LiveMapDefinition): void {
   }
   for (let first = 0; first < world.pois.length; first++) for (let second = first + 1; second < world.pois.length; second++) expect(intersects(world.pois[first]!, world.pois[second]!)).toBe(false);
 
+  // The city is a continuous place with connected streets and dense collision buildings,
+  // while every previously shipped landmark has moved out to the surrounding ring.
+  const city = world.city!;
+  expect(city).toMatchObject({ name: 'Ольховск', x: 56, y: 56, width: 144, height: 144 });
+  expect(city.quarters).toHaveLength(4);
+  expect(new Set(city.quarters.map(quarter => quarter.id)).size).toBe(4);
+  const cityPois = world.pois.filter(poi => /^poi-(?:8|9|10|11)-[0-3]$/.test(poi.id));
+  const legacyPois = world.pois.filter(poi => /^poi-[0-7]-[0-3]$/.test(poi.id));
+  expect(cityPois).toHaveLength(16); expect(legacyPois).toHaveLength(32);
+  expect(legacyPois.every(poi => !intersects(poi, city))).toBe(true);
+  const inside = (point: LivePoint, rectangle: { x: number; y: number; width: number; height: number } = city): boolean => point.x >= rectangle.x && point.y >= rectangle.y && point.x < rectangle.x + rectangle.width && point.y < rectangle.y + rectangle.height;
+  expect(cityPois.every(poi => inside(poi) && inside({ x: poi.x + poi.width - 1, y: poi.y + poi.height - 1 }) && poi.tags.includes('city'))).toBe(true);
+  const fabric = world.obstacles.filter(obstacle => obstacle.kind === 'building' && inside(obstacle) && inside({ x: obstacle.x + obstacle.width - 1, y: obstacle.y + obstacle.height - 1 }) && !world.pois.some(poi => intersects(obstacle, poi)));
+  expect(fabric.length).toBeGreaterThanOrEqual(80);
+  for (const quarter of city.quarters) {
+    expect(quarter.width).toBe(72); expect(quarter.height).toBe(72);
+    expect(inside(quarter) && inside({ x: quarter.x + quarter.width - 1, y: quarter.y + quarter.height - 1 })).toBe(true);
+    expect(cityPois.filter(poi => inside(poi, quarter) && inside({ x: poi.x + poi.width - 1, y: poi.y + poi.height - 1 }, quarter))).toHaveLength(4);
+    const buildings = fabric.filter(obstacle => intersects(obstacle, quarter));
+    expect(buildings.length).toBeGreaterThanOrEqual(12);
+    const solidArea = buildings.reduce((sum, obstacle) => sum + Math.max(0, Math.min(obstacle.x + obstacle.width, quarter.x + quarter.width) - Math.max(obstacle.x, quarter.x)) * Math.max(0, Math.min(obstacle.y + obstacle.height, quarter.y + quarter.height) - Math.max(obstacle.y, quarter.y)), 0);
+    expect(solidArea).toBeGreaterThanOrEqual(quarter.width * quarter.height * .05);
+    let streets = 0;
+    for (let y = quarter.y; y < quarter.y + quarter.height; y++) for (let x = quarter.x; x < quarter.x + quarter.width; x++) if (world.terrainRows![y]![x] === 'r' && !blocked[y * world.width + x]) streets++;
+    expect(streets).toBeGreaterThanOrEqual(quarter.width * quarter.height * .06);
+  }
+  for (let first = 0; first < city.quarters.length; first++) for (let second = first + 1; second < city.quarters.length; second++) expect(intersects(city.quarters[first]!, city.quarters[second]!)).toBe(false);
+  const perimeterRoads: LivePoint[][] = [[], [], [], []];
+  for (let offset = 0; offset < city.width; offset++) {
+    for (const [side, point] of [[0, { x: city.x, y: city.y + offset }], [1, { x: city.x + city.width - 1, y: city.y + offset }], [2, { x: city.x + offset, y: city.y }], [3, { x: city.x + offset, y: city.y + city.height - 1 }]] as const) if (world.terrainRows![point.y]![point.x] === 'r' && !blocked[point.y * world.width + point.x]) perimeterRoads[side]!.push(point);
+  }
+  expect(perimeterRoads.every(side => side.length > 0)).toBe(true);
+  const citySeen = new Uint8Array(blocked.length), cityQueue = [perimeterRoads[0]![0]!.y * world.width + perimeterRoads[0]![0]!.x]; citySeen[cityQueue[0]!] = 1;
+  for (let index = 0; index < cityQueue.length; index++) {
+    const key = cityQueue[index]!, x = key % world.width, y = Math.floor(key / world.width);
+    for (const point of [{ x: x + 1, y }, { x: x - 1, y }, { x, y: y + 1 }, { x, y: y - 1 }]) {
+      const next = point.y * world.width + point.x;
+      if (inside(point) && !blocked[next] && !citySeen[next]) { citySeen[next] = 1; cityQueue.push(next); }
+    }
+  }
+  for (const side of perimeterRoads) expect(side.some(point => citySeen[point.y * world.width + point.x])).toBe(true);
+  for (const point of [...cityPois.flatMap(poi => poi.entrances), ...world.containers.filter(anchor => cityPois.some(poi => poi.id === anchor.poiId)), ...world.npcSpawns.flatMap(spawn => [spawn.point, ...spawn.route]).filter(point => inside(point))]) expect(citySeen[point.y * world.width + point.x]).toBe(1);
+
   expect(world.terrainRows).toHaveLength(world.height);
   const ground = world.terrainRows!.join('');
   expect(world.terrainRows!.every(row => row.length === world.width && [...row].every(code => Object.hasOwn(LIVE_TERRAIN_CODES, code)))).toBe(true);
@@ -92,10 +135,11 @@ function inspect(world: LiveMapDefinition): void {
   for (const obstacle of world.obstacles.filter(obstacle => obstacle.kind === 'water')) for (let y = obstacle.y; y < obstacle.y + obstacle.height; y++) for (let x = obstacle.x; x < obstacle.x + obstacle.width; x++) water[y * world.width + x] = 1;
   expect([...ground].every((code, index) => (code === 'w') === (water[index] === 1))).toBe(true);
   expect(world.paths?.length).toBeGreaterThan(0);
+  expect(world.paths!.length).toBeLessThanOrEqual(384);
   expect(new Set(world.paths!.map(path => path.id)).size).toBe(world.paths!.length);
   expect(new Set(world.paths!.map(path => path.kind))).toEqual(new Set(['road', 'trail', 'rail', 'river']));
   for (const path of world.paths!) {
-    expect(path.points.length).toBeGreaterThanOrEqual(2); expect(path.width).toBeGreaterThan(0);
+    expect(path.points.length).toBeGreaterThanOrEqual(2); expect(path.points.length).toBeLessThanOrEqual(256); expect(path.width).toBeGreaterThan(0);
     expect(path.points.every(point => point.x >= 0 && point.y >= 0 && point.x < world.width && point.y < world.height)).toBe(true);
     if (path.kind === 'road' || path.kind === 'trail') expect(path.points.every(point => visited[Math.round(point.y) * world.width + Math.round(point.x)] === 1)).toBe(true);
   }
@@ -127,7 +171,7 @@ function inspect(world: LiveMapDefinition): void {
   }
   expect(loops).toBeGreaterThan(0);
   // Streaming partitions index intersecting content; they do not dictate its placement.
-  const chunks = worldChunks(world); expect(chunks).toHaveLength(36);
+  const chunks = worldChunks(world); expect(chunks).toHaveLength(64);
   for (const chunk of chunks) {
     const bounds = { x: chunk.x * world.chunkSize, y: chunk.y * world.chunkSize, width: chunk.width, height: chunk.height };
     expect(chunk.poiIds.slice().sort()).toEqual(world.pois.filter(poi => intersects(poi, bounds)).map(poi => poi.id).sort());
@@ -142,10 +186,13 @@ function inspect(world: LiveMapDefinition): void {
     expect(route.poiIds.length >= 2 && route.poiIds.length <= 5).toBe(true);
     expect(new Set(route.poiIds).size).toBe(route.poiIds.length);
     const places = route.poiIds.map(id => world.pois.find(poi => poi.id === id)!);
-    expect(places.every(poi => poi && poi.districtId === route.districtId)).toBe(true);
-    if (route.purpose === 'pvp') expect(places.some(poi => poi.danger === 3)).toBe(true);
-    if (route.purpose === 'loot') expect(places.some(poi => poi.danger === 1)).toBe(true);
+    expect(places.every(poi => poi)).toBe(true);
+    expect(places.some(poi => poi.tags.includes('city'))).toBe(true);
+    if (route.purpose === 'pvp') expect(places.filter(poi => poi.tags.includes('city') && poi.danger === 3).length).toBeGreaterThanOrEqual(2);
+    if (route.purpose === 'loot') { expect(places.some(poi => poi.danger === 1)).toBe(true); expect(places.some(poi => !poi.tags.includes('city'))).toBe(true); }
   }
+  const pvpRoutes = world.routes!.filter(route => route.purpose === 'pvp');
+  expect(pvpRoutes[0]!.poiIds.some(id => pvpRoutes.every(route => route.poiIds.includes(id)))).toBe(true);
 }
 
 describe('deterministic world generation', () => {
@@ -154,14 +201,14 @@ describe('deterministic world generation', () => {
     expect(second).toEqual(first); expect(second).not.toBe(first);
     const other = generateLiveWorld('another-seed');
     expect(other.version).not.toBe(first.version); expect(other.obstacles).not.toEqual(first.obstacles);
-    expect(first).toMatchObject({ id: 'perimeter', width: 192, height: 192, chunkSize: 32 });
+    expect(first).toMatchObject({ id: 'perimeter', width: 256, height: 256, chunkSize: 32 });
     expect(first.generatorVersion).toBeGreaterThan(0);
   });
   test('POI footprints and placement are independent of streaming chunk origins', () => {
     for (const seed of ['organic-layout', 'another-layout', 'district-roads']) {
       const world = generateLiveWorld(seed);
-      expect(world.generatorVersion).toBe(3);
-      expect(world.pois).toHaveLength(32); expect(world.containers).toHaveLength(128); expect(world.npcSpawns).toHaveLength(96);
+      expect(world.generatorVersion).toBe(4);
+      expect(world.pois).toHaveLength(48); expect(world.containers).toHaveLength(192); expect(world.npcSpawns).toHaveLength(128);
       expect(new Set(world.pois.map(poi => `${poi.width}x${poi.height}`)).size).toBeGreaterThanOrEqual(4);
       expect(new Set(world.pois.map(poi => poi.x % world.chunkSize)).size).toBeGreaterThanOrEqual(5);
       expect(new Set(world.pois.map(poi => poi.y % world.chunkSize)).size).toBeGreaterThanOrEqual(5);
@@ -174,8 +221,8 @@ describe('deterministic world generation', () => {
       catch (cause) { throw new Error(`Generated world seed-${seed} failed validation`, { cause }); }
     }
   }, 60_000);
-  test('the verified V2 default containers keep their original logical identities when the surrounding world expands', () => {
-    // Public identities recorded from the shipped 128×128 layout, independent of V3 placement.
+  test('all verified V3 default containers keep their original logical identities when the city displaces their landmarks', () => {
+    // Public identities recorded from the shipped 192×192 layout, independent of V4 placement.
     const legacy = [
       ['poi-0-0', ['duffel', 'toolbox', 'crate', 'medbag']], ['poi-1-0', ['jacket', 'duffel', 'toolbox', 'cabinet']],
       ['poi-2-0', ['jacket', 'duffel', 'toolbox', 'cabinet']], ['poi-3-0', ['jacket', 'duffel', 'toolbox', 'cabinet']],
@@ -185,6 +232,14 @@ describe('deterministic world generation', () => {
       ['poi-2-2', ['jacket', 'duffel', 'toolbox', 'cabinet']], ['poi-3-2', ['jacket', 'duffel', 'toolbox', 'crate']],
       ['poi-0-3', ['jacket', 'duffel', 'toolbox', 'crate']], ['poi-1-3', ['jacket', 'duffel', 'toolbox', 'crate']],
       ['poi-2-3', ['duffel', 'toolbox', 'crate', 'medbag']], ['poi-3-3', ['jacket', 'duffel', 'medbag', 'crate']],
+      ['poi-4-0', ['duffel', 'toolbox', 'crate', 'medbag']], ['poi-5-0', ['jacket', 'duffel', 'toolbox', 'cabinet']],
+      ['poi-6-0', ['duffel', 'toolbox', 'crate', 'medbag']], ['poi-7-0', ['duffel', 'toolbox', 'crate', 'medbag']],
+      ['poi-4-1', ['jacket', 'duffel', 'toolbox', 'crate']], ['poi-5-1', ['jacket', 'duffel', 'toolbox', 'crate']],
+      ['poi-6-1', ['jacket', 'duffel', 'toolbox', 'crate']], ['poi-7-1', ['duffel', 'toolbox', 'crate', 'medbag']],
+      ['poi-4-2', ['jacket', 'duffel', 'toolbox', 'crate']], ['poi-5-2', ['duffel', 'toolbox', 'crate', 'medbag']],
+      ['poi-6-2', ['jacket', 'duffel', 'toolbox', 'cabinet']], ['poi-7-2', ['duffel', 'toolbox', 'crate', 'medbag']],
+      ['poi-4-3', ['duffel', 'toolbox', 'crate', 'medbag']], ['poi-5-3', ['jacket', 'duffel', 'toolbox', 'crate']],
+      ['poi-6-3', ['duffel', 'toolbox', 'crate', 'medbag']], ['poi-7-3', ['jacket', 'duffel', 'medbag', 'crate']],
     ] as const;
     const world = generateLiveWorld(LIVE_WORLD_SEED);
     for (const [poiId, kinds] of legacy) kinds.forEach((kind, slot) => expect(world.containers.find(anchor => anchor.id === `${poiId}-${kind}-${slot}`)).toMatchObject({ poiId, kind }));
@@ -195,7 +250,7 @@ describe('deterministic world generation', () => {
       const a = { x: index * 53 % world.width, y: index * 71 % world.height }, b = { x: (index * 31 + 17) % world.width, y: (index * 23 + 49) % world.height };
       expect(navigation.walkable(a)).toBe(isLiveWalkable(world, a)); expect(navigation.hasLineOfSight(a, b)).toBe(hasLiveLineOfSight(world, a, b));
     }
-    const open = createLiveNavigation({ ...world, width: 10, height: 10, obstacles: [] });
+    const open = createLiveNavigation({ ...world, width: 10, height: 10, terrainRows: undefined, obstacles: [] });
     const occupied = new Set([open.key({ x: 3, y: 0 })]);
     const route = open.findPath({ x: 0, y: 0 }, { x: 6, y: 0 }, occupied)!;
     expect(route).not.toBeNull(); expect(route.at(-1)).toEqual({ x: 6, y: 0 }); expect(route).toHaveLength(8);
@@ -205,5 +260,35 @@ describe('deterministic world generation', () => {
       expect(Math.abs(point.x - previous.x) + Math.abs(point.y - previous.y)).toBe(1); previous = point;
     }
     expect(open.findPath({ x: 0, y: 0 }, { x: 3, y: 0 }, occupied)).toBeNull();
+  });
+  test('reused navigation searches retain shortest paths when direction, targets and occupied doorways change', () => {
+    const world = { ...generateLiveWorld('reused-navigation'), width: 16, height: 12, terrainRows: undefined, obstacles: [{ x: 6, y: 0, width: 1, height: 8 }, { x: 6, y: 9, width: 1, height: 3 }, { x: 10, y: 3, width: 1, height: 9 }] };
+    const navigation = createLiveNavigation(world), corners = [{ x: 0, y: 0 }, { x: 15, y: 11 }, { x: 0, y: 11 }, { x: 15, y: 0 }];
+    const shortest = (start: LivePoint, target: LivePoint, occupied: Set<number>): number | null => {
+      if (occupied.has(target.y * world.width + target.x)) return null;
+      const distances = new Int32Array(world.width * world.height).fill(-1), queue = [start]; distances[start.y * world.width + start.x] = 0;
+      for (let index = 0; index < queue.length; index++) {
+        const point = queue[index]!, key = point.y * world.width + point.x;
+        if (point.x === target.x && point.y === target.y) return distances[key]!;
+        for (const next of [{ x: point.x - 1, y: point.y }, { x: point.x + 1, y: point.y }, { x: point.x, y: point.y - 1 }, { x: point.x, y: point.y + 1 }]) {
+          const nextKey = next.y * world.width + next.x;
+          if (isLiveWalkable(world, next) && !occupied.has(nextKey) && distances[nextKey] === -1) { distances[nextKey] = distances[key]! + 1; queue.push(next); }
+        }
+      }
+      return null;
+    };
+    for (let index = 0; index < 100; index++) {
+      const start = corners[index % 4]!, target = corners[(index + 1 + Math.floor(index / 4) % 2) % 4]!;
+      const blocked = index % 5 === 0 ? new Set([navigation.key({ x: 6, y: 8 })]) : index % 5 === 1 ? new Set([navigation.key(target)]) : index % 5 === 2 ? new Set([navigation.key({ x: 10, y: 2 })]) : new Set<number>();
+      const expected = shortest(start, target, blocked), route = navigation.findPath(start, target, blocked);
+      if (expected === null) { expect(route).toBeNull(); continue; }
+      expect(route).toHaveLength(expected); expect(route!.at(-1)).toEqual(target);
+      let previous = start;
+      for (const point of route!) { expect(isLiveWalkable(world, point) && !blocked.has(navigation.key(point))).toBe(true); expect(Math.abs(previous.x - point.x) + Math.abs(previous.y - point.y)).toBe(1); previous = point; }
+    }
+    expect(navigation.findPath(corners[0]!, corners[0]!)).toEqual([]);
+    expect(navigation.findPath(corners[0]!, { x: 6, y: 5 })).toBeNull();
+    expect(navigation.findPath(corners[0]!, { x: -1, y: 0 })).toBeNull();
+    expect(navigation.findPath(corners[0]!, corners[1]!)?.length).toBe(shortest(corners[0]!, corners[1]!, new Set())!);
   });
 });

@@ -360,11 +360,14 @@ describe("shared endless live server", () => {
     await act(first.session, { type: "attack", targetId: second.session.id });
     expect((await state(second.session)).self.body.parts.chest.hp).toBe(53);
     const boundary = getLiveMap("perimeter").districts.find(district => district.id === "sawmill")!.x;
-    placePlayers([{ session: first.session, x: boundary - 1, y: 0 }]); await enter(first.session); await enter(second.session);
-    await act(first.session, { type: "move", x: boundary + 1, y: 0 }); await advance(1250, [first.session, second.session]);
+    // The dormant NPC fixture occupies (127,0); use a clear parallel border lane.
+    const y = 2;
+    expect([boundary - 1, boundary, boundary + 1].every(x => isLiveWalkable(getLiveMap("perimeter"), { x, y }))).toBe(true);
+    placePlayers([{ session: first.session, x: boundary - 1, y }]); await enter(first.session); await enter(second.session);
+    await act(first.session, { type: "move", x: boundary + 1, y }); await advance(1250, [first.session, second.session]);
     const crossed = await state(first.session);
     expect(crossed.world.id).toBe("perimeter"); expect(crossed.self.purpose).toBe("loot"); expect(crossed.self.districtId).toBe("sawmill");
-    expect(crossed.entities.find(entity => entity.id === first.session.id)).toMatchObject({ x: boundary + 1, y: 0 });
+    expect(crossed.entities.find(entity => entity.id === first.session.id)).toMatchObject({ x: boundary + 1, y });
     expect((await call("action", "POST", { type: "travel", mapId: "depot" }, first.session)).status).toBe(400);
   });
 
@@ -436,26 +439,52 @@ describe("shared endless live server", () => {
     expect(restored.drops.find(drop => drop.id === "legacy-body")).toMatchObject({ x: district.x + 1, y: district.y, amount: 73 });
     expect(restored.server.maps[0]!.npcs).toBe(getLiveMap("perimeter").npcSpawns.length); expect(service.healthy()).toBe(true);
   });
-  test("expanding the saved V2 world preserves global body positions, private kit and durable loose cargo across two restarts", async () => {
+  test.each(["perimeter-g2-a827381f", "perimeter-g3-b38b4b0d"])("expanding saved geometry %s preserves global body positions, private kit and durable loose cargo across two restarts", async geometryVersion => {
     const guest = await enter(), map = getLiveMap("perimeter"), point = { x: 0, y: 0 };
     expect(isLiveWalkable(map, point)).toBe(true);
     placePlayers([{ session: guest.session, ...point, health: 71, ammo: 17, medkits: 1, cargo: 65, stash: 120 }]);
     editStorage(db => {
       const saved = JSON.parse(db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!.state);
-      saved.geometryVersion = "perimeter-g2-a827381f"; saved.drops = [{ id: "v2-loose-cargo", mapId: "perimeter", x: 1, y: 0, source: "body", amount: 73, expiresAt: time + 120_000 }];
+      saved.geometryVersion = geometryVersion; saved.drops = [{ id: "legacy-loose-cargo", mapId: "perimeter", x: 1, y: 0, source: "body", amount: 73, expiresAt: time + 120_000 }];
       db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify(saved));
     });
     const restored = (await enter(guest.session)).state;
-    expect(restored.world).toMatchObject({ width: 192, height: 192, generatorVersion: 3 });
+    expect(restored.world).toMatchObject({ width: 256, height: 256, generatorVersion: 4 });
     expect(restored.self).toMatchObject({ ammo: 17, medkits: 1, cargo: 65, stash: 120 });
     expect(restored.entities.find(entity => entity.id === guest.session.id)).toMatchObject(point);
     expect(restored.entities.find(entity => entity.id === guest.session.id)!.health).toBeCloseTo(71);
-    expect(restored.drops.find(drop => drop.id === "v2-loose-cargo")).toMatchObject({ x: 1, y: 0, amount: 73 });
+    expect(restored.drops.find(drop => drop.id === "legacy-loose-cargo")).toMatchObject({ x: 1, y: 0, amount: 73 });
     editStorage(() => {});
     const again = (await enter(guest.session)).state;
     expect(again.self.body).toEqual(restored.self.body); expect(again.self.medicine).toEqual(restored.self.medicine);
     expect(again.self).toMatchObject({ ammo: 17, cargo: 65, stash: 120 }); expect(again.entities.find(entity => entity.id === guest.session.id)).toMatchObject(point);
-    expect(again.drops.filter(drop => drop.id === "v2-loose-cargo")).toHaveLength(1);
+    expect(again.drops.filter(drop => drop.id === "legacy-loose-cargo")).toHaveLength(1);
+  });
+
+  test("a saved body in the new dense city stays nearby while its spent medicine, wounds and cargo survive two restarts", async () => {
+    const guest = await enter(), world = getLiveMap("perimeter"), savedPoint = { x: 117, y: 115 };
+    const body = createHealth(71); body.parts.leftLeg.fracture = true; body.parts.rightArm.maxHp = 48; body.parts.rightArm.hp = 32;
+    const medicine = createMedicalInventory({ medkit: 27, bandage: 0, tourniquet: 0, splint: 1, surgery: 0, painkiller: 0 });
+    editStorage(db => {
+      const row = db.query<{ identity: string; state: string }, []>("SELECT identity,state FROM live_players").get()!, player = JSON.parse(row.state);
+      Object.assign(player, savedPoint, { body, medicine, healthAt: time, ammo: 17, cargo: 65, stash: 120, safeUntil: time + 120_000 });
+      db.query("UPDATE live_players SET state=? WHERE identity=?").run(JSON.stringify(player), row.identity);
+      const saved = JSON.parse(db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!.state);
+      saved.geometryVersion = "perimeter-g3-b38b4b0d"; saved.drops = [{ id: "city-migration-cargo", mapId: "perimeter", ...savedPoint, amount: 73, source: "body", expiresAt: time + 120_000 }];
+      db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify(saved));
+    });
+    const first = (await enter(guest.session)).state, relocated = first.entities.find(entity => entity.id === guest.session.id)!;
+    expect(isLiveWalkable(world, relocated)).toBe(true);
+    expect(Math.max(Math.abs(relocated.x - savedPoint.x), Math.abs(relocated.y - savedPoint.y))).toBeLessThanOrEqual(16);
+    if (isLiveWalkable(world, savedPoint) && !world.npcSpawns.some(spawn => spawn.point.x === savedPoint.x && spawn.point.y === savedPoint.y)) expect(relocated).toMatchObject(savedPoint);
+    expect(first.self).toMatchObject({ body, medicine, ammo: 17, cargo: 65, stash: 120 });
+    const cargo = first.drops.find(drop => drop.id === "city-migration-cargo")!; expect(cargo).toBeDefined(); expect(cargo.amount).toBe(73); expect(isLiveWalkable(world, cargo)).toBe(true);
+    for (let retry = 0; retry < 2; retry++) {
+      editStorage(() => {}); const again = (await enter(guest.session)).state;
+      expect(again.entities.find(entity => entity.id === guest.session.id)).toMatchObject({ x: relocated.x, y: relocated.y });
+      expect(again.self).toMatchObject({ body, medicine, ammo: 17, cargo: 65, stash: 120 });
+      expect(again.drops.filter(drop => drop.id === cargo.id)).toEqual([cargo]);
+    }
   });
 
   test("container search uses a server deadline, survives confirmed discovery across restart and permits only one shared pickup", async () => {
