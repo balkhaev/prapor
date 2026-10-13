@@ -294,7 +294,8 @@ describe("coordinated two and three scav expeditions", () => {
 	test("a v8 solo raid keeps its original paid costs, seed, duration, chance and true solo relationship provenance", () => {
 		const state = funded(); expect(dispatchRaid(state, state.scavs[0]!.id, "courtyard", state.lastUpdated).ok).toBe(true);
 		const before = structuredClone(state), raw = JSON.parse(saveGame(state));
-		raw.schemaVersion = 8; for (const raid of raw.raids) delete raid.squad; for (const report of raw.history) delete report.squad;
+		raw.schemaVersion = 8; delete raw.achievements;
+		for (const raid of raw.raids) delete raid.squad; for (const report of raw.history) delete report.squad;
 		const restored = parseSave(JSON.stringify(raw))!;
 		expect(restored).not.toBeNull(); expect(restored.schemaVersion).toBe(SAVE_VERSION);
 		expect(restored.money).toBe(before.money); expect(restored.supplies).toEqual(before.supplies); expect(restored.rng).toBe(before.rng);
@@ -302,8 +303,27 @@ describe("coordinated two and three scav expeditions", () => {
 		for (const key of ["id", "scavId", "seed", "chance", "startedAt", "endsAt", "weaponInstanceId"] as const) expect(raid[key]).toEqual(before.raids[0]![key]);
 		expect(getRaidGroup(restored, raid)).toEqual([raid]);
 		advance(restored, raid.endsAt); advance(before, before.raids[0]!.endsAt);
-		expect(restored).toEqual(before);
+		expect({ ...restored, achievements: undefined }).toEqual({ ...before, achievements: undefined });
 		expect(restored.social.pairs.every((pair) => pair.sortiesTogether === 0)).toBe(true);
+	});
+
+	test("an authentic v9 solo and paid workshop queue preserve every earned achievement and original raid when migrated to party saves", () => {
+		const state = funded(); earnRelationship(state, "friend");
+		const room = state.shelter.rooms.find((item) => item.type === "workshop")!;
+		expect(assignWorker(state, state.scavs[1]!.id, room.id, state.lastUpdated).ok).toBe(true);
+		expect(queueModuleProduction(state, room.id, "factory-sks-stock", state.lastUpdated).ok).toBe(true);
+		expect(dispatchRaid(state, state.scavs[0]!.id, "courtyard", state.lastUpdated).ok).toBe(true);
+		advance(state, state.lastUpdated + 131);
+		const raw = JSON.parse(saveGame(state)); raw.schemaVersion = 9;
+		for (const raid of raw.raids) delete raid.squad; for (const report of raw.history) delete report.squad;
+		const restored = parseSave(JSON.stringify(raw))!;
+		expect(restored).not.toBeNull(); expect(restored.schemaVersion).toBe(SAVE_VERSION);
+		expect(restored.achievements).toEqual(state.achievements);
+		expect(restored.shelter).toEqual(state.shelter); expect(restored.raids).toEqual(state.raids);
+		expect(restored.rng).toBe(state.rng); expect(restored.money).toBe(state.money); expect(restored.supplies).toEqual(state.supplies);
+		const until = state.raids[0]!.endsAt;
+		advance(state, until); advance(restored, until);
+		expect(restored).toEqual(state); expect(parseSave(saveGame(restored))).not.toBeNull();
 	});
 
 	test("earned friend and rival ties are frozen into combat instead of changing an active party when shelter relationships change", () => {

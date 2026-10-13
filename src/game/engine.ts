@@ -14,7 +14,7 @@ import { GEAR_LABELS, MAX_GEAR_LEVEL, TACTICS, type GearSlot, type GearEquipment
 export { GEAR_LABELS, GEAR_EQUIPMENT_LABELS, MAX_GEAR_LEVEL, TACTICS, type GearSlot, type GearEquipmentSlot, type RaidTactic } from "./operations";
 import { BLUEPRINTS, EXPEDITION_BRANCHES, GEAR_MODEL_BY_ID, MARKET_OFFERS, RUN_PERKS, WEAPON_ROLES, type AmmoType, type Cargo, type ExpeditionBranch, type GearItem, type Loadout, type RunPerk } from "./systems";
 export * from "./systems";
-import { FACTORY_KITS, MODULE_BY_ID, MODULE_MODELS, MODULE_SLOTS, MODULE_SLOT_LABELS, modulePlatformLabel, RECEIVER_INFO, type ModuleInstance, type ModuleSlot } from "./modules";
+import { FACTORY_KITS, getResolvedModuleMounts, MODULE_BY_ID, MODULE_MODELS, MODULE_SLOTS, MODULE_SLOT_LABELS, modulePlatformLabel, RECEIVER_INFO, type ModuleInstance, type ModuleSlot } from "./modules";
 export * from "./modules";
 import { initialShelter, ROOM_DEFINITIONS, RESOURCE_RECIPE_BY_ID, getShelterSites, getShelterFrontier, isShelterSiteCoordinate, MAX_SHELTER_SITES, SHELTER_COORDINATE_LIMIT, SHELTER_EXCAVATION, type ProductionJob, type RoomInstance, type ShelterCost, type ShelterRoomType, type ShelterSite, type ShelterExpansion, type ShelterState } from "./shelter";
 export * from "./shelter";
@@ -24,13 +24,15 @@ export * from "./recruitment";
 import { chooseScavAppearance, defaultScavAppearance, isScavAppearance } from "./scav-appearances";
 import { createScavStory, getScavStoryEffects, noteScavProduction, noteScavRaid, rememberLostScav, validateScavStory, SCAV_STORY_EVENTS, MAX_SCAV_MEMORIES, MAX_SCAV_MEMORIALS, type ScavStory, type ScavMemory, type ScavMemorial, type ScavEventId } from "./scav-stories";
 export * from "./scav-stories";
-import { createSquadSocialState, ensureSquadPairs, removeSquadMember, getRoomSocialEffects, getRaidSocialSupport, creditSquadWork, getSocialProductionWorkers, noteSquadProduction, discardSquadWork, noteSquadDispatch, noteSquadRaid, parseSquadSocialState, validateSquadSocialState, rebaseSquadSocialClock, type SquadSocialState } from "./squad-bonds";
+import { createSquadSocialState, ensureSquadPairs, removeSquadMember, getRoomSocialEffects, getRaidSocialSupport, creditSquadWork, getSocialProductionWorkers, noteSquadProduction, discardSquadWork, noteSquadDispatch, noteSquadRaid, parseSquadSocialState, validateSquadSocialState, rebaseSquadSocialClock, resolveSocialEvent as resolveSquadSocialEvent, getSquadSocialEvents, type SquadSocialState } from "./squad-bonds";
 export * from "./squad-bonds";
 import { getSquadRaidQuote, getRaidGroup, createSquadRaidSnapshot, planSquadRaidActions, squadInjuryMultiplier, parseSquadRaidSnapshot, validateSquadRaids, type SquadRaidSnapshot, type SquadRaidReport } from "./squad-raids";
 export * from "./squad-raids";
+import { createAchievementState, parseAchievementState, validateAchievementState, rebaseAchievementClock, noteAchievementBuild, noteAchievementTransfer, noteAchievementInstalled, noteAchievementDispatch, noteAchievementCheckpoint, noteAchievementContinue, noteAchievementExtract, noteAchievementRaidFinished, noteAchievementLoot, noteAchievementSupply, prepareAchievementPayment, noteAchievementPaid, prepareAchievementCraft, noteAchievementCrafted, prepareAchievementRecycle, noteAchievementRecycled, creditAchievementWork, noteAchievementUpgrade, noteAchievementUpgradeDone, noteAchievementAssignment, noteAchievementSocialDecision, noteAchievementJobDone, noteAchievementCancelled, pruneAchievementPeople, pruneAchievementInventory, type AchievementState } from "./achievements";
+export * from "./achievements";
 
 export const SAVE_KEY = "prapor.save.v1";
-export const SAVE_VERSION = 9;
+export const SAVE_VERSION = 10;
 export const MAX_OFFLINE_MS = 8 * 60 * 60 * 1000;
 export const MAX_ROOM_LEVEL = 5;
 
@@ -141,6 +143,7 @@ export interface GameState {
 	recruitment: RecruitmentState;
 	memorials: ScavMemorial[];
 	social: SquadSocialState;
+	achievements: AchievementState;
 	stats: {
 		raidsWon: number;
 		raidsCompleted: number;
@@ -207,6 +210,7 @@ function rebaseClock(state: GameState, now: number) {
 	}
 	for (const memorial of state.memorials) memorial.at = Math.max(0, memorial.at - shift);
 	rebaseSquadSocialClock(state, shift);
+	rebaseAchievementClock(state, shift);
 	for (const report of state.history) {
 		report.at = Math.max(0, report.at - shift);
 		for (const event of report.events) event.at = Math.max(0, event.at - shift);
@@ -335,6 +339,7 @@ export function createGame(now = Date.now()): GameState {
 		recruitment: { rng: 1, generation: 1, tier: 0, boardTier: 0, boardSeed: 1, board: [], hiredCandidateIds: [] },
 		memorials: [],
 		social: { pairs: [], losses: [] },
+		achievements: createAchievementState(),
 		stats: {
 			raidsWon: 0,
 			raidsCompleted: 0,
@@ -385,7 +390,13 @@ function moduleFitReason(weapon: WeaponInstance, item: ModuleInstance): string |
 	if (model.slot === "receiver" && model.weaponId !== weapon.weaponId) return "Эта ствольная коробка относится к другой пушке. Собери её отдельно.";
 	if (!model.platforms.includes("*") && !model.platforms.includes(info.platform)) return `Нужна платформа ${model.platforms.map(modulePlatformLabel).join(" / ")}; у пушки ${modulePlatformLabel(info.platform)}.`;
 	if (!model.calibers.includes("*") && !model.calibers.includes(info.caliber)) return `Калибр ${model.calibers.join(" / ")} не подходит к ${info.caliber}.`;
-	if (model.requiresMount && !Object.values(weapon.modules).some((part) => getModuleDefinition(part).providesMounts.includes(model.requiresMount!))) return `Нет крепления ${model.requiresMount === "rail-top" ? "верхней планки" : model.requiresMount === "rail-bottom" ? "нижней планки цевья" : model.requiresMount === "dovetail" ? "бокового кронштейна" : `резьбы ${info.caliber}`}.`;
+	if (model.requiresMount && !getResolvedModuleMounts(weapon.modules, model.slot).includes(model.requiresMount)) {
+		const label = model.requiresMount === "rail-top" ? "верхней планки" : model.requiresMount === "rail-bottom" ? "нижней планки цевья"
+			: model.requiresMount === "rail-side" ? "боковой планки" : model.requiresMount === "barrel-clamp" ? "открытого ствола для хомута"
+				: model.requiresMount === "barrel-clamp-wide" ? "места для широкого хомута ствола"
+				: model.requiresMount === "dovetail" ? "ласточкиного хвоста" : `резьбы ${info.caliber}`;
+		return `Нет крепления ${label}.`;
+	}
 	return null;
 }
 export function getWeaponBuildIssues(weapon: WeaponInstance): string[] {
@@ -440,11 +451,15 @@ export function getModuleInstallReason(state: GameState, gunId: string, moduleId
 export function installModule(state: GameState, gunId: string, moduleId: string): ActionResult {
 	const reason = getModuleInstallReason(state, gunId, moduleId); if (reason) return fail(reason);
 	const weapon = state.weapons.find((gun) => gun.id === gunId)!, item = state.modules.find((part) => part.id === moduleId)!;
+	const before = structuredClone(weapon);
+	noteAchievementBuild(state, weapon);
 	const slot = getModuleDefinition(item).slot, old = weapon.modules[slot];
+	if (old) noteAchievementTransfer(state, weapon, [old]);
 	state.modules = state.modules.filter((part) => part.id !== moduleId);
 	if (old) state.modules.push(old);
 	weapon.modules[slot] = item;
 	if (slot === "receiver") { weapon.durability = item.durability; weapon.attachments = { ...(item.legacyAttachments ?? { optic: 0, magazine: 0, stock: 0 }) }; }
+	noteAchievementInstalled(state, before, weapon, item);
 	return ok(`${getModuleDefinition(item).label} установлен. ${old ? "Снятая деталь возвращена на стойку." : ""}`);
 }
 export function getModuleRemoveReason(state: GameState, gunId: string, slot: ModuleSlot): string | null {
@@ -460,7 +475,9 @@ export function getModuleRemoveReason(state: GameState, gunId: string, slot: Mod
 }
 export function removeModule(state: GameState, gunId: string, slot: ModuleSlot): ActionResult {
 	const reason = getModuleRemoveReason(state, gunId, slot); if (reason) return fail(reason);
-	const weapon = state.weapons.find((gun) => gun.id === gunId)!; state.modules.push(weapon.modules[slot]!); delete weapon.modules[slot];
+	const weapon = state.weapons.find((gun) => gun.id === gunId)!;
+	noteAchievementBuild(state, weapon); noteAchievementTransfer(state, weapon, [weapon.modules[slot]!]);
+	state.modules.push(weapon.modules[slot]!); delete weapon.modules[slot];
 	return ok("Деталь снята и возвращена на стойку.");
 }
 export function assembleWeapon(state: GameState, receiverId: string): ActionResult {
@@ -485,8 +502,10 @@ export function getWeaponDisassembleReason(state: GameState, gunId: string): str
 export function disassembleWeapon(state: GameState, gunId: string): ActionResult {
 	const reason = getWeaponDisassembleReason(state, gunId); if (reason) return fail(reason);
 	const weapon = state.weapons.find((gun) => gun.id === gunId)!;
+	noteAchievementTransfer(state, weapon, Object.values(weapon.modules));
 	state.modules.push(...Object.values(weapon.modules)); state.weapons = state.weapons.filter((gun) => gun.id !== gunId);
 	for (const scav of state.scavs) if (scav.weaponInstanceId === gunId) scav.weaponInstanceId = null;
+	pruneAchievementInventory(state);
 	return ok("Сборка разобрана. Все её детали на стойке.");
 }
 export function getModuleCraftReason(state: GameState, modelId: string): string | null {
@@ -500,8 +519,10 @@ export function getModuleCraftReason(state: GameState, modelId: string): string 
 export function craftModule(state: GameState, modelId: string): ActionResult {
 	const reason = getModuleCraftReason(state, modelId); if (reason) return fail(reason);
 	const model = ownValue(MODULE_BY_ID, modelId)!;
+	const blocked = prepareAchievementCraft(state, model.craftCost.scrap);
 	state.money -= model.craftCost.money; state.supplies.scrap -= model.craftCost.scrap;
-	state.modules.push(createModule(state, modelId, state.lastUpdated));
+	const crafted = createModule(state, modelId, state.lastUpdated); state.modules.push(crafted);
+	noteAchievementCrafted(state, "module", modelId, null, crafted.id, null, blocked);
 	return ok(`${model.label} изготовлен.`);
 }
 export function getModuleSaleValue(item: ModuleInstance): number { return Math.max(2, Math.floor(getModuleDefinition(item).value * (0.2 + item.durability * 0.003))); }
@@ -510,12 +531,16 @@ export function getModuleRepairCost(item: ModuleInstance): UpgradeCost { return 
 export function sellModule(state: GameState, moduleId: string): ActionResult {
 	const item = state.modules.find((part) => part.id === moduleId); if (!item) return fail("Свободная деталь не найдена.");
 	state.modules = state.modules.filter((part) => part.id !== moduleId); const value = getModuleSaleValue(item); addMoney(state, value);
+	pruneAchievementInventory(state);
 	return ok(`Деталь продана за ${value} ₽.`);
 }
 export function recycleModule(state: GameState, moduleId: string): ActionResult {
 	const item = state.modules.find((part) => part.id === moduleId); if (!item) return fail("Свободная деталь не найдена.");
 	const amount = getModuleRecycleYield(item); if (state.supplies.scrap + amount > getSupplyCapacity(state).scrap) return fail("Нет места для деталей.");
+	const candidates = prepareAchievementRecycle(state, moduleId, amount);
 	state.modules = state.modules.filter((part) => part.id !== moduleId); state.supplies.scrap += amount;
+	noteAchievementSupply(state, "scrap", amount); noteAchievementRecycled(state, candidates);
+	pruneAchievementInventory(state);
 	return ok(`Разобрано: +${amount} деталей.`);
 }
 export function repairModule(state: GameState, moduleId: string): ActionResult {
@@ -623,6 +648,7 @@ export function upgradeRoom(state: GameState, roomId: string, now = Date.now()):
 	if (!isTime(now)) return fail("Некорректное время."); advance(state, now);
 	const quote = getRoomUpgradeQuote(state, roomId); if (quote.reason) return fail(quote.reason);
 	const room = roomById(state, roomId)!;
+	noteAchievementUpgrade(state, room);
 	state.money -= quote.money; state.supplies.scrap -= quote.scrap;
 	room.status = "upgrading"; room.construction = { workDone: 0, workRequired: quote.duration * 1_000_000, targetLevel: room.level + 1, cost: { money: quote.money, scrap: quote.scrap } };
 	return ok("Улучшение началось. Производственная очередь ждёт завершения работ.");
@@ -648,6 +674,7 @@ export function assignWorker(state: GameState, scavId: string, roomId: string | 
 	for (const current of state.shelter.rooms) current.workerIds = current.workerIds.filter((workerId) => workerId !== scavId);
 	scav.assignment = room?.id ?? null;
 	if (room) room.workerIds.push(scavId);
+	noteAchievementAssignment(state, scavId, roomId);
 	settleShelter(state, now);
 	return ok(room ? `${scav.name}: ${ROOM_DEFINITIONS[room.type].label}. Для рейда сначала освободи бойца.` : `${scav.name} освобождён от работы.`);
 }
@@ -668,9 +695,12 @@ export function queueModuleProduction(state: GameState, roomId: string, modelId:
 	if (!isTime(now)) return fail("Некорректное время."); advance(state, now);
 	const quote = getModuleProductionQuote(state, roomId, modelId); if (quote.reason) return fail(quote.reason);
 	const paid = { money: quote.money, supplies: { ...emptySupplies(), scrap: quote.scrap } };
+	const candidates = prepareAchievementPayment(state, paid), blocked = prepareAchievementCraft(state, quote.scrap);
 	reserveProduction(state, paid);
-	roomById(state, roomId)!.queue.push({ id: id(state, "job"), kind: "module", recipeId: `module:${modelId}`, modelId,
-		workDone: 0, workRequired: quote.duration * 1_000_000, paid, output: { supplies: emptySupplies(), moduleModelId: modelId }, createdAt: now });
+	const room = roomById(state, roomId)!;
+	const job: ProductionJob = { id: id(state, "job"), kind: "module", recipeId: `module:${modelId}`, modelId,
+		workDone: 0, workRequired: quote.duration * 1_000_000, paid, output: { supplies: emptySupplies(), moduleModelId: modelId }, createdAt: now };
+	room.queue.push(job); noteAchievementPaid(state, room, job, candidates); noteAchievementCrafted(state, "job", modelId, roomId, null, job.id, blocked);
 	return ok("Заказ поставлен в очередь. Материалы зарезервированы один раз.");
 }
 export function getResourceProductionQuote(state: GameState, roomId: string, recipeId: string) {
@@ -708,10 +738,11 @@ export function cancelProduction(state: GameState, roomId: string, jobId: string
 		return fail("Заказ уже завершён или не найден.");
 	}
 	room.queue = room.queue.filter((item) => item.id !== jobId);
+	noteAchievementCancelled(state, jobId);
 	discardSquadWork(state, jobId);
 	if (job.workDone === 0) {
 		addMoney(state, job.paid.money, false);
-		for (const key of Object.keys(job.paid.supplies) as (keyof Supplies)[]) state.supplies[key] += job.paid.supplies[key];
+		for (const key of Object.keys(job.paid.supplies) as (keyof Supplies)[]) { state.supplies[key] += job.paid.supplies[key]; noteAchievementSupply(state, key, job.paid.supplies[key]); }
 	}
 	room.repeat = false;
 	room.pending = false;
@@ -720,10 +751,12 @@ export function cancelProduction(state: GameState, roomId: string, jobId: string
 function tryStartResourceJob(state: GameState, room: RoomInstance, now: number): boolean {
 	if (!room.recipeId || room.queue.length || getResourceProductionQuote(state, room.id, room.recipeId).reason) return false;
 	const recipe = ownValue(RESOURCE_RECIPE_BY_ID, room.recipeId)!;
+	const candidates = prepareAchievementPayment(state, recipe.cost);
 	reserveProduction(state, recipe.cost);
 	room.pending = false;
 	room.queue.push({ id: id(state, "job"), kind: "resource", recipeId: recipe.id, modelId: null, workDone: 0,
 		workRequired: recipe.durationSeconds * 1_000_000, paid: structuredClone(recipe.cost), output: { supplies: { ...recipe.output }, moduleModelId: null }, createdAt: now });
+	noteAchievementPaid(state, room, room.queue[0]!, candidates);
 	return true;
 }
 function settleShelter(state: GameState, now: number, stoppedAtBoundary: ReadonlySet<string> = new Set()) {
@@ -737,6 +770,7 @@ function settleShelter(state: GameState, now: number, stoppedAtBoundary: Readonl
 	for (const room of [...state.shelter.rooms].sort((a, b) => a.id.localeCompare(b.id))) {
 		if (room.construction && room.construction.workDone >= room.construction.workRequired) {
 			room.level = room.construction.targetLevel; room.construction = null; room.status = "ready";
+			noteAchievementUpgradeDone(state, room);
 			if (roomKeys.includes(room.type as BaseRoom)) state.base[room.type as BaseRoom] = Math.max(state.base[room.type as BaseRoom], room.level);
 			state.recruitment.tier = Math.max(state.recruitment.tier, getEarnedRecruitmentTier(state)) as RecruitTier;
 			addXp(state, 12 * room.level);
@@ -745,10 +779,12 @@ function settleShelter(state: GameState, now: number, stoppedAtBoundary: Readonl
 		if (room.status !== "ready") continue;
 		const job = room.queue[0];
 		if (job && job.workDone >= job.workRequired && !roomOutputReason(state, job)) {
-			if (job.output.moduleModelId) state.modules.push(createModule(state, job.output.moduleModelId, now));
-			for (const key of Object.keys(job.output.supplies) as (keyof Supplies)[]) state.supplies[key] += job.output.supplies[key];
+			const item = job.output.moduleModelId ? createModule(state, job.output.moduleModelId, now) : null;
+			if (item) state.modules.push(item);
+			for (const key of Object.keys(job.output.supplies) as (keyof Supplies)[]) { state.supplies[key] += job.output.supplies[key]; noteAchievementSupply(state, key, job.output.supplies[key]); }
 			room.queue.shift(); room.cycles++;
 			changed = true;
+			noteAchievementJobDone(state, room, job, item?.id ?? null, now);
 			const creditedWorkers = getSocialProductionWorkers(state, room, job);
 			for (const workerId of creditedWorkers) {
 				const scav = state.scavs.find((item) => item.id === workerId); if (!scav) continue;
@@ -772,6 +808,7 @@ function progressShelter(state: GameState, elapsedMs: number) {
 			const job = room.queue[0], before = job.workDone;
 			job.workDone = Math.min(job.workRequired, job.workDone + elapsedMs * roomWorkRate(state, room));
 			creditSquadWork(state, room, job, job.workDone - before);
+			creditAchievementWork(state, room, job, job.workDone - before);
 		}
 	}
 }
@@ -817,6 +854,7 @@ export function getSupplyCapacity(state: GameState): Supplies {
 function addSupply(state: GameState, key: keyof Supplies, amount: number): number {
 	const accepted = Math.max(0, Math.min(amount, getSupplyCapacity(state)[key] - state.supplies[key]));
 	state.supplies[key] += accepted;
+	noteAchievementSupply(state, key, accepted);
 	return accepted;
 }
 export function getGearModel(item: GearItem) {
@@ -859,6 +897,7 @@ export function buySupplies(state: GameState, offerId: string): ActionResult {
 	if (reason) return fail(reason);
 	const offer = MARKET_OFFERS.find((item) => item.id === offerId)!;
 	state.money -= offer.money; state.supplies[offer.supply] += offer.amount;
+	noteAchievementSupply(state, offer.supply, offer.amount);
 	return ok(`${offer.label}: +${offer.amount}.`);
 }
 export function getGearCraftReason(state: GameState, modelId: string): string | null {
@@ -873,8 +912,10 @@ export function craftGear(state: GameState, modelId: string): ActionResult {
 	const reason = getGearCraftReason(state, modelId);
 	if (reason) return fail(reason);
 	const model = ownValue(GEAR_MODEL_BY_ID, modelId)!;
+	const blocked = prepareAchievementCraft(state, model.scrap);
 	state.money -= model.money; state.supplies.scrap -= model.scrap;
-	state.gearItems.push({ id: id(state, "gear"), modelId, durability: 100 });
+	const crafted = { id: id(state, "gear"), modelId, durability: 100 }; state.gearItems.push(crafted);
+	noteAchievementCrafted(state, "gear", modelId, null, crafted.id, null, blocked);
 	return ok(`${model.label} собран. Выдай предмет бойцу.`);
 }
 export function equipGear(state: GameState, scavId: string, slot: GearEquipmentSlot, itemId: string | null): ActionResult {
@@ -918,6 +959,8 @@ export function recycleGear(state: GameState, itemId: string): ActionResult {
 	state.gearItems = state.gearItems.filter((gear) => gear.id !== item.id);
 	for (const scav of state.scavs) for (const key of ["armorItemId", "helmetItemId", "backpackItemId"] as const) if (scav.loadout[key] === item.id) scav.loadout[key] = null;
 	state.supplies.scrap += amount;
+	noteAchievementSupply(state, "scrap", amount);
+	pruneAchievementInventory(state);
 	return ok(`Разобрано: +${amount} деталей.`);
 }
 export function setLoadoutOption(state: GameState, scavId: string, option: "ammoType" | "medkit", value: string | boolean): ActionResult {
@@ -1145,6 +1188,7 @@ function startRaid(state: GameState, scav: Scav, map: RaidMap, now: number, isAu
 				packModelId: pack?.modelId ?? "none", packCondition: pack?.durability ?? 0,
 				ammoType: scav.loadout.ammoType, medkit: scav.loadout.medkit } },
 	};
+	const beforeAmmo = state.supplies.ammo;
 	state.money -= quote.money;
 	state.supplies.ammo -= quote.ammo;
 	state.supplies.intel -= quote.intel;
@@ -1152,6 +1196,7 @@ function startRaid(state: GameState, scav: Scav, map: RaidMap, now: number, isAu
 	scav.status = "raiding";
 	scav.autoRaid.waitingReason = null;
 	state.raids.push(raid);
+	noteAchievementDispatch(state, scav, raid, beforeAmmo, now);
 	noteSquadDispatch(state, raid);
 	if (!state.stats.mapsVisited.includes(map.id)) state.stats.mapsVisited.push(map.id);
 	state.recruitment.tier = Math.max(state.recruitment.tier, getEarnedRecruitmentTier(state)) as RecruitTier;
@@ -1370,6 +1415,7 @@ export function dismissScav(state: GameState, scavId: string): ActionResult {
 	const scav = state.scavs.find((item) => item.id === scavId)!;
 	state.scavs = state.scavs.filter((item) => item.id !== scav.id);
 	removeSquadMember(state, scav.id);
+	pruneAchievementPeople(state);
 	return ok(`${scav.name} покинул отряд. Всё оружие и снаряжение осталось на складе.`);
 }
 export function chooseScavTalent(state: GameState, scavId: string, talentId: string): ActionResult {
@@ -1455,6 +1501,7 @@ export function sellWeapon(
 		if (scav.weaponInstanceId === weapon.id) scav.weaponInstanceId = null;
 	});
 	addMoney(state, value);
+	pruneAchievementInventory(state);
 	return ok(`Оружие продано за ${value} ₽.`);
 }
 export function getWeaponSaleValue(weapon: WeaponInstance): number {
@@ -1471,9 +1518,12 @@ export function recycleWeapon(state: GameState, weaponInstanceId: string): Actio
 	if (getWeaponStats(weapon).ready && !state.weapons.some((other) => other.id !== weapon.id && getWeaponStats(other).ready)) return fail("Последнюю готовую пушку нужно оставить отряду.");
 	const amount = getWeaponRecycleYield(weapon);
 	if (state.supplies.scrap + amount > getSupplyCapacity(state).scrap) return fail("Нет места для деталей.");
+	const candidates = prepareAchievementRecycle(state, weapon.modules.receiver!.id, amount);
 	state.weapons = state.weapons.filter((item) => item.id !== weapon.id);
 	for (const scav of state.scavs) if (scav.weaponInstanceId === weapon.id) scav.weaponInstanceId = null;
 	state.supplies.scrap += amount;
+	noteAchievementSupply(state, "scrap", amount); noteAchievementRecycled(state, candidates);
+	pruneAchievementInventory(state);
 	return ok(`Разобрано: +${amount} деталей.`);
 }
 
@@ -1575,6 +1625,7 @@ function continueAtCheckpoint(state: GameState, raid: Raid, branch: ExpeditionBr
 	const quote = getIndividualExpeditionChoices(state, raid, perk).find((item) => item.branch === branch);
 	if (!quote) return fail("Маршрут завершён: осталось эвакуироваться.");
 	if (quote.reason) return fail(quote.reason);
+	noteAchievementContinue(state, raid);
 	state.money -= quote.money; state.supplies.ammo -= quote.ammo; state.supplies.intel -= quote.intel;
 	expedition.trail.push({ at: now, label: `Выбор · этап ${expedition.stage + 1}`, text: `${quote.label}. Приём: ${RUN_PERKS[perk].label}. Шанс ${Math.round(quote.chance * 100)}%; расход ${quote.money} ₽, ${quote.ammo} патронов${quote.intel ? `, ${quote.intel} разведданных` : ""}. Под риском весь груз: ${expedition.cargo.money} ₽ и трофеи.`, kind: "neutral" });
 	expedition.perks.push(perk); expedition.offers = [];
@@ -1613,11 +1664,13 @@ export function extractRaid(state: GameState, raidId: string, now = Date.now()):
 	if (raid.squad) {
 		const group = getRaidGroup(state, raid);
 		if (group.length !== raid.squad.members.length || group.some((member) => member.expedition?.status !== "choice")) return fail("Весь отряд должен дойти до общей контрольной точки.");
+		for (const member of group) noteAchievementExtract(state, member, now);
 		state.raids = state.raids.filter((other) => !group.includes(other));
 		const reports = group.map((member) => finishExpedition(state, member, true, now));
 		attachSquadReports(state, raid.squad, reports);
 		return ok(`Отряд эвакуирован вместе: ${reports.reduce((sum, report) => sum + report.money, 0)} ₽ и доставленный груз.`);
 	}
+	noteAchievementExtract(state, raid, now);
 	state.raids = state.raids.filter((item) => item.id !== raidId);
 	const report = finishExpedition(state, raid, true, now);
 	return ok(`${raid.scavName} эвакуирован: ${report.money} ₽ и доставленный груз.`);
@@ -1662,6 +1715,7 @@ function reachCheckpoint(state: GameState, raid: Raid, now: number, party?: { in
 	if (expedition.stage >= 2 && expedition.branch !== "recon") {
 		discoverBlueprint(state, expedition, expedition.branch === "combat" ? "plate_armor" : "cargo_pack");
 	}
+	noteAchievementCheckpoint(state, raid, now);
 	const discoveriesText = expedition.discoveries.slice(discoveriesBefore).map((blueprint) => BLUEPRINTS[blueprint]!.label).join(", ");
 	const armor = ownValue(GEAR_MODEL_BY_ID, expedition.loadout.armorModelId);
 	const helmet = expedition.loadout.helmetModelId ? ownValue(GEAR_MODEL_BY_ID, expedition.loadout.helmetModelId) : undefined;
@@ -1791,6 +1845,7 @@ function finishExpedition(state: GameState, raid: Raid, success: boolean, now: n
 					const stripped = generator((raid.seed ^ Math.imul(expedition.stage, 0x297a2d39) ^ found.weaponId.length) >>> 0)() < 0.3;
 					if (stripped) delete found.modules[getWeaponDefinition(found).category === "pistol" ? "magazine" : "stock"];
 				}
+				noteAchievementLoot(state, raid.id, [found.id, ...Object.values(found.modules).map((part) => part.id)]);
 			}
 			else { report.weaponAutoSold = true; report.money += Math.round(definition.value * 0.35); }
 		}
@@ -1798,7 +1853,7 @@ function finishExpedition(state: GameState, raid: Raid, success: boolean, now: n
 			report.moduleIds.push(part.modelId);
 			const model = getModuleDefinition(part);
 			if (model.slot === "receiver") { state.stats.weaponsFound++; if (["rare", "epic", "legendary"].includes(ownValue(WEAPON_BY_ID, model.weaponId!)!.rarity)) state.stats.rareWeaponsFound++; }
-			if (state.modules.length < getModuleCapacity(state)) state.modules.push(part); else report.money += getModuleSaleValue(part);
+			if (state.modules.length < getModuleCapacity(state)) { state.modules.push(part); noteAchievementLoot(state, raid.id, [part.id]); } else report.money += getModuleSaleValue(part);
 		}
 		addMoney(state, report.money);
 		report.description = `Эвакуация после этапа ${expedition.stage}. Груз доставлен${report.weaponAutoSold ? "; лишний трофей продан" : ""}.`;
@@ -1820,6 +1875,7 @@ function finishExpedition(state: GameState, raid: Raid, success: boolean, now: n
 		report.description = `Выход сорван на этапе ${expedition.stage}. Невынесенный груз потерян. ${rescuedBy ? `Товарищ ${raid.squad?.members.find((member) => member.scavId === rescuedBy)?.scavName ?? "из отряда"} спас бойца и его оружие личной аптечкой.` : report.lostScav ? "Боец пропал." : report.lostWeapon ? "Боец вернулся без оружия." : "Боец вернулся раненым."}`;
 	}
 	if (report.discoveries.length) report.description += " Переданные чертежи сохранены.";
+	noteAchievementRaidFinished(state, raid, report);
 	if (!report.lostScav) {
 		scav.level = Math.min(15, 1 + Math.floor(Math.sqrt(scav.xp / 60)));
 		scav.combat = Math.min(100, scav.combat + (scav.level - oldLevel) * 4);
@@ -1834,6 +1890,7 @@ function finishExpedition(state: GameState, raid: Raid, success: boolean, now: n
 	noteScavRaid(scav, report);
 	if (report.lostScav) rememberLostScav(state, scav, report);
 	noteSquadRaid(state, scav, report);
+	pruneAchievementPeople(state);
 	state.history.unshift(report); state.history.length = Math.min(state.history.length, 40);
 	state.recruitment.tier = Math.max(state.recruitment.tier, getEarnedRecruitmentTier(state)) as RecruitTier;
 	return report;
@@ -1903,6 +1960,7 @@ function finishRaid(state: GameState, raid: Raid): RaidReport {
 		addMoney(state, report.money);
 		(Object.keys(report.supplies) as (keyof Supplies)[]).forEach((key) => {
 			state.supplies[key] += report.supplies[key];
+			noteAchievementSupply(state, key, report.supplies[key]);
 		});
 		addXp(state, map.xp);
 		scav.xp += map.xp;
@@ -1926,13 +1984,15 @@ function finishRaid(state: GameState, raid: Raid): RaidReport {
 				state.stats.rareWeaponsFound++;
 			if (!state.discoveredWeapons.includes(report.weaponId))
 				state.discoveredWeapons.push(report.weaponId);
-			if (state.weapons.length < getStorageCapacity(state))
-				createWeapon(
+			if (state.weapons.length < getStorageCapacity(state)) {
+				const found = createWeapon(
 					state,
 					report.weaponId,
 					raid.endsAt,
 					55 + Math.floor(random() * 46)
 				);
+				noteAchievementLoot(state, raid.id, [found.id, ...Object.values(found.modules).map((part) => part.id)]);
+			}
 			else {
 				report.weaponAutoSold = true;
 				const value = Math.round(foundDefinition.value * 0.65);
@@ -1979,9 +2039,11 @@ function finishRaid(state: GameState, raid: Raid): RaidReport {
 			survivor.weaponInstanceId = createWeapon(state, "pm", raid.endsAt, 70).id;
 	}
 	report.events = createRaidEvents(raid, report, map);
+	noteAchievementRaidFinished(state, raid, report);
 	noteScavRaid(scav, report);
 	if (report.lostScav) rememberLostScav(state, scav, report);
 	noteSquadRaid(state, scav, report);
+	pruneAchievementPeople(state);
 	state.history.unshift(report);
 	state.history.length = Math.min(state.history.length, 40);
 	state.recruitment.tier = Math.max(state.recruitment.tier, getEarnedRecruitmentTier(state)) as RecruitTier;
@@ -2103,6 +2165,13 @@ function simulateAdvance(state: GameState, now: number, stoppedAtBoundary: Reado
 	state.lastUpdated = now;
 	summary.money = state.money - beforeMoney;
 	return summary;
+}
+
+export function resolveSocialEvent(state: GameState, eventId: string, choiceId: string): ActionResult {
+	const event = getSquadSocialEvents(state).find((item) => item.id === eventId);
+	const result = resolveSquadSocialEvent(state, eventId, choiceId);
+	if (result.ok && event?.eventId === "friction" && event.pairId) noteAchievementSocialDecision(state, event.pairId, choiceId);
+	return result;
 }
 
 export function saveGame(state: GameState): string {
@@ -2498,7 +2567,7 @@ function parseScav(value: unknown, version: number): Scav {
 }
 function parseRaid(value: unknown, version: number): Raid {
 	const source = record(value);
-	fields(source, ["id", "scavId", "scavName", "scavAppearance", "mapId", "weaponInstanceId", "startedAt", "endsAt", "chance", "lootBonus", "seed", ...(version >= 2 ? ["isAuto", "tactic", "armorLevel", "backpackLevel"] : []), ...(version >= 3 ? ["expedition"] : []), ...(version >= 9 ? ["squad"] : [])]);
+	fields(source, ["id", "scavId", "scavName", "scavAppearance", "mapId", "weaponInstanceId", "startedAt", "endsAt", "chance", "lootBonus", "seed", ...(version >= 2 ? ["isAuto", "tactic", "armorLevel", "backpackLevel"] : []), ...(version >= 3 ? ["expedition"] : []), ...(version >= 10 ? ["squad"] : [])]);
 	const startedAt = number(source.startedAt);
 	const endsAt = number(source.endsAt);
 	const expedition = version >= 3 ? parseExpedition(source.expedition, version) : null;
@@ -2521,12 +2590,12 @@ function parseRaid(value: unknown, version: number): Raid {
 		armorLevel: version === 1 ? 0 : number(source.armorLevel, 3, 0, true),
 		backpackLevel: version === 1 ? 0 : number(source.backpackLevel, 3, 0, true),
 		expedition,
-		...(version >= 9 && Object.hasOwn(source, "squad") ? { squad: parseSquadRaidSnapshot(source.squad) as SquadRaidSnapshot } : {}),
+		...(version >= 10 && Object.hasOwn(source, "squad") ? { squad: parseSquadRaidSnapshot(source.squad) as SquadRaidSnapshot } : {}),
 	};
 }
 function parseReport(value: unknown, version: number): RaidReport {
 	const source = record(value);
-	fields(source, ["id", "raidId", "scavName", "scavAppearance", "mapId", "at", "success", "lostScav", "lostWeapon", "money", "supplies", "weaponId", "weaponAutoSold", "description", ...(version >= 2 ? ["isAuto", "tactic", "events"] : []), ...(version >= 3 ? ["depth", "discoveries", "lostCargo"] : []), ...(version >= 4 ? ["moduleIds"] : []), ...(version >= 9 ? ["squad"] : [])]);
+	fields(source, ["id", "raidId", "scavName", "scavAppearance", "mapId", "at", "success", "lostScav", "lostWeapon", "money", "supplies", "weaponId", "weaponAutoSold", "description", ...(version >= 2 ? ["isAuto", "tactic", "events"] : []), ...(version >= 3 ? ["depth", "discoveries", "lostCargo"] : []), ...(version >= 4 ? ["moduleIds"] : []), ...(version >= 10 ? ["squad"] : [])]);
 	return {
 		id: string(source.id),
 		raidId: string(source.raidId),
@@ -2550,7 +2619,7 @@ function parseReport(value: unknown, version: number): RaidReport {
 		isAuto: version === 1 ? false : bool(source.isAuto),
 		tactic: version === 1 ? "balanced" : known(source.tactic, TACTICS) as RaidTactic,
 		events: version === 1 ? [] : parseEvents(source.events, version >= 3 ? 10 : 4),
-		...(version >= 9 && Object.hasOwn(source, "squad") ? { squad: parseSquadRaidSnapshot(source.squad, true) as SquadRaidReport } : {}),
+		...(version >= 10 && Object.hasOwn(source, "squad") ? { squad: parseSquadRaidSnapshot(source.squad, true) as SquadRaidReport } : {}),
 	};
 }
 
@@ -2559,9 +2628,9 @@ export function parseSave(raw: string): GameState | null {
 	try {
 		if (typeof raw !== "string" || raw.length > 1_000_000) return null;
 		const source = record(JSON.parse(raw));
-		if (source.schemaVersion !== 1 && source.schemaVersion !== 2 && source.schemaVersion !== 3 && source.schemaVersion !== 4 && source.schemaVersion !== 5 && source.schemaVersion !== 6 && source.schemaVersion !== 7 && source.schemaVersion !== 8 && source.schemaVersion !== SAVE_VERSION) return null;
+		if (source.schemaVersion !== 1 && source.schemaVersion !== 2 && source.schemaVersion !== 3 && source.schemaVersion !== 4 && source.schemaVersion !== 5 && source.schemaVersion !== 6 && source.schemaVersion !== 7 && source.schemaVersion !== 8 && source.schemaVersion !== 9 && source.schemaVersion !== SAVE_VERSION) return null;
 		const version = source.schemaVersion;
-		fields(source, ["schemaVersion", "createdAt", "lastUpdated", "money", "supplies", "xp", "level", "base", "scavs", "weapons", "raids", "history", "claimedContracts", "discoveredWeapons", "stats", "clock", "rng", "nextId", ...(version >= 3 ? ["gearItems", "blueprints"] : []), ...(version >= 4 ? ["modules"] : []), ...(version >= 5 ? ["shelter"] : []), ...(version >= 6 ? ["recruitment"] : []), ...(version >= 7 ? ["memorials"] : []), ...(version >= 8 ? ["social"] : [])]);
+		fields(source, ["schemaVersion", "createdAt", "lastUpdated", "money", "supplies", "xp", "level", "base", "scavs", "weapons", "raids", "history", "claimedContracts", "discoveredWeapons", "stats", "clock", "rng", "nextId", ...(version >= 3 ? ["gearItems", "blueprints"] : []), ...(version >= 4 ? ["modules"] : []), ...(version >= 5 ? ["shelter"] : []), ...(version >= 6 ? ["recruitment"] : []), ...(version >= 7 ? ["memorials"] : []), ...(version >= 8 ? ["social"] : []), ...(version >= 9 ? ["achievements"] : [])]);
 		const base = record(source.base);
 		const stats = record(source.stats);
 		const clock = record(source.clock);
@@ -2616,6 +2685,7 @@ export function parseSave(raw: string): GameState | null {
 			recruitment: version >= 6 ? parseRecruitment(source.recruitment, version) : { rng: 1, generation: 1, tier: 0, boardTier: 0, boardSeed: 1, board: [], hiredCandidateIds: [] },
 			memorials: version >= 7 ? array(source.memorials, MAX_SCAV_MEMORIALS, parseScavMemorial) : [],
 			social: version >= 8 ? parseSquadSocialState(source.social) : { pairs: [], losses: [] },
+			achievements: version >= 9 ? parseAchievementState(source.achievements, (value) => parseWeapon(value, version)) : createAchievementState(),
 			stats: {
 				raidsWon: number(stats.raidsWon, 1e9, 0, true),
 				raidsCompleted: number(stats.raidsCompleted, 1e9, 0, true),
@@ -2806,6 +2876,7 @@ export function parseSave(raw: string): GameState | null {
 			throw new Error("id-sequence");
 		validateSquadSocialState(state);
 		validateSquadRaids(state);
+		validateAchievementState(state);
 		return state;
 	} catch {
 		return null;

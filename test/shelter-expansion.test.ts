@@ -126,14 +126,14 @@ describe("expansion save integrity", () => {
 		const value = JSON.parse(saveGame(original));
 		value.schemaVersion = 5;
 		delete value.recruitment;
-		delete value.memorials; delete value.social;
+		delete value.memorials; delete value.social; delete value.achievements;
 		for (const scav of value.scavs) { delete scav.profile; delete scav.story; }
 		delete value.shelter.sites; delete value.shelter.expansions;
 		const transferred = parseSave(JSON.stringify(value))!;
 		expect(transferred).not.toBeNull();
 		const withoutPersonalHistory = (game: GameState) => {
 			const copy = JSON.parse(saveGame(game));
-			delete copy.memorials; delete copy.social;
+			delete copy.memorials; delete copy.social; delete copy.achievements;
 			for (const scav of copy.scavs) delete scav.story;
 			return copy;
 		};

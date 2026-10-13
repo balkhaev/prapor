@@ -78,7 +78,7 @@ function pairedWork(count = 3, now = NOW) {
 function v7(state: GameState) {
 	const raw = JSON.parse(saveGame(state));
 	raw.schemaVersion = 7;
-	delete raw.social;
+	delete raw.social; delete raw.achievements;
 	return raw;
 }
 
