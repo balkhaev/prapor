@@ -17,9 +17,10 @@ export class LiveApiError extends Error {
 function liveErrorMessage(status: number, code: string): string {
   if (code === 'network' || code === 'timeout') return 'Связь с Периметром прервалась. Подключаемся снова; последний приказ автоматически не повторяется.';
   if (code === 'invalid_response') return 'Сервер прислал неполную сводку. Ожидаем новое состояние.';
+  if (code === 'join_required') return 'Связь с сервером восстановлена. Подключаемся к Периметру снова.';
   if (status === 401 || ['account_changed', 'identity_changed', 'live_identity_changed'].includes(code)) return 'Игровая сессия изменилась. Войди на сервер заново с текущим аккаунтом.';
   if (code === 'server_full' || code === 'full') return 'Периметр заполнен. Подожди свободного места и попробуй войти ещё раз.';
-  if (['not_joined', 'not_online', 'player_missing', 'join_required'].includes(code)) return 'Ты уже вышел с Периметра. Подключись снова.';
+  if (['not_joined', 'not_online', 'player_missing'].includes(code)) return 'Ты уже вышел с Периметра. Подключись снова.';
   if (['too_far', 'out_of_range', 'loot_out_of_range', 'extract_out_of_range'].includes(code)) return 'Цель слишком далеко. Подойди ближе.';
   if (code === 'target_out_of_range') return 'Цель далеко или за укрытием. Подойди ближе и найди прямую линию огня.';
   if (code === 'blocked' || code === 'invalid_move') return 'Этот путь перекрыт. Выбери свободную клетку.';
@@ -35,6 +36,11 @@ function liveErrorMessage(status: number, code: string): string {
   if (status === 429 || ['cooldown', 'action_cooldown', 'rate_limited'].includes(code)) return 'Следующий приказ ещё не готов. Подожди немного.';
   if (status >= 500) return 'Периметр временно недоступен. Подключение восстановится автоматически.';
   return 'Приказ не выполнен. Проверь обстановку и попробуй ещё раз.';
+}
+
+/** Presence can be restored after a restart; game commands and changed identities cannot be retried. */
+export function shouldRejoinLivePresence(error: unknown, requestAccount: string | null, currentAccount: string | null): boolean {
+  return error instanceof LiveApiError && error.status === 401 && error.code === 'join_required' && requestAccount === currentAccount;
 }
 
 export function readLiveStatus(value: unknown): LiveStatus {
