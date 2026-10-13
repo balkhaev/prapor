@@ -1,6 +1,7 @@
 import "./style.css";
 import "./gear-style.css";
 import "./module-catalog.css";
+import "./achievements.css";
 import {
 	ATTACHMENT_LABELS,
 	CATEGORY_LABELS,
@@ -117,6 +118,7 @@ import {
 	getScavTalentOffers,
 	chooseScavTalent,
 	resolveScavPersonalEvent,
+	resolveSocialEvent,
 	getDismissScavReason,
 	dismissScav,
 	repairWeapon,
@@ -162,13 +164,15 @@ import { recruitmentPanel, scavRecruitmentPanel } from "./recruitment-ui";
 import { scavStoryPanel, scavMemorialPanel } from "./scav-story-ui";
 import { getScavPersonalEvent } from "./game/scav-stories";
 import { scavRelationsPanel, squadRelationsPanel, roomRelationsPanel, raidRelationsPanel } from "./squad-bonds-ui";
-import { getSquadSocialEvents, getSocialPresentationKey, resolveSocialEvent } from "./game/squad-bonds";
+import { getSquadSocialEvents, getSocialPresentationKey } from "./game/squad-bonds";
+import { getAchievementViews, getUnseenAchievementIds, markAchievementsSeen } from "./game/achievements";
+import { achievementsPanel, achievementNotice, filterAchievementViews, readAchievementFilter, type AchievementFilter } from "./achievements-ui";
 import { accountApi, AccountApiError, accountErrorMessage, type AccountUser } from "./account-client";
 import { mountAccountUI } from "./account-ui";
 import { createCloudSaveSync, type CloudBaseline, type CloudSyncStatus } from "./account-sync";
 import { readAccountEmailLink, isAccountEmailFragment, type AccountEmailLink } from "./account-link";
 
-type Page = "home" | "raids" | "arsenal" | "base" | "contracts" | "journal" | "recruits" | "squad";
+type Page = "home" | "raids" | "arsenal" | "base" | "contracts" | "journal" | "recruits" | "squad" | "achievements";
 const e = (value: unknown) =>
 	String(value).replace(
 		/[&<>"']/g,
@@ -193,6 +197,7 @@ const paths: Record<string, string> = {
 	journal: "M4 4h16v16H4ZM8 8h8M8 12h8M8 16h5",
 	recruits: "M8 8a4 4 0 1 0 8 0 4 4 0 1 0-8 0M4 21v-3a6 6 0 0 1 12 0v3M19 9v6M16 12h6",
 	squad: "M8 9a3 3 0 1 0 0-6 3 3 0 1 0 0 6m9 2a3 3 0 1 0 0-6 3 3 0 1 0 0 6M2 20v-2a6 6 0 0 1 12 0v2m2-6a5 5 0 0 1 6 5v2M9 11l4 2",
+	achievements: "M5 3h14v11l-7 7-7-7ZM8 9l3 3 5-6M8 3v3M16 3v3",
 	money: "M3 6h18v13H3ZM7 6V4h12v2M15 10h6v5h-6ZM17 12.5h1",
 	ammo: "M7 21V7l2-4 2 4v14ZM15 21V7l2-4 2 4v14M7 17h4M15 17h4",
 	medicine: "M4 5h16v15H4ZM9 10h6M12 7v6",
@@ -284,6 +289,10 @@ let benchPartSearch = "";
 let moduleCraftForWeapon = true;
 const selectedPerks = new Map<string, RunPerk>();
 let contractFilter: "open" | "done" | "all" = "open";
+let achievementFilter: AchievementFilter = "all";
+let achievementNoticeTimer: ReturnType<typeof setTimeout> | null = null;
+let achievementNoticeSchedule: ReturnType<typeof setTimeout> | null = null;
+const freshAchievements = new Set<string>();
 let deferredRender = false;
 let world: ReturnType<typeof createWorld> | null = null;
 const gameSound = createGameSound();
@@ -319,9 +328,10 @@ function applySession(session: GameSession) {
 	modulePlatformFilter = "all"; moduleCatalogPageIndex = 0; moduleCatalogFilterKey = "";
 	moduleRarityFilter = session.filters.moduleRarity as typeof moduleRarityFilter; roomModuleSearch = session.filters.roomModuleSearch; roomModuleSlot = session.filters.roomModuleSlot;
 	moduleCraftForWeapon = session.filters.craftForWeapon; contractFilter = session.filters.contracts;
+	achievementFilter = readAchievementFilter(session.filters.achievements);
 }
 function captureSession(): GameSession {
-	return readGameSession({version:1,page,view:worldView,mapId:selectedMap,weaponId:selectedWeapon,scavId:selectedScav,roomId:selectedRoomId,raidId:selectedRaidId,context:contextMode,site:selectedShelterSite,roomTab:roomContextTab,armoryTab:arsenalTab,moduleSlot:selectedModuleSlot,benchModuleId:selectedBenchModule,workshopId:productionWorkshopId,perks:[...selectedPerks].flatMap(([raidId,perk])=>{const raid=state.raids.find(item=>item.id===raidId);return raid?.expedition?[{raidId,perk,stage:raid.expedition.stage,seed:raid.seed}]:[]}),journal:[...document.querySelectorAll<HTMLDetailsElement>('details[data-report][open]')].map(item=>item.dataset.report),filters:{weaponSearch,category,collection,moduleSearch,benchSearch:benchPartSearch,moduleSlot:moduleSlotFilter,moduleRarity:moduleRarityFilter,roomModuleSearch,roomModuleSlot,craftForWeapon:moduleCraftForWeapon,contracts:contractFilter},presentation:world?.getPresentationState() ?? presentationFallback},state);
+	return readGameSession({version:1,page,view:worldView,mapId:selectedMap,weaponId:selectedWeapon,scavId:selectedScav,roomId:selectedRoomId,raidId:selectedRaidId,context:contextMode,site:selectedShelterSite,roomTab:roomContextTab,armoryTab:arsenalTab,moduleSlot:selectedModuleSlot,benchModuleId:selectedBenchModule,workshopId:productionWorkshopId,perks:[...selectedPerks].flatMap(([raidId,perk])=>{const raid=state.raids.find(item=>item.id===raidId);return raid?.expedition?[{raidId,perk,stage:raid.expedition.stage,seed:raid.seed}]:[]}),journal:[...document.querySelectorAll<HTMLDetailsElement>('details[data-report][open]')].map(item=>item.dataset.report),filters:{weaponSearch,category,collection,moduleSearch,benchSearch:benchPartSearch,moduleSlot:moduleSlotFilter,moduleRarity:moduleRarityFilter,roomModuleSearch,roomModuleSlot,craftForWeapon:moduleCraftForWeapon,contracts:contractFilter,achievements:achievementFilter},presentation:world?.getPresentationState() ?? presentationFallback},state);
 }
 function scheduleSessionSave() {
 	if (!ownsSaveLease || saveConflict || protectedSave) return;
@@ -351,9 +361,12 @@ const names: Record<Page, string> = {
 	journal: "Журнал",
 	recruits: "Найм",
 	squad: "Отряд",
+	achievements: "Достижения",
 };
 app.innerHTML = `<div id="save-banner" class="save-banner" role="status" hidden></div><div class="shell command-shell"><header class="topbar command-hud"><div class="command-brand"><span class="brand-mark">П</span><div><strong>ПРАПОР</strong><small>УБЕЖИЩЕ 07</small></div></div><div class="level"><span class="eyebrow">Репутация</span><strong id="level-label"></strong><div class="xp-track"><i id="xp-fill"></i></div></div><div class="resources">${[["money", "Рубли"], ["ammo", "Патроны"], ["medicine", "Медикаменты"], ["scrap", "Материалы"], ["intel", "Разведданные"]].map(([key, label]) => `<div class="resource" title="${label}">${icon(key!,18)}<div><label>${label}</label><strong id="res-${key}"></strong></div><i class="resource-cap" id="cap-${key}"></i></div>`).join("")}</div><button class="settings" data-action="settings" aria-label="Сохранение и помощь">${icon("settings",18)}</button></header><main class="main command-main"><div class="command-toolbar"><div class="command-heading"><h1>Свои люди. Своё убежище.</h1><span><i class="status-dot"></i><span id="passive-note">База на связи</span></span></div><nav class="nav command-tools" aria-label="Инструменты штаба">${(Object.keys(names) as Page[]).map((id) => `<button data-page="${id}" aria-label="${names[id]}" title="${names[id]}">${icon(id,17)}<span>${names[id]}</span>${id === "raids" ? '<b class="badge" id="raid-badge">0</b>' : id === "squad" ? '<b class="badge" id="squad-badge" hidden>0</b>' : ""}</button>`).join("")}</nav></div><div class="command-stage-layout"><section id="hero" class="hero-grid"><section class="world-card"><div class="world-head"><div class="view-switch" aria-label="Вид сцены"><button class="active" data-view="base" aria-label="Убежище" title="Убежище" aria-pressed="true">${icon("home",14)} Убежище</button><button data-view="map" aria-label="Сектора" title="Сектора" aria-pressed="false">${icon("raids",14)} Сектора</button><button data-view="raid" aria-label="Живой рейд" title="Живой рейд" aria-pressed="false" disabled>${icon("people",14)} Рейд</button></div><button class="text-button room-index-button" data-page="base">${icon("base",14)} Комнаты</button><span class="world-coordinate mono">БАЗА 07 · СЕВЕР</span></div><div id="world" aria-label="Графический штаб: комнаты, рабочие и стройка"></div><div class="world-bottom"><span><i class="status-dot"></i><span id="scene-hint">Нажми на комнату или бойца</span></span><span id="world-raid-note">ОТРЯД НА БАЗЕ</span></div><div class="room-shortcuts" hidden></div></section></section><aside id="command-dock" class="command-dock" aria-label="Сводка и управление выбранным объектом"></aside></div><section id="command-crew" class="command-crew" aria-label="Отряд и рабочие"></section><section id="command-routes" class="command-routes" aria-label="Рейды и сектора"></section><div id="offline-summary"></div><footer class="footer-line command-footer"><span id="save-status">ПРОГРЕСС НА ЭТОМ УСТРОЙСТВЕ</span><span>ПРАПОР · 0.14.0</span></footer></main></div><div id="tool-root" class="tool-backdrop" hidden><section class="tool-window" role="dialog" aria-modal="true" aria-labelledby="tool-title"><header class="tool-head"><div id="page-head" class="page-head"></div><button class="icon-button" data-action="close-tools" aria-label="Закрыть инструмент и вернуться в штаб">×</button></header><div class="tool-scroll"><div id="expedition-alerts"></div><div id="panel"></div></div></section></div><div id="context-shade" class="context-shade" hidden></div><div id="toast" role="status" aria-live="polite" hidden></div><div id="inspector-root"></div><div id="modal-root"></div>`;
 const panel = document.querySelector<HTMLDivElement>("#panel")!;
+document.querySelector<HTMLButtonElement>('.nav [data-page="achievements"]')!.insertAdjacentHTML('beforeend', '<b class="badge" id="achievement-badge">0/12</b>');
+app.insertAdjacentHTML('beforeend', '<aside id="achievement-notice" class="achievement-notice" aria-label="Новая нашивка" hidden></aside>');
 document.querySelector(".command-footer")!.prepend(document.querySelector("#offline-summary")!);
 document.querySelector(".world-head .view-switch")!.insertAdjacentHTML("afterend", '<div class="camera-controls" role="group" aria-label="Вид убежища"><button data-camera="out" aria-label="Отдалить убежище" title="Отдалить (−)">−</button><span id="camera-scale" class="camera-scale" aria-label="Масштаб">100%</span><button data-camera="in" aria-label="Приблизить убежище" title="Приблизить (+)">+</button><button data-camera="fit" class="camera-fit" aria-label="Обзор всего убежища" title="Обзор всего убежища (0)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 9V3h6m6 0h6v6m0 6v6h-6M9 21H3v-6"/></svg><span>Обзор</span></button><button data-camera="pan" aria-label="Рука: перемещать вид" title="Рука: перетаскивать убежище" aria-pressed="false"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 12V5a2 2 0 0 1 4 0v7-8a2 2 0 0 1 4 0v8-5a2 2 0 0 1 4 0v8c0 4-3 7-7 7h-1c-2 0-4-1-5-3L3 12a2 2 0 0 1 3-2l2 2"/></svg></button></div>');
 const worldViewport = document.querySelector<HTMLElement>("#world")!;
@@ -459,6 +472,7 @@ function persist(): boolean {
 	if (result.ok) {
 		storageWarning = false;
 		document.querySelector("#save-status")!.textContent = `СОХРАНЕНО · ${new Date(result.savedAt!).toLocaleTimeString('ru-RU')} · ЭКРАН И ПРОГРЕСС`;
+		scheduleAchievementNotice();
 		return true;
 	} else {
 		if (result.code === 'conflict' || result.code === 'verification') { saveConflict = true; saveConflictReason = result.reason; setOverlayState(); updateSaveBanner(); return false; }
@@ -538,6 +552,7 @@ function activatePlayerSave(user: AccountUser | null, store: ReturnType<typeof c
 		if (!result.ok) throw new Error('local-save-unavailable');
 	}
 	cancelWorkerPlacement(); closeModal(); closeInspector();
+	dismissAchievementNotice(); freshAchievements.clear();
 	playerAccount = user; saveStore = store; state = loaded.state;
 	protectedSave = Boolean(loaded.protectedRaw); raw = loaded.protectedRaw ?? null;
 	selectedPerks.clear(); chosenWorkers.clear(); roomRepeatPreferences.clear();
@@ -667,6 +682,50 @@ function toast(message: string, ok = true) {
 	toastTimer = setTimeout(() => {
 		node.hidden = true;
 	}, 6000);
+}
+function dismissAchievementNotice(restoreFocus = false) {
+	if (achievementNoticeTimer !== null) clearTimeout(achievementNoticeTimer);
+	if (achievementNoticeSchedule !== null) clearTimeout(achievementNoticeSchedule);
+	achievementNoticeTimer = null; achievementNoticeSchedule = null;
+	const node = document.querySelector<HTMLElement>('#achievement-notice');
+	const focused = restoreFocus && node?.contains(document.activeElement);
+	if (node) { node.hidden = true; node.innerHTML = ''; }
+	if (focused) document.querySelector<HTMLButtonElement>('.nav [data-page="achievements"]')?.focus({ preventScroll: true });
+}
+function updateAchievementBadge() {
+	const views = getAchievementViews(state), count = views.filter(view => view.unlocked).length;
+	const unseen = getUnseenAchievementIds(state).length;
+	const badge = document.querySelector<HTMLElement>('#achievement-badge');
+	if (badge) { badge.textContent = `${count}/${views.length}`; badge.classList.toggle('has-new', unseen > 0); }
+	document.querySelector<HTMLButtonElement>('.nav [data-page="achievements"]')?.setAttribute('aria-label', `Достижения: ${count} из ${views.length}${unseen ? `, новых: ${unseen}` : ''}`);
+}
+function acknowledgeAchievementScreen() {
+	if (page !== 'achievements' || !ownsSaveLease || saveConflict || protectedSave || document.hidden) return;
+	markAchievementsSeen(state, filterAchievementViews(getAchievementViews(state), achievementFilter).filter(view => view.unlocked).map(view => view.id));
+	updateAchievementBadge();
+}
+function scheduleAchievementNotice() {
+	if (achievementNoticeSchedule !== null || !getUnseenAchievementIds(state).length) return;
+	achievementNoticeSchedule = setTimeout(() => {
+		achievementNoticeSchedule = null;
+		if (document.hidden || !ownsSaveLease || saveConflict || protectedSave || accountChanging || accountDialogOpen || selectedScav || document.querySelector('#modal-root .modal') || (page !== 'home' && page !== 'achievements')) return;
+		const ids = getUnseenAchievementIds(state);
+		if (!ids.length) return;
+		for (const id of ids) freshAchievements.add(id);
+		if (page === 'achievements') {
+			if (achievementFilter === 'active') return;
+			render(); acknowledgeAchievementScreen(); persist(); return;
+		}
+		const node = document.querySelector<HTMLElement>('#achievement-notice');
+		if (!node) return;
+		node.innerHTML = achievementNotice(getAchievementViews(state).filter(view => ids.includes(view.id)));
+		node.hidden = false;
+		if (!node.innerHTML) return;
+		// A notice is seen only after it is rendered on the visible, owned game.
+		markAchievementsSeen(state, ids); updateAchievementBadge(); persist();
+		if (achievementNoticeTimer !== null) clearTimeout(achievementNoticeTimer);
+		achievementNoticeTimer = setTimeout(() => { achievementNoticeTimer = null; if (!node.contains(document.activeElement)) node.hidden = true; }, 12_000);
+	}, 400);
 }
 function workerPickReason(id: string) {
 	const reason = getWorkerAssignmentReason(state, id, null);
@@ -992,6 +1051,7 @@ function expeditionCard(raid: Raid, compact = false) {
 	return `<article class="decision-card" data-expedition="${raid.id}"><div class="decision-head"><div class="scav-avatar">${scavPortrait(scav.personality, scav.name, scav.appearance)}</div><div><span class="eyebrow">${e(MAP_BY_ID[raid.mapId]!.name)} · точка ${run.stage} / 3</span><h3>${e(scav.name)} ждёт приказа</h3><p>${run.stage >= 3 ? "Маршрут пройден. Забери добычу на базу." : "Добыча ещё в рюкзаке. Можно уйти или рискнуть дальше."}</p></div>${!compact ? `<button class="button ghost small" data-scav="${scav.id}">Личное дело</button>` : ""}</div><div class="decision-content"><div class="expedition-stage" aria-label="Пройдено этапов: ${run.stage} из 3">${[1, 2, 3].map((stage) => `<span class="${stage < run.stage ? "done" : stage === run.stage ? "current" : ""}">${stage < run.stage ? "✓ " : ""}${stage}. ${stage === 1 ? "Вход" : stage === 2 ? "Глубина" : "Цель"}</span>`).join("")}</div><div class="cargo-summary"><div><span>В рюкзаке</span><strong>${n(run.cargo.money)} ₽</strong><small>Наличными · припасы ниже</small></div><div><span>Защищено от потери</span><strong>Открытия</strong><small>Остаются даже при провале</small></div><div><span>Здоровье бойца</span><strong>${Math.floor(scav.health)} / 100</strong><small>Броня на входе: ${Math.round(run.loadout.armorCondition)}%</small></div></div>${cargoMetrics}<p class="field-hint">Ценность — оценка наличных и находок, а не выплата рублями. Деньги не занимают место. При перегрузе боец оставляет лишние припасы; склад на базе тоже ограничен.</p><div class="cargo-items">${supplies}${weapons || (!supplies ? "<span>Рюкзак пока пуст</span>" : "")}</div>${moduleCargo(run.cargo.modules)}${warehouseWarning}${run.discoveries.length ? `<p class="field-hint">Записаны находки: ${run.discoveries.map((id) => e(BLUEPRINTS[id]?.label ?? "Разведанный маршрут")).join(" · ")}. Останутся у базы.</p>` : ""}${run.perks.length ? `<p class="field-hint">Опыт этой экспедиции: ${run.perks.map((perk) => e(RUN_PERKS[perk].label)).join(" · ")}</p>` : ""}${choices.length ? `<p class="risk-note">Следующий этап опаснее. При провале добыча в рюкзаке может быть потеряна; постоянные открытия сохранятся.</p>${run.offers.length ? `<div class="run-perk-pick"><h3>Находка маршрута</h3><p>Выбери один бонус. Он работает до конца этой экспедиции.</p><div class="decision-branches">${run.offers.map((perk) => `<button class="branch-choice ${perk === selectedPerk ? "active" : ""}" data-action="run-perk" data-id="${raid.id}" data-perk="${perk}" data-focus-key="perk-${perk}" aria-pressed="${perk === selectedPerk}"><strong>${e(RUN_PERKS[perk].label)}</strong><p>${e(RUN_PERKS[perk].description)}</p><small>${perk === selectedPerk ? "✓ Выбрано" : "Выбрать бонус"}</small></button>`).join("")}</div></div>` : ""}<h3>Куда дальше?</h3><div class="decision-branches">${choices.map((choice) => `<button class="branch-choice" data-action="continue-expedition" data-id="${raid.id}" data-branch="${choice.branch}" data-focus-key="branch-${choice.branch}" ${choice.reason || (run.offers.length && !hasPerk) ? "disabled" : ""}><strong>${e(choice.label)}</strong><p>${e(choice.description)}</p><small>${Math.round(choice.chance * 100)}% успеха · ${seconds(choice.duration)} · ${n(choice.money)} ₽ + ${choice.ammo} патр.${choice.intel ? ` + ${choice.intel} разв.` : ""}</small><span class="quote-note">${e(choice.reason ?? (run.offers.length && !hasPerk ? "Сначала выбери бонус маршрута" : `Этап ${run.stage + 1} · добыча под риском`))}</span></button>`).join("")}</div>` : ""}<div class="extract-row"><p>Эвакуация вернёт бойца и доставит добычу в пределах склада. ${run.stage < 3 ? "База готовит следующий выход." : "Экспедиция завершится."}</p><button class="button" data-action="extract" data-id="${raid.id}" data-focus-key="extract">${icon("check", 17)} Эвакуировать с добычей</button></div></div></article>`;
 }
 function hud() {
+	updateAchievementBadge();
 	if (workerPlacement && (!canWorldDrag() || workerPickReason(workerPlacement.scavId))) cancelWorkerPlacement(false, true);
 	refreshWorkerRoomTargets();
 	const commandSummary = getCommandSummary(state);
@@ -1444,6 +1504,7 @@ function closeCommandContext() {
 }
 function closeTools() {
 	const closedPage = page;
+	if (closedPage === 'achievements') freshAchievements.clear();
 	page = "home";
 	render();
 	if (window.innerWidth <= 850 && contextMode !== "overview") document.querySelector<HTMLButtonElement>('#command-dock [data-action="close-context"]')?.focus({ preventScroll: true });
@@ -1705,6 +1766,8 @@ function render() {
 	const panelFocus = document.activeElement instanceof HTMLElement && panel.contains(document.activeElement) ? document.activeElement.dataset.focusKey : undefined;
 	const expandedReports = [...resumedJournal, ...Array.from(panel.querySelectorAll<HTMLDetailsElement>("details[data-report][open]")).map((node) => node.dataset.report)];
 	const expandedSocial = Array.from(panel.querySelectorAll<HTMLDetailsElement>('details[data-social-detail-key][open]')).map(node => node.dataset.socialDetailKey);
+	const expandedAchievements = Array.from(panel.querySelectorAll<HTMLDetailsElement>('details[data-achievement-detail][open]')).map(node => node.dataset.achievementDetail);
+	const collapsedAchievements = Array.from(panel.querySelectorAll<HTMLDetailsElement>('details[data-achievement-detail]:not([open])')).map(node => node.dataset.achievementDetail);
 	resumedJournal = [];
 	document
 		.querySelectorAll<HTMLButtonElement>(".nav button")
@@ -1720,6 +1783,7 @@ function render() {
 		journal: "Кто вышел, кто вернулся и что принёс.",
 		recruits: "Выбери характер отряда. Связи переживают потери, таланты растут вместе с бойцами.",
 		squad: "Дружба, споры и общие истории. Смотри, кто стал своим и кому нужна поддержка.",
+		achievements: "Нашивки за решения, которые сработали. Каждая хранит свою историю.",
 	};
 	document.querySelector("#page-head")!.innerHTML =
 		`<div><div class="eyebrow"><span class="page-number">0${Object.keys(names).indexOf(page) + 1} /</span> ${page === "home" ? "УБЕЖИЩЕ ПРАПОРА" : names[page]}</div><h2 id="tool-title">${names[page]}</h2><p>${captions[page]}</p></div><span class="tag">${icon("time", 13)} <span id="income-status"></span></span>`;
@@ -1774,6 +1838,7 @@ function render() {
 	if (page === "arsenal") renderArsenal();
 	if (page === "recruits") panel.innerHTML = recruitmentPanel(state);
 	if (page === "squad") panel.innerHTML = squadRelationsPanel(state);
+	if (page === "achievements") panel.innerHTML = achievementsPanel(state, achievementFilter, new Set([...freshAchievements, ...getUnseenAchievementIds(state)]));
 	if (page === "base") renderShelter();
 	if (page === "contracts") {
 		const contracts = CONTRACTS.filter((contract) => contractFilter === "all" || (contractFilter === "done") === state.claimedContracts.includes(contract.id));
@@ -1785,6 +1850,10 @@ function render() {
 			: '<div class="empty">Радио пока молчит.<br>Отправь дикого в первый рейд — здесь появится его отчёт.</div>') + scavMemorialPanel(state);
 	panel.querySelectorAll<HTMLDetailsElement>("details[data-report]").forEach((node) => { node.open = expandedReports.includes(node.dataset.report); });
 	panel.querySelectorAll<HTMLDetailsElement>('details[data-social-detail-key]').forEach(node => { node.open = expandedSocial.includes(node.dataset.socialDetailKey); });
+	panel.querySelectorAll<HTMLDetailsElement>('details[data-achievement-detail]').forEach(node => {
+		if (expandedAchievements.includes(node.dataset.achievementDetail)) node.open = true;
+		else if (collapsedAchievements.includes(node.dataset.achievementDetail)) node.open = false;
+	});
 	renderCommandBoard();
 	const tools = document.querySelector<HTMLElement>("#tool-root")!; tools.hidden = page === "home";
 	renderInspector();
@@ -2072,6 +2141,7 @@ document.addEventListener("click", (event) => {
 		toolOrigin = target;
 		page = target.dataset.page as Page;
 		render();
+		if (page === 'achievements') { dismissAchievementNotice(); acknowledgeAchievementScreen(); }
 		if (page !== "home") document.querySelector<HTMLButtonElement>('[data-action="close-tools"]')?.focus();
 		return;
 	}
@@ -2106,8 +2176,16 @@ document.addEventListener("click", (event) => {
 		render();
 		return;
 	}
+	if (target.dataset.achievementFilter) {
+		achievementFilter = readAchievementFilter(target.dataset.achievementFilter);
+		render();
+		acknowledgeAchievementScreen();
+		panel.querySelector<HTMLButtonElement>(`[data-achievement-filter="${achievementFilter}"]`)?.focus({ preventScroll: true });
+		return;
+	}
 	const id = target.dataset.id ?? "";
 	switch (target.dataset.action) {
+		case 'dismiss-achievement-notice': dismissAchievementNotice(true); break;
 		case "close-tools": closeTools(); break;
 		case "close-context": closeCommandContext(); break;
 		case "open-market":
@@ -2737,6 +2815,7 @@ const readyContracts = () =>
 	).length;
 const rosterStatus = () => `${state.scavs.map((scav) => `${scav.id}:${scav.status}:${scav.autoRaid.enabled}:${scav.assignment}:${scav.story.pending?.eventId}:${scav.story.bond}:${scav.story.stress}`).join(";")}|${state.raids.map((raid) => `${raid.id}:${raid.expedition?.stage}:${raid.expedition?.status}`).join(";")}|${getSocialPresentationKey(state)}`;
 const shelterStatus = () => `${state.shelter.sites.map((p) => `${p.column}:${p.row}`).join(";")}|${state.shelter.expansions.map((p) => `${p.column}:${p.row}:${Math.floor(p.workDone / p.workRequired * 100)}`).join(";")}|` + state.shelter.rooms.map((room) => `${room.id}:${room.status}:${room.level}:${room.queue.map((job) => job.id).join(",")}:${room.workerIds.join(",")}:${room.recipeId}:${room.repeat}:${room.pending}:${room.cycles}`).join(";");
+const achievementPresentationKey = () => getAchievementViews(state).map(view => `${view.id}:${view.unlocked}:${view.active}:${view.steps.map(step => Number(step.done)).join('')}`).join('|');
 function interacting() {
 	return Boolean(workerPlacement || crewPointer) || (document.activeElement?.tagName === "SELECT" && !document.activeElement.hasAttribute("data-live-raid-select")) || document.activeElement?.tagName === "INPUT" || Boolean(document.querySelector("#modal-root .modal"));
 }
@@ -2776,6 +2855,7 @@ const simulationTimer = setInterval(() => {
 	const beforeLevel = state.level,
 		beforeStatus = rosterStatus(),
 		beforeShelter = shelterStatus(),
+		beforeAchievements = page === 'achievements' ? achievementPresentationKey() : '',
 		beforeContracts = readyContracts();
 	const summary = advance(state);
 	updateGameFeedback();
@@ -2786,6 +2866,7 @@ const simulationTimer = setInterval(() => {
 		state.level !== beforeLevel ||
 		rosterStatus() !== beforeStatus ||
 		shelterStatus() !== beforeShelter ||
+		(page === 'achievements' && achievementPresentationKey() !== beforeAchievements) ||
 		readyContracts() !== beforeContracts
 	) {
 		refreshAfterAdvance();
@@ -2823,6 +2904,7 @@ const responsiveContext = () => {
 };
 window.addEventListener("resize", responsiveContext);
 import.meta.hot?.dispose(() => {
+	dismissAchievementNotice();
 	window.removeEventListener('hashchange', captureAccountEmailLink);
 	clearInterval(cloudTimer); cloudSync?.disconnect(); accountUI.destroy(); accountRoot.remove();
 	cancelWorkerPlacement();
