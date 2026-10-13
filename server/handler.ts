@@ -1,5 +1,7 @@
 import { extname, resolve, sep } from "node:path";
 import type { AccountService } from "./accounts";
+import type { LiveService } from "./live";
+import type { GameService } from "./game";
 
 const SECURITY_HEADERS: Record<string, string> = {
   "X-Content-Type-Options": "nosniff",
@@ -31,9 +33,17 @@ function reply(body: BodyInit | null, status: number, headers?: Record<string, s
 }
 
 /** A standalone production handler. Only built files are public; no DevHub imports or env. */
-export function createHandler(directory: string, accounts?: AccountService): (request: Request, clientAddress?: string) => Promise<Response> {
+export function createHandler(directory: string, accounts?: AccountService, live?: LiveService, game?: GameService): (request: Request, clientAddress?: string) => Promise<Response> {
   const root = resolve(directory);
   return async (request, clientAddress) => {
+    if (game) {
+      const api = await game.fetch(request, clientAddress);
+      if (api) return api;
+    }
+    if (live) {
+      const api = await live.fetch(request, clientAddress);
+      if (api) return api;
+    }
     if (accounts) {
       const api = await accounts.fetch(request, clientAddress);
       if (api) return api;
@@ -52,7 +62,7 @@ export function createHandler(directory: string, accounts?: AccountService): (re
       return reply(head ? null : "Bad request", 400);
     }
     if (pathname === "/health") {
-      const healthy = !accounts || accounts.healthy();
+      const healthy = (!accounts || accounts.healthy()) && (!live || live.healthy()) && (!game || game.healthy());
       return reply(head ? null : JSON.stringify({ ok: healthy }), healthy ? 200 : 503, {
         "Content-Type": "application/json",
         "Cache-Control": "no-store",

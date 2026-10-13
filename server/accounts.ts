@@ -3,12 +3,12 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypt
 import { chmodSync, mkdirSync } from "node:fs";
 import { isIP } from "node:net";
 import { dirname } from "node:path";
-import { MAX_GAME_SAVE_LENGTH, isValidGameSave } from "../src/game-save";
 import { readResendSender, type MailSender } from "./mail";
 
 export interface AccountUser { id: string; username: string; email: string | null; emailVerified: boolean; pendingEmail: string | null }
 export interface AccountService {
   fetch(request: Request, clientAddress?: string): Promise<Response | null>;
+  resolveLiveIdentity(request: Request): { id: string; name: string } | null;
   healthy(): boolean;
   close(): void;
 }
@@ -30,7 +30,6 @@ interface EmailTicket { token_hash: string; ticket_id: string; user_id: string; 
 interface SaveRow { revision: number; saved_at: number | null; save: string | null }
 const SESSION_SECONDS = 30 * 24 * 60 * 60;
 const AUTH_BODY_BYTES = 4096;
-const SAVE_BODY_BYTES = MAX_GAME_SAVE_LENGTH * 4 + 4096;
 const hashToken = (token: string): string => createHash("sha256").update(token).digest("hex");
 const publicUser = (user: UserRow): AccountUser => ({ id: user.id, username: user.username, email: user.email ?? user.pending_email, emailVerified: user.email !== null && user.email_verified_at !== null, pendingEmail: user.pending_email });
 const isObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -303,15 +302,8 @@ export function createAccountService(options: AccountOptions): AccountService {
         const current = readSave.get(user.id);
         if (!current) throw new ApiError(503, "service-unavailable");
         if (request.method === "GET") return response({ revision: current.revision, savedAt: current.saved_at, save: current.save });
-        limit(`save:${user.id}`, 120, 60_000);
-        const body = await readJson(request, SAVE_BODY_BYTES);
-        // Validation never advances a client's offline simulation or changes its stored document.
-        if (!exactKeys(body, ["revision", "save"]) || !Number.isSafeInteger(body.revision) || (body.revision as number) < 0 || typeof body.save !== "string" || body.save.length > MAX_GAME_SAVE_LENGTH || !isValidGameSave(body.save)) throw new ApiError(400, "invalid-save");
-        if (currentUser(request)?.id !== user.id) throw new ApiError(401, "unauthorized");
-        const savedAt = now();
-        const changed = db.query("UPDATE saves SET revision=revision+1, saved_at=?, save=? WHERE user_id=? AND revision=?").run(savedAt, body.save, user.id, body.revision as number);
-        if (changed.changes !== 1) return response({ code: "save_conflict", revision: readSave.get(user.id)!.revision }, 409);
-        return response({ revision: (body.revision as number) + 1, savedAt });
+        // Old client-authored documents remain exportable, but can never become trusted game state.
+        return response({ code: "server_authoritative" }, 410);
       }
       limit(`auth-ip:${ipKey}`, 120, 15 * 60_000);
       if (path === "/api/auth/email" || path === "/api/auth/email/resend") {
@@ -426,5 +418,9 @@ export function createAccountService(options: AccountOptions): AccountService {
       return response({ code: "service_unavailable" }, 503);
     }
   }
-  return { fetch: fetchApi, healthy: () => { try { return !closed && Boolean(db.query("SELECT 1 AS ready").get()); } catch { return false; } }, close: () => { if (!closed) { closed = true; db.close(); } } };
+  return { fetch: fetchApi, resolveLiveIdentity: request => {
+    if (closed) throw new Error("Account service unavailable");
+    const user = currentUser(request);
+    return user ? { id: user.id, name: user.username } : null;
+  }, healthy: () => { try { return !closed && Boolean(db.query("SELECT 1 AS ready").get()); } catch { return false; } }, close: () => { if (!closed) { closed = true; db.close(); } } };
 }

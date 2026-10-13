@@ -102,6 +102,8 @@ export interface Raid {
 	chance: number;
 	lootBonus: number;
 	seed: number;
+	/** Private server outcome seed; visual routes continue to use seed. Never sent to browsers. */
+	outcomeSeed?: number;
 	isAuto: boolean;
 	tactic: RaidTactic;
 	armorLevel: number;
@@ -264,6 +266,14 @@ function takeSeed(state: GameState): number {
 	const next = generator(state.rng)();
 	state.rng = Math.floor(next * 4294967296) >>> 0 || 1;
 	return state.rng;
+}
+const outcomeSeedSources = new WeakMap<GameState, () => number>();
+/** Server-only runtime policy, deliberately absent from saved and public state. */
+export function setGameOutcomeSeedSource(state: GameState, source: () => number): void { outcomeSeedSources.set(state, source); }
+function renewRaidOutcomeSeed(state: GameState, raid: Raid): void {
+	const source = outcomeSeedSources.get(state); if (!source) return;
+	const seed = source(); if (!Number.isInteger(seed) || seed < 1 || seed > 4294967295) throw new Error("Invalid private outcome seed");
+	raid.outcomeSeed = seed;
 }
 function addXp(state: GameState, xp: number) {
 	state.xp += xp;
@@ -1253,6 +1263,7 @@ function startRaid(state: GameState, scav: Scav, map: RaidMap, now: number, isAu
 	state.supplies.medicine -= quote.medicine;
 	scav.status = "raiding";
 	scav.autoRaid.waitingReason = null;
+	renewRaidOutcomeSeed(state, raid);
 	state.raids.push(raid);
 	noteAchievementDispatch(state, scav, raid, beforeAmmo, now);
 	noteSquadDispatch(state, raid);
@@ -1696,6 +1707,7 @@ function continueAtCheckpoint(state: GameState, raid: Raid, branch: ExpeditionBr
 	state.money -= quote.money; state.supplies.ammo -= quote.ammo; state.supplies.intel -= quote.intel;
 	expedition.trail.push({ at: now, label: `Выбор · этап ${expedition.stage + 1}`, text: `${quote.label}. Приём: ${RUN_PERKS[perk].label}. Шанс ${Math.round(quote.chance * 100)}%; расход ${quote.money} ₽, ${quote.ammo} патронов${quote.intel ? `, ${quote.intel} разведданных` : ""}. Под риском весь груз: ${expedition.cargo.money} ₽ и трофеи.`, kind: "neutral" });
 	expedition.perks.push(perk); expedition.offers = [];
+	renewRaidOutcomeSeed(state, raid);
 	expedition.stage++; expedition.status = "travel"; expedition.branch = branch;
 	raid.chance = quote.chance; raid.startedAt = now; raid.endsAt = now + quote.duration * 1000;
 	return ok(`${raid.scavName}: этап ${expedition.stage}, ${quote.label.toLowerCase()}. Груз остаётся под риском.`);
@@ -1715,7 +1727,7 @@ export function continueExpedition(state: GameState, raidId: string, branch: Exp
 		for (const member of group) { const result = continueAtCheckpoint(state, member, branch, perk, now); if (!result.ok) throw new Error("Prevalidated squad continuation failed"); member.endsAt = now + quote.duration * 1000; }
 		const squad = structuredClone(raid.squad);
 		squad.stage = raid.expedition!.stage; squad.branch = branch; squad.actions = [];
-		for (const member of squad.members) { const peer = group.find((other) => other.id === member.raidId)!; member.chance = peer.chance; member.health = state.scavs.find((person) => person.id === member.scavId)!.health; }
+		for (const member of squad.members) { const peer = group.find((other) => other.id === member.raidId)!; member.chance = peer.chance; member.health = state.scavs.find((person) => person.id === member.scavId)!.health; if (peer.outcomeSeed !== undefined) member.outcomeSeed = peer.outcomeSeed; }
 		for (const member of group) member.squad = structuredClone(squad);
 		squad.actions = planSquadRaidActions(group[0]!);
 		for (const member of group) member.squad = structuredClone(squad);
@@ -1779,7 +1791,7 @@ function reachCheckpoint(state: GameState, raid: Raid, now: number, party?: { in
 	// credit loot, touch damage, or consume the existing settlement RNG streams.
 	const field = expedition.legacyLoot ? null : getRaidFieldOutcome(raid);
 	const streetText = field ? ` ${field.narrative}` : "";
-	const random = generator((raid.seed ^ Math.imul(expedition.stage, 0x45d9f3b)) >>> 0);
+	const random = generator(((raid.outcomeSeed ?? raid.seed) ^ Math.imul(expedition.stage, 0x45d9f3b)) >>> 0);
 	const success = random() < raid.chance;
 	const discoveriesBefore = expedition.discoveries.length;
 	// Discoveries are radioed home on arrival, before the fight or attempted escape.
@@ -1830,8 +1842,8 @@ function reachCheckpoint(state: GameState, raid: Raid, now: number, party?: { in
 		expedition.cargo.weaponIds.push(weaponId);
 	}
 	if (!expedition.legacyLoot) {
-		const partsRandom = generator((raid.seed ^ Math.imul(expedition.stage, 0x2c1b3c6d)) >>> 0);
-		const strategyPartsRandom = generator((raid.seed ^ Math.imul(expedition.stage, 0x72e51b09)) >>> 0);
+		const partsRandom = generator(((raid.outcomeSeed ?? raid.seed) ^ Math.imul(expedition.stage, 0x2c1b3c6d)) >>> 0);
+		const strategyPartsRandom = generator(((raid.outcomeSeed ?? raid.seed) ^ Math.imul(expedition.stage, 0x72e51b09)) >>> 0);
 		const count = expedition.branch === "combat" ? 2 + Math.floor(partsRandom() * 2) : 1 + (partsRandom() < 0.35 ? 1 : 0);
 		for (let i = 0; i < count; i++) {
 			const receiverRoll = partsRandom() < (expedition.branch === "combat" ? 0.32 : 0.12);
@@ -1911,7 +1923,7 @@ function finishExpedition(state: GameState, raid: Raid, success: boolean, now: n
 	const expedition = raid.expedition!;
 	const map = ownValue(MAP_BY_ID, raid.mapId)!;
 	const scav = state.scavs.find((item) => item.id === raid.scavId)!;
-	const random = generator((raid.seed ^ Math.imul(expedition.stage, 0x6c078965)) >>> 0);
+	const random = generator(((raid.outcomeSeed ?? raid.seed) ^ Math.imul(expedition.stage, 0x6c078965)) >>> 0);
 	const report: RaidReport = { id: id(state, "report"), raidId: raid.id, scavName: raid.scavName, mapId: raid.mapId,
 		scavAppearance: raid.scavAppearance ?? scav.appearance ?? defaultScavAppearance(scav.personality),
 		at: now, success, lostScav: false, lostWeapon: false, money: 0, supplies: emptySupplies(), weaponId: null,
@@ -1935,7 +1947,7 @@ function finishExpedition(state: GameState, raid: Raid, success: boolean, now: n
 			if (state.weapons.length < getStorageCapacity(state)) {
 				const found = createWeapon(state, weaponId, now, 50 + Math.floor(random() * 46));
 				if (!expedition.legacyLoot) {
-					const stripped = generator((raid.seed ^ Math.imul(expedition.stage, 0x297a2d39) ^ found.weaponId.length) >>> 0)() < 0.3;
+					const stripped = generator(((raid.outcomeSeed ?? raid.seed) ^ Math.imul(expedition.stage, 0x297a2d39) ^ found.weaponId.length) >>> 0)() < 0.3;
 					if (stripped) delete found.modules[getWeaponDefinition(found).category === "pistol" ? "magazine" : "stock"];
 				}
 				noteAchievementLoot(state, raid.id, [found.id, ...Object.values(found.modules).map((part) => part.id)]);
@@ -1997,7 +2009,7 @@ function finishRaid(state: GameState, raid: Raid): RaidReport {
 	const weapon = state.weapons.find(
 		(item) => item.id === raid.weaponInstanceId
 	)!;
-	const random = generator(raid.seed);
+	const random = generator(raid.outcomeSeed ?? raid.seed);
 	const success = random() < raid.chance;
 	const report: RaidReport = {
 		id: id(state, "report"),
@@ -2676,7 +2688,7 @@ function parseScav(value: unknown, version: number): Scav {
 }
 function parseRaid(value: unknown, version: number): Raid {
 	const source = record(value);
-	fields(source, ["id", "scavId", "scavName", "scavAppearance", "mapId", "weaponInstanceId", "startedAt", "endsAt", "chance", "lootBonus", "seed", ...(version >= 2 ? ["isAuto", "tactic", "armorLevel", "backpackLevel"] : []), ...(version >= 3 ? ["expedition"] : []), ...(version >= 10 ? ["squad"] : []), ...(version >= 12 ? ["strategy"] : [])]);
+	fields(source, ["id", "scavId", "scavName", "scavAppearance", "mapId", "weaponInstanceId", "startedAt", "endsAt", "chance", "lootBonus", "seed", "outcomeSeed", ...(version >= 2 ? ["isAuto", "tactic", "armorLevel", "backpackLevel"] : []), ...(version >= 3 ? ["expedition"] : []), ...(version >= 10 ? ["squad"] : []), ...(version >= 12 ? ["strategy"] : [])]);
 	const startedAt = number(source.startedAt);
 	const endsAt = number(source.endsAt);
 	const expedition = version >= 3 ? parseExpedition(source.expedition, version) : null;
@@ -2694,6 +2706,7 @@ function parseRaid(value: unknown, version: number): Raid {
 		chance: number(source.chance, 1),
 		lootBonus: number(source.lootBonus, 2, -0.15),
 		seed: number(source.seed, 4294967295, 1, true),
+		...(Object.hasOwn(source, "outcomeSeed") ? { outcomeSeed: number(source.outcomeSeed, 4294967295, 1, true) } : {}),
 		isAuto: version === 1 ? false : bool(source.isAuto),
 		tactic: version === 1 ? "balanced" : known(source.tactic, TACTICS) as RaidTactic,
 		armorLevel: version === 1 ? 0 : number(source.armorLevel, 3, 0, true),
@@ -2737,7 +2750,7 @@ function parseReport(value: unknown, version: number): RaidReport {
 }
 
 /** Returns null for invalid/unsupported saves; no user-controlled object reaches gameplay. */
-export function parseSave(raw: string): GameState | null {
+export function parseSave(raw: string, options: { publicSnapshot?: boolean } = {}): GameState | null {
 	try {
 		if (typeof raw !== "string" || raw.length > 1_000_000) return null;
 		const source = record(JSON.parse(raw));
@@ -3008,7 +3021,7 @@ export function parseSave(raw: string): GameState | null {
 		)
 			throw new Error("id-sequence");
 		validateSquadSocialState(state);
-		validateSquadRaids(state);
+		validateSquadRaids(state, options.publicSnapshot ?? false);
 		validateAchievementState(state);
 		return state;
 	} catch {

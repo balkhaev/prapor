@@ -20,14 +20,8 @@ import {
 	type WeaponCategory,
 } from "./game/data";
 import {
-	SAVE_KEY,
 	MAX_ROOM_LEVEL,
-	advance,
-	claimContract,
 	createGame,
-	dispatchRaid,
-	continueExpedition,
-	extractRaid,
 	getExpeditionChoices,
 	RUN_PERKS,
 	GEAR_MODELS,
@@ -42,20 +36,11 @@ import {
 	getGearModel,
 	getGearCraftReason,
 	getGearRepairCost,
-	craftGear,
-	equipGear,
-	repairGear,
-	recycleGear,
-	setLoadoutOption,
-	setAutoRaidDepth,
 	getSupplyCapacity,
 	getRecoveryAllowance,
 	getRaidQuote,
-	buySupplies,
-	recycleWeapon,
 	getWeaponRecycleYield,
 	getWeaponRole,
-	equipWeapon,
 	getContractProgress,
 	getContractLockReason,
 	getAutoRaidStatus,
@@ -79,58 +64,30 @@ import {
 	getWeaponStats,
 	getWeaponBuildIssues,
 	getModuleInstallReason,
-	installModule,
-	removeModule,
-	assembleWeapon,
-	disassembleWeapon,
 	getModuleCapacity,
 	getModuleSaleValue,
 	getModuleRecycleYield,
 	getModuleRepairCost,
 	getWeaponDisassembleReason,
 	getModuleRemoveReason,
-	repairModule,
-	sellModule,
-	recycleModule,
 	ROOM_DEFINITIONS,
 	RESOURCE_RECIPES,
 	getBuildRoomQuote,
-	buildRoom,
 	getShelterSites,
 	getShelterFrontier,
 	getExcavationQuote,
-	excavateShelter,
 	getRoomUpgradeQuote,
-	upgradeRoom,
-	assignWorker,
 	getWorkerAssignmentReason,
 	getWorkerAffinity,
 	getRoomWorkerCapacity,
 	getRoomProductionState,
 	getResourceProductionQuote,
 	getModuleProductionQuote,
-	queueModuleProduction,
-	setRoomRecipe,
-	cancelProduction,
-	healScav,
-	hireRecruitCandidate,
-	refreshRecruitment,
 	getRecruitCandidateQuote,
 	getRecruitmentBoard,
 	getRecruitmentRefreshQuote,
 	getScavTalentOffers,
-	chooseScavTalent,
-	resolveScavPersonalEvent,
-	resolveSocialEvent,
 	getDismissScavReason,
-	dismissScav,
-	repairWeapon,
-	sellWeapon,
-	setAutoRaid,
-	setRaidTactic,
-	stopAllAutoRaids,
-	upgradeBase,
-	upgradeScavGear,
 	xpForLevel,
 	type ActionResult,
 	type AdvanceSummary,
@@ -160,12 +117,13 @@ import { getCommandSummary, type CommandSummary, type CommandRoomTab, type RoomC
 import { getGameplayGuidance } from "./gameplay-guidance";
 import { gameplayFocus, gameplayRoadmap } from "./gameplay-ui";
 import { raidPlanEditor, sectorIntelPanel } from "./raid-strategy-ui";
-import { getRaidPlan, setRaidPlan, type RaidObjective, type RaidPreparation } from "./game/engine";
+import { getRaidPlan, type RaidObjective, type RaidPreparation } from "./game/engine";
 import { MIN_SHELTER_ZOOM, MAX_SHELTER_ZOOM } from "./shelter-camera";
 import { getShelterProductionPresentation, getShelterProductionStages, SHELTER_PRODUCTION_STAGES, type ProductionPresentation } from "./shelter-production";
 import { projectShelterBounds, shelterRoomPolygon, shelterRoomPosition, SHELTER_ROOM_WIDTH, SHELTER_ROOM_HEIGHT } from "./shelter-isometric";
 import { renderLiveRaidPanel, updateLiveRaidPanel, getWatchedReport } from "./raid-ui";
-import { createGameSaveStore, parseGameSave, PREVIOUS_SAVE_KEY, MAX_GAME_SAVE_LENGTH } from "./game-save";
+import { createAuthoritativeClient } from "./authoritative-client";
+import type { GameCommand, GameSnapshot } from "./game/commands";
 import { readGameSession, type GameSession } from "./game-session";
 import { createGameSound, type GameSoundCue } from "./game-sound";
 import { createGameFeedbackCursor, observeGameFeedback, type GameResourceGains } from "./game-feedback";
@@ -175,14 +133,19 @@ import { getScavPersonalEvent } from "./game/scav-stories";
 import { scavRelationsPanel, squadRelationsPanel, roomRelationsPanel, raidRelationsPanel } from "./squad-bonds-ui";
 import "./squad-raid.css";
 import { squadRaidComposer, squadRaidDecision, squadRaidOngoing, raidRepresentatives } from "./squad-raid-ui";
-import { getSquadRaidQuote, dispatchSquadRaid, getRaidGroup, getRaidGroupKey } from "./game/engine";
+import {
+	getSquadRaidQuote,
+	getRaidGroup,
+	getRaidGroupKey,
+} from "./game/engine";
 import { getSquadSocialEvents, getSocialPresentationKey } from "./game/squad-bonds";
-import { getAchievementViews, getUnseenAchievementIds, markAchievementsSeen } from "./game/achievements";
+import { getAchievementViews, getUnseenAchievementIds } from "./game/achievements";
 import { achievementsPanel, achievementNotice, filterAchievementViews, readAchievementFilter, type AchievementFilter } from "./achievements-ui";
-import { accountApi, AccountApiError, accountErrorMessage, type AccountUser } from "./account-client";
+import { accountApi, accountErrorMessage, type AccountUser } from "./account-client";
 import { mountAccountUI } from "./account-ui";
-import { createCloudSaveSync, type CloudBaseline, type CloudSyncStatus } from "./account-sync";
+
 import { readAccountEmailLink, isAccountEmailFragment, type AccountEmailLink } from "./account-link";
+import { createLiveMode } from "./live-ui";
 
 type Page = "home" | "raids" | "arsenal" | "base" | "contracts" | "journal" | "recruits" | "squad" | "achievements";
 const e = (value: unknown) =>
@@ -238,11 +201,14 @@ const gearLoadoutItemId = (scav: Scav, slot: GearEquipmentSlot) => slot === "arm
 const scavHasGear = (scav: Scav, itemId: string) => ["armor", "helmet", "backpack"].some((slot) => gearLoadoutItemId(scav, slot as GearEquipmentSlot) === itemId);
 
 
-let ownsSaveLease = false;
-let saveOwnershipPending = true;
+let serverReady = false;
+
 let saveConflict = false;
-let saveConflictReason: string | null = null;
-let releaseSaveLease: (() => void) | null = null;
+
+let gameCommandPending=false;
+let authoritative: ReturnType<typeof createAuthoritativeClient>|null=null;
+let serverSnapshot: GameSnapshot|null=null;
+let connectionMessage="Подключаемся к игровому серверу…";
 let saveUiTimer: ReturnType<typeof setTimeout> | null = null;
 let accountDialogOpen = false;
 let accountChanging = false;
@@ -250,21 +216,20 @@ let accountStartupChecked = false;
 let accountGeneration = 0;
 let signedInUser: AccountUser | null = null;
 let playerAccount: AccountUser | null = null;
-let cloudSync: ReturnType<typeof createCloudSaveSync> | null = null;
+
 let pendingAccountEmailLink: AccountEmailLink | null = readAccountEmailLink(window.location.hash);
 let invalidAccountEmailLink = isAccountEmailFragment(window.location.hash) && !pendingAccountEmailLink;
 if (isAccountEmailFragment(window.location.hash)) history.replaceState(history.state, '', window.location.pathname + window.location.search);
-const accountKey = (user: AccountUser, key: string) => `prapor.account.${encodeURIComponent(user.id)}.${key}`;
-function createPlayerSaveStore(user: AccountUser | null) {
-	const keyFor = (key: string) => user ? accountKey(user, key) : key;
-	return createGameSaveStore({ getItem: key => localStorage.getItem(keyFor(key)), setItem: (key, value) => localStorage.setItem(keyFor(key), value) }, { writerId: crypto.randomUUID(), isExclusiveHeld: () => ownsSaveLease });
+const uiKey=()=> 'prapor.ui.'+(signedInUser?.id??'guest');
+function storedSession(): unknown { try {
+    return JSON.parse(localStorage.getItem(uiKey()) ?? 'null');
 }
-let saveStore = createPlayerSaveStore(null);
-const openedSave = saveStore.open();
-let raw = openedSave.protectedRaw ?? openedSave.raw;
-let protectedSave = openedSave.protectedRaw !== null;
-let state: GameState = openedSave.state ?? createGame();
-let offlineSummary: AdvanceSummary | null = openedSave.summary && (openedSave.summary.elapsedMs >= 60_000 || openedSave.summary.completedCount) ? openedSave.summary : null;
+catch {
+    return null;
+} }
+let protectedSave=false;
+let state:GameState=createGame();
+let offlineSummary:AdvanceSummary|null=null;
 let resumedJournal: string[] = [];
 let page: Page = "home";
 let squadDraft: string[] = [];
@@ -308,9 +273,10 @@ let achievementNoticeSchedule: ReturnType<typeof setTimeout> | null = null;
 const freshAchievements = new Set<string>();
 let deferredRender = false;
 let world: ReturnType<typeof createWorld> | null = null;
+let liveMode: ReturnType<typeof createLiveMode> | null = null;
 const gameSound = createGameSound();
 let toastTimer: ReturnType<typeof setTimeout>;
-let storageWarning = false;
+
 let worldInputBlockedUntil = 0;
 let worldOverlaySignature = "";
 let worldView: "base" | "map" | "raid" = "base";
@@ -325,7 +291,7 @@ let suppressWorkerClickUntil = 0;
 let workerRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 type CameraViewState = { zoom: number; x: number; y: number; panMode: boolean; view?: "base" | "map" | "raid"; following?: boolean; minZoom?: number; maxZoom?: number };
 let cameraView: CameraViewState = { zoom: 1, x: 0, y: 0, panMode: false };
-const initialSession = readGameSession(openedSave.session, state);
+const initialSession = readGameSession(storedSession(), state);
 let presentationFallback = initialSession.presentation;
 applySession(initialSession);
 function applySession(session: GameSession) {
@@ -347,17 +313,17 @@ function captureSession(): GameSession {
 	return readGameSession({version:1,page,view:worldView,mapId:selectedMap,weaponId:selectedWeapon,scavId:selectedScav,roomId:selectedRoomId,raidId:selectedRaidId,squadDraft,context:contextMode,site:selectedShelterSite,roomTab:roomContextTab,armoryTab:arsenalTab,moduleSlot:selectedModuleSlot,benchModuleId:selectedBenchModule,workshopId:productionWorkshopId,perks:[...selectedPerks].flatMap(([raidId,perk])=>{const raid=state.raids.find(item=>item.id===raidId);return raid?.expedition?[{raidId,perk,stage:raid.expedition.stage,seed:raid.seed}]:[]}),journal:[...document.querySelectorAll<HTMLDetailsElement>('details[data-report][open]')].map(item=>item.dataset.report),filters:{weaponSearch,category,collection,moduleSearch,benchSearch:benchPartSearch,moduleSlot:moduleSlotFilter,moduleRarity:moduleRarityFilter,roomModuleSearch,roomModuleSlot,craftForWeapon:moduleCraftForWeapon,contracts:contractFilter,achievements:achievementFilter},presentation:world?.getPresentationState() ?? presentationFallback},state);
 }
 function scheduleSessionSave() {
-	if (!ownsSaveLease || saveConflict || protectedSave) return;
+	if (!serverReady || saveConflict || protectedSave) return;
 	if (saveUiTimer !== null) clearTimeout(saveUiTimer);
 	saveUiTimer = setTimeout(() => { saveUiTimer = null; persist(); }, 300);
 }
 function holdWorldInput() { worldInputBlockedUntil = Date.now() + 350; }
 function canWorldDrag() {
-	return !accountDialogOpen && !accountChanging && ownsSaveLease && !saveConflict && !protectedSave && worldView === "base" && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal") && !(window.innerWidth <= 850 && contextMode !== "overview");
+	return !liveMode?.isActive() && !accountDialogOpen && !accountChanging && serverReady && !saveConflict && !protectedSave && worldView === "base" && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal") && !(window.innerWidth <= 850 && contextMode !== "overview");
 }
-function canWorldCamera() { return !accountDialogOpen && !accountChanging && ownsSaveLease && !saveConflict && !protectedSave && (canWorldDrag() || (worldView === "raid" && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal"))) && !workerPlacement && !crewPointer; }
+function canWorldCamera() { return !liveMode?.isActive() && !accountDialogOpen && !accountChanging && serverReady && !saveConflict && !protectedSave && (canWorldDrag() || (worldView === "raid" && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal"))) && !workerPlacement && !crewPointer; }
 function canWorldInteract() {
-	return !accountDialogOpen && !accountChanging && ownsSaveLease && !saveConflict && !protectedSave && !workerPlacement && !crewPointer?.started && Date.now() >= worldInputBlockedUntil && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal") && !(window.innerWidth <= 850 && contextMode !== "overview");
+	return !liveMode?.isActive() && !accountDialogOpen && !accountChanging && serverReady && !saveConflict && !protectedSave && !workerPlacement && !crewPointer?.started && Date.now() >= worldInputBlockedUntil && page === "home" && !selectedScav && !document.querySelector("#modal-root .modal") && !(window.innerWidth <= 850 && contextMode !== "overview");
 }
 function captureInterfacePointer(event: PointerEvent) {
 	const target = event.target instanceof Element ? event.target : null;
@@ -383,6 +349,8 @@ app.insertAdjacentHTML('beforeend', '<aside id="achievement-notice" class="achie
 document.querySelector(".command-footer")!.prepend(document.querySelector("#offline-summary")!);
 document.querySelector(".world-head .view-switch")!.insertAdjacentHTML("afterend", '<div class="camera-controls" role="group" aria-label="Вид убежища"><button data-camera="out" aria-label="Отдалить убежище" title="Отдалить (−)">−</button><span id="camera-scale" class="camera-scale" aria-label="Масштаб">100%</span><button data-camera="in" aria-label="Приблизить убежище" title="Приблизить (+)">+</button><button data-camera="fit" class="camera-fit" aria-label="Обзор всего убежища" title="Обзор всего убежища (0)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 9V3h6m6 0h6v6m0 6v6h-6M9 21H3v-6"/></svg><span>Обзор</span></button><button data-camera="pan" aria-label="Рука: перемещать вид" title="Рука: перетаскивать убежище" aria-pressed="false"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 12V5a2 2 0 0 1 4 0v7-8a2 2 0 0 1 4 0v8-5a2 2 0 0 1 4 0v8c0 4-3 7-7 7h-1c-2 0-4-1-5-3L3 12a2 2 0 0 1 3-2l2 2"/></svg></button></div>');
 const worldViewport = document.querySelector<HTMLElement>("#world")!;
+worldViewport.insertAdjacentHTML("afterend", '<div id="live-world" aria-label="Общий онлайн-периметр" hidden></div>');
+document.querySelector(".world-head .view-switch")!.insertAdjacentHTML("beforeend", '<button data-view="live" aria-label="Бесконечный лайв онлайн" title="Один общий сервер" aria-pressed="false"><span class="live-tab-dot" aria-hidden="true"></span> Лайв · онлайн</button>');
 document.querySelector('.camera-controls [data-camera="fit"]')!.insertAdjacentHTML("beforebegin", `<button data-camera="near" class="camera-fit camera-near" aria-label="Рабочий вид базы" title="Рабочий вид базы: ближе к комнатам">${icon("base",15)}<span>К комнатам</span></button>`);
 document.querySelector(".world-head")!.insertAdjacentHTML("beforeend", `<button class="scene-sound" data-action="toggle-sound" aria-label="Звуки игры" aria-pressed="false" title="Включить звуки игры">${icon("sound",17)}<span>Звук</span></button>`);
 worldViewport.insertAdjacentHTML("afterend", '<div id="scene-hover" class="scene-hover" hidden><strong></strong><span></span></div>');
@@ -422,6 +390,13 @@ const costLabel = (cost: { money: number; scrap: number }) =>
 	`${n(cost.money)} ₽ · ${cost.scrap} дет.`;
 function updateCameraControls() {
 	const controls = document.querySelector<HTMLElement>(".camera-controls"); if (!controls) return;
+	if (liveMode?.isActive()) {
+		controls.hidden = true;
+		document.querySelector(".world-coordinate")!.textContent = "ПЕРИМЕТР 01 · ОНЛАЙН";
+		document.querySelector("#scene-hint")!.textContent = "Точка — идти · персонаж — выбрать цель";
+		document.querySelector("#world-raid-note")!.textContent = "БЕЗ ТАЙМЕРА";
+		return;
+	}
 	controls.hidden = worldView === "map";
 	controls.setAttribute("aria-label", worldView === "raid" ? "Вид улицы" : "Вид убежища");
 	worldViewport.setAttribute("aria-label", worldView === "raid" ? "Уличный рейд: движение бойца, укрытия и поиск" : "Графический штаб: комнаты, рабочие и стройка");
@@ -476,174 +451,153 @@ function inspectRoomView(id: string) {
 	holdWorldInput();
 }
 function persist(): boolean {
-	if (!ownsSaveLease || saveConflict) { updateSaveBanner(); return false; }
-	if (protectedSave) {
-		document.querySelector("#save-status")!.textContent = "ИСХОДНЫЙ ПРОГРЕСС НЕ ПЕРЕЗАПИСАН · НУЖЕН КОРРЕКТНЫЙ ИМПОРТ";
-		return false;
-	}
-	const result = saveStore.saveSync(state, captureSession());
-	if (result.ok) {
-		storageWarning = false;
-		document.querySelector("#save-status")!.textContent = `СОХРАНЕНО · ${new Date(result.savedAt!).toLocaleTimeString('ru-RU')} · ЭКРАН И ПРОГРЕСС`;
-		scheduleAchievementNotice();
-		return true;
-	} else {
-		if (result.code === 'conflict' || result.code === 'verification') { saveConflict = true; saveConflictReason = result.reason; setOverlayState(); updateSaveBanner(); return false; }
-		document.querySelector("#save-status")!.textContent =
-			"ХРАНИЛИЩЕ НЕДОСТУПНО · ЭКСПОРТИРУЙ СОХРАНЕНИЕ";
-		if (!storageWarning) {
-			storageWarning = true;
-			toast(
-				"Браузер не разрешает сохранять прогресс. Используй экспорт в настройках.",
-				false
-			);
-		}
-		return false;
-	}
+    try {
+        localStorage.setItem(uiKey(), JSON.stringify(captureSession()));
+    }
+    catch { /* UI preferences do not own gameplay. */ }
+    document.querySelector('#save-status')!.textContent = serverSnapshot ? 'ПРОГРЕСС НА СЕРВЕРЕ · РЕВИЗИЯ ' + serverSnapshot.revision : 'ПОДКЛЮЧЕНИЕ К СЕРВЕРУ';
+    if (serverReady)
+        scheduleAchievementNotice();
+    return Boolean(serverSnapshot);
 }
 function updateSaveBanner() {
-	const banner = document.querySelector<HTMLElement>('#save-banner'); if (!banner) return;
-	const blocked = !ownsSaveLease || saveConflict || protectedSave;
-	banner.hidden = !blocked;
-	if (!blocked) return;
-	const pending = saveOwnershipPending && !saveConflict && !protectedSave;
-	const recovered = openedSave.status === 'recovered' && protectedSave;
-	const message = protectedSave ? recovered ? 'Найдена последняя исправная запись. Исходный повреждённый файл сохранён до восстановления.' : 'Эта запись не читается или создана более новой версией. Исходный файл защищён от перезаписи.' : saveConflict ? saveConflictReason === 'storage-unavailable' || saveConflictReason === 'save-not-opened' ? 'Хранилище не удалось прочитать. Вкладка приостановлена; обнови игру, чтобы проверить запись снова.' : 'В другой вкладке появился новый прогресс. Эта вкладка остановлена, чтобы сохранить обе версии.' : pending ? 'Подключаем сохранение…' : 'Игра уже открыта в другой вкладке. Продолжай там или закрой её и обнови эту страницу.';
-	banner.innerHTML = `<p>${e(message)}</p><div>${recovered ? '<button class="button" data-action="recover-save">Восстановить исправную запись</button>' : protectedSave ? '<button class="button secondary" data-action="import">Импортировать сохранение</button>' : !pending ? '<button class="button secondary" data-action="reload-save">Обновить игру</button>' : ''}${!pending ? `<button class="button ghost" data-action="export">${protectedSave ? 'Скачать исходный файл' : 'Экспорт этой вкладки'}</button>` : ''}</div>`;
+    const banner = document.querySelector<HTMLElement>('#save-banner');
+    if (!banner)
+        return;
+    banner.hidden = Boolean(serverReady && authoritative?.isReady()) || Boolean(liveMode?.isActive());
+    if (!banner.hidden)
+        banner.innerHTML = '<p>' + e(connectionMessage) + '</p><div><button class="button secondary" data-action="reconnect-server">Подключиться снова</button><button class="button ghost" data-open-live>Лайв · онлайн</button></div>';
 }
-function storedProgressChanged(): boolean {
-	const conflict = saveStore.detectConflict();
-	if (conflict.conflict) { saveConflict = true; saveConflictReason = conflict.reason; setOverlayState(); updateSaveBanner(); }
-	return saveConflict;
+function storedProgressChanged(): boolean { return false; }
+function startServerSession() { if (accountStartupChecked)
+    return; accountStartupChecked = true; void initializeAccount(); }
+function flushAndReleaseSave() { persist(); }
+function applyServerSnapshot(snapshot: GameSnapshot) {
+    const oldStatus = rosterStatus(), oldShelter = shelterStatus(), oldAchievements = achievementPresentationKey();
+    const oldInventory = inventoryPresentationKey();
+    const oldLevel = state.level, oldContracts = readyContracts(), oldWeapons = state.weapons.map(w => w.id).join('|');
+    serverSnapshot = snapshot;
+    state = snapshot.state;
+    serverReady = true;
+    saveConflict = false;
+    protectedSave = false;
+    updateGameFeedback();
+    hud();
+    persist();
+    updateSaveBanner();
+    setOverlayState();
+    if (oldStatus !== rosterStatus() || oldShelter !== shelterStatus() || oldAchievements !== achievementPresentationKey() || oldInventory !== inventoryPresentationKey() || oldLevel !== state.level || oldContracts !== readyContracts() || oldWeapons !== state.weapons.map(w => w.id).join('|'))
+        refreshAfterAdvance();
+    if (!liveMode?.isActive() && worldView === 'raid') {
+        const raid = watchedRaid();
+        if (raid)
+            updateLiveRaidPanel(document.querySelector<HTMLElement>('#command-dock')!, raid, watchedReport(), state);
+    }
 }
-function requestSaveOwnership() {
-	if (ownsSaveLease) return;
-	if (!navigator.locks) { saveOwnershipPending = false; updateSaveBanner(); document.querySelector('#save-banner p')!.textContent = 'Этот браузер не поддерживает безопасное автосохранение. Экспортируй игру, чтобы сохранить прогресс.'; return; }
-	saveOwnershipPending = true;
-	void navigator.locks.request('prapor-game-writer', {ifAvailable:true}, async lock => {
-		saveOwnershipPending = false;
-		if (!lock) {
-			updateSaveBanner(); setOverlayState();
-			if (!accountStartupChecked && (pendingAccountEmailLink || invalidAccountEmailLink)) { accountStartupChecked = true; void initializeAccount(); }
-			return;
-		}
-		if (storedProgressChanged()) { updateSaveBanner(); return; }
-		ownsSaveLease = true;
-		try {
-			updateSaveBanner(); setOverlayState();
-			persist();
-			if (!accountStartupChecked) { accountStartupChecked = true; void initializeAccount(); }
-			await new Promise<void>(resolve => { releaseSaveLease = resolve; });
-		} finally {
-			ownsSaveLease = false; releaseSaveLease = null;
-		}
-	}).catch(() => { saveOwnershipPending = false; setOverlayState(); updateSaveBanner(); document.querySelector('#save-banner p')!.textContent = 'Не удалось подключить сохранение. Экспортируй текущую запись и обнови игру.'; });
+async function gameAction(command: GameCommand): Promise<ActionResult> {
+    if (!authoritative || !serverReady)
+        return { ok: false, message: 'Нет подтверждённой связи с игровым сервером.' };
+    if (gameCommandPending)
+        return { ok: false, message: 'Сервер ещё обрабатывает предыдущий приказ.' };
+    gameCommandPending = true;
+    try {
+        return await authoritative.action(command);
+    }
+    catch (error) {
+        return { ok: false, message: error instanceof Error ? error.message : 'Связь прервалась. Приказ не повторён автоматически.' };
+    }
+    finally {
+        gameCommandPending = false;
+    }
 }
-function flushAndReleaseSave() {
-	persist();
-	void cloudSync?.flush();
-	releaseSaveLease?.();
-	ownsSaveLease = false;
+async function refreshServerProgress(): Promise<boolean> {
+    try {
+        await authoritative?.poll();
+        return Boolean(authoritative?.isReady());
+    }
+    catch {
+        return false;
+    }
 }
-
-function readCloudBaseline(user: AccountUser): CloudBaseline | null {
-	try {
-		const value: unknown = JSON.parse(localStorage.getItem(accountKey(user, 'cloud')) ?? 'null');
-		if (!value || typeof value !== 'object' || !('serverRevision' in value) || !('localRevision' in value)
-			|| !Number.isSafeInteger(value.serverRevision) || !Number.isSafeInteger(value.localRevision)
-			|| Number(value.serverRevision) < 0 || Number(value.localRevision) < 0) return null;
-		return { serverRevision: Number(value.serverRevision), localRevision: Number(value.localRevision) };
-	} catch { return null; }
+async function loadServerProgress() {
+    if (!authoritative)
+        return;
+    const presentation = storedSession();
+    serverReady = false;
+    serverSnapshot = null;
+    connectionMessage = 'Подключаем проверенный серверный прогресс…';
+    updateSaveBanner();
+    setOverlayState();
+    authoritative.resetIdentity();
+    try {
+        const snapshot = await authoritative.join();
+        const session = readGameSession(presentation, snapshot.state);
+        applySession(session);
+        presentationFallback = session.presentation;
+        render();
+        setView(worldView);
+        world?.selectRaid(selectedRaidId);
+        world?.restorePresentationState(session.presentation);
+        persist();
+        connectionMessage = 'Прогресс подтверждён сервером.';
+    }
+    catch (error) {
+        connectionMessage = error instanceof Error ? error.message : 'Игровой сервер недоступен. Повтори подключение.';
+    }
+    finally {
+        updateSaveBanner();
+        setOverlayState();
+    }
 }
-
-function activatePlayerSave(user: AccountUser | null, store: ReturnType<typeof createPlayerSaveStore>, loaded: {
-	state: GameState; session: unknown; summary: AdvanceSummary | null; protectedRaw?: string | null;
-}) {
-	const session = readGameSession(loaded.session, loaded.state);
-	if (!loaded.protectedRaw) {
-		const result = store.saveSync(loaded.state, session);
-		if (!result.ok) throw new Error('local-save-unavailable');
-	}
-	cancelWorkerPlacement(); closeModal(); closeInspector();
-	dismissAchievementNotice(); freshAchievements.clear();
-	playerAccount = user; saveStore = store; state = loaded.state;
-	protectedSave = Boolean(loaded.protectedRaw); raw = loaded.protectedRaw ?? null;
-	selectedPerks.clear(); chosenWorkers.clear(); roomRepeatPreferences.clear();
-	toolOrigin = null; commandOrigin = null;
-	offlineSummary = loaded.summary && (loaded.summary.elapsedMs >= 60_000 || loaded.summary.completedCount) ? loaded.summary : null;
-	applySession(session); presentationFallback = session.presentation;
-	feedbackCursor = createGameFeedbackCursor(state, session.view === 'raid' ? session.raidId : null);
-	render(); setView(worldView); world?.selectRaid(selectedRaidId); world?.restorePresentationState(session.presentation);
-	updateSaveBanner(); setOverlayState();
+async function connectAccount(user: AccountUser, _source: 'login' | 'register' | 'session') {
+    if (accountChanging)
+        throw new Error('account-operation-pending');
+    accountGeneration++;
+    accountChanging = true;
+    signedInUser = user;
+    playerAccount = user;
+    accountUI.setUser(user);
+    liveMode?.resetIdentity();
+    cancelWorkerPlacement();
+    closeModal();
+    closeInspector();
+    dismissAchievementNotice();
+    freshAchievements.clear();
+    try {
+        await loadServerProgress();
+        accountUI.setStatus('Прогресс и все игровые действия сохраняет сервер.', 'success');
+    }
+    finally {
+        accountChanging = false;
+        setOverlayState();
+        showPendingAccountEmailLink();
+    }
 }
-
-async function connectAccount(user: AccountUser, source: 'login' | 'register' | 'session') {
-	if (!ownsSaveLease || saveConflict) throw new Error('writer-lock-required');
-	if (accountChanging) throw new Error('account-operation-pending');
-	accountGeneration++;
-	accountChanging = true; signedInUser = user; accountUI.setUser(user); setOverlayState();
-	try {
-		if (cloudSync?.isConnected()) await cloudSync.flush();
-		cloudSync?.disconnect();
-		persist();
-		const sameAccount = playerAccount?.id === user.id;
-		const localCandidate = { state, session: captureSession(), summary: offlineSummary };
-		const localSavedAt = saveStore.getMetadata().savedAt;
-		const store = sameAccount ? saveStore : createPlayerSaveStore(user);
-		const cached = sameAccount ? null : store.open();
-		const baseline = readCloudBaseline(user);
-		const localRevision = cached?.revision ?? saveStore.getMetadata().revision;
-		const hasCache = sameAccount || cached?.state !== null && cached?.state !== undefined;
-		let candidate = cached?.state ? { state: cached.state, session: cached.session, summary: cached.summary }
-			: playerAccount && !sameAccount ? { state: createGame(), session: null, summary: null } : localCandidate;
-		if (source === 'session' && !sameAccount && cached?.state) {
-			activatePlayerSave(user, store, { ...candidate, protectedRaw: cached.protectedRaw });
-		}
-		if (cached?.protectedRaw || sameAccount && protectedSave) {
-			if (!sameAccount && source !== 'session') activatePlayerSave(user, store, { state: cached!.state ?? createGame(), session: cached!.session, summary: cached!.summary, protectedRaw: cached!.protectedRaw });
-			accountUI.setStatus('Локальная запись защищена. Экспортируй её или импортируй исправную через настройки игры.', 'warning');
-			return;
-		}
-		const remote = await accountApi.getSave(user.id);
-		let choice: 'server' | 'local' | 'cancel' = 'local';
-		if (remote.save !== null) {
-			const knownLocal = source === 'session' && hasCache && baseline?.serverRevision === remote.revision;
-			const cleanRemote = source === 'session' && (!hasCache || baseline?.localRevision === localRevision);
-			if (knownLocal) choice = 'local';
-			else if (cleanRemote) choice = 'server';
-			else choice = await accountUI.chooseProgress({ serverSavedAt: remote.savedAt, localSavedAt: cached?.savedAt ?? localSavedAt,
-				message: 'У аккаунта и этого устройства есть свои записи. Выбери убежище для продолжения. Слияния двух игр нет.',
-				serverSummary: 'Убежище, сохранённое в аккаунте', localSummary: hasCache ? 'Локальная запись этого аккаунта' : playerAccount && !sameAccount ? 'Новое убежище' : 'Текущее гостевое убежище' });
-		}
-		if (choice === 'cancel') { accountUI.setStatus('Убежище не подключено. Нажми «Подключить убежище», когда будешь готов.', 'warning'); return; }
-		if (choice === 'server') {
-			const parsed = parseGameSave(remote.save);
-			if (!parsed) throw new AccountApiError(0, 'invalid_response');
-			candidate = { state: parsed.state, session: parsed.session, summary: parsed.summary };
-		} else if (source === 'session' && !hasCache) {
-			candidate = { state: createGame(), session: null, summary: null };
-		}
-		if (protectedSave && playerAccount?.id !== user.id && choice === 'local') throw new Error('protected-local-save');
-		activatePlayerSave(user, store, candidate);
-		cloudSync!.connect(remote.revision);
-		await cloudSync!.flush();
-	} finally { accountChanging = false; setOverlayState(); showPendingAccountEmailLink(); }
-}
-
 async function initializeAccount() {
-	const epoch = accountGeneration;
-	accountChanging = true; setOverlayState();
-	accountUI.setStatus('Проверяем связь с аккаунтом…');
-	try {
-		const { user, emailEnabled } = await accountApi.session();
-		accountUI.setEmailEnabled(emailEnabled);
-		if (epoch !== accountGeneration) return;
-		accountChanging = false;
-		if (user && ownsSaveLease) await connectAccount(user, 'session');
-		else if (user) { signedInUser = user; accountUI.setUser(user); accountUI.setStatus('Игра открыта в другой вкладке. Почту можно подтвердить здесь.'); }
-		else accountUI.setStatus('Гостевая игра: прогресс хранится в этом браузере.');
-	} catch (error) { if (epoch === accountGeneration || accountGeneration === epoch + 1) accountUI.setStatus(accountErrorMessage(error), 'warning'); }
-	finally { accountChanging = false; setOverlayState(); showPendingAccountEmailLink(); }
+    const epoch = accountGeneration;
+    accountChanging = true;
+    setOverlayState();
+    try {
+        const { user, emailEnabled } = await accountApi.session();
+        if (epoch !== accountGeneration)
+            return;
+        accountUI.setEmailEnabled(emailEnabled);
+        signedInUser = user;
+        playerAccount = user;
+        accountUI.setUser(user);
+        await loadServerProgress();
+        accountUI.setStatus(user ? 'Аккаунт подключён. Прогресс принадлежит серверу.' : 'Гостевой прогресс хранится на сервере. Для игры с другого устройства войди в аккаунт.');
+    }
+    catch (error) {
+        connectionMessage = accountErrorMessage(error);
+        accountUI.setStatus(connectionMessage, 'warning');
+    }
+    finally {
+        accountChanging = false;
+        updateSaveBanner();
+        setOverlayState();
+        showPendingAccountEmailLink();
+    }
 }
 
 function showPendingAccountEmailLink() {
@@ -670,21 +624,7 @@ function updateAccountProfile(user: AccountUser) {
 	if (playerAccount?.id === user.id) playerAccount = user;
 }
 
-function revokeAccountSession() {
-	accountGeneration++; cloudSync?.disconnect(); signedInUser = null;
-	accountUI.setUser(null);
-}
-
-function showCloudStatus(status: CloudSyncStatus, savedAt?: number | string) {
-	const text = status === 'saving' ? 'Сохраняем убежище в аккаунте…'
-		: status === 'saved' ? `В аккаунте · ${new Date(savedAt ?? Date.now()).toLocaleTimeString('ru-RU')}`
-		: status === 'conflict' ? 'На другом устройстве появилась новая запись. Нажми «Синхронизировать» и выбери убежище.'
-		: status === 'expired' ? 'Сессия завершилась. Локальная запись сохранена. Войди снова, чтобы подключить аккаунт.'
-		: status === 'offline' ? 'Нет связи: прогресс сохранён на этом устройстве. Синхронизация повторится при подключении.'
-		: 'Аккаунт подключён. Сохраняем каждые 15 секунд.';
-	accountUI.setStatus(text, status === 'saved' ? 'success' : ['conflict','expired','offline'].includes(status) ? 'warning' : 'neutral');
-	if (status === 'expired') { signedInUser = null; accountUI.setUser(null); }
-}
+function revokeAccountSession() { accountGeneration++; signedInUser = null; playerAccount = null; accountUI.setUser(null); liveMode?.resetIdentity(); void loadServerProgress(); }
 
 function toast(message: string, ok = true) {
 	const node = document.querySelector<HTMLDivElement>("#toast")!;
@@ -712,16 +652,18 @@ function updateAchievementBadge() {
 	if (badge) { badge.textContent = `${count}/${views.length}`; badge.classList.toggle('has-new', unseen > 0); }
 	document.querySelector<HTMLButtonElement>('.nav [data-page="achievements"]')?.setAttribute('aria-label', `Достижения: ${count} из ${views.length}${unseen ? `, новых: ${unseen}` : ''}`);
 }
-function acknowledgeAchievementScreen() {
-	if (page !== 'achievements' || !ownsSaveLease || saveConflict || protectedSave || document.hidden) return;
-	markAchievementsSeen(state, filterAchievementViews(getAchievementViews(state), achievementFilter).filter(view => view.unlocked).map(view => view.id));
+async function acknowledgeAchievementScreen() {
+	if (page !== 'achievements' || !serverReady || saveConflict || protectedSave || document.hidden) return;
+	const unseen = new Set(getUnseenAchievementIds(state));
+	const ids = filterAchievementViews(getAchievementViews(state), achievementFilter).filter(view => view.unlocked && unseen.has(view.id)).map(view => view.id);
+	if (ids.length) await gameAction({ type: "markAchievementsSeen", args: [ids] });
 	updateAchievementBadge();
 }
 function scheduleAchievementNotice() {
 	if (achievementNoticeSchedule !== null || !getUnseenAchievementIds(state).length) return;
-	achievementNoticeSchedule = setTimeout(() => {
+	achievementNoticeSchedule = setTimeout(async () => {
 		achievementNoticeSchedule = null;
-		if (document.hidden || !ownsSaveLease || saveConflict || protectedSave || accountChanging || accountDialogOpen || selectedScav || document.querySelector('#modal-root .modal') || (page !== 'home' && page !== 'achievements')) return;
+		if (document.hidden || !serverReady || saveConflict || protectedSave || accountChanging || accountDialogOpen || selectedScav || document.querySelector('#modal-root .modal') || (page !== 'home' && page !== 'achievements')) return;
 		const ids = getUnseenAchievementIds(state);
 		if (!ids.length) return;
 		for (const id of ids) freshAchievements.add(id);
@@ -735,7 +677,7 @@ function scheduleAchievementNotice() {
 		node.hidden = false;
 		if (!node.innerHTML) return;
 		// A notice is seen only after it is rendered on the visible, owned game.
-		markAchievementsSeen(state, ids); updateAchievementBadge(); persist();
+		await gameAction({ type: "markAchievementsSeen", args: [ids] }); updateAchievementBadge(); persist();
 		if (achievementNoticeTimer !== null) clearTimeout(achievementNoticeTimer);
 		achievementNoticeTimer = setTimeout(() => { achievementNoticeTimer = null; if (!node.contains(document.activeElement)) node.hidden = true; }, 12_000);
 	}, 400);
@@ -886,14 +828,14 @@ function beginKeyboardAssignment(id: string) {
 	target?.focus({ preventScroll: true });
 	if (target) revealAssignmentControl(target);
 }
-function assignPlacedWorker(scavId: string, roomId: string) {
+async function assignPlacedWorker(scavId: string, roomId: string) {
 	if (storedProgressChanged()) { cancelWorkerPlacement(false, true); return; }
 	if (!canWorldDrag()) { cancelWorkerPlacement(false, true); return; }
 	const scav = state.scavs.find((item) => item.id === scavId), room = state.shelter.rooms.find((item) => item.id === roomId);
 	const alreadyAssigned = scav?.assignment === roomId;
 	const returnFocus = workerPlacement?.mode === "keyboard";
 	cancelWorkerPlacement();
-	const result = assignWorker(state, scavId, roomId);
+	const result = await gameAction({ type: "assignWorker", args: [scavId, roomId] });
 	act(result.ok && scav && room ? { ...result, message: alreadyAssigned ? `${scav.name} уже работает: ${ROOM_DEFINITIONS[room.type].label}.` : `${scav.name} назначен: ${ROOM_DEFINITIONS[room.type].label}.` } : result, "assign");
 	announceWorkerPlacement(result.ok && scav && room ? `${scav.name}: ${ROOM_DEFINITIONS[room.type].label}.` : result.message);
 	if (returnFocus) focusWorkerHandle(scavId);
@@ -1100,7 +1042,7 @@ function hud() {
 		const cap = document.querySelector<HTMLElement>(`#cap-${key}`); if (cap) { cap.style.setProperty("--fill", `${Math.min(100,state.supplies[key]/capacities[key]*100)}%`); cap.classList.toggle("full",state.supplies[key]>=capacities[key]); }
 	}
 	const moneyCap=document.querySelector<HTMLElement>("#cap-money"); if(moneyCap)moneyCap.style.setProperty("--fill",`${Math.min(100,state.money/getRecoveryAllowance(state)*100)}%`);
-	document.querySelector("#world-raid-note")!.textContent = state.raids.length
+	document.querySelector("#world-raid-note")!.textContent = liveMode?.isActive() ? "БЕЗ ТАЙМЕРА" : state.raids.length
 		? state.raids.some((raid) => raid.expedition?.status === "choice") ? "ЕСТЬ СИГНАЛ · НУЖЕН ТВОЙ ПРИКАЗ" : `В РЕЙДАХ: ${state.raids.length} · ДИКИЕ НА СВЯЗИ`
 		: "ОТРЯД НА БАЗЕ";
 	const orderCounter = document.querySelector("#auto-order-count");
@@ -1434,9 +1376,9 @@ function setOverlayState() {
 		holdWorldInput();
 	}
 	const shell = document.querySelector<HTMLElement>(".shell")!;
-	shell.inert = !ownsSaveLease || saveConflict || protectedSave || modalOpen || drawerOpen || toolsOpen;
-	const tools = document.querySelector<HTMLElement>("#tool-root")!; tools.inert = !ownsSaveLease || saveConflict || protectedSave || modalOpen || drawerOpen;
-	document.querySelector<HTMLElement>('#inspector-root')!.inert = !ownsSaveLease || saveConflict || protectedSave;
+	shell.inert = (!liveMode?.isActive() && (!serverReady || saveConflict || protectedSave)) || modalOpen || drawerOpen || toolsOpen;
+	const tools = document.querySelector<HTMLElement>("#tool-root")!; tools.inert = !serverReady || saveConflict || protectedSave || modalOpen || drawerOpen;
+	document.querySelector<HTMLElement>('#inspector-root')!.inert = !serverReady || saveConflict || protectedSave;
 	if (mobileContext && !shell.inert) {
 		document.querySelector<HTMLElement>(".command-hud")!.inert = true;
 		document.querySelector<HTMLElement>(".command-toolbar")!.inert = true;
@@ -1495,7 +1437,7 @@ function focusCommandControl(key: string) {
 	}
 }
 function refreshCommandOverview(summary: CommandSummary) {
-	if (worldView === "raid" || contextMode !== "overview" || interacting() || commandSummaryKey(summary) === commandSummarySignature) return;
+	if (liveMode?.isActive() || worldView === "raid" || contextMode !== "overview" || interacting() || commandSummaryKey(summary) === commandSummarySignature) return;
 	const dock = document.querySelector<HTMLElement>("#command-dock"); if (!dock) return;
 	const activeKey = document.activeElement instanceof HTMLElement && dock.contains(document.activeElement) ? document.activeElement.dataset.focusKey : null;
 	const stripScroll = dock.querySelector<HTMLElement>(".command-system-grid")?.scrollLeft ?? 0;
@@ -1574,6 +1516,7 @@ function shelterHomeNote() {
 	return `<div class="shelter-home-note"><div><span class="eyebrow">Жизнь убежища</span><h3>${working ? `${working} бойцов на рабочих местах` : "Комнатам нужны свои люди"}</h3><p>${blocked ? `${blocked} производств ждут работников, расходников или места на складе.` : busy.length ? `Настроено производств: ${busy.length}. Готовые партии поступают на склад.` : "Назначь бойцов, выбери рецепты и поставь оружейные модули в очередь мастерской."}</p></div><button class="button secondary" data-page="base">Управлять комнатами ${icon("arrow", 16)}</button></div>`;
 }
 function renderCommandBoard() {
+	if (liveMode?.isActive()) { liveMode.refreshPanel(); return; }
 	cancelWorkerPlacement(false, true);
 	const dock = document.querySelector<HTMLElement>("#command-dock")!;
 	const room = state.shelter.rooms.find((item) => item.id === selectedRoomId);
@@ -2111,11 +2054,8 @@ function weaponDetail(weapon: WeaponInstance) {
 	return `<aside class="weapon-detail"><span class="eyebrow" style="color:${RARITY_COLORS[def.rarity]}">${RARITY_LABELS[def.rarity]} · ${CATEGORY_LABELS[def.category]}</span><h2>${e(def.name)}</h2>${weaponBuildArt(weapon)}${weaponReadiness(weapon)}<p>${e(def.description)}</p>${preservedTuning(weapon)}<div class="weapon-role"><strong>${e(role.label)}</strong><p>${e(role.description)}</p><div class="loadout-stats"><span>Вес ${stats.weight.toFixed(2)} кг</span><span>Патроны ×${(stats.ammoMultiplier * role.ammoMultiplier).toFixed(2)}</span><span>Модулей ${Object.keys(weapon.modules).length} / ${MODULE_SLOTS.length}</span></div></div><div class="detail-row"><span>Мощность</span><strong>${stats.power}</strong></div><div class="detail-row"><span>Эргономика</span><strong>${Math.round(stats.ergonomics)}</strong></div><div class="detail-row"><span>Отдача · ниже лучше</span><strong>${Math.round(stats.recoil)}</strong></div><div class="detail-row"><span>Надёжность · индекс</span><strong>${Math.round(stats.reliability)} / 100</strong></div><div class="detail-row"><span>Состояние</span><strong>${Math.round(weapon.durability)}%</strong></div><div class="health-track"><i style="width:${weapon.durability}%"></i></div>${issues.length ? `<p class="risk-note">${issues.map(e).join(" · ")}</p>` : ""}${weaponMechanicsPanel(weapon, selectedMap, owner?.tactic ?? "balanced")}<button class="button bench-entry" data-action="open-bench" data-id="${weapon.id}">${icon("scrap", 18)} Открыть оружейный верстак</button><div class="detail-row"><span>Выдано</span><strong>${owner ? e(owner.name) : "На складе"}</strong></div><div class="weapon-assign">${owner ? `<button class="button ghost" data-scav="${owner.id}">${icon("people", 16)} Личное дело: ${e(owner.name)}</button>` : `<label class="field-label">Выдать бойцу<select data-assign-weapon="${weapon.id}" aria-label="Выдать ${e(def.name)} бойцу"><option value="">Выбери бойца</option>${state.scavs.filter((scav) => scav.status !== "raiding").map((scav) => `<option value="${scav.id}">${e(scav.name)}${scav.weaponInstanceId ? " · заменить ствол" : " · без оружия"}</option>`).join("")}</select></label>`}</div><div class="detail-actions"><button class="button secondary" data-action="repair" data-id="${weapon.id}" ${busy || !needsWeaponRepair(weapon) || !canAfford(repair) ? "disabled" : ""}>Ремонт сборки · ${costLabel(repair)}</button><small class="cost-reason" data-weapon-cost="${weapon.id}-repair">${busy ? "Оружие в рейде" : !needsWeaponRepair(weapon) ? "Ремонт не нужен" : costReason(repair)}</small><button class="button ghost" data-action="sell" data-id="${weapon.id}" ${liquidationReason ? "disabled" : ""} title="${e(liquidationReason ?? "Продажа вместе с установленными модулями")}">Продать сборку · ${n(getWeaponSaleValue(weapon))} ₽</button><button class="button ghost" data-action="recycle-weapon" data-id="${weapon.id}" ${liquidationReason ? "disabled" : ""} title="${e(liquidationReason ?? "Уничтожить сборку и модули, получить материалы")}">Утилизация сборки · ${getWeaponRecycleYield(weapon)} дет.</button><small class="quote-note" data-recycle-note>${e(liquidationReason ?? "Продажа и утилизация удалят всю сборку с модулями. Чтобы сохранить модули, используй верстак")}</small></div></aside>`;
 }
 function showSettings() {
-	const meta = saveStore.getMetadata();
-	const saveDescription = storageWarning ? 'Последняя запись не подтверждена. Экспортируй игру перед закрытием.' : meta.savedAt ? `Последняя запись: ${new Date(meta.savedAt).toLocaleTimeString('ru-RU')}. Прогресс, текущий экран, камера и выбранные приёмы сохраняются вместе.` : 'Первая запись появится после подключения хранилища.';
-	document.querySelector("#modal-root")!.innerHTML =
-		`<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title"><h2 id="settings-title">Твоё дело — при тебе.</h2><div class="save-summary"><span class="eyebrow">Прогресс на этом устройстве</span><p>${e(saveDescription)}</p><button class="button secondary" data-action="save-now">Сохранить сейчас</button></div><p>Прогресс хранится в этом браузере. Перед сменой устройства экспортируй сохранение. За отсутствие учитывается до 8 часов стройки, пополнения резерва, работы назначенных бойцов, лечения и рейдов по постоянным приказам. Рубли и припасы пополняются до предела базы.</p><p>Автовыходы повторяются офлайн до выбранной глубины и нехватки ресурсов, здоровья или исправного оружия. Ручная экспедиция остановится в точке связи до твоего приказа. Они несут риск потери бойца и ствола. Останови постоянный приказ в карточке дикого, чтобы отменить будущие выходы.</p>${protectedSave ? '<p class="order-risk">Исходный файл не удалось прочитать. Он остаётся в браузере без изменений; автоматическое сохранение временной сессии отключено. Скачай исходный файл и импортируй корректное сохранение.</p>' : ""}<p>Для назначения на работу перетащи бойца на комнату: мышью — за портрет или фигурку, на телефоне — за значок рядом с портретом. Кнопка «Назначить» рядом с портретом позволяет выбрать комнату с клавиатуры; Tab переключает комнаты, Enter назначает, Esc отменяет. Для выхода в рейд сначала освободи работника.</p><p>Начни с «Дворов»: выбери бойца и оружие, отправь на первый этап. После точки связи эвакуируйся или выбери бонус и путь дальше. Чертежи и память маршрутов сохраняются после потерь; рубли и найденные предметы попадут на базу при эвакуации.</p><div class="detail-actions"><button class="button secondary" data-action="export">${protectedSave ? "Скачать исходный файл" : "Экспорт"}</button><button class="button ghost" data-action="import">Импорт</button></div><input type="file" accept="application/json,.json" id="save-file" hidden><div class="save-note">Сохранение восстанавливает отряд, физические сборки и запасные модули с их состоянием, комплекты, чертежи, приказы и текущие этапы. Ручные экспедиции ждут твоего приказа в точке связи. Импорт заменит текущий прогресс после проверки файла.</div><button class="button ghost" style="width:100%;margin-top:20px" data-action="close-modal">Продолжить</button></section></div>`;
-	focusModal();
+    document.querySelector('#modal-root')!.innerHTML = '<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title"><h2 id="settings-title">Прогресс на сервере</h2><div class="save-summary"><span class="eyebrow">Проверенное игровое состояние</span><p>Ресурсы, инвентарь, производство и исходы рейдов считает и сохраняет сервер. Вкладки и устройства получают одно состояние. Файлы и изменения в браузере не добавляют деньги или предметы.</p><button class="button secondary" data-action="save-now">Обновить с сервера</button></div><p>Гость привязан к cookie браузера. Для доступа с другого устройства войди в аккаунт. Экспорт — копия для просмотра; загрузка произвольного прогресса отключена.</p><p>Постоянные приказы продолжаются по серверному времени. Ручная экспедиция ждёт твоего решения на контрольной точке.</p><div class="detail-actions"><button class="button ghost" data-action="export">Скачать копию прогресса</button><button class="button" data-action="close-modal">Вернуться</button></div></section></div>';
+    focusModal();
 }
 function showAutoRaidOrder(scavId: string) {
 	const scav = state.scavs.find((item) => item.id === scavId);
@@ -2159,7 +2099,7 @@ function followGameplayAction(origin: HTMLElement) {
 	if (claim && !claim.disabled) { claim.scrollIntoView({ block: "center", behavior: scrollBehavior() }); claim.focus({ preventScroll: true }); }
 	else document.querySelector<HTMLButtonElement>('[data-action="close-tools"]')?.focus();
 }
-document.addEventListener("click", (event) => {
+document.addEventListener("click", async (event) => {
 	storedProgressChanged();
 	if ((event.target as Element).closest("#tool-root, #inspector-root, #modal-root, #command-dock, #context-shade, button, select, input, summary")) holdWorldInput();
 	const artSlot = (event.target as Element).closest<SVGElement>('.workbench-stage [data-module-slot]');
@@ -2167,7 +2107,7 @@ document.addEventListener("click", (event) => {
 	const target = (event.target as HTMLElement).closest<HTMLButtonElement>(
 		"button"
 	);
-	if (target && (!ownsSaveLease || saveConflict || protectedSave) && !['settings','close-modal','export','import','recover-save','reload-save'].includes(target.dataset.action ?? '')) return;
+	if (target && (!serverReady || saveConflict || protectedSave) && !target.hasAttribute('data-open-live') && target.dataset.view !== 'live' && !(liveMode?.isActive() && ['base','map','raid'].includes(target.dataset.view ?? '')) && !['settings','close-modal','export','import','reconnect-server','save-now'].includes(target.dataset.action ?? '')) return;
 	if (!target || target.disabled) {
 		if ((event.target as HTMLElement).classList.contains("inspector-backdrop")) closeInspector();
 		if ((event.target as HTMLElement).classList.contains("modal-backdrop")) closeModal();
@@ -2175,6 +2115,7 @@ document.addEventListener("click", (event) => {
 		if ((event.target as HTMLElement).id === "context-shade") closeCommandContext();
 		return;
 	}
+	if (target.hasAttribute('data-open-live')) { setView('live'); return; }
 	if (target.dataset.workerHandle) { beginKeyboardAssignment(target.dataset.workerHandle); return; }
 	if (target.dataset.action === "gameplay-next") { followGameplayAction(target); return; }
 	if (target.dataset.action === "toggle-sound") { void toggleGameSound(); return; }
@@ -2207,7 +2148,7 @@ document.addEventListener("click", (event) => {
 		return;
 	}
 	if (target.dataset.view) {
-		setView(target.dataset.view as "base" | "map" | "raid");
+		setView(target.dataset.view as "base" | "map" | "raid" | "live");
 		return;
 	}
 	if (target.dataset.map) {
@@ -2252,24 +2193,24 @@ document.addEventListener("click", (event) => {
 		case "open-market":
 			toolOrigin = target; page = "arsenal"; arsenalTab = "market"; render(); document.querySelector<HTMLButtonElement>('[data-action="close-tools"]')?.focus(); break;
 		case "excavate-wall": {
-			const result = excavateShelter(state, Number(target.dataset.column), Number(target.dataset.row));
+			const result = await gameAction({ type: "excavateShelter", args: [Number(target.dataset.column), Number(target.dataset.row)] });
 			act(result, "build"); return;
 		}
 		case "build-room": {
 			const column = Number(target.dataset.column), row = Number(target.dataset.row);
-			const result = buildRoom(state, target.dataset.roomType as ShelterRoomType, column, row);
+			const result = await gameAction({ type: "buildRoom", args: [target.dataset.roomType as ShelterRoomType, column, row] });
 			if (result.ok) { selectedRoomId = state.shelter.rooms.find((room) => room.column === column && room.row === row)?.id ?? null; selectedShelterSite = null; contextMode = "room"; roomContextTab = "upgrade"; }
 			act(result, "build");
 			break;
 		}
 		case "upgrade-room":
-			act(upgradeRoom(state, id), "build");
+			act(await gameAction({ type: "upgradeRoom", args: [id] }), "build");
 			break;
 		case "assign-worker":
-			act(assignWorker(state, chosenWorkers.get(id) ?? "", id), "assign");
+			act(await gameAction({ type: "assignWorker", args: [chosenWorkers.get(id) ?? "", id] }), "assign");
 			break;
 		case "release-worker":
-			act(assignWorker(state, id, null), "assign");
+			act(await gameAction({ type: "assignWorker", args: [id, null] }), "assign");
 			break;
 		case "open-work-room":
 			openShelterRoom(id);
@@ -2277,26 +2218,26 @@ document.addEventListener("click", (event) => {
 		case "set-room-recipe": {
 			const repeat = document.querySelector<HTMLInputElement>(`[data-room-repeat="${CSS.escape(id)}"]`)?.checked ?? true;
 			roomRepeatPreferences.set(id, repeat);
-			act(setRoomRecipe(state, id, target.dataset.recipeId ?? null, repeat));
+			act(await gameAction({ type: "setRoomRecipe", args: [id, target.dataset.recipeId ?? null, repeat] }));
 			break;
 		}
 		case "stop-room-recipe":
-			act(setRoomRecipe(state, id, null, false));
+			act(await gameAction({ type: "setRoomRecipe", args: [id, null, false] }));
 			break;
 		case "queue-room-module":
-			act(queueModuleProduction(state, id, target.dataset.modelId ?? ""));
+			act(await gameAction({ type: "queueModuleProduction", args: [id, target.dataset.modelId ?? ""] }));
 			break;
 		case "cancel-production": {
-			const summary = advance(state); persist();
+
 			const room = state.shelter.rooms.find((item) => item.id === id), job = room?.queue.find((item) => item.id === target.dataset.jobId);
-			if (!job) { render(); notifyCompleted(summary); toast("Заказ уже завершён."); break; }
+			if (!job) { render();toast("Заказ уже завершён."); break; }
 			document.querySelector("#modal-root")!.innerHTML = `<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="cancel-production-title"><h2 id="cancel-production-title">Отменить производственный заказ?</h2><p>${job.workDone > 0 ? "Работа уже началась: оплаченные материалы и рубли не вернутся." : "Заказ пока не начат. Полная стоимость вернётся, если к моменту отмены он ещё не начнёт работу."} Повторение рецепта выключится; остальные оплаченные заказы останутся.</p><div class="detail-actions"><button class="button danger" data-action="confirm-cancel-production" data-id="${id}" data-job-id="${job.id}">Отменить заказ</button><button class="button ghost" data-action="close-modal">Продолжить работу</button></div></section></div>`;
 			focusModal();
 			break;
 		}
 		case "confirm-cancel-production":
 			closeModal();
-			act(cancelProduction(state, id, target.dataset.jobId ?? ""));
+			act(await gameAction({ type: "cancelProduction", args: [id, target.dataset.jobId ?? ""] }));
 			break;
 		case "open-bench":
 			openWorkbench(id);
@@ -2340,14 +2281,14 @@ document.addEventListener("click", (event) => {
 			break;
 		}
 		case "install-module":
-			act(installModule(state, id, target.dataset.moduleId ?? ""));
+			act(await gameAction({ type: "installModule", args: [id, target.dataset.moduleId ?? ""] }));
 			break;
 		case "remove-module":
-			act(removeModule(state, id, target.dataset.slot as ModuleSlot));
+			act(await gameAction({ type: "removeModule", args: [id, target.dataset.slot as ModuleSlot] }));
 			break;
 		case "assemble-weapon": {
 			const existing = new Set(state.weapons.map((weapon) => weapon.id));
-			const result = assembleWeapon(state, id);
+			const result = await gameAction({ type: "assembleWeapon", args: [id] });
 			if (result.ok) {
 				const built = state.weapons.find((weapon) => !existing.has(weapon.id));
 				if (built) { selectedWeapon = built.id; selectedModuleSlot = RECEIVER_INFO[built.weaponId]!.requiredSlots.find((slot) => !built.modules[slot]) ?? "barrel"; }
@@ -2359,10 +2300,10 @@ document.addEventListener("click", (event) => {
 			break;
 		}
 		case "craft-module":
-			act(queueModuleProduction(state, selectedProductionWorkshop()?.id ?? "", id));
+			act(await gameAction({ type: "queueModuleProduction", args: [selectedProductionWorkshop()?.id ?? "", id] }));
 			break;
 		case "repair-module":
-			act(repairModule(state, id));
+			act(await gameAction({ type: "repairModule", args: [id] }));
 			break;
 		case "disassemble-weapon": {
 			const weapon = state.weapons.find((item) => item.id === id); if (!weapon) break;
@@ -2372,7 +2313,7 @@ document.addEventListener("click", (event) => {
 		}
 		case "confirm-disassemble":
 			closeModal();
-			act(disassembleWeapon(state, id));
+			act(await gameAction({ type: "disassembleWeapon", args: [id] }));
 			break;
 		case "sell-module":
 		case "recycle-module": {
@@ -2385,7 +2326,7 @@ document.addEventListener("click", (event) => {
 		}
 		case "confirm-module-disposal":
 			closeModal();
-			act(target.dataset.kind === "sale" ? sellModule(state, id) : recycleModule(state, id));
+			act(target.dataset.kind === "sale" ? await gameAction({ type: "sellModule", args: [id] }) : await gameAction({ type: "recycleModule", args: [id] }));
 			break;
 		case "review-decisions":
 			closeInspector();
@@ -2405,14 +2346,14 @@ document.addEventListener("click", (event) => {
 		case "continue-expedition": {
 			const perk = selectedPerks.get(id);
 			if (!perk) { toast("Выбери бонус маршрута.", false); break; }
-			act(continueExpedition(state, id, target.dataset.branch as ExpeditionBranch, perk));
+			act(await gameAction({ type: "continueExpedition", args: [id, target.dataset.branch as ExpeditionBranch, perk] }));
 			selectedPerks.delete(id);
 			if (!selectedScav) focusScavOrTool(state.raids.find((raid) => raid.id === id)?.scavId ?? "");
 			break;
 		}
 		case "extract": {
 			const scavId = state.raids.find((raid) => raid.id === id)?.scavId;
-			act(extractRaid(state, id));
+			act(await gameAction({ type: "extractRaid", args: [id] }));
 			selectedPerks.delete(id);
 			if (!selectedScav && scavId) focusScavOrTool(scavId);
 			break;
@@ -2433,13 +2374,13 @@ document.addEventListener("click", (event) => {
 			document.querySelector("#discoveries")?.scrollIntoView({ block: "start", behavior: scrollBehavior() });
 			break;
 		case "craft-gear":
-			act(craftGear(state, id));
+			act(await gameAction({ type: "craftGear", args: [id] }));
 			break;
 		case "repair-gear":
-			act(repairGear(state, id));
+			act(await gameAction({ type: "repairGear", args: [id] }));
 			break;
 		case "buy-supplies":
-			act(buySupplies(state, id));
+			act(await gameAction({ type: "buySupplies", args: [id] }));
 			break;
 		case "recycle-gear":
 		case "recycle-weapon": {
@@ -2454,7 +2395,7 @@ document.addEventListener("click", (event) => {
 		}
 		case "confirm-recycle":
 			closeModal();
-			act(target.dataset.kind === "gear" ? recycleGear(state, id) : recycleWeapon(state, id));
+			act(target.dataset.kind === "gear" ? await gameAction({ type: "recycleGear", args: [id] }) : await gameAction({ type: "recycleWeapon", args: [id] }));
 			break;
 		case "focus-roster":
 			document.querySelector(".scav-grid")?.scrollIntoView({ block: "start", behavior: scrollBehavior() });
@@ -2469,13 +2410,13 @@ document.addEventListener("click", (event) => {
 			setView(showTacticalMap ? "map" : "base");
 			break;
 		case "tactic":
-			act(setRaidTactic(state, id, target.dataset.tacticValue as RaidTactic));
+			act(await gameAction({ type: "setRaidTactic", args: [id, target.dataset.tacticValue as RaidTactic] }));
 			break;
 		case "inspect-weapon":
 			openWorkbench(id);
 			break;
 		case "gear":
-			act(upgradeScavGear(state, id, target.dataset.slot as GearSlot));
+			act(await gameAction({ type: "upgradeScavGear", args: [id, target.dataset.slot as GearSlot] }));
 			break;
 		case "auto-enable":
 		case "auto-route":
@@ -2483,13 +2424,13 @@ document.addEventListener("click", (event) => {
 			break;
 		case "confirm-auto":
 			closeModal();
-			act(setAutoRaid(state, id, target.dataset.route!, Number(target.dataset.minHealth)));
+			act(await gameAction({ type: "setAutoRaid", args: [id, target.dataset.route!, Number(target.dataset.minHealth)] }));
 			break;
 		case "auto-stop":
-			act(setAutoRaid(state, id, null, state.scavs.find((scav) => scav.id === id)?.autoRaid.minHealth ?? 70));
+			act(await gameAction({ type: "setAutoRaid", args: [id, null, state.scavs.find((scav) => scav.id === id)?.autoRaid.minHealth ?? 70] }));
 			break;
 		case "auto-stop-all": {
-			act(stopAllAutoRaids(state));
+			act(await gameAction({ type: "stopAllAutoRaids", args: [] }));
 			break;
 		}
 		case "dismiss-offline":
@@ -2498,14 +2439,14 @@ document.addEventListener("click", (event) => {
 			document.querySelector<HTMLButtonElement>('.command-tools [data-page="journal"]')?.focus({ preventScroll: true });
 			break;
 		case "dispatch-squad": {
-			const result = dispatchSquadRaid(state, [...squadDraft], selectedMap);
+			const result = await gameAction({ type: "dispatchSquadRaid", args: [[...squadDraft], selectedMap] });
 			if (result.ok) squadDraft = [];
 			act(result);
 			if (result.ok && result.raidId) watchRaid(result.raidId);
 			break;
 		}
 		case "dispatch": {
-			const result = dispatchRaid(state, id, selectedMap);
+			const result = await gameAction({ type: "dispatchRaid", args: [id, selectedMap] });
 			act(result);
 			const raid = state.raids.find(item => item.scavId === id);
 			if (result.ok && raid) watchRaid(raid.id);
@@ -2516,29 +2457,29 @@ document.addEventListener("click", (event) => {
 			break;
 		case "recruit-candidate": {
 			const owned = new Set(state.scavs.map(scav => scav.id));
-			const result = hireRecruitCandidate(state, id);
+			const result = await gameAction({ type: "hireRecruitCandidate", args: [id] });
 			act(result);
 			const arrival = result.ok ? state.scavs.find(scav => !owned.has(scav.id)) : null;
 			if (arrival) openInspector(arrival.id);
 			break;
 		}
 		case "recruit-refresh":
-			act(refreshRecruitment(state));
+			act(await gameAction({ type: "refreshRecruitment", args: [] }));
 			break;
 		case "scav-talent":
-			act(chooseScavTalent(state, id, target.dataset.talent ?? ""));
+			act(await gameAction({ type: "chooseScavTalent", args: [id, target.dataset.talent ?? ""] }));
 			break;
 		case "story-choice":
-			act(resolveScavPersonalEvent(state, id, target.dataset.event ?? "", target.dataset.choice ?? ""));
+			act(await gameAction({ type: "resolveScavPersonalEvent", args: [id, target.dataset.event ?? "", target.dataset.choice ?? ""] }));
 			break;
 		case "social-choice":
-			act(resolveSocialEvent(state, target.dataset.event ?? "", target.dataset.choice ?? ""));
+			act(await gameAction({ type: "resolveSocialEvent", args: [target.dataset.event ?? "", target.dataset.choice ?? ""] }));
 			break;
 		case "dismiss-scav":
 			showScavDismissal(id);
 			break;
 		case "confirm-dismiss-scav": {
-			const result = dismissScav(state, id);
+			const result = await gameAction({ type: "dismissScav", args: [id] });
 			closeModal();
 			if (result.ok) { selectedScav = null; page = "recruits"; }
 			act(result);
@@ -2549,13 +2490,13 @@ document.addEventListener("click", (event) => {
 			document.querySelector<HTMLButtonElement>('[data-action="close-tools"]')?.focus({ preventScroll: true });
 			break;
 		case "heal":
-			act(healScav(state, id));
+			act(await gameAction({ type: "healScav", args: [id] }));
 			break;
 		case "upgrade":
-			act(upgradeBase(state, id as BaseRoom));
+			act(await gameAction({ type: "upgradeBase", args: [id as BaseRoom] }));
 			break;
 		case "repair":
-			act(repairWeapon(state, id));
+			act(await gameAction({ type: "repairWeapon", args: [id] }));
 			break;
 		case "sell": {
 			const weapon = state.weapons.find((w) => w.id === id);
@@ -2567,10 +2508,10 @@ document.addEventListener("click", (event) => {
 		}
 		case "confirm-sell":
 			closeModal();
-			act(sellWeapon(state, id));
+			act(await gameAction({ type: "sellWeapon", args: [id] }));
 			break;
 		case "claim":
-			act(claimContract(state, id));
+			act(await gameAction({ type: "claimContract", args: [id] }));
 			break;
 		case "collection":
 			collection = !collection;
@@ -2588,49 +2529,25 @@ document.addEventListener("click", (event) => {
 		case "close-modal":
 			closeModal();
 			break;
-		case "export": {
-			if (ownsSaveLease && !saveConflict && !protectedSave) persist();
-			const url = URL.createObjectURL(
-				new Blob([protectedSave && raw !== null ? raw : saveStore.exportCurrent(state, captureSession())], { type: "application/json" })
-			);
-			const a = document.createElement("a");
-			a.href = url;
-			a.download = "prapor-save.json";
-			a.click();
-			setTimeout(() => URL.revokeObjectURL(url), 1000);
-			toast(protectedSave ? "Исходный файл скачан без изменений." : "Сохранение экспортировано.");
-			break;
-		}
-		case "import":
-			if (!document.querySelector('#save-file')) showSettings();
-			document.querySelector<HTMLInputElement>("#save-file")!.click();
-			break;
-		case "save-now":
-			{ const saved = persist(); toast(saved ? "Сохранены прогресс, текущий экран и приказы." : "Запись не подтверждена. Используй экспорт.", saved); }
-			break;
-		case "reload-save":
-			window.location.reload();
-			break;
-		case "recover-save": {
-			const result = saveStore.saveSync(state, captureSession(), {replaceProtected:true});
-			if (!result.ok) { toast("Не удалось подтвердить восстановление. Исходный файл защищён.",false); break; }
-			protectedSave = false; raw = null; updateSaveBanner(); setOverlayState(); persist();
-			toast("Исправная запись восстановлена.");
-			break;
-		}
+		case 'export':{
+      const url=URL.createObjectURL(new Blob([JSON.stringify(serverSnapshot)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='prapor-server-progress.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);toast('Скачана копия серверного прогресса для просмотра.');break;
+    }
+    case 'save-now':closeModal();if(await refreshServerProgress())toast('Состояние обновлено с сервера.');else toast(connectionMessage,false);break;
+    case 'reconnect-server':await initializeAccount();break;
+
 	}
 });
 document.addEventListener("change", async (event) => {
 	const target = event.target as HTMLInputElement | HTMLSelectElement;
 	storedProgressChanged();
-	if ((!ownsSaveLease || saveConflict || protectedSave) && target.id !== 'save-file') return;
+	if (!serverReady || saveConflict || protectedSave) return;
 	if (target.dataset.raidObjective || target.dataset.raidPreparation) {
 		const scavId = target.dataset.raidObjective ?? target.dataset.raidPreparation!;
 		const scav = state.scavs.find(person => person.id === scavId);
 		if (!scav) return;
 		const plan = getRaidPlan(scav), focusKey = target.dataset.focusKey;
-		act(setRaidPlan(state, scavId, target.dataset.raidObjective ? target.value as RaidObjective : plan.objective,
-			target.dataset.raidPreparation ? target.value as RaidPreparation : plan.preparation));
+		act(await gameAction({type:'setRaidPlan',args:[scavId,target.dataset.raidObjective ? target.value as RaidObjective : plan.objective,
+			target.dataset.raidPreparation ? target.value as RaidPreparation : plan.preparation]}));
 		if (focusKey) document.querySelector<HTMLSelectElement>(`#inspector-root [data-focus-key="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
 		return;
 	}
@@ -2652,7 +2569,7 @@ document.addEventListener("change", async (event) => {
 	if (target.dataset.roomRepeat) {
 		const room = state.shelter.rooms.find((item) => item.id === target.dataset.roomRepeat);
 		roomRepeatPreferences.set(target.dataset.roomRepeat, (target as HTMLInputElement).checked);
-		if (room?.recipeId) act(setRoomRecipe(state, room.id, room.recipeId, (target as HTMLInputElement).checked));
+		if (room?.recipeId) act(await gameAction({ type: "setRoomRecipe", args: [room.id, room.recipeId, (target as HTMLInputElement).checked] }));
 		return;
 	}
 	if (target.hasAttribute("data-room-module-slot")) { roomModuleSlot = target.value as typeof roomModuleSlot; renderCommandBoard(); document.querySelector<HTMLSelectElement>('[data-room-module-slot]')?.focus({ preventScroll: true }); return; }
@@ -2687,59 +2604,21 @@ document.addEventListener("change", async (event) => {
 		selectedWeapon = target.value; if (moduleCraftForWeapon) modulePlatformFilter = "all"; renderModules(); document.querySelector<HTMLSelectElement>('[data-craft-weapon]')?.focus({ preventScroll: true }); return;
 	}
 	if (target.hasAttribute("data-inspector-map")) { selectedMap = target.value; render(); }
-	if (target.dataset.assignWeapon && target.value) act(equipWeapon(state, target.value, target.dataset.assignWeapon));
+	if (target.dataset.assignWeapon && target.value) act(await gameAction({ type: "equipWeapon", args: [target.value, target.dataset.assignWeapon] }));
 	if (target.dataset.equip)
-		act(equipWeapon(state, target.dataset.equip, target.value || null));
-	if (target.dataset.equipGear) act(equipGear(state, target.dataset.equipGear, target.dataset.slot as GearEquipmentSlot, target.value || null));
-	if (target.dataset.assignGear && target.value) act(equipGear(state, target.value, target.dataset.slot as GearEquipmentSlot, target.dataset.assignGear));
-	if (target.dataset.ammoType) act(setLoadoutOption(state, target.dataset.ammoType, "ammoType", target.value));
-	if (target.dataset.medkit) act(setLoadoutOption(state, target.dataset.medkit, "medkit", (target as HTMLInputElement).checked));
-	if (target.dataset.autoDepth) act(setAutoRaidDepth(state, target.dataset.autoDepth, Number(target.value)));
+		act(await gameAction({ type: "equipWeapon", args: [target.dataset.equip, target.value || null] }));
+	if (target.dataset.equipGear) act(await gameAction({ type: "equipGear", args: [target.dataset.equipGear, target.dataset.slot as GearEquipmentSlot, target.value || null] }));
+	if (target.dataset.assignGear && target.value) act(await gameAction({ type: "equipGear", args: [target.value, target.dataset.slot as GearEquipmentSlot, target.dataset.assignGear] }));
+	if (target.dataset.ammoType) act(await gameAction({ type: "setLoadoutOption", args: [target.dataset.ammoType, "ammoType", target.value] }));
+	if (target.dataset.medkit) act(await gameAction({ type: "setLoadoutOption", args: [target.dataset.medkit, "medkit", (target as HTMLInputElement).checked] }));
+	if (target.dataset.autoDepth) act(await gameAction({ type: "setAutoRaidDepth", args: [target.dataset.autoDepth, Number(target.value)] }));
 	if (target.dataset.tactic)
-		act(setRaidTactic(state, target.dataset.tactic, target.value as RaidTactic));
+		act(await gameAction({ type: "setRaidTactic", args: [target.dataset.tactic, target.value as RaidTactic] }));
 	if (target.dataset.autoHealth) {
 		const scav = state.scavs.find((item) => item.id === target.dataset.autoHealth);
-		if (scav) act(setAutoRaid(state, scav.id, scav.autoRaid.enabled ? scav.autoRaid.mapId : null, Number(target.value)));
+		if (scav) act(await gameAction({ type: "setAutoRaid", args: [scav.id, scav.autoRaid.enabled ? scav.autoRaid.mapId : null, Number(target.value)] }));
 	}
-	if (target.id === "save-file") {
-		const file = (target as HTMLInputElement).files?.[0];
-		if (!file) return;
-		if (file.size > MAX_GAME_SAVE_LENGTH) {
-			toast("Файл слишком большой.", false);
-			return;
-		}
-		try {
-			const imported = parseGameSave(await file.text());
-			if (!imported) {
-				toast("Сохранение повреждено или имеет другую версию.", false);
-				return;
-			}
-			const session = readGameSession(imported.session, imported.state);
-			const written = saveStore.saveSync(imported.state,session,{replaceProtected:true});
-			if (!written.ok) {
-				toast("Импорт отменён: браузер не смог записать сохранение.", false);
-				return;
-			}
-			cancelWorkerPlacement();
-			state = imported.state; protectedSave = false; raw = null;
-			closeModal();
-			closeInspector();
-			selectedPerks.clear(); chosenWorkers.clear(); roomRepeatPreferences.clear();
-			toolOrigin = null; commandOrigin = null;
-			offlineSummary = imported.summary.elapsedMs >= 60_000 || imported.summary.completedCount ? imported.summary : null;
-			applySession(session);
-			presentationFallback = session.presentation;
-			render();
-			setView(worldView);
-			world?.selectRaid(selectedRaidId);
-			world?.restorePresentationState(session.presentation);
-			updateSaveBanner(); setOverlayState(); persist();
-			(target as HTMLInputElement).value = '';
-			toast("Сохранение восстановлено.");
-		} catch {
-			toast("Не удалось прочитать сохранение.", false);
-		}
-	}
+
 });
 document.addEventListener("input", (event) => {
 	const input = event.target as HTMLInputElement;
@@ -2766,7 +2645,7 @@ document.addEventListener("input", (event) => {
 	if (caret != null) replacement?.setSelectionRange(caret, caret);
 });
 document.addEventListener("keydown", (event) => {
-	if ((!ownsSaveLease || saveConflict || protectedSave) && !document.querySelector('#modal-root .modal')) return;
+	if ((!serverReady || saveConflict || protectedSave) && !document.querySelector('#modal-root .modal')) return;
 	if ((workerPlacement || crewPointer) && event.key === "Escape") { event.preventDefault(); cancelWorkerPlacement(true, true); return; }
 	if (workerPlacement?.mode === "keyboard" && event.key === "Tab") {
 		const controls = Array.from(document.querySelectorAll<HTMLButtonElement>("#worker-room-targets button, #worker-placement button")).filter((node) => node.getClientRects().length > 0);
@@ -2831,7 +2710,25 @@ function watchRaid(id: string) {
 	document.querySelector<HTMLElement>(".command-main")?.scrollTo({ top: 0, behavior: "instant" });
 	worldViewport.focus({preventScroll:true});
 }
-function setView(view: "base" | "map" | "raid") {
+function setView(view: "base" | "map" | "raid" | "live") {
+	if (view === "live") {
+		if (!liveMode) return;
+		cancelWorkerPlacement(false, true); world?.cancelCameraGesture(); closeInspector(); closeModal();
+		page = "home"; contextMode = "overview"; selectedShelterSite = null;
+		worldViewport.hidden = true;
+		document.querySelector('.world-card')?.classList.add('live-view');
+		document.querySelector('.command-main')?.classList.add('live-watching');
+		document.querySelector('.world-card')?.classList.remove('raid-view');
+		document.querySelector('.command-main')?.classList.remove('raid-watching');
+		liveMode.show();
+		document.querySelectorAll<HTMLButtonElement>("[data-view]").forEach(button => { button.classList.toggle("active", button.dataset.view === "live"); button.setAttribute("aria-pressed", String(button.dataset.view === "live")); });
+		render(); updateCameraControls(); updateSaveBanner();
+		return;
+	}
+	if (liveMode?.isActive()) liveMode.hide();
+	worldViewport.hidden = false;
+	document.querySelector('.world-card')?.classList.remove('live-view');
+	document.querySelector('.command-main')?.classList.remove('live-watching');
 	updateSceneHover(null);
 	if (view === "raid") {
 		const target = state.raids.find(raid => raid.id === selectedRaidId) ?? (lastWatchedRaid?.id === selectedRaidId ? null : state.raids[0]);
@@ -2852,6 +2749,7 @@ function setView(view: "base" | "map" | "raid") {
 	(document.querySelector(".room-shortcuts") as HTMLElement).hidden = view === "map";
 	updateCameraControls();
 	if (world) renderCommandBoard();
+	updateSaveBanner(); setOverlayState();
 }
 render();
 world = createWorld(
@@ -2903,19 +2801,13 @@ const readyContracts = () =>
 const rosterStatus = () => `${state.scavs.map((scav) => `${scav.id}:${scav.status}:${scav.autoRaid.enabled}:${scav.assignment}:${scav.story.pending?.eventId}:${scav.story.bond}:${scav.story.stress}`).join(";")}|${state.raids.map((raid) => `${raid.id}:${raid.expedition?.stage}:${raid.expedition?.status}`).join(";")}|${getSocialPresentationKey(state)}`;
 const shelterStatus = () => `${state.shelter.sites.map((p) => `${p.column}:${p.row}`).join(";")}|${state.shelter.expansions.map((p) => `${p.column}:${p.row}:${Math.floor(p.workDone / p.workRequired * 100)}`).join(";")}|` + state.shelter.rooms.map((room) => `${room.id}:${room.status}:${room.level}:${room.queue.map((job) => job.id).join(",")}:${room.workerIds.join(",")}:${room.recipeId}:${room.repeat}:${room.pending}:${room.cycles}`).join(";");
 const achievementPresentationKey = () => getAchievementViews(state).map(view => `${view.id}:${view.unlocked}:${view.active}:${view.steps.map(step => Number(step.done)).join('')}`).join('|');
+const inventoryPresentationKey = () => JSON.stringify({ weapons:state.weapons, modules:state.modules, gear:state.gearItems, scavs:state.scavs.map(({health, ...scav})=>({...scav, healthy:health>=25})), recruitment:state.recruitment });
 function interacting() {
 	return Boolean(workerPlacement || crewPointer) || (document.activeElement?.tagName === "SELECT" && !document.activeElement.hasAttribute("data-live-raid-select")) || document.activeElement?.tagName === "INPUT" || Boolean(document.querySelector("#modal-root .modal"));
 }
 function refreshAfterAdvance() {
 	if (interacting()) deferredRender = true;
 	else render();
-}
-function notifyCompleted(summary: AdvanceSummary) {
-	if (summary.completedCount > 1) toast(`Завершено выходов: ${n(summary.completedCount)}. Добыча в арсенале, подробности в журнале.`);
-	else if (summary.completedCount === 1) {
-		const report = summary.completed[0];
-		if (report) toast(`${report.scavName}: ${report.description}`, report.success);
-	}
 }
 let feedbackCursor = createGameFeedbackCursor(state, initialSession.view === "raid" ? initialSession.raidId : null);
 const resourcePulseTimers = new Map<HTMLElement, ReturnType<typeof setTimeout>>();
@@ -2937,48 +2829,9 @@ function updateGameFeedback(quiet = false) {
 		if (feedback.events.some((event) => event.cue === "complete" || event.cue === "return")) pulseResourceGains(feedback.gains);
 	}
 }
-const simulationTimer = setInterval(() => {
-	if (document.hidden || accountChanging || !ownsSaveLease || protectedSave || storedProgressChanged()) return;
-	const beforeLevel = state.level,
-		beforeStatus = rosterStatus(),
-		beforeShelter = shelterStatus(),
-		beforeAchievements = page === 'achievements' ? achievementPresentationKey() : '',
-		beforeContracts = readyContracts();
-	const summary = advance(state);
-	updateGameFeedback();
-	hud();
-	if (worldView === "raid") { const raid = watchedRaid(); if (raid) updateLiveRaidPanel(document.querySelector<HTMLElement>('#command-dock')!, raid, watchedReport(), state); }
-	if (
-		summary.completedCount ||
-		state.level !== beforeLevel ||
-		rosterStatus() !== beforeStatus ||
-		shelterStatus() !== beforeShelter ||
-		(page === 'achievements' && achievementPresentationKey() !== beforeAchievements) ||
-		readyContracts() !== beforeContracts
-	) {
-		refreshAfterAdvance();
-		notifyCompleted(summary);
-	}
-	if (deferredRender && !interacting()) render();
-	persist();
-}, 1000);
-document.addEventListener("visibilitychange", () => {
-	if (document.hidden) { cancelWorkerPlacement(false, true); world?.cancelCameraGesture(); persist(); }
-	else if (!accountChanging && ownsSaveLease && !protectedSave && !storedProgressChanged()) {
-		const summary = advance(state);
-		updateGameFeedback(true);
-		if (summary.elapsedMs >= 60_000 || summary.completedCount) offlineSummary = summary;
-		refreshAfterAdvance();
-		persist();
-	}
-});
-window.addEventListener("pagehide", flushAndReleaseSave);
-window.addEventListener("beforeunload", persist);
-window.addEventListener('pageshow', event => { if (event.persisted) requestSaveOwnership(); });
-window.addEventListener('storage', event => {
-	const keyFor = (key: string) => playerAccount ? accountKey(playerAccount, key) : key;
-	if (event.key === null || event.key === keyFor(SAVE_KEY) || event.key === keyFor(PREVIOUS_SAVE_KEY)) storedProgressChanged();
-});
+const simulationTimer=setInterval(()=>{if(!document.hidden&&!accountChanging&&serverReady&&!gameCommandPending)void refreshServerProgress();if(deferredRender&&!interacting())render();},1000);
+document.addEventListener('visibilitychange',()=>{if(document.hidden){cancelWorkerPlacement(false,true);world?.cancelCameraGesture();persist();}else if(!accountChanging&&serverReady)void refreshServerProgress();});
+window.addEventListener('pagehide',flushAndReleaseSave);window.addEventListener('beforeunload',persist);window.addEventListener('pageshow',event=>{if(event.persisted)void refreshServerProgress();});
 for (const type of ['click','change','input','toggle','pointerup']) document.addEventListener(type, scheduleSessionSave);
 let contextIsMobile = window.innerWidth <= 850;
 const responsiveContext = () => {
@@ -2991,9 +2844,10 @@ const responsiveContext = () => {
 };
 window.addEventListener("resize", responsiveContext);
 import.meta.hot?.dispose(() => {
+	liveMode?.destroy();
 	dismissAchievementNotice();
 	window.removeEventListener('hashchange', captureAccountEmailLink);
-	clearInterval(cloudTimer); cloudSync?.disconnect(); accountUI.destroy(); accountRoot.remove();
+	authoritative?.destroy();accountUI.destroy();accountRoot.remove();
 	cancelWorkerPlacement();
 	gameSound.destroy();
 	document.removeEventListener("pointerdown", resumeSoundOnGesture, true);
@@ -3020,12 +2874,6 @@ import.meta.hot?.dispose(() => {
 	document.removeEventListener("keydown", handleCameraKey);
 	worldViewport.removeEventListener("pointerdown", focusWorldViewport);
 });
-if (protectedSave) {
-	toast(
-		"Исходный прогресс не перезаписан. Скачай его в настройках и импортируй корректный файл.",
-		false
-	);
-}
 setView(worldView);
 world?.selectRaid(selectedRaidId);
 world?.restorePresentationState(initialSession.presentation);
@@ -3044,40 +2892,24 @@ const accountUI = mountAccountUI({
 		else if (!user && signedInUser) revokeAccountSession();
 	},
 	onDialogChange: open => { accountDialogOpen = open; setOverlayState(); },
-	onBeforeLogout: async () => {
-		if (accountChanging || !ownsSaveLease || saveConflict) { accountUI.setStatus('Дождись подключения записи или обнови игру перед выходом.', 'warning'); return false; }
-		if (protectedSave) return true;
-		if (!persist()) { accountUI.setStatus('Не удалось подтвердить локальную запись. Экспортируй прогресс в настройках перед выходом.', 'warning'); return false; }
-		if (cloudSync?.isConnected()) await cloudSync.flush();
-		return true;
-	},
-	onLogout: () => {
-		accountGeneration++;
-		cloudSync?.disconnect(); signedInUser = null;
-		const guestStore = createPlayerSaveStore(null), guest = guestStore.open();
-		activatePlayerSave(null, guestStore, { state: guest.state ?? createGame(), session: guest.session, summary: guest.summary, protectedRaw: guest.protectedRaw });
-		accountUI.setStatus('Ты вышел. Убежище аккаунта сохранено отдельно; открыта гостевая игра.');
-	},
-	onReconnect: async () => { if (signedInUser) await connectAccount(signedInUser, playerAccount?.id === signedInUser.id ? 'session' : 'login'); },
-	onSync: async () => { if (signedInUser) await connectAccount(signedInUser, playerAccount?.id === signedInUser.id ? 'session' : 'login'); },
+  onBeforeLogout:async()=>!gameCommandPending&&!accountChanging,
+  onLogout:async()=>{accountGeneration++;signedInUser=null;playerAccount=null;liveMode?.resetIdentity();await loadServerProgress();accountUI.setStatus('Аккаунт отключён. Подключён гостевой серверный прогресс.');},
+  onReconnect:async()=>{await loadServerProgress();},onSync:async()=>{await refreshServerProgress();},
+});
+liveMode = createLiveMode({
+	world: document.querySelector<HTMLElement>('#live-world')!,
+	dock: document.querySelector<HTMLElement>('#command-dock')!,
+	getAccountId: () => signedInUser?.id ?? null,
+	onExit: () => setView("base"),
+	onAccount: () => document.querySelector<HTMLButtonElement>('.account-launcher')?.click(),
+	onError: message => toast(message, false),
 });
 document.querySelector('.settings')!.before(accountRoot.querySelector('.account-launcher')!);
-cloudSync = createCloudSaveSync({
-	readLocal: () => playerAccount && !protectedSave && !saveConflict && ownsSaveLease ? { save: saveStore.exportCurrent(state, captureSession()), revision: saveStore.getMetadata().revision } : null,
-	upload: async (revision, save) => {
-		if (!playerAccount) throw new AccountApiError(401, 'account_changed');
-		const result = await accountApi.putSave(playerAccount.id, revision, save);
-		if (result.savedAt === null) throw new AccountApiError(0, 'invalid_response');
-		return { revision: result.revision, savedAt: result.savedAt };
-	},
-	writeBaseline: baseline => {
-		if (!playerAccount) return;
-		try { localStorage.setItem(accountKey(playerAccount, 'cloud'), JSON.stringify(baseline)); } catch { /* Missing baseline prompts a choice on the next connection. */ }
-	},
-	onStatus: showCloudStatus,
-});
-const cloudTimer = setInterval(() => { if (!document.hidden && !accountChanging && cloudSync?.isConnected()) void cloudSync.flush(); }, 15_000);
+authoritative=createAuthoritativeClient({getAccountId:()=>signedInUser?.id??null,onSnapshot:applyServerSnapshot,onStatus:status=>{
+  connectionMessage=status.message;
+  if(status.phase==='changed') {serverReady=false; if(!accountChanging) queueMicrotask(()=>void initializeAccount());}
+  updateSaveBanner();setOverlayState();
+}});
 window.addEventListener('hashchange', captureAccountEmailLink);
-window.addEventListener('online', () => { if (!accountChanging && cloudSync?.isConnected()) void cloudSync.flush(); });
-requestSaveOwnership();
-if (!navigator.locks) showPendingAccountEmailLink();
+window.addEventListener('online',()=>{if(!accountChanging){if(serverReady)void refreshServerProgress();else void initializeAccount();}});
+startServerSession();
