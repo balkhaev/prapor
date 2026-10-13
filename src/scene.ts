@@ -307,6 +307,7 @@ export function createWorld(
 		private viewState: WorldSnapshot | null = null;
 		private terrain!: Phaser.GameObjects.Graphics;
 		private exteriorProps: Phaser.GameObjects.Image[] = [];
+		private perimeterFences: Phaser.GameObjects.Graphics[] = [];
 		private layoutSignature = "";
 		private worldBounds: ShelterRect = { x: 0, y: 0, width: WIDTH, height: HEIGHT };
 		private pendingPresentation: unknown = null;
@@ -895,25 +896,32 @@ export function createWorld(
 				line(g, [segment.from, segment.to].map(projectShelterPoint), 0xbbb696, .5, .32);
 			}
 			const has = (column: number, row: number) => sites.some((p) => p.column === column && p.row === row);
+			for (const fence of this.perimeterFences) fence.destroy(); this.perimeterFences = [];
 			for (const site of sites) {
 				const p = cellPosition(site.column, site.row);
-				const edge = (a: Point, b: Point) => {
+				const edge = (a: Point, b: Point, rear = false) => {
 					const aa = projectShelterPoint(a), bb = projectShelterPoint(b), height = 16;
-					polygon(g, [aa, bb, { x: bb.x, y: bb.y - height }, { x: aa.x, y: aa.y - height }], 0x9baa85, .13);
-					for (const lift of [2, height]) line(g, [{ x: aa.x, y: aa.y - lift }, { x: bb.x, y: bb.y - lift }], 0xb0b696, 1.2, .8);
+					const room = getShelterRoomAt(shelter, site.column, site.row);
+					const rect = room ? roomRect(room) : null;
+					const groundDepth = (aa.y + bb.y) / 2;
+					const depth = rear && rect ? Math.min(groundDepth, projectShelterPoint({ x: rect.x + rect.width / 2, y: rect.y + 18 }).y - 20.1) : groundDepth;
+					const fence = this.add.graphics().setDepth(depth);
+					this.baseLayer.add(fence); this.perimeterFences.push(fence);
+					polygon(fence, [aa, bb, { x: bb.x, y: bb.y - height }, { x: aa.x, y: aa.y - height }], 0x9baa85, .13);
+					for (const lift of [2, height]) line(fence, [{ x: aa.x, y: aa.y - lift }, { x: bb.x, y: bb.y - lift }], 0xb0b696, 1.2, .8);
 					for (let step = 0; step <= 1; step += .125) {
 						const at = { x: aa.x + (bb.x - aa.x) * step, y: aa.y + (bb.y - aa.y) * step };
-						line(g, [{ x: at.x, y: at.y - 1 }, { x: at.x, y: at.y - height + 2 }], 0x7f916e, .6, .8);
+						line(fence, [{ x: at.x, y: at.y - 1 }, { x: at.x, y: at.y - height + 2 }], 0x7f916e, .6, .8);
 					}
 				};
-				if (!has(site.column - 1, site.row)) edge({ x: p.x - 10, y: p.y - 16 }, { x: p.x - 10, y: p.y + 116 });
+				if (!has(site.column - 1, site.row)) edge({ x: p.x - 10, y: p.y - 16 }, { x: p.x - 10, y: p.y + 116 }, true);
 				if (!has(site.column + 1, site.row)) edge({ x: p.x + 182, y: p.y - 16 }, { x: p.x + 182, y: p.y + 116 });
 				if (!has(site.column, site.row + 1)) edge({ x: p.x - 10, y: p.y + 116 }, { x: p.x + 182, y: p.y + 116 });
 				if (!has(site.column, site.row - 1)) {
 					if (site.row === 0 && site.column === 1) {
-						edge({ x: p.x - 10, y: p.y - 16 }, { x: p.x + 56, y: p.y - 16 });
-						edge({ x: p.x + 116, y: p.y - 16 }, { x: p.x + 182, y: p.y - 16 });
-					} else edge({ x: p.x - 10, y: p.y - 16 }, { x: p.x + 182, y: p.y - 16 });
+						edge({ x: p.x - 10, y: p.y - 16 }, { x: p.x + 56, y: p.y - 16 }, true);
+						edge({ x: p.x + 116, y: p.y - 16 }, { x: p.x + 182, y: p.y - 16 }, true);
+					} else edge({ x: p.x - 10, y: p.y - 16 }, { x: p.x + 182, y: p.y - 16 }, true);
 				}
 			}
 			for (const prop of this.exteriorProps) prop.destroy(); this.exteriorProps = [];
@@ -1020,7 +1028,7 @@ export function createWorld(
 			const front = projectShelterPoint({ x: rect.x + rect.width / 2, y: rect.y + rect.height - 7 });
 			cell.label.setPosition(at.x, at.y - 23); cell.status.setPosition(front.x, front.y - 4);
 			cell.productLabel.setPosition(at.x, at.y - 39); cell.feedback.setPosition(front.x, front.y - 23);
-			cell.lamp.setPosition(at.x, at.y + 5); cell.root.setDepth(at.y - 20);
+			cell.lamp.setPosition(at.x, at.y + 5); cell.root.setDepth(cell.room ? at.y - 20 : -999_999_999);
 		}
 
 		private clickFeedback(at: Point, layer: Phaser.GameObjects.Container): void {
