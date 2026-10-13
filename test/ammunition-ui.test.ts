@@ -3,7 +3,7 @@ import { WEAPONS } from "../src/game/data";
 import { type GameState, type WeaponInstance, advance, dispatchSquadRaid, getWeaponStats, setLoadoutOption } from "../src/game/engine";
 import { FACTORY_KITS, RECEIVER_INFO } from "../src/game/modules";
 import { AMMO_TYPES, getAmmoEffect, getAmmoModel } from "../src/game/ammunition";
-import { ammunitionCaliberLabel, ammunitionOptions, ammunitionPanel, ammunitionSnapshot, ammunitionThreat } from "../src/ammunition-ui";
+import { ammunitionCaliberLabel, ammunitionCards, ammunitionOptions, ammunitionPanel, ammunitionSnapshot, ammunitionThreat } from "../src/ammunition-ui";
 import { weaponBonusLabel } from "../src/weapon-mechanics-ui";
 import { squadRaidComposer, squadRaidDecision, squadRaidSummary } from "../src/squad-raid-ui";
 import { fundedSquadFixture, SQUAD_FIXTURE_NOW } from "./squad-raid-fixtures";
@@ -27,11 +27,11 @@ function mixedAmmoCheckpoint(): GameState {
 }
 
 describe("ammunition presentation", () => {
-	test("offers exactly four compatible cartridges for every platform and retains the chosen type", () => {
+	test("offers exactly eight compatible cartridges for every platform and retains the chosen type", () => {
 		for (const definition of WEAPONS) {
 			const weapon = factory(definition.id);
 			const html = ammunitionOptions(weapon, "precision");
-			expect(html.match(/<option/g)).toHaveLength(4);
+			expect(html.match(/<option/g)).toHaveLength(8);
 			expect(html.match(/ selected/g)).toHaveLength(1);
 			expect(html).toContain('value="precision" selected');
 			for (const type of AMMO_TYPES) expect(html).toContain(getAmmoModel(weapon, type).label);
@@ -78,17 +78,48 @@ describe("ammunition presentation", () => {
 		expect(html).toContain("для второго этапа; глубже чаще встречаются цели в броне");
 	});
 
-	test("compares the four real rounds under the same selected sector and tactic without mutation", () => {
+	test("compares the eight real rounds under the same selected sector and tactic without mutation", () => {
 		const weapon = factory("saiga"), before = JSON.stringify(weapon);
 		const html = ammunitionPanel(weapon, "expanding", "reserve", "bold", { compare: true });
-		expect(html).toContain("Сравнить 4 типа · только 12 калибр");
-		expect(html.match(/<tr class=/g)).toHaveLength(4);
+		expect(html).toContain("Сравнить 8 типов · только 12 калибр");
+		expect(html.match(/<tr class=/g)).toHaveLength(8);
 		expect(html.match(/aria-current="true"/g)).toHaveLength(1);
 		for (const type of AMMO_TYPES) {
 			const effect = getAmmoEffect(weapon, type, "reserve", "scavenge", 1, "bold");
 			expect(html).toContain(`<td>${number(effect.model.damage)}</td><td>${number(effect.model.penetration)}</td><td>${number(effect.effectiveDamage)}</td><td>${weaponBonusLabel(effect.bonus)}</td><td>×${effect.model.ammoMultiplier.toFixed(2)}</td>`);
 		}
 		expect(JSON.stringify(weapon)).toBe(before);
+	});
+
+	test("all platforms show eight selectable packs from their own caliber with real stats and no inventory grants", () => {
+		for (const definition of WEAPONS) {
+			const weapon = factory(definition.id), before = JSON.stringify(weapon);
+			const html = ammunitionCards(weapon, "highpressure", { selectScavId: 'scav-"1' });
+			expect(html.match(/<button /g)).toHaveLength(8);
+			expect(html.match(/aria-pressed="true"/g)).toHaveLength(1);
+			expect(html).toContain('data-ammo-pick="highpressure"');
+			expect(html).toContain('data-ammo-scav="scav-&quot;1"');
+			for (const type of AMMO_TYPES) {
+				const model = getAmmoModel(weapon, type);
+				expect(html).toContain(`data-ammo-art="${model.id}"`);
+				expect(html).toContain(`пачка ${model.packRounds}`);
+				expect(html).toContain(`<b>${model.packCode}</b>`);
+				expect(html).toContain(`Урон <b>${number(model.damage)}</b> · пробитие <b>${number(model.penetration)}</b>`);
+				expect(html).toContain(`Припасы ×${model.ammoMultiplier.toFixed(2)} · износ ×${model.wearMultiplier.toFixed(2)}`);
+			}
+			expect(html).not.toContain("На складе");
+			expect(html).not.toContain("Купить");
+			expect(JSON.stringify(weapon)).toBe(before);
+		}
+	});
+
+	test("pack count stays descriptive while the actual dispatch amount comes from the quote", () => {
+		const weapon = factory("pm"), html = ammunitionPanel(weapon, "surplus", "depot", "cautious", { chargedAmmo: 9 });
+		expect(html).toContain('data-ammo-art="ammo-9x18-surplus" role="img"');
+		expect(html).toContain("На изображении пачка 50 патронов.");
+		expect(html).toContain("На входе потребуется <strong>9 патр.</strong> из общего запаса.");
+		expect(html).toContain("Маршруты и действие патрона");
+		expect(html).not.toContain('<details class="ammunition-route-details" open');
 	});
 
 	test("incomplete weapons retain raw cartridge stats and advertise no active bonuses", () => {
@@ -104,6 +135,8 @@ describe("ammunition presentation", () => {
 		const model = getAmmoModel(factory("pm"), "piercing");
 		const html = ammunitionSnapshot(model.id);
 		expect(html).toContain(model.label);
+		expect(html).toContain(`data-ammo-art="${model.id}"`);
+		expect(html).toContain("/art/ammo/ammo-9x18.png");
 		expect(html).toContain("Выбран перед выходом");
 		expect(html).toContain("после возвращения");
 		expect(html).not.toContain("п.п.");

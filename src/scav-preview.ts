@@ -80,6 +80,7 @@ function fittingReason(model: ModuleModel, weapon: WeaponInstance | null): strin
 
 function renderInspection(weapon: WeaponInstance | null): void {
 	const scroll = { left: closeup.scrollLeft, top: closeup.scrollTop };
+	const ammoDetails = { compare: inspectionAmmunition.querySelector<HTMLDetailsElement>(".ammunition-comparison")?.open ?? false, routes: inspectionAmmunition.querySelector<HTMLDetailsElement>(".ammunition-route-details")?.open ?? false };
 	const focusedSlot = buildParts.contains(document.activeElement) ? (document.activeElement as HTMLButtonElement)?.dataset.inspectSlot : undefined;
 	closeup.innerHTML = weapon ? `<div class="inspection-canvas">${weaponBuildArt(weapon, highlightInspection ? inspectedSlot : undefined)}</div>` : '<div class="inspection-canvas"><p class="library-help">Выбери основу оружия, чтобы рассмотреть сборку.</p></div>';
 	closeup.style.setProperty("--inspection-width", `${inspectionZoom * 100}%`);
@@ -103,6 +104,9 @@ function renderInspection(weapon: WeaponInstance | null): void {
 	inspectionStats.innerHTML = weaponStatSummary(weapon).map(([label, value]) => `<span>${label}<strong>${value}</strong></span>`).join("");
 	inspectionMechanics.innerHTML = weaponMechanicsPanel(weapon, inspectionMap.value, inspectionTactic.value as RaidTactic);
 	inspectionAmmunition.innerHTML = ammunitionPanel(weapon, selectedAmmo, inspectionMap.value, inspectionTactic.value as RaidTactic, { compare: true });
+	const ammoComparison = inspectionAmmunition.querySelector<HTMLDetailsElement>(".ammunition-comparison"), ammoRoutes = inspectionAmmunition.querySelector<HTMLDetailsElement>(".ammunition-route-details");
+	if (ammoComparison) ammoComparison.open = ammoDetails.compare;
+	if (ammoRoutes) ammoRoutes.open = ammoDetails.routes;
 	buildParts.innerHTML = MODULE_DISPLAY_SLOTS.map((slot) => {
 		const modelId = weapon.modules[slot]?.modelId, model = modelId ? MODULE_BY_ID[modelId] : undefined;
 		return `<li><button type="button" data-inspect-slot="${slot}" class="${model ? "" : "empty-part"}" aria-pressed="${slot === inspectedSlot}"><small>${MODULE_SLOT_LABELS[slot]}</small><strong>${escape(model?.label ?? (info.requiredSlots.includes(slot) ? "Нужна для сборки" : "Не установлено"))}</strong></button></li>`;
@@ -136,6 +140,14 @@ for (const input of [inspectionMap, inspectionTactic]) input.addEventListener("c
 inspectionAmmo.addEventListener("change", () => {
 	if (AMMO_TYPES.includes(inspectionAmmo.value as AmmoType)) selectedAmmo = inspectionAmmo.value as AmmoType;
 	renderInspection(selectedWeapon());
+});
+inspectionAmmunition.addEventListener("click", (event) => {
+	const button = (event.target as Element | null)?.closest<HTMLButtonElement>("[data-ammo-pick]");
+	const type = button?.dataset.ammoPick as AmmoType | undefined;
+	if (!type || !AMMO_TYPES.includes(type) || !selectedWeapon()) return;
+	selectedAmmo = type;
+	renderInspection(selectedWeapon());
+	inspectionAmmunition.querySelector<HTMLButtonElement>(`[data-ammo-pick="${type}"]`)?.focus({ preventScroll: true });
 });
 function inspectSlot(slot: string | undefined): void {
 	if (!slot || !MODULE_SLOTS.includes(slot as ModuleSlot)) return;

@@ -10,15 +10,15 @@ const tactics = Object.keys(TACTICS) as RaidTactic[];
 const weapon = (weaponId: string) => ({ weaponId });
 
 describe("calibre-specific ammunition and armour interaction", () => {
-	test("each of the nine receiver calibres has four real, distinct ammunition models", () => {
+	test("each of the nine receiver calibres has eight real, distinct ammunition models", () => {
 		const calibers = [...new Set(Object.values(RECEIVER_INFO).map((info) => info.caliber))];
 		expect(calibers).toHaveLength(9);
-		expect(AMMO_MODELS).toHaveLength(36);
-		expect(new Set(AMMO_MODELS.map((model) => model.id)).size).toBe(36);
+		expect(AMMO_MODELS).toHaveLength(72);
+		expect(new Set(AMMO_MODELS.map((model) => model.id)).size).toBe(72);
 		for (const caliber of calibers) {
 			const models = AMMO_MODELS.filter((model) => model.caliber === caliber);
 			expect(models.map((model) => model.type)).toEqual([...AMMO_TYPES]);
-			expect(new Set(models.map((model) => `${model.damage}:${model.penetration}`)).size).toBe(4);
+			expect(new Set(models.map((model) => `${model.damage}:${model.penetration}`)).size).toBe(8);
 			for (const model of models) {
 				expect(AMMO_BY_ID[model.id]).toBe(model);
 				expect(model.label.length).toBeGreaterThan(6);
@@ -27,8 +27,8 @@ describe("calibre-specific ammunition and armour interaction", () => {
 				expect(model.penetration).toBeGreaterThanOrEqual(0);
 				expect(model.armorDamage).toBeGreaterThanOrEqual(0);
 				expect(model.armorDamage).toBeLessThanOrEqual(1);
-				expect(model.ammoMultiplier).toBeGreaterThanOrEqual(1);
-				expect(model.wearMultiplier).toBeGreaterThanOrEqual(1);
+				expect(model.ammoMultiplier).toBeGreaterThanOrEqual(.75);
+				expect(model.wearMultiplier).toBeGreaterThanOrEqual(.96);
 			}
 		}
 	});
@@ -84,7 +84,7 @@ describe("calibre-specific ammunition and armour interaction", () => {
 		expect(getAmmoSupplyMultiplier("expanding")).toBe(1.15);
 		expect(getAmmoSupplyMultiplier("precision")).toBe(1.2);
 		for (const model of AMMO_MODELS) expect(getAmmoSupplyMultiplier(model.type)).toBe(model.ammoMultiplier);
-		for (const invalid of ["tracer", "constructor", "__proto__", undefined, null]) expect(() => getAmmoSupplyMultiplier(invalid as AmmoType)).toThrow();
+		for (const invalid of ["incendiary", "constructor", "__proto__", undefined, null]) expect(() => getAmmoSupplyMultiplier(invalid as AmmoType)).toThrow();
 	});
 
 	test("sector intelligence exposes actual armour class and the share of protected targets", () => {
@@ -160,7 +160,7 @@ describe("calibre-specific ammunition and armour interaction", () => {
 		}
 	});
 
-	test("all 10,368 weapon, sector, route, depth and tactic cases stay finite and bounded", () => {
+	test("all 20,736 weapon, sector, route, depth and tactic cases stay finite and bounded", () => {
 		let combinations = 0;
 		for (const definition of WEAPONS) for (const map of MAPS) for (const branch of branches) for (const stage of [1, 2, 3]) for (const tactic of tactics) for (const type of AMMO_TYPES) {
 			const effect = getAmmoEffect(weapon(definition.id), type, map.id, branch, stage, tactic);
@@ -174,11 +174,11 @@ describe("calibre-specific ammunition and armour interaction", () => {
 			expect(effect.injuryMultiplier).toBeLessThanOrEqual(1.2);
 			combinations += 1;
 		}
-		expect(combinations).toBe(10_368);
+		expect(combinations).toBe(20_736);
 	});
 
 	test("forged weapons, ammo and sector IDs are rejected rather than silently falling back", () => {
-		for (const invalid of [null, undefined, "tracer", "constructor", "__proto__", {}, 1]) expect(isAmmoType(invalid)).toBe(false);
+		for (const invalid of [null, undefined, "incendiary", "constructor", "__proto__", {}, 1]) expect(isAmmoType(invalid)).toBe(false);
 		for (const type of AMMO_TYPES) expect(isAmmoType(type)).toBe(true);
 		for (const id of ["ak", "constructor", "__proto__", "ammo-9x18-piercing"]) expect(() => getAmmoModel(weapon(id), "standard")).toThrow();
 		expect(() => getAmmoModel(weapon("ak74"), "ammo-9x18-piercing" as AmmoType)).toThrow();
