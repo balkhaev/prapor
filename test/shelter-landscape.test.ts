@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { getShelterLandscape } from "../src/shelter-landscape";
-import { getShelterCorridorSegments, getShelterRoomDoor, getShelterTerritoryCell, getShelterWorldBounds, type ShelterLayoutBuilding } from "../src/shelter-layout";
-import { projectShelterPoint, shelterRoomPosition, shelterRoomRect } from "../src/shelter-isometric";
+import { getShelterBuildingRect, getShelterCorridorSegments, getShelterRoomDoor, getShelterTerritoryCell, getShelterWorldBounds, type ShelterLayoutBuilding } from "../src/shelter-layout";
+import { projectShelterPoint, shelterRoomPosition } from "../src/shelter-isometric";
 import type { ShelterPoint } from "../src/shelter-motion";
 
 const sites = Array.from({ length: 3 }, (_, row) => Array.from({ length: 4 }, (_, column) => ({ column, row }))).flat();
 const buildings: ShelterLayoutBuilding[] = Array.from({ length: 4 }, (_, column) => ({ column, row: 0, width: 1, height: 1 }));
 function overlaps(point: ShelterPoint, radius: number, building: ShelterLayoutBuilding): boolean {
-	const rect = shelterRoomRect(building.column, building.row, building.width, building.height);
+	const rect = getShelterBuildingRect(building);
 	return point.x + radius > rect.x && point.x - radius < rect.x + rect.width && point.y + radius > rect.y && point.y - radius < rect.y + rect.height;
 }
 
@@ -73,5 +73,22 @@ describe("surface base landscaping", () => {
 			expect(at.y - 55).toBeGreaterThan(bounds.y);
 			expect(at.y + 10).toBeLessThan(bounds.y + bounds.height);
 		}
+	});
+
+	test("continuous dragging reculls props and redraws paths to fractional south doors", () => {
+		const first: ShelterLayoutBuilding = { column: 1, row: 1, width: 1, height: 1, position: { x: 307.75, y: 346.4 } };
+		const moved: ShelterLayoutBuilding = { ...first, position: { x: 487.3, y: 379.15 } };
+		const initial = getShelterLandscape(sites, [first]), plan = getShelterLandscape(sites, [moved]), door = getShelterRoomDoor(moved);
+		expect(plan.decorations).not.toEqual(initial.decorations);
+		expect(plan.paths).not.toEqual(initial.paths);
+		expect(plan.paths.some(({ from, to }) => [from, to].some((p) => p.x === door.x && p.y === door.y))).toBe(true);
+		expect(plan.decorations.filter((d) => d.kind !== "gate").every((d) => !overlaps(d.point, d.radius + 12, moved))).toBe(true);
+	});
+
+	test("a freely placed rotated hangar clears scenery across its actual full footprint", () => {
+		const hangar: ShelterLayoutBuilding = { column: 1, row: 0, width: 2, height: 3, position: { x: 306.2, y: 141.8 } };
+		const plan = getShelterLandscape(sites, [hangar]), door = getShelterRoomDoor(hangar);
+		expect(plan.decorations.filter((d) => d.kind !== "gate").every((d) => !overlaps(d.point, d.radius + 12, hangar))).toBe(true);
+		expect(plan.paths.some(({ from, to }) => [from, to].some((p) => p.x === door.x && p.y === door.y))).toBe(true);
 	});
 });
