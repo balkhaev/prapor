@@ -3,7 +3,7 @@ import { projectShelterPoint, shelterRoomPolygon, shelterRoomPosition } from "..
 import {
 	getShelterCorridorPoint, getShelterCorridorSegments, getShelterLayoutCell,
 	getShelterRoomDoor, getShelterWalkingRoute, getShelterWorldBounds, type ShelterLayoutSite,
-	getShelterBuildingRect, getShelterBuildingPosition, getShelterOpenGroundPoints, isShelterPointInTerritory, type ShelterLayoutBuilding,
+	getShelterBuildingRect, getShelterBuildingPosition, getShelterOpenGroundPoints, getShelterRoomEntranceDirection, isShelterPointInTerritory, type ShelterLayoutBuilding,
 } from "../src/shelter-layout";
 import { advanceShelterRoute, type ShelterPoint } from "../src/shelter-motion";
 
@@ -144,6 +144,52 @@ function expectFreeGroundRoute(from: ShelterPoint, route: readonly ShelterPoint[
 }
 
 describe("continuous building navigation", () => {
+	test("four quarter turns rotate physical dimensions, entrances and approach direction", () => {
+		const base: ShelterLayoutBuilding = { column: 1, row: 1, width: 3, height: 2, position: { x: 311.25, y: 300.75 } };
+		const expected = [
+			{ width: 556, height: 232, door: { x: 589.25, y: 532.75 }, normal: { x: 0, y: 1 } },
+			{ width: 232, height: 556, door: { x: 311.25, y: 578.75 }, normal: { x: -1, y: 0 } },
+			{ width: 556, height: 232, door: { x: 589.25, y: 300.75 }, normal: { x: 0, y: -1 } },
+			{ width: 232, height: 556, door: { x: 543.25, y: 578.75 }, normal: { x: 1, y: 0 } },
+		];
+		for (const facing of [0, 1, 2, 3] as const) {
+			const building = { ...base, facing }, value = expected[facing]!;
+			expect(getShelterBuildingRect(building)).toEqual({ x: 311.25, y: 300.75, width: value.width, height: value.height });
+			expect(getShelterRoomDoor(building)).toEqual(value.door);
+			expect(getShelterRoomEntranceDirection(building)).toEqual(value.normal);
+			expect(getShelterCorridorPoint(building)).toEqual({ x: value.door.x + value.normal.x * 16, y: value.door.y + value.normal.y * 16 });
+		}
+		expect(base).toEqual({ column: 1, row: 1, width: 3, height: 2, position: { x: 311.25, y: 300.75 } });
+	});
+
+	test("workers leave and enter every oriented doorway through its outward approach", () => {
+		for (const facing of [0, 1, 2, 3] as const) {
+			const room: ShelterLayoutBuilding = { column: 1, row: 1, width: 1, height: 1, position: { x: 311.25, y: 288.75 }, facing };
+			const rect = getShelterBuildingRect(room), centre = { x: rect.x + rect.width * .3, y: rect.y + rect.height * .4 }, gate = { x: 318, y: 132 };
+			const door = getShelterRoomDoor(room), outside = getShelterCorridorPoint(room), outward = getShelterWalkingRoute(centre, gate, ownedYard, [room]);
+			const index = outward.findIndex((point) => point.x === door.x && point.y === door.y);
+			expect(index).toBeGreaterThanOrEqual(0);
+			expect(outward[index + 1]).toEqual(outside);
+			expect(outward.at(-1)).toEqual(gate);
+			expectFreeGroundRoute(door, outward.slice(index + 1), ownedYard, [room]);
+			const inward = getShelterWalkingRoute(gate, centre, ownedYard, [room]), entrance = inward.findIndex((point) => point.x === door.x && point.y === door.y);
+			expect(inward[entrance - 1]).toEqual(outside);
+			expect(inward.at(-1)).toEqual(centre);
+			expectFreeGroundRoute(gate, inward.slice(0, entrance + 1), ownedYard, [room]);
+		}
+	});
+
+	test("explicit facing switches legacy-origin rooms to ground navigation and boundary doors remain usable", () => {
+		const room: ShelterLayoutBuilding = { column: 1, row: 1, width: 1, height: 1, facing: 1 };
+		const door = getShelterRoomDoor(room), route = getShelterWalkingRoute({ x: 250, y: 350 }, { x: 318, y: 132 }, ownedYard, [room]);
+		expect(route).toContainEqual(door);
+		expect(route).toContainEqual(getShelterCorridorPoint(room));
+		const northEdge: ShelterLayoutBuilding = { ...room, facing: 2, position: { x: 232, y: 132 } };
+		const arrival = getShelterWalkingRoute({ x: 318, y: 132 }, { x: 300, y: 200 }, ownedYard, [northEdge]);
+		expect(arrival.length).toBeGreaterThan(0);
+		expect(arrival.at(-1)).toEqual({ x: 300, y: 200 });
+	});
+
 	test("fractional room positions retain their actual south doors and route around moved obstacles", () => {
 		const rooms: ShelterLayoutBuilding[] = [
 			{ column: 0, row: 0, width: 1, height: 1, position: { x: 73.25, y: 158.75 } },

@@ -56,13 +56,13 @@ describe("intact raid loot as shelter materials", () => {
 			valid(state);
 		}
 	});
-	test("new material recipes cannot be configured in released v22 saves before any order has been paid", () => {
-		for (const { id } of newRecipes.filter(recipe => recipe.releasedIn === 23)) {
+	test("new material recipes cannot be configured in released v23 saves before any order has been paid", () => {
+		for (const { id } of newRecipes.filter(recipe => recipe.releasedIn === 24)) {
 			const { state, room } = prepareProduction(id); room.recipeId = id; room.pending = true;
-			valid(state); state.schemaVersion = 22; expect(parseSave(saveGame(state))).toBeNull();
-			state.schemaVersion = 23; const items = add(state, RESOURCE_RECIPES.find(recipe => recipe.id === id)!.lootRequirements);
+			valid(state); state.schemaVersion = 23; expect(parseSave(saveGame(state))).toBeNull();
+			state.schemaVersion = 24; const items = add(state, RESOURCE_RECIPES.find(recipe => recipe.id === id)!.lootRequirements);
 			expect(setRoomRecipe(state, room.id, id, false, state.lastUpdated).ok).toBe(true); expect(room.queue[0]!.paidLoot).toEqual(items); valid(state);
-			state.schemaVersion = 22; expect(parseSave(saveGame(state))).toBeNull();
+			state.schemaVersion = 23; expect(parseSave(saveGame(state))).toBeNull();
 		}
 	});
 	test("worker, cash reserves, capacity and targets block before any trophy is consumed", () => {

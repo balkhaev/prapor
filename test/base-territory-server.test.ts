@@ -46,8 +46,12 @@ describe("authoritative base placement commands", () => {
 		for (const command of [
 			{ type: "placeRoom", args: ["room-workshop", 89.375, 301.625] },
 			{ type: "placeRoom", args: ["room-workshop", 89.375, 301.625, 0] },
+			{ type: "placeRoom", args: ["room-workshop", 89.375, 301.625, 0, 3] },
 			{ type: "constructRoom", args: ["ammo", 270.125, 290.75] },
+			{ type: "constructRoom", args: ["ammo", 270.125, 290.75, 0, 1] },
 			{ type: "constructRoom", args: ["hangar", -152.5, 290.75, 1] },
+			{ type: "faceRoom", args: ["room-workshop", 0] },
+			{ type: "faceRoom", args: ["room-workshop", 3] },
 		] satisfies GameCommand[]) expect(readGameCommand(command)).toEqual(command);
 		const { service } = setup(), client = await connect(service), before = structuredClone(client.snapshot);
 		for (const command of [
@@ -57,8 +61,18 @@ describe("authoritative base placement commands", () => {
 			{ type: "placeRoom", args: ["room-workshop", 89.375, -1] },
 			{ type: "placeRoom", args: ["room-workshop", 89.375, 301.625, NOW] },
 			{ type: "placeRoom", args: ["room-workshop", 89.375, 301.625, 0, NOW] },
+			{ type: "placeRoom", args: ["room-workshop", 89.375, 301.625, 0, 4] },
+			{ type: "placeRoom", args: ["room-workshop", 89.375, 301.625, 0, 1, NOW] },
 			{ type: "placeRoom", args: ["room-workshop", 89.375, 301.625, null] },
 			{ type: "constructRoom", args: ["ammo", 270.125, 290.75, .5] },
+			{ type: "constructRoom", args: ["ammo", 270.125, 290.75, 0, -1] },
+			{ type: "constructRoom", args: ["ammo", 270.125, 290.75, 0, .5] },
+			{ type: "faceRoom", args: ["room-workshop", -1] },
+			{ type: "faceRoom", args: ["room-workshop", 4] },
+			{ type: "faceRoom", args: ["room-workshop", .5] },
+			{ type: "faceRoom", args: ["room-workshop", "1"] },
+			{ type: "faceRoom", args: ["room-workshop", 1, NOW] },
+			{ type: "faceRoom", args: ["room-workshop"] },
 			{ type: "constructRoom", args: ["forged", 270.125, 290.75] },
 			{ type: "constructRoom", args: ["ammo", 270.125, 290.75], footprint: { width: 1, height: 1 } },
 		]) {
@@ -83,16 +97,18 @@ describe("authoritative base placement commands", () => {
 		expect((await action(first.service, client, { type: "queueModuleProduction", args: ["room-workshop", "factory-sks-stock"] })).result.ok).toBe(true);
 		first.setTime(NOW + 1000);
 		const original = structuredClone(client.snapshot.state), jobId = original.shelter.rooms[0]!.queue[0]!.id;
-		const moved = await action(first.service, client, { type: "placeRoom", args: ["room-workshop", 89.375, 301.625] });
+		const moved = await action(first.service, client, { type: "placeRoom", args: ["room-workshop", 89.375, 301.625, 0, 0] });
 		expect(moved.result.ok).toBe(true); const workshop = moved.state.shelter.rooms[0]!;
+		expect(workshop.facing).toBe(0);
 		expect(getRoomPosition(workshop)).toEqual({ x: 89.375, y: 301.625 });
 		expect(workshop.workerIds).toEqual([workerId]); expect(workshop.queue[0]!.id).toBe(jobId);
 		expect(workshop.queue[0]!.workDone).toBeGreaterThan(0);
 		expect(moved.state.money).toBe(original.money); expect(moved.state.supplies).toEqual(original.supplies);
-		const quote = getFreeBuildRoomQuote(moved.state, "ammo", 270.125, 290.75), physical = moved.state.lootItems!.filter(item => quote.lootItemIds.includes(item.id));
-		expect((await action(first.service, client, { type: "constructRoom", args: ["ammo", 270.125, 290.75] })).result.ok).toBe(true);
+		const quote = getFreeBuildRoomQuote(moved.state, "ammo", 270.125, 290.75, 0, 2), physical = moved.state.lootItems!.filter(item => quote.lootItemIds.includes(item.id));
+		expect((await action(first.service, client, { type: "constructRoom", args: ["ammo", 270.125, 290.75, 0, 2] })).result.ok).toBe(true);
 		const ammo = getShelterRoomAtPoint(client.snapshot.state.shelter, 280, 350)!;
 		expect(getRoomPosition(ammo)).toEqual({ x: 270.125, y: 290.75 });
+		expect(ammo.facing).toBe(2);
 		expect(ammo.construction!.paidLoot).toEqual(physical); expect(physical.length).toBeGreaterThan(0);
 		expect(client.snapshot.state.lootItems!.some(item => quote.lootItemIds.includes(item.id))).toBe(false);
 		expect(client.snapshot.state.money).toBe(moved.state.money - quote.money); expect(client.snapshot.state.supplies.scrap).toBe(moved.state.supplies.scrap - quote.scrap);
@@ -106,6 +122,12 @@ describe("authoritative base placement commands", () => {
 			{ type: "constructRoom", args: ["ammo", 700.25, 300] },
 		] satisfies GameCommand[]) expect((await action(first.service, client, command)).result.ok).toBe(false);
 		expect(client.snapshot.state).toEqual(before);
+		const preTurn = structuredClone(client.snapshot.state);
+		expect((await action(first.service, client, { type: "faceRoom", args: ["room-workshop", 3] })).result.ok).toBe(true);
+		expect(client.snapshot.state.shelter.rooms[0]!.facing).toBe(3);
+		expect(client.snapshot.state.shelter.rooms[0]!.queue).toEqual(preTurn.shelter.rooms[0]!.queue);
+		expect(client.snapshot.state.money).toBe(preTurn.money); expect(client.snapshot.state.supplies).toEqual(preTurn.supplies);
+		expect(client.snapshot.state.lootItems).toEqual(preTurn.lootItems);
 		const saved = structuredClone(readAuthoritativeSnapshot(client.snapshot));
 		services.splice(services.indexOf(first.service), 1); first.service.close();
 		const second = setup(path); second.setTime(NOW + 1000);
@@ -115,7 +137,9 @@ describe("authoritative base placement commands", () => {
 		expect(settled.state.shelter.rooms[0]!.queue).toHaveLength(0);
 		expect(settled.state.shelter.rooms[0]!.cycles).toBe(1);
 		expect(getRoomPosition(settled.state.shelter.rooms[0]!)).toEqual({ x: 89.375, y: 301.625 });
+		expect(settled.state.shelter.rooms[0]!.facing).toBe(3);
 		expect(getShelterRoomAtPoint(settled.state.shelter, 280, 350)!.status).toBe("ready");
+		expect(getShelterRoomAtPoint(settled.state.shelter, 280, 350)!.facing).toBe(2);
 		expect(await poll(second.service, rejoined)).toEqual(settled);
 	});
 

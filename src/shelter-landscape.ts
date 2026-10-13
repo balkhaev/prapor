@@ -1,6 +1,6 @@
 import type Phaser from "phaser";
 import type { ShelterRect } from "./shelter-camera";
-import { getShelterBuildingRect, getShelterCorridorSegments, getShelterOpenGroundPoints, getShelterRoomDoor, getShelterTerritoryCell, getShelterWalkingRoute, type ShelterCorridorSegment, type ShelterLayoutBuilding, type ShelterLayoutSite } from "./shelter-layout";
+import { getShelterBuildingRect, getShelterCorridorSegments, getShelterOpenGroundPoints, getShelterRoomDoor, getShelterRoomEntranceDirection, getShelterTerritoryCell, getShelterWalkingRoute, type ShelterCorridorSegment, type ShelterLayoutBuilding, type ShelterLayoutSite } from "./shelter-layout";
 import { projectShelterPoint, shelterRoomPosition, SHELTER_COLUMN_STRIDE, SHELTER_ROW_STRIDE } from "./shelter-isometric";
 import type { ShelterPoint } from "./shelter-motion";
 
@@ -12,11 +12,13 @@ export interface ShelterLandscapeDecoration {
 	radius: number;
 	owned: boolean;
 }
+export interface ShelterLandscapeApron { points: ShelterPoint[]; seed: number }
 export interface ShelterLandscape {
 	sites: ShelterLayoutSite[];
 	lots: ShelterRect[];
 	perimeter: ShelterLandscapeEdge[];
 	paths: ShelterCorridorSegment[];
+	aprons: ShelterLandscapeApron[];
 	decorations: ShelterLandscapeDecoration[];
 }
 const ENTRANCE = { x: 318, y: 132 };
@@ -82,7 +84,7 @@ function perimeterFor(sites: readonly ShelterLayoutSite[], owned: ReadonlySet<st
 function pathsFor(sites: readonly ShelterLayoutSite[], buildings: readonly ShelterLayoutBuilding[]): ShelterCorridorSegment[] {
 	const destinations = buildings.map(getShelterRoomDoor);
 	const free = sites.filter((site) => !buildings.some((building) => intersects(shelterRoomPosition(site.column, site.row), 1, getShelterBuildingRect(building))));
-	if (buildings.some((building) => building.position)) {
+	if (buildings.some((building) => building.position || building.facing !== undefined)) {
 		const clearings = getShelterOpenGroundPoints(sites, buildings);
 		for (const point of [clearings[0], clearings[Math.floor(clearings.length * .7)]]) if (point) destinations.push(point);
 	} else for (const site of [free[0], free[Math.floor(free.length * .7)]]) if (site) {
@@ -102,14 +104,29 @@ function pathsFor(sites: readonly ShelterLayoutSite[], buildings: readonly Shelt
 	return [...paths.values()];
 }
 
+/** A compact gravel threshold sits outside the chosen entrance, never under a neighbour. */
+function apronsFor(buildings: readonly ShelterLayoutBuilding[], owned: ReadonlySet<string>): ShelterLandscapeApron[] {
+	const result: ShelterLandscapeApron[] = [], rects = buildings.map(getShelterBuildingRect);
+	for (const building of buildings) {
+		const door = getShelterRoomDoor(building), normal = getShelterRoomEntranceDirection(building), tangent = { x: normal.y, y: -normal.x };
+		for (const depth of [18, 8, 4]) {
+			const points = [-1, 1].flatMap((side) => [0, depth].map((distance) => ({ x: door.x + tangent.x * side * 11 + normal.x * distance, y: door.y + tangent.y * side * 11 + normal.y * distance })));
+			const safe = points.every((point) => ownedAt({ x: point.x + normal.x * .01, y: point.y + normal.y * .01 }, owned)
+				&& !rects.some((rect) => point.x > rect.x + .001 && point.x < rect.x + rect.width - .001 && point.y > rect.y + .001 && point.y < rect.y + rect.height - .001));
+			if (safe) { result.push({ points: [points[0]!, points[2]!, points[3]!, points[1]!], seed: hash(Math.round(door.x), Math.round(door.y), building.facing ?? 0) }); break; }
+		}
+	}
+	return result;
+}
+
 /** Decorative objects are regenerated from coordinates when buildings move or land expands. */
 export function getShelterLandscape(inputSites: readonly ShelterLayoutSite[], buildings: readonly ShelterLayoutBuilding[] = [], reservedSites: readonly ShelterLayoutSite[] = []): ShelterLandscape {
 	const sites = [...new Map(inputSites.filter((site) => Number.isSafeInteger(site.column) && Number.isSafeInteger(site.row)).map((site) => [key(site), { ...site }])).values()].sort((a, b) => a.row - b.row || a.column - b.column);
 	const owned = new Set(sites.map(key)), lots = sites.map((site) => { const p = shelterRoomPosition(site.column, site.row); return { x: p.x - 10, y: p.y - 16, width: SHELTER_COLUMN_STRIDE, height: SHELTER_ROW_STRIDE }; });
-	const perimeter = perimeterFor(sites, owned), paths = pathsFor(sites, buildings), decorations: ShelterLandscapeDecoration[] = [];
+	const perimeter = perimeterFor(sites, owned), paths = pathsFor(sites, buildings), aprons = apronsFor(buildings, owned), decorations: ShelterLandscapeDecoration[] = [];
 	const rects = buildings.map(getShelterBuildingRect);
 	const reserved = reservedSites.map((site) => { const p = shelterRoomPosition(site.column, site.row); return { x: p.x - 10, y: p.y - 16, width: SHELTER_COLUMN_STRIDE, height: SHELTER_ROW_STRIDE }; });
-	const freePlacement = buildings.some((building) => building.position);
+	const freePlacement = buildings.some((building) => building.position || building.facing !== undefined);
 	const corridors = freePlacement ? [] : getShelterCorridorSegments(sites, buildings);
 	const clearings = freePlacement ? getShelterOpenGroundPoints(sites, buildings) : sites.map((site) => { const p = shelterRoomPosition(site.column, site.row); return { x: p.x + 83, y: p.y + 80 }; });
 	const canPlace = (point: ShelterPoint, radius: number, inside: boolean) => {
@@ -152,7 +169,7 @@ export function getShelterLandscape(inputSites: readonly ShelterLayoutSite[], bu
 		add(seed % 2 ? "bush" : "tree", { x: p.x + 123 + seed % 23, y: p.y + 73 }, 17, false, seed + 1);
 		add("rock", { x: p.x + 101, y: p.y + 31 }, 9, false, seed + 2);
 	}
-	return { sites, lots, perimeter, paths, decorations };
+	return { sites, lots, perimeter, paths, aprons, decorations };
 }
 
 class LandscapePainter {
@@ -187,12 +204,27 @@ export function paintShelterLandscape(g: Phaser.GameObjects.Graphics, landscape:
 			a.line([at, { x: at.x + 3 + r() * 4, y: at.y - 2 }], i % 3 ? 0x9da174 : 0x46654a, .6, .34);
 		}
 	}
+	// Compressed gravel and exposed earth at entrances make circulation read as use of the yard.
+	for (const apron of landscape.aprons) {
+		a.face(apron.points, 0x514f40, .35);
+		const centre = { x: apron.points.reduce((sum, point) => sum + point.x, 0) / 4, y: apron.points.reduce((sum, point) => sum + point.y, 0) / 4 };
+		const inset = apron.points.map((point) => ({ x: centre.x + (point.x - centre.x) * .9, y: centre.y + (point.y - centre.y) * .9 }));
+		a.face(inset, 0xa7a18a, .85);
+		a.line([inset[0]!, inset[1]!], 0xd0c5a5, .8, .5);
+		const r = random(apron.seed);
+		for (let i = 0; i < 19; i++) {
+			const u = r(), v = r(), p0 = inset[0]!, p1 = inset[1]!, p3 = inset[3]!;
+			const point = { x: p0.x + (p1.x - p0.x) * u + (p3.x - p0.x) * v, y: p0.y + (p1.y - p0.y) * u + (p3.y - p0.y) * v }, at = a.point(point);
+			g.fillStyle(i % 3 ? 0xd8ccb0 : 0x656752, .55).fillEllipse(at.x, at.y, .9 + r(), .6);
+		}
+	}
 	for (const edge of landscape.perimeter) {
 		a.line([edge.from, edge.to], 0x243e31, 8, .38);
 		a.line([edge.from, edge.to], 0xc0bc8c, 1.5, .22);
 	}
 	for (const path of landscape.paths) {
 		// An uneven worn shoulder and a warm gravel centre follow the actual walking route.
+		a.line([path.from, path.to], 0x384d36, 17, .13);
 		a.line([path.from, path.to], C.soil, 12, .4);
 		a.line([path.from, path.to], 0xa18f70, 7.5, .75);
 		a.line([path.from, path.to], C.gravel, 3.8, .3);
@@ -201,6 +233,12 @@ export function paintShelterLandscape(g: Phaser.GameObjects.Graphics, landscape:
 		for (let step = 5; step < length; step += 12) {
 			const t = step / length, at = a.point({ x: path.from.x + (path.to.x - path.from.x) * t + r() * 5 - 2.5, y: path.from.y + (path.to.y - path.from.y) * t + r() * 5 - 2.5 });
 			g.fillStyle(step % 3 ? 0xd1c4a2 : 0x726c53, .32).fillEllipse(at.x, at.y, 1.4, .7);
+		}
+		// Short broken ruts avoid an artificial, uniformly stroked path.
+		const normal = length ? { x: -(path.to.y - path.from.y) / length, y: (path.to.x - path.from.x) / length } : { x: 0, y: 0 };
+		for (let step = 13; step < length - 5; step += 29) {
+			const start = step / length, end = Math.min(length, step + 7 + r() * 10) / length, side = r() < .5 ? -1 : 1;
+			a.line([start, end].map((t) => ({ x: path.from.x + (path.to.x - path.from.x) * t + normal.x * side * 2.2, y: path.from.y + (path.to.y - path.from.y) * t + normal.y * side * 2.2 })), 0x615f47, .8, .27);
 		}
 	}
 	if (landscape.lots.length) {

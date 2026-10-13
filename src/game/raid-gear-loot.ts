@@ -8,8 +8,8 @@ const gates: Record<string, { depth: number; level: number }> = {
 	assault_armor: { depth: 2, level: 3 }, tactical_helmet: { depth: 2, level: 3 }, expedition_pack: { depth: 2, level: 3 },
 	plate_armor: { depth: 2, level: 5 }, heavy_armor: { depth: 3, level: 7 }, visor_helmet: { depth: 3, level: 7 }, frame_pack: { depth: 3, level: 7 },
 };
-export function getRaidGearLootPool(mapId: string, branch: ExpeditionBranch, depth: number, catalogVersion = 23): { model: GearModel; weight: number }[] {
-	if (catalogVersion < 23 || !Object.hasOwn(MAP_BY_ID, mapId) || !["scavenge", "combat", "recon"].includes(branch) || !Number.isInteger(depth) || depth < 1 || depth > 3) return [];
+export function getRaidGearLootPool(mapId: string, branch: ExpeditionBranch, depth: number, catalogVersion = 24): { model: GearModel; weight: number }[] {
+	if (catalogVersion < 24 || !Object.hasOwn(MAP_BY_ID, mapId) || !["scavenge", "combat", "recon"].includes(branch) || !Number.isInteger(depth) || depth < 1 || depth > 3) return [];
 	const level = MAP_BY_ID[mapId]!.level;
 	return GEAR_MODELS.filter(model => gates[model.id]!.depth <= depth && gates[model.id]!.level <= level).map(model => ({ model,
 		weight: (model.money <= 145 ? 7 : model.money <= 295 ? 4 : model.money <= 440 ? 2 : .65)
@@ -18,7 +18,7 @@ export function getRaidGearLootPool(mapId: string, branch: ExpeditionBranch, dep
 	}));
 }
 /** Independent random stream: one worn, usable physical item at most per checkpoint. */
-export function rollRaidGearLoot(mapId: string, branch: ExpeditionBranch, depth: number, random: () => number, catalogVersion = 23): { model: GearModel; durability: number }[] {
+export function rollRaidGearLoot(mapId: string, branch: ExpeditionBranch, depth: number, random: () => number, catalogVersion = 24): { model: GearModel; durability: number }[] {
 	const pool = getRaidGearLootPool(mapId, branch, depth, catalogVersion); if (!pool.length) return [];
 	if (random() >= .2 + (depth - 1) * .075 + (branch === "combat" ? .08 : 0)) return [];
 	let value = random() * pool.reduce((sum, entry) => sum + entry.weight, 0);

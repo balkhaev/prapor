@@ -18,7 +18,7 @@ export function getLiveLootFamilyOdds(table?: LiveContainerAnchor['lootTable']):
 export function getLiveModuleLootPool(mapId: string, depth: number): { model: ModuleModel; weight: number }[] {
   if (!Object.hasOwn(MAP_BY_ID, mapId) || !Number.isInteger(depth) || depth < 1 || depth > 3) return [];
   const map = MAP_BY_ID[mapId]!, weapons = map.weapons.filter(id => Object.hasOwn(RECEIVER_INFO, id));
-  return MODULE_MODELS.filter(model => moduleAvailableInSave(model.id, 23) && model.lootTier <= depth + (depth === 3 && map.level >= 7 ? 1 : 0)
+  return MODULE_MODELS.filter(model => moduleAvailableInSave(model.id, 24) && model.lootTier <= depth + (depth === 3 && map.level >= 7 ? 1 : 0)
     && (model.slot === 'receiver' ? weapons.includes(model.weaponId!) : weapons.some(weaponId => {
       const receiver = RECEIVER_INFO[weaponId]!;
       return (model.platforms.includes('*') || model.platforms.includes(receiver.platform))

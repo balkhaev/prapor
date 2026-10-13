@@ -1,12 +1,13 @@
 import type Phaser from "phaser";
 import type { ModuleSlot } from "./game/modules";
-import { ROOM_DEFINITIONS, getRoomFootprint, getRoomPosition, type RoomInstance } from "./game/shelter";
-import { projectShelterPoint, shelterRoomPosition, shelterRoomRect } from "./shelter-isometric";
+import { ROOM_DEFINITIONS, getRoomLocalPoint, getRoomLocalSize, type RoomInstance } from "./game/shelter";
+import { projectShelterPoint } from "./shelter-isometric";
 import type { ProductionPresentation } from "./shelter-production";
 
 type Point = { x: number; y: number };
 type Vertex = readonly [number, number, number?];
 type Material = readonly [number, number, number];
+type WallSide = "north" | "east" | "south" | "west";
 const C = {
 	ink: 0x26302b, seam: 0x4b5145, concrete: 0x929482, floor: 0x8c795a,
 	steel: 0xa2aba0, pale: 0xe2d9bc, amber: 0xf2c27d, cyan: 0x9cc8be,
@@ -42,18 +43,21 @@ function buildingFinish(type: RoomInstance["type"]): BuildingFinish {
 
 /** Equipment remains upright: the affine projection applies only to the floor. */
 class RoomPainter {
-	private readonly origin: Point;
 	readonly width: number;
 	readonly height: number;
-	constructor(readonly g: Phaser.GameObjects.Graphics, column: number, row: number, width = 1, height = 1, position?: Point) {
-		this.origin = position ?? shelterRoomPosition(column, row);
-		const rect = shelterRoomRect(column, row, width, height);
-		this.width = rect.width; this.height = rect.height;
+	constructor(readonly g: Phaser.GameObjects.Graphics, readonly room: RoomInstance) {
+		const size = getRoomLocalSize(room);
+		this.width = size.width; this.height = size.height;
 	}
 	p(x: number, y: number, z = 0): Point {
-		const point = projectShelterPoint({ x: this.origin.x + x, y: this.origin.y + y });
+		const point = projectShelterPoint(getRoomLocalPoint(this.room, x, y));
 		return { x: point.x, y: point.y - z };
 	}
+	worldSide(side: WallSide): WallSide {
+		const sides: WallSide[] = ["north", "east", "south", "west"];
+		return sides[(sides.indexOf(side) + (this.room.facing ?? 0)) % 4]!;
+	}
+	farWall(side: WallSide): boolean { const world = this.worldSide(side); return world === "north" || world === "west"; }
 	face(vertices: readonly Vertex[], color: number, alpha = 1, outline = C.ink): void {
 		const points = vertices.map(([x, y, z = 0]) => this.p(x, y, z));
 		this.g.fillStyle(color, alpha).fillPoints(points, true);
@@ -71,8 +75,18 @@ class RoomPainter {
 		this.face([[x, y, z], [x + w, y, z], [x + w, y + d, z], [x, y + d, z]], color, alpha);
 	}
 	box(x: number, y: number, w: number, d: number, h: number, material: Material = OLIVE, z = 0): void {
-		this.face([[x + w, y, z], [x + w, y + d, z], [x + w, y + d, z + h], [x + w, y, z + h]], material[2]);
-		this.face([[x, y + d, z], [x + w, y + d, z], [x + w, y + d, z + h], [x, y + d, z + h]], material[1]);
+		// The camera keeps its light direction when a building turns. Only the two
+		// world-facing sides are visible; equipment must never look inside-out.
+		const faces: [WallSide, Vertex[]][] = [
+			["north", [[x, y, z], [x + w, y, z], [x + w, y, z + h], [x, y, z + h]]],
+			["east", [[x + w, y, z], [x + w, y + d, z], [x + w, y + d, z + h], [x + w, y, z + h]]],
+			["south", [[x, y + d, z], [x + w, y + d, z], [x + w, y + d, z + h], [x, y + d, z + h]]],
+			["west", [[x, y, z], [x, y + d, z], [x, y + d, z + h], [x, y, z + h]]],
+		];
+		for (const [side, vertices] of faces) {
+			const world = this.worldSide(side);
+			if (world === "east" || world === "south") this.face(vertices, material[world === "east" ? 2 : 1]);
+		}
 		this.plane(x, y, w, d, z + h, material[0]);
 	}
 	shadow(x: number, y: number, w: number, d: number): void {
@@ -137,51 +151,72 @@ function cabinWindow(a: RoomPainter, x: number, y: number, side: "rear" | "left"
 }
 
 function roof(a: RoomPainter, finish: BuildingFinish): void {
-	const depth = Math.min(20, a.height * .15), ridge = 4;
-	// Only the rear strip is roofed; the cutaway keeps the benches and workers visible.
-	a.face([[-4, -5, 33], [a.width + 4, -5, 33], [a.width + 4, ridge, 41], [-4, ridge, 41]], finish.roof[2]);
-	a.face([[-4, ridge, 41], [a.width + 4, ridge, 41], [a.width + 4, depth, 32], [-4, depth, 32]], finish.roof[0]);
-	for (let x = 1; x < a.width + 3; x += 8) {
-		a.line([x, -5, 33], [x, ridge, 41], finish.roof[0], .65, .65);
-		a.line([x, ridge, 41], [x, depth, 32], finish.roof[2], .75, .7);
+	// The removed roof always faces the camera. Rotating the cabin reveals its
+	// other interior walls instead of placing an opaque roof in front of work.
+	const side = (["north", "east", "south", "west"] as const).find((candidate) => a.worldSide(candidate) === "north")!;
+	const horizontal = side === "north" || side === "south", length = horizontal ? a.width : a.height;
+	const depth = Math.min(20, (horizontal ? a.height : a.width) * .15);
+	const vertex = (along: number, across: number, z: number): Vertex => {
+		if (side === "north") return [along, across, z];
+		if (side === "south") return [a.width - along, a.height - across, z];
+		if (side === "west") return [across, a.height - along, z];
+		return [a.width - across, along, z];
+	};
+	a.face([vertex(-4, -5, 33), vertex(length + 4, -5, 33), vertex(length + 4, 4, 41), vertex(-4, 4, 41)], finish.roof[2]);
+	a.face([vertex(-4, 4, 41), vertex(length + 4, 4, 41), vertex(length + 4, depth, 32), vertex(-4, depth, 32)], finish.roof[0]);
+	for (let along = 1; along < length + 3; along += 8) {
+		a.line(vertex(along, -5, 33), vertex(along, 4, 41), finish.roof[0], .65, .65);
+		a.line(vertex(along, 4, 41), vertex(along, depth, 32), finish.roof[2], .75, .7);
 	}
-	a.line([-4, ridge, 41], [a.width + 4, ridge, 41], 0xc9cbb3, 1.4, .85);
-	a.line([-4, depth, 32], [a.width + 4, depth, 32], 0xd2ceb2, 1.6);
-	// Exposed end grain, gutters and a downpipe make the strip read as a real roof.
-	a.face([[-4, -5, 32], [-4, ridge, 40], [-4, depth, 31]], finish.wall[2]);
-	a.line([a.width + 2, depth, 31], [a.width + 2, depth, 3], 0x6c7d6d, 1.5);
-	a.line([a.width + 2, depth, 3], [a.width - 2, depth + 5, 1], 0x6c7d6d, 1.3);
+	a.line(vertex(-4, 4, 41), vertex(length + 4, 4, 41), 0xc9cbb3, 1.4, .85);
+	a.line(vertex(-4, depth, 32), vertex(length + 4, depth, 32), 0xd2ceb2, 1.6);
+	a.face([vertex(-4, -5, 32), vertex(-4, 4, 40), vertex(-4, depth, 31)], finish.wall[2]);
+	a.line(vertex(length + 2, depth, 31), vertex(length + 2, depth, 3), 0x6c7d6d, 1.5);
+	a.line(vertex(length + 2, depth, 3), vertex(length - 2, depth + 5, 1), 0x6c7d6d, 1.3);
 	if (a.width < 200) {
-		a.box(a.width - 26, -1, 10, 9, 12, STONE, 35);
-		a.box(a.width - 28, -3, 14, 13, 2, STEEL, 47);
-		a.plane(a.width - 24, 1, 6, 5, 49.1, C.ink);
+		const base = vertex(length - 28, 0, 0), end = vertex(length - 16, 10, 0);
+		const x = Math.min(base[0], end[0]), y = Math.min(base[1], end[1]);
+		a.box(x + 2, y + 2, 8, 6, 11, STONE, 35);
+		a.box(x, y, 12, 10, 2, STEEL, 46);
+		a.plane(x + 3, y + 3, 6, 4, 48.1, C.ink);
 	}
 }
 
 function walls(a: RoomPainter, finish: BuildingFinish): void {
-	a.box(0, 0, a.width, 5, 32, finish.wall);
-	a.box(0, 5, 5, a.height - 5, 29, finish.wall);
-	if (finish.timber) {
-		for (const height of [5, 11, 17, 23]) {
-			a.line([5, 5.2, height], [a.width - 2, 5.2, height], 0x735c40, .6, .45);
-			a.line([5.2, 5, height], [5.2, a.height - 3, height], 0x735c40, .6, .45);
+	const entrance = a.width / 2;
+	for (const side of ["north", "west", "east", "south"] as const) {
+		const tall = a.farWall(side), h = tall ? 31 : 5;
+		const horizontal = side === "north" || side === "south";
+		const x = side === "east" ? a.width - 5 : 0, y = side === "south" ? a.height - 5 : 0;
+		const length = horizontal ? a.width : a.height;
+		if (side === "south") {
+			a.box(0, y, entrance - 17, 5, h, finish.wall);
+			a.box(entrance + 17, y, a.width - entrance - 17, 5, h, finish.wall);
+		} else a.box(x, y, horizontal ? a.width : 5, horizontal ? 5 : a.height, h, finish.wall);
+		const inside = (along: number, z: number): Vertex => horizontal
+			? [along, side === "north" ? 5.3 : a.height - 5.3, z]
+			: [side === "west" ? 5.3 : a.width - 5.3, along, z];
+		a.line(inside(6, 3), inside(length - 6, 3), 0xe0cfab, 1.2, .85);
+		if (!tall) continue;
+		a.line(inside(6, 30), inside(length - 6, 30), 0xe0cfab, 1.2);
+		if (finish.timber) {
+			for (const z of [8, 14, 20, 26]) a.line(inside(6, z), inside(length - 6, z), 0x735c40, .6, .45);
+		} else {
+			for (let along = 14; along < length - 7; along += 10) {
+				if (side !== "south" || Math.abs(along - entrance) > 19) a.line(inside(along, 4), inside(along, 28), finish.wall[2], .5, .38);
+			}
 		}
-	} else {
-		for (let x = 14; x < a.width - 7; x += 10) a.line([x, 5.2, 2], [x, 5.2, 30], finish.wall[2], .5, .38);
-		for (let y = 14; y < a.height - 7; y += 10) a.line([5.2, y, 2], [5.2, y, 27], finish.wall[2], .5, .38);
+		const windowAlong = side === "south" ? 25 : Math.max(20, length * .25);
+		const pane = inside(windowAlong, 0);
+		cabinWindow(a, pane[0], pane[1], horizontal ? "rear" : "left", Math.min(28, length * .25));
+		if (horizontal && side !== "south" && length > 150) {
+			const other = inside(length - 60, 0); cabinWindow(a, other[0], other[1], "rear", 27);
+		}
 	}
-	a.box(0, 0, 7, 7, 34, WOOD);
-	a.box(a.width - 7, 0, 7, 7, 34, WOOD);
-	a.box(0, a.height - 7, 7, 7, 30, WOOD);
-	a.line([7, 5.4, 3], [a.width - 7, 5.4, 3], 0xe0cfab, 1.2, .85);
-	a.line([5.4, 7, 3], [5.4, a.height - 7, 3], 0xe0cfab, 1.2, .85);
-	a.line([5.3, 7, 29], [5.3, a.height - 7, 29], 0xe0cfab, 1.4);
-	cabinWindow(a, 25, 5.5, "rear", 28);
-	cabinWindow(a, Math.max(85, a.width - 60), 5.5, "rear", 27);
-	cabinWindow(a, 5.6, a.height * .48, "left", 24);
-	a.box(8, 8, 8, 8, 12, BLACK);
-	a.line([10, 16, 8], [14, 16, 8], finish.accent, 1.2, .8);
-	roof(a, finish);
+	for (const [x, y, vertical, horizontal] of [
+		[0, 0, "west", "north"], [a.width - 7, 0, "east", "north"],
+		[0, a.height - 7, "west", "south"], [a.width - 7, a.height - 7, "east", "south"],
+	] as const) a.box(x, y, 7, 7, a.farWall(vertical) && a.farWall(horizontal) ? 34 : 6, WOOD);
 }
 
 function roomEmblem(a: RoomPainter, type: RoomInstance["type"], x: number, y: number, z: number): void {
@@ -201,17 +236,23 @@ function roomEmblem(a: RoomPainter, type: RoomInstance["type"], x: number, y: nu
 }
 
 function frontDetails(a: RoomPainter, finish: BuildingFinish, type: RoomInstance["type"]): void {
-	const entrance = a.width * .52;
-	// Front walls are opened to the viewer, with a porch and trimmed cut ends.
-	a.box(6, a.height - 5, Math.max(1, entrance - 28), 5, 5, finish.wall);
-	a.box(entrance + 18, a.height - 5, Math.max(1, a.width - entrance - 25), 5, 5, finish.wall);
-	for (const x of [entrance - 25, entrance + 19]) a.box(x, a.height - 6, 5, 6, 12, WOOD);
-	a.box(a.width - 7, a.height - 7, 7, 7, 17, WOOD);
+	const entrance = a.width / 2;
+	// This is an actual doorway rather than a gap in a square outline. The
+	// threshold, hinged leaf and shallow canopy turn with the entrance route.
+	for (const x of [entrance - 19, entrance + 16]) a.box(x, a.height - 5, 3, 5, 28, WOOD);
+	a.box(entrance - 19, a.height - 5, 38, 5, 3, WOOD, 27);
+	a.face([[entrance - 15, a.height - 3, .3], [entrance + 15, a.height - 3, .3], [entrance + 15, a.height - 3, 26], [entrance - 15, a.height - 3, 26]], C.ink, .52);
+	a.face([[entrance - 15, a.height - 3.1, 1], [entrance - 7, a.height - 19, 1], [entrance - 7, a.height - 19, 25], [entrance - 15, a.height - 3.1, 25]], finish.wall[1]);
+	a.line([entrance - 14, a.height - 4, 23], [entrance - 8, a.height - 17, 23], C.pale, .8);
+	a.dot(entrance - 8, a.height - 17, 12, .8, C.amber);
 	a.box(entrance - 21, a.height - 1, 42, 6, 3.2, STONE, -3.2);
-	a.box(entrance - 18, a.height + 5, 36, 5, 2, STONE, -4.6);
+	a.box(entrance - 18, a.height + 5, 36, 4, 2, STONE, -4.6);
 	a.line([entrance - 20, a.height + 5, .1], [entrance + 20, a.height + 5, .1], C.pale, .85, .7);
+	a.face([[entrance - 23, a.height - 5, 31], [entrance + 23, a.height - 5, 31], [entrance + 23, a.height + 7, 27], [entrance - 23, a.height + 7, 27]], finish.roof[0]);
+	a.line([entrance - 23, a.height + 7, 27], [entrance + 23, a.height + 7, 27], C.pale, 1.2);
+	for (const x of [entrance - 20, entrance + 20]) a.line([x, a.height - 2, 20], [x, a.height + 5, 27], C.dark, 1.1);
 	// A mounted enamel emblem is legible even when room labels are hidden.
-	const signX = 35, signY = a.height - 5;
+	const signX = 35, signY = a.height - 1;
 	a.box(signX - 14, signY - 1, 28, 3, 17, WOOD, 7);
 	a.face([[signX - 12, signY + 2.2, 9], [signX + 12, signY + 2.2, 9], [signX + 12, signY + 2.2, 22], [signX - 12, signY + 2.2, 22]], mixColor(finish.accent, C.ink, .45));
 	roomEmblem(a, type, signX, signY + 2.5, 15.5);
@@ -430,11 +471,12 @@ function construction(a: RoomPainter): void {
 /** Draw a small cutaway building in the shared projected world space. */
 export function paintIsometricRoom(g: Phaser.GameObjects.Graphics, column: number, row: number, room: RoomInstance | null): void {
 	if (!room) { paintIsometricLand(g, column, row, true); return; }
-	const footprint = getRoomFootprint(room), a = new RoomPainter(g, column, row, footprint.width, footprint.height, getRoomPosition(room));
+	const a = new RoomPainter(g, room);
 	const finish = buildingFinish(room.type);
 	foundation(a, finish);
 	if (room.status === "building") { construction(a); return; }
 	walls(a, finish);
+	if (a.farWall("south")) frontDetails(a, finish, room.type);
 	switch (room.type) {
 		case "workshop": workshop(a); break;
 		case "ammo": ammo(a); break;
@@ -445,7 +487,8 @@ export function paintIsometricRoom(g: Phaser.GameObjects.Graphics, column: numbe
 		case "dormitory": dormitory(a); break;
 		case "hangar": hangar(a); break;
 	}
-	frontDetails(a, finish, room.type);
+	roof(a, finish);
+	if (!a.farWall("south")) frontDetails(a, finish, room.type);
 	if (room.status === "upgrading") construction(a);
 }
 
@@ -493,9 +536,9 @@ function productionIndicator(a: RoomPainter, p: ProductionPresentation, time: nu
 }
 
 /** Visual progress comes from the engine; a paused station has no moving parts. */
-export function paintIsometricProduction(g: Phaser.GameObjects.Graphics, column: number, row: number, room: RoomInstance, presentation: ProductionPresentation | null, time: number, reducedMotion: boolean): void {
+export function paintIsometricProduction(g: Phaser.GameObjects.Graphics, _column: number, _row: number, room: RoomInstance, presentation: ProductionPresentation | null, time: number, reducedMotion: boolean): void {
 	if (room.status !== "ready" || !presentation?.jobId) return;
-	const footprint = getRoomFootprint(room), a = new RoomPainter(g, column, row, footprint.width, footprint.height, getRoomPosition(room)), p = presentation;
+	const a = new RoomPainter(g, room), p = presentation;
 	const animate = p.active && !reducedMotion;
 	const clock = reducedMotion ? 0 : Math.max(0, time);
 	switch (room.type) {

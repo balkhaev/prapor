@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { advance, claimLootDelivery, continueExpedition, createGame, dispatchRaid, equipGear, extractRaid, getCargoValue, getCargoWeight, getLoadoutStats, getLootCapacity, getRaidGearLootPool, getRaidGearValue, parseSave, recycleGear, rollRaidGearLoot, saveGame, sellLootItem, setLoadoutOption, type GameState } from "../src/game/engine";
+import { advance, claimLootDelivery, continueExpedition, createGame, dispatchRaid, equipGear, extractRaid, getCargoValue, getCargoWeight, getLoadoutStats, getLootCapacity, getRaidGearLootPool, getRaidGearValue, getRaidLootPool, parseSave, recycleGear, rollRaidGearLoot, saveGame, sellLootItem, setLoadoutOption, type GameState } from "../src/game/engine";
 import { GEAR_MODELS } from "../src/game/systems";
 import { MAPS } from "../src/game/data";
 
 const NOW = 1_792_000_000_000;
-function start(seed = 9, catalog = 23) {
+function start(seed = 9, catalog = 24) {
 	const state = createGame(NOW); state.money = 5000; state.supplies.ammo = 72;
 	expect(setLoadoutOption(state, state.scavs[0]!.id, "medkit", true).ok).toBe(true);
 	expect(dispatchRaid(state, state.scavs[0]!.id, "courtyard", NOW).ok).toBe(true);
@@ -24,7 +24,8 @@ describe("physical equipment as ordinary raid cargo", () => {
 		expect(getRaidGearLootPool("courtyard", "combat", 1).some(entry => entry.model.id === "heavy_armor")).toBe(false);
 		expect(getRaidGearLootPool("bunker", "combat", 2).some(entry => entry.model.id === "heavy_armor")).toBe(false);
 		expect(getRaidGearLootPool("bunker", "combat", 3).some(entry => entry.model.id === "heavy_armor")).toBe(true);
-		expect(getRaidGearLootPool("bunker", "combat", 3, 22)).toEqual([]); expect(getRaidGearLootPool("__proto__", "combat", 3)).toEqual([]);
+		expect(getRaidGearLootPool("bunker", "combat", 3, 23)).toEqual([]); expect(getRaidGearLootPool("__proto__", "combat", 3)).toEqual([]);
+		expect(getRaidLootPool("bunker", "scavenge", 3, 23)).toHaveLength(32);
 		const weight = (branch: "scavenge" | "combat") => getRaidGearLootPool("courtyard", branch, 1).find(entry => entry.model.id === "steel_helmet")!.weight;
 		expect(weight("combat")).toBeGreaterThan(weight("scavenge"));
 		const draws = [.1, .5, 1 - Number.EPSILON]; expect(rollRaidGearLoot("courtyard", "scavenge", 1, () => draws.shift()!)[0]!.durability).toBe(100);
@@ -60,13 +61,15 @@ describe("physical equipment as ordinary raid cargo", () => {
 	});
 	test("old paid catalogues retain their exact fields and new gear RNG never changes combat, cash or perk draws", () => {
 		for (let seed = 1; seed <= 20; seed++) {
-			const modern = start(seed), old = start(seed, 22); old.state.schemaVersion = 22;
+			const modern = start(seed), old = start(seed, 23); old.state.schemaVersion = 23;
+			old.state.shelter.rooms[0]!.facing = 2;
 			expect(parseSave(saveGame(old.state))).not.toBeNull(); advance(modern.state, modern.raid.endsAt); advance(old.state, old.raid.endsAt);
 			expect(old.raid.expedition!.cargo.gearItems).toBeUndefined(); expect(modern.state.rng).toBe(old.state.rng);
 			expect(modern.state.scavs[0]!.health).toBe(old.state.scavs[0]!.health); expect(modern.state.weapons[0]!.durability).toBe(old.state.weapons[0]!.durability);
 			expect(modern.raid.expedition!.cargo.money).toBe(old.raid.expedition!.cargo.money); expect(modern.raid.expedition!.offers).toEqual(old.raid.expedition!.offers);
 			expect(modern.raid.expedition!.cargo.modules).toEqual(old.raid.expedition!.cargo.modules);
 			if (old.raid.expedition!.status === "choice") { expect(extractRaid(old.state, old.raid.id, old.state.lastUpdated).ok).toBe(true); expect(old.state.history[0]!.gearItems).toBeUndefined(); expect(old.state.history[0]!.gearPending).toBeUndefined(); }
+			const restored = parseSave(saveGame(old.state)); expect(restored).not.toBeNull(); expect(restored!.shelter.rooms[0]!.facing).toBe(2);
 		}
 	});
 	test("strict new cargo and parcel parsing rejects duplication, unreleased shapes, impossible depth and altered receipts", () => {
@@ -75,14 +78,14 @@ describe("physical equipment as ordinary raid cargo", () => {
 			(value: GameState) => { value.raids[0]!.expedition!.cargo.gearItems!.push(structuredClone(value.raids[0]!.expedition!.cargo.gearItems![0]!)); },
 			(value: GameState) => { value.raids[0]!.expedition!.cargo.gearItems![0]!.modelId = "heavy_armor"; },
 			(value: GameState) => { value.raids[0]!.expedition!.cargo.gearItems![0]!.durability = 49; },
-			(value: GameState) => { value.raids[0]!.expedition!.lootCatalogVersion = 22; },
-			(value: GameState) => { value.schemaVersion = 22; },
+			(value: GameState) => { value.raids[0]!.expedition!.lootCatalogVersion = 23; },
+			(value: GameState) => { value.schemaVersion = 23; },
 		]) { const altered = structuredClone(state); mutate(altered); expect(parseSave(saveGame(altered))).toBeNull(); }
 		state.gearItems = Array.from({ length: 28 }, () => ({ id: `gear-${state.nextId++}`, modelId: "canvas_pack", durability: 100 })); expect(extractRaid(state, raid.id, state.lastUpdated).ok).toBe(true);
 		const parcel = state.pendingLoot![0]!; expect(parcel.items).toEqual([]); valid(state);
 		const duplicate = structuredClone(state); duplicate.gearItems[0] = { ...parcel.gearItems![0]! }; expect(parseSave(saveGame(duplicate))).toBeNull();
 		const changed = structuredClone(state); changed.pendingLoot![0]!.gearItems![0]!.durability--; expect(parseSave(saveGame(changed))).toBeNull();
-		const historical = structuredClone(state); historical.schemaVersion = 22; expect(parseSave(saveGame(historical))).toBeNull();
+		const historical = structuredClone(state); historical.schemaVersion = 23; expect(parseSave(saveGame(historical))).toBeNull();
 	});
 	test("gear draws follow the private outcome stream while public street seeds remain cosmetic", () => {
 		const first = start(1), second = start(2); first.raid.outcomeSeed = second.raid.outcomeSeed = 58319;

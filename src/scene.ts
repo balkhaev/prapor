@@ -1,6 +1,6 @@
 import Phaser from "phaser";
 import { getRaidPhase, type Raid, type RaidReport, type RoomInstance, type WeaponInstance, getShelterSites, getShelterFrontier, type ShelterSite, type ShelterExpansion, ROOM_DEFINITIONS, getRoomWorkerCapacity } from "./game/engine";
-import { getRoomFootprint, getRoomPosition, getRoomBounds, getShelterRoomAtPoint } from "./game/shelter";
+import { getRoomFootprint, getRoomPosition, getRoomBounds, getRoomFacing, getRoomLocalPoint, getRoomEntrance, getShelterRoomAtPoint } from "./game/shelter";
 import { type BaseRoom } from "./game/data";
 import type { GearItem, Loadout } from "./game/systems";
 import { ScavEquipment } from "./scav-equipment";
@@ -109,18 +109,20 @@ export interface WorldInteractions {
 	onBuildSite?: (site: { column: number; row: number }) => void;
 	onShelterSite?: (column: number, row: number) => void;
 	canBuildingDrag?: () => boolean;
-	getBuildingPlacementReason?: (roomId: string, x: number, y: number, rotation: 0 | 1) => string | null;
+	getBuildingPlacementReason?: (roomId: string, x: number, y: number, rotation: 0 | 1, facing: 0 | 1 | 2 | 3) => string | null;
 	getFreeBuildPlacementReason?: (placement: BuildingPlacement, x: number, y: number) => string | null;
-	onPlaceBuilding?: (roomId: string, x: number, y: number, rotation: 0 | 1) => void;
+	onPlaceBuilding?: (roomId: string, x: number, y: number, rotation: 0 | 1, facing: 0 | 1 | 2 | 3) => void;
+	onTurnBuilding?: (roomId: string) => void;
 	onBuildingDragState?: (state: BuildingDragState | null) => void;
 	onFreeBuildSite?: (point: Point) => void;
 }
-export interface BuildingDragState { roomId: string; x: number; y: number; rotation: 0 | 1; reason: string | null; active: boolean }
+export interface BuildingDragState { roomId: string; x: number; y: number; rotation: 0 | 1; facing: 0 | 1 | 2 | 3; reason: string | null; active: boolean }
 export interface WorldCameraState extends ShelterCamera { panMode: boolean; view: WorldView; following?: boolean; minZoom?: number; maxZoom?: number }
 export interface BuildingPlacement {
 	type?: string;
 	roomId?: string;
 	rotation: 0 | 1;
+	facing?: 0 | 1 | 2 | 3;
 	width: number;
 	height: number;
 	column?: number;
@@ -177,12 +179,13 @@ type ShelterCell = {
 	working: boolean;
 	operational: "empty" | "building" | "working" | "blocked" | "idle" | "passive";
 	feedback: Phaser.GameObjects.Text;
+	turnHandle: Phaser.GameObjects.Text;
 	lastCycles: number | null;
 	completedAt: number;
 };
 type DragSession = { scavId: string; roomId: string | null; reason: string | null; cellKey: string | null; point: Point | null; canvas: boolean; shelter: WorldSnapshot["shelter"]; scav: NonNullable<WorldSnapshot["scavs"]>[number] };
 type CanvasGesture = { scavId: string; pointerId: number; clientX: number; clientY: number; active: boolean };
-type BuildingGesture = BuildingDragState & { pointerId: number; clientX: number; clientY: number; offset: Point; source: Point; identityKey?: string; room: RoomInstance };
+type BuildingGesture = BuildingDragState & { pointerId: number; clientX: number; clientY: number; offset: Point; source: Point; identityKey?: string; room: RoomInstance; turn?: boolean };
 type RaidMarker = {
 	actor: Phaser.GameObjects.Container;
 	ring: Phaser.GameObjects.Ellipse;
@@ -194,7 +197,7 @@ const WIDTH = 840;
 const HEIGHT = 520;
 const cellPosition = shelterRoomPosition;
 const roomRect = getRoomBounds;
-const roomBuildings = (rooms: readonly RoomInstance[]): ShelterLayoutBuilding[] => rooms.map((room) => ({ column: room.column, row: room.row, position: getRoomPosition(room), ...getRoomFootprint(room) }));
+const roomBuildings = (rooms: readonly RoomInstance[]): ShelterLayoutBuilding[] => rooms.map((room) => ({ column: room.column, row: room.row, position: getRoomPosition(room), facing: getRoomFacing(room), ...getRoomFootprint(room) }));
 const cellPolygon = (cell: ShelterCell) => cell.room ? shelterRectPolygon(roomRect(cell.room)) : shelterRoomPolygon(cell.column, cell.row);
 const roomCellKey = (id: string) => `room:${id}`;
 const ROOM_STYLE: Record<string, { label: string; color: number; light: number; wall: number }> = {
@@ -613,15 +616,23 @@ export function createWorld(
 			this.placementGhost.clear();
 			if (requestedView !== "base") return;
 			const drag = this.buildingGesture;
-			const placement = drag?.active ? { roomId: drag.roomId, rotation: drag.rotation, ...getRoomFootprint(drag.room), x: drag.x, y: drag.y } : this.buildingPlacement;
+			const placement = drag?.active ? { roomId: drag.roomId, rotation: drag.rotation, facing: drag.facing, ...getRoomFootprint(drag.room), x: drag.x, y: drag.y } : this.buildingPlacement;
 			if (!placement) return;
 			const paint = (point: Point, pinned: boolean) => {
 				const reason = drag?.active ? drag.reason : interactions.getFreeBuildPlacementReason?.(placement, point.x, point.y)
-					?? (placement.roomId ? interactions.getBuildingPlacementReason?.(placement.roomId, point.x, point.y, placement.rotation) : null);
+					?? (placement.roomId ? interactions.getBuildingPlacementReason?.(placement.roomId, point.x, point.y, placement.rotation, placement.facing ?? 0) : null);
 				const size = shelterRoomRect(0, 0, placement.width, placement.height);
-				const corners = shelterRectPolygon({ ...point, width: size.width, height: size.height }), tint = reason ? 0xed997e : 0xb6eaa0;
+				const odd = (placement.facing ?? 0) % 2, width = odd ? size.height : size.width, height = odd ? size.width : size.height;
+				const corners = shelterRectPolygon({ ...point, width, height }), tint = reason ? 0xed997e : 0xb6eaa0;
 				polygon(this.placementGhost, corners, tint, pinned ? .15 : .22);
 				line(this.placementGhost, [...corners, corners[0]!], tint, pinned ? 2 : 3, pinned ? .6 : 1);
+				const facing = placement.facing ?? 0;
+				const door = facing === 0 ? { x: point.x + width / 2, y: point.y + height } : facing === 1 ? { x: point.x, y: point.y + height / 2 } : facing === 2 ? { x: point.x + width / 2, y: point.y } : { x: point.x + width, y: point.y + height / 2 };
+				const normal = [{x:0,y:1},{x:-1,y:0},{x:0,y:-1},{x:1,y:0}][facing]!;
+				const arrow = projectShelterPoint(door), tip = projectShelterPoint({ x: door.x + normal.x * 24, y: door.y + normal.y * 24 });
+				line(this.placementGhost, [arrow, tip], tint, 3, 1);
+				const angle = Math.atan2(tip.y - arrow.y, tip.x - arrow.x);
+				for (const side of [-1, 1]) line(this.placementGhost, [tip, { x: tip.x - Math.cos(angle + side * .6) * 9, y: tip.y - Math.sin(angle + side * .6) * 9 }], tint, 2, 1);
 				if (!pinned) {
 					const elevated = corners.map((point) => ({ x: point.x, y: point.y - 20 }));
 					line(this.placementGhost, [...elevated, elevated[0]!], tint, 1, .65);
@@ -660,20 +671,21 @@ export function createWorld(
 			if (!point) {
 				drag.reason = "Отпусти постройку на территории базы";
 				this.paintBuildingPlacement();
-				interactions.onBuildingDragState?.({ roomId: drag.roomId, x: drag.x, y: drag.y, rotation: drag.rotation, reason: drag.reason, active: true });
+				interactions.onBuildingDragState?.({ roomId: drag.roomId, x: drag.x, y: drag.y, rotation: drag.rotation, facing: drag.facing, reason: drag.reason, active: true });
 				return;
 			}
 			drag.x = point.x - drag.offset.x; drag.y = point.y - drag.offset.y;
-			drag.reason = drag.room.status !== "ready" ? "Дождись окончания строительных работ" : interactions.getBuildingPlacementReason?.(drag.roomId, drag.x, drag.y, drag.rotation) ?? null;
+			drag.clientX = clientX; drag.clientY = clientY;
+			drag.reason = drag.room.status !== "ready" ? "Дождись окончания строительных работ" : interactions.getBuildingPlacementReason?.(drag.roomId, drag.x, drag.y, drag.rotation, drag.facing) ?? null;
 			const from = projectShelterPoint(drag.source), to = projectShelterPoint(drag);
 			this.buildingGhost.setPosition(to.x - from.x, to.y - from.y).setVisible(true);
 			this.paintBuildingPlacement();
-			interactions.onBuildingDragState?.({ roomId: drag.roomId, x: drag.x, y: drag.y, rotation: drag.rotation, reason: drag.reason, active: true });
+			interactions.onBuildingDragState?.({ roomId: drag.roomId, x: drag.x, y: drag.y, rotation: drag.rotation, facing: drag.facing, reason: drag.reason, active: true });
 		}
 
 		private buildingSourceCurrent(drag: BuildingGesture): boolean {
 			const state = snapshot(), room = state.shelter?.rooms.find((candidate) => candidate.id === drag.roomId);
-			if (state.identityKey !== drag.identityKey || !room || room.status !== drag.room.status || room.type !== drag.room.type || (room.rotation ?? 0) !== drag.rotation) return false;
+			if (state.identityKey !== drag.identityKey || !room || room.status !== drag.room.status || room.type !== drag.room.type || (room.rotation ?? 0) !== drag.rotation || getRoomFacing(room) !== getRoomFacing(drag.room)) return false;
 			const at = getRoomPosition(room);
 			return Math.hypot(at.x - drag.source.x, at.y - drag.source.y) < .001;
 		}
@@ -829,6 +841,12 @@ export function createWorld(
 					return;
 				}
 				const visual = projectShelterPoint(point);
+				const turnCell = [...this.cells.values()].find(cell => cell.room && cell.turnHandle.visible && Math.abs(visual.x - cell.turnHandle.x) < 20 && Math.abs(visual.y - cell.turnHandle.y) < 20);
+				if (turnCell?.room && this.buildingAllowed()) {
+					const room = turnCell.room, origin = getRoomPosition(room);
+					this.buildingGesture = { roomId: room.id, room, source: { ...origin }, identityKey: snapshot().identityKey, pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, offset: { x: 0, y: 0 }, ...origin, rotation: room.rotation ?? 0, facing: getRoomFacing(room), active: false, reason: null, turn: true };
+					canvas.setPointerCapture(event.pointerId); event.preventDefault(); return;
+				}
 				const hit = [...this.scavs].filter(([, slot]) => slot.actor.visible && Math.abs(slot.actor.x - visual.x) <= 16 * slot.actor.scaleX && visual.y >= slot.actor.y - 44 * slot.actor.scaleY && visual.y <= slot.actor.y + 2).sort((a, b) => Math.hypot(a[1].actor.x - visual.x, a[1].actor.y - 21 - visual.y) - Math.hypot(b[1].actor.x - visual.x, b[1].actor.y - 21 - visual.y))[0];
 				if (hit) {
 					this.gesture = { scavId: hit[0], pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, active: false };
@@ -837,7 +855,7 @@ export function createWorld(
 				const room = this.roomAtPoint(point);
 				if (room) {
 					const origin = getRoomPosition(room);
-					this.buildingGesture = { roomId: room.id, room, source: { ...origin }, identityKey: snapshot().identityKey, pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, offset: { x: point.x - origin.x, y: point.y - origin.y }, ...origin, rotation: room.rotation ?? 0, active: false, reason: null };
+					this.buildingGesture = { roomId: room.id, room, source: { ...origin }, identityKey: snapshot().identityKey, pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, offset: { x: point.x - origin.x, y: point.y - origin.y }, ...origin, rotation: room.rotation ?? 0, facing: getRoomFacing(room), active: false, reason: null };
 					canvas.setPointerCapture(event.pointerId); event.preventDefault(); return;
 				}
 				const site = getShelterTerritoryCell(point), cell = site && this.cells.get(`${site.column}:${site.row}`);
@@ -873,6 +891,7 @@ export function createWorld(
 				const gesture = this.gesture;
 				const building = this.buildingGesture;
 				if (building && event.pointerId === building.pointerId) {
+					if (building.turn) { if (Math.hypot(event.clientX - building.clientX, event.clientY - building.clientY) >= 8) this.cancelBuildingDrag(); return; }
 					if (!building.active && Math.hypot(event.clientX - building.clientX, event.clientY - building.clientY) >= 6) {
 						if (!this.buildingAllowed() || !interactions.onPlaceBuilding) { this.cancelBuildingDrag(); return; }
 						if (building.room.status !== "ready") { interactions.onHover?.({ title: ROOM_DEFINITIONS[building.room.type].label, detail: "Дождись окончания строительных работ" }); this.cancelBuildingDrag(); return; }
@@ -899,11 +918,12 @@ export function createWorld(
 				if (this.panGesture?.pointerId === event.pointerId) { this.cancelPan(); this.applyCamera(); return; }
 				const building = this.buildingGesture;
 				if (building && event.pointerId === building.pointerId) {
+					if (building.turn) { const allowed = this.buildingAllowed() && this.buildingSourceCurrent(building); this.cancelBuildingDrag(); if (allowed) interactions.onTurnBuilding?.(building.roomId); return; }
 					if (building.active) {
 						this.moveBuildingDrag(event.clientX, event.clientY);
 						const allowed = this.buildingGesture === building && this.buildingAllowed() && !building.reason;
 						this.cancelBuildingDrag();
-						if (allowed) interactions.onPlaceBuilding?.(building.roomId, building.x, building.y, building.rotation);
+						if (allowed) interactions.onPlaceBuilding?.(building.roomId, building.x, building.y, building.rotation, building.facing);
 						else if (building.reason) interactions.onHover?.({ title: "Постройку нельзя разместить", detail: building.reason });
 					} else {
 						const tapped = Math.hypot(event.clientX - building.clientX, event.clientY - building.clientY) < 6;
@@ -937,6 +957,17 @@ export function createWorld(
 			}, { ...options, passive: false });
 			window.addEventListener("keydown", (event) => {
 				if (event.key === "Escape" && (this.drag || this.gesture || this.buildingGesture || this.panGesture)) { event.preventDefault(); this.cancelScavDrag(); this.cancelBuildingDrag(); this.cancelCameraGesture(); }
+				if (!event.defaultPrevented && !event.repeat && event.key.toLowerCase() === "r" && this.buildingAllowed() && !(event.target instanceof Element && event.target.closest("input,textarea,select,[contenteditable=true]"))) {
+					const drag = this.buildingGesture;
+					if (drag?.active) {
+						event.preventDefault(); drag.facing = ((drag.facing + 1) % 4) as 0 | 1 | 2 | 3;
+						this.buildingGhost.clear(); paintIsometricRoom(this.buildingGhost, drag.room.column, drag.room.row, { ...drag.room, facing: drag.facing });
+						this.moveBuildingDrag(drag.clientX, drag.clientY);
+					} else if (!this.buildingPlacement) {
+						const hovered = [...this.cells.values()].find(cell => cell.hovered && cell.room?.status === "ready")?.room;
+						if (hovered) { event.preventDefault(); interactions.onTurnBuilding?.(hovered.id); }
+					}
+				}
 				if (event.code === "Space" && this.cameraAllowed() && (document.activeElement === canvas || parent.contains(document.activeElement)) && !(event.target instanceof Element && event.target.closest("input,textarea,select,[contenteditable=true],button"))) {
 					event.preventDefault(); this.spacePressed = true; this.applyCamera();
 				}
@@ -978,7 +1009,7 @@ export function createWorld(
 			const frontier = getShelterFrontier(shelter), expansions = shelter.expansions ?? [];
 			const all = [...sites, ...frontier, ...expansions];
 			const buildings = roomBuildings(shelter.rooms);
-			const signature = `${sites.map((p) => `${p.column}:${p.row}`).join(";")}|${expansions.map((p) => `${p.column}:${p.row}`).join(";")}|${shelter.rooms.map((room) => `${room.id}:${room.type}:${getRoomPosition(room).x}:${getRoomPosition(room).y}:${room.rotation ?? 0}`).join(";")}`;
+			const signature = `${sites.map((p) => `${p.column}:${p.row}`).join(";")}|${expansions.map((p) => `${p.column}:${p.row}`).join(";")}|${shelter.rooms.map((room) => `${room.id}:${room.type}:${getRoomPosition(room).x}:${getRoomPosition(room).y}:${room.rotation ?? 0}:${getRoomFacing(room)}`).join(";")}`;
 			if (signature === this.layoutSignature) return;
 			const first = !this.layoutSignature; this.layoutSignature = signature;
 			this.worldBounds = getShelterWorldBounds(sites, [...frontier, ...expansions]);
@@ -1044,15 +1075,16 @@ export function createWorld(
 			const status = this.text(front.x, front.y - 4, "", 8, "#c1d8bd").setOrigin(.5).setFontFamily("Manrope, sans-serif").setLetterSpacing(0).setBackgroundColor("#10221ded").setPadding(3, 2);
 			const productLabel = this.text(at.x, at.y - 39, "", 9, "#f4e4bb").setOrigin(.5).setLetterSpacing(0).setBackgroundColor("#10231e").setPadding(4, 2).setVisible(false);
 			const feedback = this.text(front.x, front.y - 23, "", 12, "#e6ffce").setOrigin(.5).setLetterSpacing(0).setBackgroundColor("#163023").setPadding(5, 3).setVisible(false);
+			const turnHandle = this.text(at.x + 66, at.y - 43, "↻", 25, "#f7dfaa").setOrigin(.5).setFontFamily("Arial, sans-serif").setBackgroundColor("#183d30ed").setPadding(6, 3).setVisible(false);
 			const lamp = this.add.image(at.x, at.y + 5, "prapor-light").setScale(.30, .18).setAlpha(.08).setBlendMode(Phaser.BlendModes.ADD);
 			const bounds = projectShelterBounds(lot);
 			const zone = this.add.zone(bounds.x, bounds.y, bounds.width, bounds.height).setOrigin(0);
 			zone.setInteractive(new Phaser.Geom.Polygon(corners.map((point) => ({ x: point.x - bounds.x, y: point.y - bounds.y }))), Phaser.Geom.Polygon.Contains);
 			zone.input!.cursor = "pointer";
 			const root = this.add.container(0, 0, [art, lamp, animation, frame, progress]).setDepth(at.y - 20);
-			const chrome = this.add.container(0, 0, [label, status, productLabel, feedback]).setDepth(10_000_000);
+			const chrome = this.add.container(0, 0, [label, status, productLabel, feedback, turnHandle]).setDepth(10_000_000);
 			this.baseLayer.add([root, chrome, zone.setDepth(-100_000_000)]);
-			const cell: ShelterCell = { root, chrome, open: false, expansion: null, art, frame, progress, animation, stationClock: 0, stationJob: null, production: null, productLabel, label, status, lamp, zone, signature: "", column, row, hovered: false, room: room ?? null, roomId: room?.id, working: false, operational: "empty", feedback, lastCycles: null, completedAt: -10000 };
+			const cell: ShelterCell = { root, chrome, open: false, expansion: null, art, frame, progress, animation, stationClock: 0, stationJob: null, production: null, productLabel, label, status, lamp, zone, signature: "", column, row, hovered: false, room: room ?? null, roomId: room?.id, working: false, operational: "empty", feedback, turnHandle, lastCycles: null, completedAt: -10000 };
 			this.cells.set(room ? roomCellKey(room.id) : `${column}:${row}`, cell);
 			zone.on("pointerover", (pointer: Phaser.Input.Pointer) => { if (this.acceptsPointer(pointer, "base")) { cell.hovered = true; for (const candidate of this.cells.values()) if (candidate === cell || candidate.room?.id === cell.room?.id) this.paintCellFrame(candidate); if (!this.buildingPlacement) this.describeCell(cell); } });
 			zone.on("pointerout", () => { cell.hovered = false; for (const candidate of this.cells.values()) if (candidate === cell || candidate.room?.id === cell.room?.id) this.paintCellFrame(candidate); interactions.onHover?.(null); });
@@ -1065,7 +1097,7 @@ export function createWorld(
 				const room = cell.room, production = this.viewState?.roomProduction?.[room.id];
 				const eta = production?.remainingSeconds != null ? ` · ${Math.ceil(production.remainingSeconds)} с` : "";
 				interactions.onHover?.({ title: `${ROOM_DEFINITIONS[room.type].label} · ур. ${room.level || 1}`,
-					detail: `${room.workerIds.length}/${getRoomWorkerCapacity(room)} работников · ${production?.reason ?? production?.status ?? "На базе"}${eta}` });
+						detail: `${room.workerIds.length}/${getRoomWorkerCapacity(room)} работников · ${production?.reason ?? production?.status ?? "На базе"}${eta} · ↻ или R — поворот` });
 			} else if (cell.expansion) {
 				interactions.onHover?.({ title: "Расширяем территорию", detail: `${Math.ceil((cell.expansion.workRequired - cell.expansion.workDone) / 1_000_000)} с до нового участка` });
 			} else interactions.onHover?.(cell.open ? { title: "Свободная земля", detail: "Выбери место для новой постройки или переноса" } : { title: "Земля за оградой", detail: "Присоединить: 60 ₽ и 2 детали · новый участок за 20 с" });
@@ -1077,6 +1109,7 @@ export function createWorld(
 			const hovered = cell.hovered || Boolean(cell.room && [...this.cells.values()].some((candidate) => candidate.room?.id === cell.room?.id && candidate.hovered));
 			const selected = Boolean(cell.room ? state.selectedRoomId === cell.room.id : state.selectedSite?.column === cell.column && state.selectedSite.row === cell.row);
 			const building = cell.room && cell.room.status !== "ready";
+			cell.turnHandle.setVisible(Boolean(cell.room?.status === "ready" && !this.buildingPlacement && !this.buildingGesture?.active && !this.drag)).setAlpha(hovered || selected ? 1 : .6);
 			let tint = selected || hovered ? C.light : building ? C.gold : cell.room ? ROOM_STYLE[cell.room.type]?.color ?? 0x899a7c : 0x788b71;
 			cell.label.setAlpha(cell.room || selected || hovered ? 1 : .6).setVisible(Boolean(cell.room || selected || hovered || cell.expansion));
 			cell.status.setVisible(Boolean(cell.expansion || selected || hovered || cell.working || building));
@@ -1118,9 +1151,10 @@ export function createWorld(
 		private positionCellChrome(cell: ShelterCell): void {
 			const rect = cell.room ? roomRect(cell.room) : shelterRoomRect(cell.column, cell.row);
 			const at = projectShelterPoint({ x: rect.x + rect.width / 2, y: rect.y + 18 });
-			const front = projectShelterPoint({ x: rect.x + rect.width / 2, y: rect.y + rect.height - 7 });
+			const front = projectShelterPoint(cell.room ? getRoomEntrance(cell.room, 7) : { x: rect.x + rect.width / 2, y: rect.y + rect.height - 7 });
 			cell.label.setPosition(at.x, at.y - 43); cell.status.setPosition(front.x, front.y - 4);
 			cell.productLabel.setPosition(at.x, at.y - 63); cell.feedback.setPosition(front.x, front.y - 23);
+			cell.turnHandle.setPosition(at.x + 74, at.y - 43);
 			cell.lamp.setPosition(at.x, at.y + 5); cell.root.setDepth(cell.room ? at.y - 20 : -999_999_999);
 			if (cell.room) {
 				const hit = shelterBuildingHitPolygon(rect);
@@ -1226,7 +1260,7 @@ export function createWorld(
 				cell.working = Boolean(room?.status === "ready" && room.queue.length && room.workerIds.length && production?.rate && !production.reason);
 				cell.operational = !room ? "empty" : room.status !== "ready" ? "building" : !ROOM_DEFINITIONS[room.type].production ? "passive" : cell.working ? "working" : production?.reason || room.queue.length ? "blocked" : "idle";
 				if (cell.working) workingRooms++;
-				const signature = room ? `${room.id}:${getRoomPosition(room).x}:${getRoomPosition(room).y}:${room.rotation ?? 0}:${room.type}:${room.level}:${room.status}` : `${cell.open}:${Boolean(cell.expansion)}`;
+				const signature = room ? `${room.id}:${getRoomPosition(room).x}:${getRoomPosition(room).y}:${room.rotation ?? 0}:${getRoomFacing(room)}:${room.type}:${room.level}:${room.status}` : `${cell.open}:${Boolean(cell.expansion)}`;
 				if (cell.signature !== signature) { cell.signature = signature; this.positionCellChrome(cell); this.paintRoom(cell); }
 				this.paintCellFrame(cell);
 				if (cell.hovered) this.describeCell(cell);
@@ -1295,9 +1329,9 @@ export function createWorld(
 				const room = rooms.find((candidate) => candidate.id === scav.assignment && candidate.workerIds.includes(scav.id));
 				const production = room ? state.roomProduction?.[room.id] : undefined;
 				const presentation = room ? this.cells.get(roomCellKey(room.id))?.production ?? null : null;
-				const rank = Math.max(0, room?.workerIds.indexOf(scav.id) ?? 0), roomPoint = room ? getRoomPosition(room) : null;
+				const rank = Math.max(0, room?.workerIds.indexOf(scav.id) ?? 0);
 				const station = room?.type === "workshop" && presentation?.active ? presentation.stage === "assembly" ? 104 : 51 : 86;
-				const at = roomPoint ? { x: roomPoint.x + station + rank * 24, y: roomPoint.y + 80 } : this.homePosition(Math.max(0, free.indexOf(scav)), free.length);
+				const at = room ? getRoomLocalPoint(room, station + rank * 24, 80) : this.homePosition(Math.max(0, free.indexOf(scav)), free.length);
 				const slot = this.scavs.get(scav.id) ?? this.createScav(scav.id, index, at);
 				this.setScavAppearance(slot, scavAvailableAppearance(requestedAppearance, (texture) => this.textures.exists(texture)));
 				slot.visualLoadout = getScavVisualLoadout(scav, state.gearItems ?? [], state.weapons ?? []);
@@ -1316,8 +1350,7 @@ export function createWorld(
 				slot.actor.setVisible(true).setScale(.78).setAlpha(this.drag?.scavId === scav.id ? .45 : scav.status === "wounded" ? .78 : 1);
 				if (scav.status === "wounded" && (!room || scav.health < 25)) {
 					const rest = rooms.find((candidate) => candidate.type === "medbay" && candidate.status === "ready") ?? rooms.find((candidate) => candidate.type === "dormitory" && candidate.status === "ready");
-					const p = rest ? getRoomPosition(rest) : null;
-					this.sendActor(slot, `rest:${rest?.id ?? "entrance"}`, p ? { x: p.x + 35 + index % 3 * 20, y: p.y + 80 } : at);
+					this.sendActor(slot, `rest:${rest?.id ?? "entrance"}`, rest ? getRoomLocalPoint(rest, 35 + index % 3 * 20, 80) : at);
 					slot.role = "rest";
 				} else if (room) {
 					// Workshop stages use real bench/lathe positions. Changing stage is
@@ -1353,8 +1386,8 @@ export function createWorld(
 			const people = state?.scavs?.filter((scav) => scav.status !== "raiding" && !scav.assignment) ?? [];
 			if (!ready.length || slot.visit % 3 === 0) this.sendActor(slot, `idle-home:${slot.visit}`, this.homePosition(Math.max(0, people.findIndex((scav) => scav.id === id)), people.length));
 			else {
-				const room = ready[(Math.floor(slot.phase * 7) + slot.visit * 3) % ready.length]!, p = getRoomPosition(room);
-				this.sendActor(slot, `visit:${slot.visit}:${room.id}`, { x: p.x + (slot.visit % 2 ? 27 : 146), y: p.y + 80 });
+				const room = ready[(Math.floor(slot.phase * 7) + slot.visit * 3) % ready.length]!;
+				this.sendActor(slot, `visit:${slot.visit}:${room.id}`, getRoomLocalPoint(room, slot.visit % 2 ? 27 : 146, 80));
 			}
 			slot.role = "idle"; slot.dwellUntil = time + 9000 + slot.phase * 400;
 		}

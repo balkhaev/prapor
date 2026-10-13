@@ -50,24 +50,24 @@ export const LOOT_MODELS: LootModel[] = [
 	{ ...item("cracked-lens", "Треснувшая линза", "Мусор · автопродажа при доставке. Оптика разбита и не подходит для приборов или бартера.", "junk", "common", .12, 10, {}), autoSell: true, releasedIn: 21 },
 	{ ...item("military-cpu", "Военный вычислительный модуль", "Легендарный процессор из защищённого комплекса. Целый трофей для бартера на снаряжение; разбор даёт детали и разведданные.", "electronics", "legendary", .2, 1050, { scrap: 18, intel: 8 }, 3, 7), releasedIn: 21 },
 	{ ...item("prototype-optics", "Прототип военной оптики", "Легендарный опытный прибор из закрытого бункера. Целый трофей для бартера на снаряжение; разбор даёт детали и разведданные.", "electronics", "legendary", .25, 800, { scrap: 16, intel: 5 }, 3, 9), releasedIn: 21 },
-	{ ...item("luxury-watch", "Коллекционные часы", "Рабочие часы с механическим калибром. Компактная роскошь для обмена или продажи по своей цене.", "valuables", "rare", .2, 300, { scrap: 4 }, 2, 3), releasedIn: 23 },
-	{ ...item("perfume", "Флакон духов", "Запечатанный флакон из заброшенного магазина. Ценный целый товар для обмена.", "valuables", "uncommon", .5, 140, { medicine: 1, scrap: 1 }, 2, 3), releasedIn: 23 },
-	{ ...item("gemstone", "Огранённый камень", "Небольшой ювелирный камень. Высокая ценность при почти незаметном весе.", "valuables", "rare", .05, 400, { scrap: 3 }, 2, 3), releasedIn: 23 },
-	{ ...item("bronze-statuette", "Бронзовая статуэтка", "Уцелевшая коллекционная фигурка. Хороший товар, но занимает больше места в рюкзаке.", "valuables", "uncommon", .8, 180, { scrap: 5 }, 2, 3), releasedIn: 23 },
-	{ ...item("suture-kit", "Набор для наложения швов", "Стерильные иглы и нити. Целый медицинский трофей для обмена или запаса медблока.", "medicine", "uncommon", .25, 80, { medicine: 2 }, 1, 2), releasedIn: 23 },
-	{ ...item("antibiotics", "Упаковка антибиотиков", "Неповреждённая аптечная упаковка. Сохрани целой для обмена или извлеки медикаменты.", "medicine", "uncommon", .15, 120, { medicine: 3 }, 1, 2), releasedIn: 23 },
-	{ ...item("hemostatic", "Кровоостанавливающий препарат", "Запечатанный полевой препарат. Ценное содержимое для медицинских комплектов.", "medicine", "uncommon", .2, 90, { medicine: 2 }), releasedIn: 23 },
-	{ ...item("painkillers", "Блистер обезболивающего", "Целая упаковка таблеток. Медицинский трофей для обмена и переработки в медикамент.", "medicine", "common", .1, 40, { medicine: 1 }), releasedIn: 23 },
-	{ ...item("screws", "Коробка крепежа", "Винты и гайки в заводской коробке. Целый расходник для сборки; разбор даёт детали.", "tools", "common", .2, 25, { scrap: 1 }), releasedIn: 23 },
-	{ ...item("sewing-kit", "Швейный набор", "Прочные нити, иглы и инструменты. Сохрани целым для производства экипировки.", "tools", "uncommon", .4, 80, { scrap: 2, medicine: 1 }), releasedIn: 23 },
-	{ ...item("gunpowder", "Банка оружейного пороха", "Запечатанная банка для снаряжения патронов. Нужна целиком патронному цеху.", "tools", "common", .3, 50, { ammo: 4 }, 1, 2), releasedIn: 23 },
-	{ ...item("primer", "Коробка капсюлей", "Рабочие капсюли в сухой упаковке. Целый компонент для производства боеприпасов.", "tools", "common", .1, 30, { ammo: 2 }), releasedIn: 23 },
-	{ ...item("faded-receipt", "Выцветший чек", "Мусор · автопродажа при доставке. Бумага без читаемых сведений.", "junk", "common", .03, 2, {}), autoSell: true, releasedIn: 23 },
-	{ ...item("crushed-bottle", "Смятая бутылка", "Мусор · автопродажа при доставке. Пустая повреждённая пластиковая тара.", "junk", "common", .08, 4, {}), autoSell: true, releasedIn: 23 },
-	{ ...item("rusty-nail", "Ржавый гвоздь", "Мусор · автопродажа при доставке. Погнутый крепёж, непригодный для сборки.", "junk", "common", .04, 6, {}), autoSell: true, releasedIn: 23 },
-	{ ...item("plastic-shard", "Обломок пластика", "Мусор · автопродажа при доставке. Треснувший кусок корпуса без полезных деталей.", "junk", "common", .06, 8, {}), autoSell: true, releasedIn: 23 },
-	{ ...item("dead-battery", "Потёкшая батарейка", "Мусор · автопродажа при доставке. Повреждённый элемент питания, непригодный для оборудования.", "junk", "common", .1, 12, {}), autoSell: true, releasedIn: 23 },
-	{ ...item("broken-circuit", "Обгоревшая плата", "Мусор · автопродажа при доставке. Дорожки и компоненты уничтожены, целым материалом не считается.", "junk", "common", .15, 18, {}), autoSell: true, releasedIn: 23 },
+	{ ...item("luxury-watch", "Коллекционные часы", "Рабочие часы с механическим калибром. Компактная роскошь для обмена или продажи по своей цене.", "valuables", "rare", .2, 300, { scrap: 4 }, 2, 3), releasedIn: 24 },
+	{ ...item("perfume", "Флакон духов", "Запечатанный флакон из заброшенного магазина. Ценный целый товар для обмена.", "valuables", "uncommon", .5, 140, { medicine: 1, scrap: 1 }, 2, 3), releasedIn: 24 },
+	{ ...item("gemstone", "Огранённый камень", "Небольшой ювелирный камень. Высокая ценность при почти незаметном весе.", "valuables", "rare", .05, 400, { scrap: 3 }, 2, 3), releasedIn: 24 },
+	{ ...item("bronze-statuette", "Бронзовая статуэтка", "Уцелевшая коллекционная фигурка. Хороший товар, но занимает больше места в рюкзаке.", "valuables", "uncommon", .8, 180, { scrap: 5 }, 2, 3), releasedIn: 24 },
+	{ ...item("suture-kit", "Набор для наложения швов", "Стерильные иглы и нити. Целый медицинский трофей для обмена или запаса медблока.", "medicine", "uncommon", .25, 80, { medicine: 2 }, 1, 2), releasedIn: 24 },
+	{ ...item("antibiotics", "Упаковка антибиотиков", "Неповреждённая аптечная упаковка. Сохрани целой для обмена или извлеки медикаменты.", "medicine", "uncommon", .15, 120, { medicine: 3 }, 1, 2), releasedIn: 24 },
+	{ ...item("hemostatic", "Кровоостанавливающий препарат", "Запечатанный полевой препарат. Ценное содержимое для медицинских комплектов.", "medicine", "uncommon", .2, 90, { medicine: 2 }), releasedIn: 24 },
+	{ ...item("painkillers", "Блистер обезболивающего", "Целая упаковка таблеток. Медицинский трофей для обмена и переработки в медикамент.", "medicine", "common", .1, 40, { medicine: 1 }), releasedIn: 24 },
+	{ ...item("screws", "Коробка крепежа", "Винты и гайки в заводской коробке. Целый расходник для сборки; разбор даёт детали.", "tools", "common", .2, 25, { scrap: 1 }), releasedIn: 24 },
+	{ ...item("sewing-kit", "Швейный набор", "Прочные нити, иглы и инструменты. Сохрани целым для производства экипировки.", "tools", "uncommon", .4, 80, { scrap: 2, medicine: 1 }), releasedIn: 24 },
+	{ ...item("gunpowder", "Банка оружейного пороха", "Запечатанная банка для снаряжения патронов. Нужна целиком патронному цеху.", "tools", "common", .3, 50, { ammo: 4 }, 1, 2), releasedIn: 24 },
+	{ ...item("primer", "Коробка капсюлей", "Рабочие капсюли в сухой упаковке. Целый компонент для производства боеприпасов.", "tools", "common", .1, 30, { ammo: 2 }), releasedIn: 24 },
+	{ ...item("faded-receipt", "Выцветший чек", "Мусор · автопродажа при доставке. Бумага без читаемых сведений.", "junk", "common", .03, 2, {}), autoSell: true, releasedIn: 24 },
+	{ ...item("crushed-bottle", "Смятая бутылка", "Мусор · автопродажа при доставке. Пустая повреждённая пластиковая тара.", "junk", "common", .08, 4, {}), autoSell: true, releasedIn: 24 },
+	{ ...item("rusty-nail", "Ржавый гвоздь", "Мусор · автопродажа при доставке. Погнутый крепёж, непригодный для сборки.", "junk", "common", .04, 6, {}), autoSell: true, releasedIn: 24 },
+	{ ...item("plastic-shard", "Обломок пластика", "Мусор · автопродажа при доставке. Треснувший кусок корпуса без полезных деталей.", "junk", "common", .06, 8, {}), autoSell: true, releasedIn: 24 },
+	{ ...item("dead-battery", "Потёкшая батарейка", "Мусор · автопродажа при доставке. Повреждённый элемент питания, непригодный для оборудования.", "junk", "common", .1, 12, {}), autoSell: true, releasedIn: 24 },
+	{ ...item("broken-circuit", "Обгоревшая плата", "Мусор · автопродажа при доставке. Дорожки и компоненты уничтожены, целым материалом не считается.", "junk", "common", .15, 18, {}), autoSell: true, releasedIn: 24 },
 ];
 export const LOOT_MODEL_BY_ID: Record<string, LootModel> = Object.fromEntries(LOOT_MODELS.map(model => [model.id, model]));
 export const JUNK_MODELS: readonly LootModel[] = LOOT_MODELS.filter(model => model.autoSell === true);
@@ -82,7 +82,7 @@ const sectorCategories: Record<string, LootCategory[]> = {
 	factory: ["tools", "electronics"], reserve: ["medicine", "intel", "electronics"], bunker: ["electronics", "intel", "valuables"],
 };
 const branchCategories: Record<ExpeditionBranch, LootCategory[]> = { scavenge: ["tools", "provisions", "valuables"], combat: ["electronics", "medicine"], recon: ["intel", "electronics"] };
-export function getRaidLootPool(mapId: string, branch: ExpeditionBranch, depth: number, catalogVersion = 23): { model: LootModel; weight: number }[] {
+export function getRaidLootPool(mapId: string, branch: ExpeditionBranch, depth: number, catalogVersion = 24): { model: LootModel; weight: number }[] {
 	if (!Object.hasOwn(MAP_BY_ID, mapId) || !Object.hasOwn(branchCategories, branch) || !Number.isInteger(depth) || depth < 1 || depth > 3) return [];
 	const level = MAP_BY_ID[mapId]!.level;
 	return LOOT_MODELS.filter(model => lootAvailableInCatalog(model.id, catalogVersion) && model.minDepth <= depth && model.minSectorLevel <= level).map(model => ({ model,
@@ -91,7 +91,7 @@ export function getRaidLootPool(mapId: string, branch: ExpeditionBranch, depth: 
 			* (model.rarity === "rare" || model.rarity === "epic" ? 1 + (depth - 1) * .25 + (level - 1) * .08 : 1),
 	}));
 }
-export function rollRaidLoot(mapId: string, branch: ExpeditionBranch, depth: number, random: () => number, catalogVersion = 23): LootModel[] {
+export function rollRaidLoot(mapId: string, branch: ExpeditionBranch, depth: number, random: () => number, catalogVersion = 24): LootModel[] {
 	const pool = getRaidLootPool(mapId, branch, depth, catalogVersion); if (!pool.length) return [];
 	const count = 1 + (random() < (branch === "scavenge" ? .3 : .15) + (depth - 1) * .12 ? 1 : 0);
 	const result: LootModel[] = [], total = pool.reduce((sum, entry) => sum + entry.weight, 0);

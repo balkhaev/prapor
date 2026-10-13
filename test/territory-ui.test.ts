@@ -82,7 +82,12 @@ describe("territory presentation and restored controls", () => {
 		expect(blocked).not.toContain('<occupied "lot">');
 		expect(button(blocked, "placement-confirm")).toContain("disabled");
 		expect(button(buildingPlacementControls({ ...placement, site: null, point: null }, null), "placement-confirm")).toContain("disabled");
-		expect(button(buildingPlacementControls({ ...placement, type: "storage" }, null), "placement-rotate")).toContain("disabled");
+		expect(button(buildingPlacementControls({ ...placement, type: "storage" }, null), "placement-rotate")).not.toContain("disabled");
+		for (const facing of [0, 1, 2, 3] as const) {
+			const html = buildingPlacementControls({ ...placement, facing }, null);
+			expect(html).toContain(["вход во двор", "вход влево", "вход к задней границе", "вход вправо"][facing]!);
+			expect(button(html, "placement-rotate")).not.toContain("disabled");
+		}
 	});
 
 	test("passive buildings explain their operation and relocation remains unavailable during construction", () => {

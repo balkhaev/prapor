@@ -39,8 +39,9 @@ export function shelterRectPolygon(rect: ShelterRect): ShelterPoint[] {
 
 /** One visual hull for hover and drag hits, including eaves, chimney and porch. */
 export function shelterBuildingHitPolygon(rect: ShelterRect): ShelterPoint[] {
-	const ground = shelterRectPolygon({ x: rect.x - 5, y: rect.y - 6, width: rect.width + 10, height: rect.height + 24 });
-	const roof = ground.map((point) => ({ x: point.x, y: point.y - SHELTER_BUILDING_MAX_VISUAL_HEIGHT }));
+	const corners = shelterRectPolygon({ x: rect.x - 10, y: rect.y - 10, width: rect.width + 20, height: rect.height + 20 });
+	const ground = corners.map(point => ({ x: point.x, y: point.y + 5 }));
+	const roof = corners.map((point) => ({ x: point.x, y: point.y - SHELTER_BUILDING_MAX_VISUAL_HEIGHT }));
 	return [roof[0]!, roof[1]!, ground[1]!, ground[2]!, ground[3]!, roof[3]!];
 }
 

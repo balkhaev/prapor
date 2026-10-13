@@ -84,6 +84,7 @@ import {
 	getShelterRoomAt,
 	getRoomPosition,
 	getRoomBounds,
+	getRoomFacing,
 	getShelterRoomAtPoint,
 	getRoomFreePlacementReason,
 	getFreeBuildRoomQuote,
@@ -451,7 +452,7 @@ function updateCameraControls() {
 	controls.querySelector<HTMLButtonElement>('[data-camera="pan"]')?.classList.toggle("active", cameraView.panMode);
 	document.querySelector(".world-card")?.classList.toggle("camera-hand-mode", cameraView.panMode);
 	document.querySelector("#camera-scale")!.textContent = `${Math.round(cameraView.zoom * 100)}%`;
-	document.querySelector("#scene-hint")!.textContent = worldView === "raid" ? cameraView.panMode ? "Осмотри улицу · За бойцом — вернуть камеру" : "Живой маршрут · Рука — осмотр улицы" : worldView === "map" ? "Нажми на сектор, чтобы выбрать маршрут" : cameraView.panMode ? "Перетаскивай вид · Обзор — вся база" : cameraView.zoom > 1.05 ? "Осмотр · Рука — сдвиг · Обзор — вся база" : "Перетащи постройку по двору · за оградой — расширение";
+	document.querySelector("#scene-hint")!.textContent = worldView === "raid" ? cameraView.panMode ? "Осмотри улицу · За бойцом — вернуть камеру" : "Живой маршрут · Рука — осмотр улицы" : worldView === "map" ? "Нажми на сектор, чтобы выбрать маршрут" : cameraView.panMode ? "Перетаскивай вид · Обзор — вся база" : "Перетащи постройку · ↻ или R — поворот";
 	document.querySelector('.world-card')?.classList.toggle('raid-view', worldView === "raid");
 	document.querySelector('.command-main')?.classList.toggle('raid-watching', worldView === "raid");
 	const raidTab = document.querySelector<HTMLButtonElement>('[data-view="raid"]'); if (raidTab) raidTab.disabled = !state.raids.length && !lastWatchedRaid;
@@ -1583,8 +1584,8 @@ function placementPoint() {
 }
 function placementReason(): string | null {
 	const point = placementPoint(); if (!buildingPlacement || !point) return null;
-	const { type, roomId, rotation } = buildingPlacement;
-	return roomId ? getRoomFreePlacementReason(state, roomId, point.x, point.y, rotation) : getFreeBuildRoomQuote(state, type, point.x, point.y, rotation).reason;
+	const { type, roomId, rotation, facing } = buildingPlacement;
+	return roomId ? getRoomFreePlacementReason(state, roomId, point.x, point.y, rotation, facing) : getFreeBuildRoomQuote(state, type, point.x, point.y, rotation, facing).reason;
 }
 function paintBuildingPlacement() {
 	const banner = document.querySelector<HTMLElement>("#building-placement");
@@ -1596,7 +1597,7 @@ function paintBuildingPlacement() {
 	banner.innerHTML = buildingPlacementControls(buildingPlacement, placementReason(), state);
 	if (buildingPlacementBusy) banner.querySelectorAll<HTMLButtonElement>("button").forEach(button => { button.disabled = true; });
 	const size = getRoomFootprint(buildingPlacement), point = placementPoint();
-	world?.setBuildingPlacement({ type: buildingPlacement.type, roomId: buildingPlacement.roomId, rotation: buildingPlacement.rotation, ...size, ...(point ?? {}) });
+	world?.setBuildingPlacement({ type: buildingPlacement.type, roomId: buildingPlacement.roomId, rotation: buildingPlacement.rotation, facing: buildingPlacement.facing ?? 0, ...size, ...(point ?? {}) });
 	if (focus) banner.querySelector<HTMLElement>(`[data-action="${focus}"]`)?.focus({ preventScroll: true });
 }
 function cancelBuildingPlacement() {
@@ -1609,7 +1610,7 @@ function beginBuildingPlacement(type: ShelterRoomType, roomId?: string) {
 	if (roomId && (!room || room.status !== "ready")) { toast("Дождись готовности постройки.", false); return; }
 	closeInspector();
 	page = "home"; contextMode = "overview"; selectedShelterSite = null;
-	buildingPlacement = { type, ...(roomId ? { roomId } : {}), rotation: room?.rotation ?? 0, site: null, point: room ? getRoomPosition(room) : null };
+	buildingPlacement = { type, ...(roomId ? { roomId } : {}), rotation: room?.rotation ?? 0, facing: room ? getRoomFacing(room) : 0, site: null, point: room ? getRoomPosition(room) : null };
 	render(); setView("base"); world?.setPanMode(false);
 	paintBuildingPlacement(); worldViewport.focus({ preventScroll: true });
 }
@@ -1640,7 +1641,7 @@ async function confirmBuildingPlacement() {
 	const draft = buildingPlacement;
 	buildingPlacementBusy = true; paintBuildingPlacement();
 	try {
-		const result = await gameAction(draft.roomId ? { type: "placeRoom", args: [draft.roomId, point.x, point.y, draft.rotation] } : { type: "constructRoom", args: [draft.type, point.x, point.y, draft.rotation] });
+		const result = await gameAction(draft.roomId ? { type: "placeRoom", args: [draft.roomId, point.x, point.y, draft.rotation, draft.facing ?? 0] } : { type: "constructRoom", args: [draft.type, point.x, point.y, draft.rotation, draft.facing ?? 0] });
 		if (result.ok) {
 			cancelBuildingPlacement();
 			selectedRoomId = draft.roomId ?? getShelterRoomAtPoint(state.shelter, point.x + 1, point.y + 1)?.id ?? null;
@@ -1660,12 +1661,23 @@ function onBuildingDragState(preview: typeof buildingDragPreview) {
 	document.body.classList.toggle("dragging-building", Boolean(preview?.active));
 	if (!preview?.active) return;
 	const room = state.shelter.rooms.find(item => item.id === preview.roomId);
-	readout.textContent = preview.reason ?? `${room ? ROOM_DEFINITIONS[room.type].label : "Постройка"}: отпусти, чтобы разместить здесь`;
+	readout.textContent = preview.reason ?? `${room ? ROOM_DEFINITIONS[room.type].label : "Постройка"}: отпусти, чтобы разместить · R — поворот`;
 	readout.classList.toggle("invalid", Boolean(preview.reason));
 }
-async function placeDraggedBuilding(roomId: string, x: number, y: number, rotation: 0 | 1) {
+async function placeDraggedBuilding(roomId: string, x: number, y: number, rotation: 0 | 1, facing: 0 | 1 | 2 | 3) {
 	if (!serverReady || gameCommandPending) return;
-	const result = await gameAction({ type: "placeRoom", args: [roomId, x, y, rotation] });
+	const result = await gameAction({ type: "placeRoom", args: [roomId, x, y, rotation, facing] });
+	if (result.ok) selectedRoomId = roomId;
+	act(result, "build");
+}
+async function turnBuilding(roomId: string) {
+	const room = state.shelter.rooms.find(item => item.id === roomId);
+	if (!room || !serverReady || gameCommandPending) return;
+	world?.cancelBuildingDrag();
+	const facing = ((getRoomFacing(room) + 1) % 4) as 0 | 1 | 2 | 3;
+	const at = getRoomPosition(room), reason = getRoomFreePlacementReason(state, roomId, at.x, at.y, room.rotation, facing);
+	if (reason) { beginBuildingPlacement(room.type, roomId); buildingPlacement!.facing = facing; paintBuildingPlacement(); toast(`${reason} Выбери место для повёрнутой постройки.`, false); return; }
+	const result = await gameAction({ type: "faceRoom", args: [roomId, facing] });
 	if (result.ok) selectedRoomId = roomId;
 	act(result, "build");
 }
@@ -2489,8 +2501,9 @@ document.addEventListener("click", async (event) => {
 		}
 		case "placement-cancel": cancelBuildingPlacement(); render(); break;
 		case "placement-rotate":
-			if (buildingPlacement && !buildingPlacementBusy) { buildingPlacement.rotation = buildingPlacement.rotation === 0 ? 1 : 0; paintBuildingPlacement(); }
+			if (buildingPlacement && !buildingPlacementBusy) { buildingPlacement.facing = (((buildingPlacement.facing ?? 0) + 1) % 4) as 0 | 1 | 2 | 3; paintBuildingPlacement(); }
 			break;
+		case "turn-building": await turnBuilding(id); break;
 		case "placement-confirm": await confirmBuildingPlacement(); break;
 		case "placement-plan": page = "base"; render(); break;
 		case "open-market":
@@ -3024,7 +3037,7 @@ document.addEventListener("keydown", (event) => {
 	}
 	if (buildingPlacement && !buildingPlacementBusy && event.key === "Escape") { event.preventDefault(); cancelBuildingPlacement(); if (page !== "home") closeTools(); return; }
 	if (buildingPlacement && !buildingPlacementBusy && event.key.toLowerCase() === "r" && !(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLSelectElement)) {
-		event.preventDefault(); buildingPlacement.rotation = buildingPlacement.rotation === 0 ? 1 : 0; paintBuildingPlacement(); return;
+		event.preventDefault(); buildingPlacement.facing = (((buildingPlacement.facing ?? 0) + 1) % 4) as 0 | 1 | 2 | 3; paintBuildingPlacement(); return;
 	}
 	if (workerPlacement?.mode === "keyboard" && event.key === "Tab") {
 		const controls = Array.from(document.querySelectorAll<HTMLButtonElement>("#worker-room-targets button, #worker-placement button")).filter((node) => node.getClientRects().length > 0);
@@ -3165,9 +3178,10 @@ world = createWorld(
 		onCameraChange: onWorldCameraChange,
 		canDrag: canWorldDrag,
 		canBuildingDrag,
-		getBuildingPlacementReason: (id, x, y, rotation) => getRoomFreePlacementReason(state, id, x, y, rotation),
-		getFreeBuildPlacementReason: (placement, x, y) => placement.roomId ? getRoomFreePlacementReason(state, placement.roomId, x, y, placement.rotation) : getFreeBuildRoomQuote(state, placement.type as ShelterRoomType, x, y, placement.rotation).reason,
-		onPlaceBuilding: (id, x, y, rotation) => { void placeDraggedBuilding(id, x, y, rotation); },
+		getBuildingPlacementReason: (id, x, y, rotation, facing) => getRoomFreePlacementReason(state, id, x, y, rotation, facing),
+		getFreeBuildPlacementReason: (placement, x, y) => placement.roomId ? getRoomFreePlacementReason(state, placement.roomId, x, y, placement.rotation, placement.facing) : getFreeBuildRoomQuote(state, placement.type as ShelterRoomType, x, y, placement.rotation, placement.facing).reason,
+		onPlaceBuilding: (id, x, y, rotation, facing) => { void placeDraggedBuilding(id, x, y, rotation, facing); },
+		onTurnBuilding: (id) => { void turnBuilding(id); },
 		onBuildingDragState,
 		onFreeBuildSite: ({ x, y }) => chooseFreeBuildingSite(x, y),
 		getAssignmentReason: (scavId, roomId) => getWorkerAssignmentReason(state, scavId, roomId),
@@ -3186,7 +3200,7 @@ const readyContracts = () =>
 			getContractProgress(state, contract) >= contract.target
 	).length;
 const rosterStatus = () => `${state.scavs.map((scav) => `${scav.id}:${scav.status}:${scav.autoRaid.enabled}:${scav.assignment}:${scav.story.pending?.eventId}:${scav.story.bond}:${scav.story.stress}`).join(";")}|${state.raids.map((raid) => `${raid.id}:${raid.expedition?.stage}:${raid.expedition?.status}`).join(";")}|${getSocialPresentationKey(state)}`;
-const shelterStatus = () => `${state.shelter.sites.map((p) => `${p.column}:${p.row}`).join(";")}|${state.shelter.expansions.map((p) => `${p.column}:${p.row}:${Math.floor(p.workDone / p.workRequired * 100)}`).join(";")}|` + state.shelter.rooms.map((room) => `${room.id}:${room.column}:${room.row}:${room.position?.x ?? ""}:${room.position?.y ?? ""}:${room.rotation ?? 0}:${room.status}:${room.level}:${room.queue.map((job) => job.id).join(",")}:${room.workerIds.join(",")}:${room.recipeId}:${room.repeat}:${room.pending}:${room.cycles}`).join(";");
+const shelterStatus = () => `${state.shelter.sites.map((p) => `${p.column}:${p.row}`).join(";")}|${state.shelter.expansions.map((p) => `${p.column}:${p.row}:${Math.floor(p.workDone / p.workRequired * 100)}`).join(";")}|` + state.shelter.rooms.map((room) => `${room.id}:${room.column}:${room.row}:${room.position?.x ?? ""}:${room.position?.y ?? ""}:${room.rotation ?? 0}:${getRoomFacing(room)}:${room.status}:${room.level}:${room.queue.map((job) => job.id).join(",")}:${room.workerIds.join(",")}:${room.recipeId}:${room.repeat}:${room.pending}:${room.cycles}`).join(";");
 const achievementPresentationKey = () => getAchievementViews(state).map(view => `${view.id}:${view.unlocked}:${view.active}:${view.steps.map(step => Number(step.done)).join('')}`).join('|');
 const inventoryPresentationKey = () => JSON.stringify({ weapons:state.weapons, modules:state.modules, gear:state.gearItems, scavs:state.scavs.map(({health, ...scav})=>({...scav, healthy:isScavMedicallyReady({...scav,health})})), recruitment:state.recruitment,loot:state.lootItems,pendingLoot:state.pendingLoot,raidGear:state.raids.map(raid=>raid.expedition?.cargo.gearItems),kits:getFieldKitStock(state) });
 function interacting() {

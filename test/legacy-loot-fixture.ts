@@ -30,7 +30,7 @@ export function withoutLoot<T>(value: T): T {
 	return value;
 }
 
-/** Before v23 gear exists in the rack, but never in named raid cargo or receipts. */
+/** Before v24 gear exists in the rack, but never in named raid cargo or receipts. */
 export function withoutRaidGear<T>(value: T): T {
 	const state = value as {
 		raids?: { expedition?: { cargo?: { gearItems?: unknown } } | null }[];
