@@ -100,7 +100,7 @@
 .view-switch button[data-view=live]{width:auto!important;min-width:72px;font-size:10px!important;gap:5px;white-space:nowrap}
 @media(max-width:850px){
  .command-main.live-watching,.live-watching .command-main{grid-template-rows:40px auto max-content max-content!important;align-content:start;overflow-y:auto!important}
- .live-watching .command-stage-layout{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(310px,50dvh) auto;gap:9px;overflow:visible;height:auto!important}
+ .command-main.live-watching .command-stage-layout{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(310px,50dvh) auto;gap:9px;overflow:visible;height:auto!important}
  .live-watching #hero{height:100%;min-height:0}
  .live-watching .command-dock.live-dock{height:auto!important;max-height:none!important;min-height:0;margin:0!important}
  .live-dock-scroll{overflow:visible;max-height:none}
@@ -116,7 +116,7 @@
  .live-lobby-scene p{font-size:11px}
 }
 @media(max-width:480px){
- .live-watching .command-stage-layout{grid-template-rows:minmax(330px,46dvh) auto}
+ .command-main.live-watching .command-stage-layout{grid-template-rows:minmax(330px,46dvh) auto}
  .live-world{min-height:330px}
  .live-dock-head{padding:14px}.live-dock-head h2{font-size:18px}.live-dock-scroll{padding:12px}
  .live-field-hud{top:54px;max-width:180px}.live-field-hud p{font-size:8px;max-width:155px}.live-field-hud>strong{font-size:10px;max-width:155px}
