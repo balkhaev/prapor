@@ -75,13 +75,24 @@ export function shouldRejoinLivePresence(error: unknown, requestAccount: string 
 const rectangle = (value: unknown, bounds: Pick<LiveWorld, 'width' | 'height'>): value is Record<string, unknown> & { x: number; y: number; width: number; height: number } =>
   point(value, bounds) && integer(value.x) && integer(value.y) && integer(value.width, 1, bounds.width) && integer(value.height, 1, bounds.height) && value.x + value.width <= bounds.width && value.y + value.height <= bounds.height;
 
+function readCity(value: unknown, bounds: Pick<LiveWorld, 'width' | 'height'>) {
+  if (!rectangle(value, bounds) || !keys(value, ['name', 'x', 'y', 'width', 'height', 'quarters']) || !text(value.name, 80) || !Array.isArray(value.quarters) || value.quarters.length !== 4) return invalid();
+  const quarters = value.quarters.map(quarter => {
+    if (!rectangle(quarter, bounds) || !keys(quarter, ['id', 'name', 'x', 'y', 'width', 'height']) || !text(quarter.id, 64) || !text(quarter.name, 80) || quarter.x < value.x || quarter.y < value.y || quarter.x + quarter.width > value.x + value.width || quarter.y + quarter.height > value.y + value.height) return invalid();
+    return { id: quarter.id, name: quarter.name, x: quarter.x, y: quarter.y, width: quarter.width, height: quarter.height };
+  });
+  if (new Set(quarters.map(quarter => quarter.id)).size !== quarters.length) return invalid();
+  return { name: value.name, x: value.x, y: value.y, width: value.width, height: value.height, quarters };
+}
+
 function readDistrict(value: unknown, bounds: Pick<LiveWorld, 'width' | 'height'>): LiveDistrict {
   if (!rectangle(value, bounds) || !districtId(value.id) || !text(value.name, 80) || !text(value.description, 500) || !['industrial', 'forest', 'urban'].includes(value.theme as string) || !Array.isArray(value.spawns) || !value.spawns.length || value.spawns.length > 16) return invalid();
   const spawns = value.spawns.map(spawn => {
     if (!point(spawn, bounds) || !integer(spawn.x) || !integer(spawn.y) || spawn.x < value.x || spawn.y < value.y || spawn.x >= value.x + value.width || spawn.y >= value.y + value.height) return invalid();
     return { x: spawn.x, y: spawn.y };
   });
-  return { id: value.id, name: value.name, description: value.description, theme: value.theme as LiveDistrict['theme'], x: value.x, y: value.y, width: value.width, height: value.height, spawns };
+  const labelPoint = value.labelPoint === undefined ? undefined : point(value.labelPoint, bounds) && keys(value.labelPoint, ['x', 'y']) ? { x: value.labelPoint.x, y: value.labelPoint.y } : invalid();
+  return { id: value.id, name: value.name, description: value.description, theme: value.theme as LiveDistrict['theme'], x: value.x, y: value.y, width: value.width, height: value.height, spawns, ...(labelPoint ? { labelPoint } : {}) };
 }
 
 function readRouteBase(value: unknown) {
@@ -97,7 +108,7 @@ export function readLiveStatus(value: unknown): LiveStatus {
   const capacity = value.capacity;
   const maps: LiveMapSummary[] = value.maps.map(map => {
     if (!record(map) || map.id !== 'perimeter' || !text(map.name, 80) || !text(map.description, 500) || !['industrial', 'forest', 'urban', 'mixed'].includes(map.theme as string) || !integer(map.width, 2, 256) || !integer(map.height, 2, 256) || !integer(map.online, 0, capacity) || !integer(map.npcs, 0, 256)) return invalid();
-    return { id: map.id, name: map.name, description: map.description, theme: map.theme as LiveMapSummary['theme'], width: map.width, height: map.height, online: map.online, npcs: map.npcs };
+    return { id: map.id, name: map.name, description: map.description, theme: map.theme as LiveMapSummary['theme'], width: map.width, height: map.height, online: map.online, npcs: map.npcs, ...(map.city === undefined ? {} : { city: readCity(map.city, map as { width: number; height: number }) }) };
   });
   if (maps[0]!.online !== value.online) return invalid();
   const districts = value.districts.map(district => {
@@ -122,12 +133,13 @@ export function readLiveStatus(value: unknown): LiveStatus {
 export function readLiveWorld(source: unknown): LiveWorld {
   if (!record(source) || source.id !== 'perimeter' || !text(source.name, 80) || !text(source.description, 500) || !['industrial', 'forest', 'urban', 'mixed'].includes(source.theme as string) || !integer(source.width, 2, 256) || !integer(source.height, 2, 256) || !text(source.version, 128) || !text(source.seed, 128) || !integer(source.generatorVersion, 1, 1_000_000) || !integer(source.chunkSize, 1, 128) || !Array.isArray(source.obstacles) || source.obstacles.length > 4096 || !Array.isArray(source.extracts) || !source.extracts.length || source.extracts.length > 64 || !Array.isArray(source.zones) || source.zones.length > 1000 || !Array.isArray(source.districts) || source.districts.length !== 4 || !Array.isArray(source.pois) || source.pois.length > 256 || !Array.isArray(source.containers) || source.containers.length > 512) return invalid();
   const bounds = { width: source.width, height: source.height };
+  const city = source.city === undefined ? undefined : readCity(source.city, bounds);
   const terrainRows = source.terrainRows === undefined ? undefined : (() => {
     if (!Array.isArray(source.terrainRows) || source.terrainRows.length !== bounds.height || !source.terrainRows.every(row => typeof row === 'string' && row.length === bounds.width && [...row].every(code => Object.hasOwn(LIVE_TERRAIN_CODES, code)))) return invalid();
     return [...source.terrainRows] as string[];
   })();
   const paths: LiveWorld['paths'] = source.paths === undefined ? undefined : (() => {
-    if (!Array.isArray(source.paths) || source.paths.length > 256) return invalid();
+    if (!Array.isArray(source.paths) || source.paths.length > 384) return invalid();
     const parsed = source.paths.map(path => {
       if (!record(path) || !text(path.id) || !text(path.name, 80) || !['road', 'trail', 'rail', 'river'].includes(path.kind as string) || !number(path.width, .1, Math.max(bounds.width, bounds.height)) || !Array.isArray(path.points) || path.points.length < 2 || path.points.length > 256) return invalid();
       return { id: path.id, name: path.name, kind: path.kind as NonNullable<LiveWorld['paths']>[number]['kind'], width: path.width, points: path.points.map(location => point(location, bounds) ? { x: location.x, y: location.y } : invalid()) };
@@ -147,7 +159,7 @@ export function readLiveWorld(source: unknown): LiveWorld {
     if (!Array.isArray(source.routes) || source.routes.length > 16) return invalid();
     const parsed = source.routes.map(route => {
       const base = readRouteBase(route);
-      if (!record(route) || !keys(route, ['id', 'name', 'description', 'districtId', 'purpose', 'poiIds']) || !Array.isArray(route.poiIds) || route.poiIds.length < 2 || route.poiIds.length > 5 || !route.poiIds.every(id => text(id) && pois.some(poi => poi.id === id && poi.districtId === base.districtId)) || new Set(route.poiIds).size !== route.poiIds.length) return invalid();
+      if (!record(route) || !keys(route, ['id', 'name', 'description', 'districtId', 'purpose', 'poiIds']) || !Array.isArray(route.poiIds) || route.poiIds.length < 2 || route.poiIds.length > 5 || !route.poiIds.every(id => text(id) && pois.some(poi => poi.id === id)) || new Set(route.poiIds).size !== route.poiIds.length) return invalid();
       return { ...base, poiIds: [...route.poiIds] as string[] };
     });
     uniqueRoutes(parsed); return parsed;
@@ -157,7 +169,7 @@ export function readLiveWorld(source: unknown): LiveWorld {
     return { x: container.x, y: container.y, id: container.id, poiId: container.poiId, kind: container.kind, lootTable: container.lootTable as LiveWorld['containers'][number]['lootTable'], searchMs: container.searchMs };
   });
   if (new Set(containers.map(container => container.id)).size !== containers.length) return invalid();
-  return { ...bounds, id: source.id, name: source.name, description: source.description, theme: source.theme as LiveWorld['theme'], version: source.version, seed: source.seed, generatorVersion: source.generatorVersion, chunkSize: source.chunkSize, districts, pois, containers, ...(terrainRows ? { terrainRows } : {}), ...(paths ? { paths } : {}), ...(routes ? { routes } : {}), obstacles: source.obstacles.map(obstacle => {
+  return { ...bounds, id: source.id, name: source.name, description: source.description, theme: source.theme as LiveWorld['theme'], version: source.version, seed: source.seed, generatorVersion: source.generatorVersion, chunkSize: source.chunkSize, districts, pois, containers, ...(city ? { city } : {}), ...(terrainRows ? { terrainRows } : {}), ...(paths ? { paths } : {}), ...(routes ? { routes } : {}), obstacles: source.obstacles.map(obstacle => {
     if (!rectangle(obstacle, bounds) || !(obstacle.kind === undefined || ['building', 'wall', 'container', 'barricade', 'tree', 'water'].includes(obstacle.kind as string)) || !(obstacle.label === undefined || text(obstacle.label, 80))) return invalid();
     return { x: obstacle.x, y: obstacle.y, width: obstacle.width, height: obstacle.height, ...(obstacle.kind ? { kind: obstacle.kind as LiveWorld['obstacles'][number]['kind'] } : {}), ...(obstacle.label ? { label: obstacle.label as string } : {}) };
   }), extracts: source.extracts.map(extract => point(extract, bounds) && integer(extract.x) && integer(extract.y) ? { x: extract.x, y: extract.y } : invalid()), zones: source.zones.map(zone => {
@@ -220,6 +232,7 @@ export function readLiveSnapshot(value: unknown, cachedWorld?: LiveWorld): LiveS
   if (new Set(visibleChunks.map(chunk => `${chunk.x},${chunk.y}`)).size !== visibleChunks.length) return invalid();
   const server = readLiveStatus(value.server), map = server.maps[0]!;
   if (map.width !== world.width || map.height !== world.height || map.theme !== world.theme || map.name !== world.name) return invalid();
+  if (map.city && JSON.stringify(map.city) !== JSON.stringify(world.city)) return invalid();
   return { server, now: value.now, selfId: value.selfId, self: player, world, entities, drops, events, worldVersion: value.worldVersion, visibleChunks };
 }
 export interface LiveIdentity { accountId: string | null; playerId?: string; worldVersion?: string; gameId?: string | null }

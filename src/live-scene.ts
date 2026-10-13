@@ -35,6 +35,7 @@ export class LiveScene {
   private controls = document.createElement('div');
   private following = true;
   private overview = false;
+  private cityOverview = false;
   private dragging: { id: number; startX: number; startY: number; camera: LivePoint; moved: boolean } | null = null;
   private ignoreClickUntil = 0;
   private effects: { event: LiveEvent; at: number }[] = [];
@@ -52,7 +53,7 @@ export class LiveScene {
     this.canvas.setAttribute('aria-label', 'Общая карта. Нажми на землю для движения или выбери бойца. Потяни карту для обзора. Стрелки и WASD перемещают тебя.');
     this.canvas.setAttribute('role', 'application');
     this.controls.className = 'live-camera';
-    this.controls.innerHTML = '<button data-live-zoom="out" aria-label="Отдалить карту">−</button><button data-live-zoom="follow" aria-label="Следовать за своим бойцом">За мной</button><button data-live-zoom="overview" aria-label="Показать всю карту">Вся карта</button><button data-live-zoom="in" aria-label="Приблизить карту">+</button>';
+    this.controls.innerHTML = '<button data-live-zoom="out" aria-label="Отдалить карту">−</button><button data-live-zoom="follow" aria-label="Следовать за своим бойцом">За мной</button><button data-live-zoom="overview" aria-label="Показать всю карту">Вся карта</button><button data-live-zoom="city" aria-label="Показать город" hidden>Город</button><button data-live-zoom="in" aria-label="Приблизить карту">+</button>';
     host.append(this.canvas, this.controls);
     this.observer = new ResizeObserver(() => this.resize());
     this.observer.observe(host);
@@ -78,7 +79,9 @@ export class LiveScene {
   update(snapshot: LiveSnapshot): void {
     const at = performance.now();
     this.overlayBoundsDirty = true;
-    if (this.snapshot?.worldVersion !== snapshot.worldVersion) { this.motions.clear(); this.effects = []; this.seenEvents.clear(); this.selected = null; this.routePoiIds = []; this.waypointTargets = []; this.hitTargets = []; this.following = true; this.overview = false; this.zoom = 1; this.dragging = null; this.canvas.classList.remove('is-dragging'); this.cacheTerrain(snapshot.world); }
+    if (this.snapshot?.worldVersion !== snapshot.worldVersion) { this.motions.clear(); this.effects = []; this.seenEvents.clear(); this.selected = null; this.routePoiIds = []; this.waypointTargets = []; this.hitTargets = []; this.following = true; this.overview = false; this.cityOverview = false; this.zoom = 1; this.dragging = null; this.canvas.classList.remove('is-dragging'); this.cacheTerrain(snapshot.world); }
+    const cityButton = this.controls.querySelector<HTMLButtonElement>('[data-live-zoom=city]');
+    if (cityButton) cityButton.hidden = !snapshot.world.city;
     for (const entity of snapshot.entities) {
       const existing = this.motions.get(entity.id);
       const from = existing && Math.hypot(entity.x - existing.to.x, entity.y - existing.to.y) <= 4 ? this.interpolated(existing, at) : { x: entity.x, y: entity.y };
@@ -112,10 +115,10 @@ export class LiveScene {
   private zoomClick = (event: MouseEvent): void => {
     const action = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-live-zoom]')?.dataset.liveZoom;
     if (!action) return;
-    if (action === 'follow') { this.following = true; this.overview = false; this.zoom = 1; }
-    else if (action === 'overview') { this.following = false; this.overview = true; }
-    else { this.overview = false; this.zoom = clamp(this.zoom * (action === 'in' ? 1.25 : .8), .06, 1.8); }
-    this.controls.querySelectorAll<HTMLButtonElement>('button').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.liveZoom === (this.overview ? 'overview' : this.following ? 'follow' : ''))));
+    if (action === 'follow') { this.following = true; this.overview = false; this.cityOverview = false; this.zoom = 1; }
+    else if (action === 'overview' || action === 'city' && this.snapshot?.world.city) { this.following = false; this.overview = true; this.cityOverview = action === 'city'; }
+    else { this.overview = false; this.cityOverview = false; this.zoom = clamp(this.zoom * (action === 'in' ? 1.25 : .8), .06, 1.8); }
+    this.controls.querySelectorAll<HTMLButtonElement>('button').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.liveZoom === (this.overview ? this.cityOverview ? 'city' : 'overview' : this.following ? 'follow' : ''))));
     this.canvas.focus({ preventScroll: true });
   };
   private click = (event: MouseEvent): void => {
@@ -154,7 +157,7 @@ export class LiveScene {
     if (!drag.moved && Math.hypot(dx, dy) < 7) return;
     drag.moved = true; this.following = false;
     // Keep the same scale while leaving overview, so a drag never jumps the map.
-    if (this.overview) { this.zoom = this.tile / (this.width < 480 ? 44 : 54); this.overview = false; }
+    if (this.overview) { this.zoom = this.tile / (this.width < 480 ? 44 : 54); this.overview = false; this.cityOverview = false; }
     this.camera = { x: clamp(drag.camera.x - (dx / (this.tile / 2) + dy / (this.tile / 4)) / 2, 0, this.snapshot.world.width - 1), y: clamp(drag.camera.y - (dy / (this.tile / 4) - dx / (this.tile / 2)) / 2, 0, this.snapshot.world.height - 1) };
     this.canvas.classList.add('is-dragging');
   };
@@ -313,11 +316,13 @@ export class LiveScene {
       } else for (let tier = 0; tier < 3; tier++) { const y = p.y - (height * .32 + tier * height * .23) * scale, w = (20 - tier * 4) * scale; this.polygon([{ x: p.x - w, y }, { x: p.x, y: y - height * .48 * scale }, { x: p.x + w, y }], ['#314d34', '#476743', '#5c7549'][tier]!, '#263c2d'); }
       return;
     }
-    const elevation = this.tile * (kind === 'wall' ? .6 : kind === 'barricade' ? .26 : kind === 'container' ? .65 : 1.05);
+    const city = this.snapshot?.world.city;
+    const urban = !!city && obstacle.x + obstacle.width / 2 >= city.x && obstacle.y + obstacle.height / 2 >= city.y && obstacle.x + obstacle.width / 2 < city.x + city.width && obstacle.y + obstacle.height / 2 < city.y + city.height;
+    const elevation = this.tile * (kind === 'wall' ? .6 : kind === 'barricade' ? .26 : kind === 'container' ? .65 : urban ? 1.05 + (index % 4) * .18 : 1.05);
     const base = this.quad(obstacle.x - .5, obstacle.y - .5, obstacle.width, obstacle.height), top = this.quad(obstacle.x - .5, obstacle.y - .5, obstacle.width, obstacle.height, elevation);
     const localPoi = this.snapshot?.world.pois.find(poi => obstacle.x >= poi.x && obstacle.y >= poi.y && obstacle.x < poi.x + poi.width && obstacle.y < poi.y + poi.height);
-    const rural = localPoi?.districtId === 'village' || localPoi?.districtId === 'sawmill';
-    const colors = kind === 'container' ? [['#576e6c', '#345354', '#7b9086'], ['#92705b', '#664b3a', '#b59070'], ['#777955', '#4c523c', '#9b9a76']][index % 3]! : kind === 'barricade' ? ['#817452', '#62543d', '#aa9470'] : kind === 'wall' ? rural ? ['#918066', '#6a5b44', '#b1a078'] : ['#81877a', '#596154', '#a0a28b'] : rural ? ['#988c69', '#6e6247', '#787a59'] : ['#707b70', '#4e5e55', '#949684'];
+    const rural = !urban && (localPoi?.districtId === 'village' || localPoi?.districtId === 'sawmill');
+    const colors = kind === 'container' ? [['#576e6c', '#345354', '#7b9086'], ['#92705b', '#664b3a', '#b59070'], ['#777955', '#4c523c', '#9b9a76']][index % 3]! : kind === 'barricade' ? ['#817452', '#62543d', '#aa9470'] : kind === 'wall' ? rural ? ['#918066', '#6a5b44', '#b1a078'] : ['#81877a', '#596154', '#a0a28b'] : rural ? ['#988c69', '#6e6247', '#787a59'] : urban ? [['#8b8174', '#60594e', '#ada896'], ['#8c776c', '#665950', '#9d9e95'], ['#a3a08c', '#767967', '#b3b29c']][index % 3]! : ['#707b70', '#4e5e55', '#949684'];
     this.polygon([base[1]!, base[2]!, top[2]!, top[1]!], colors[0]!, '#acaf8644'); this.polygon([base[2]!, base[3]!, top[3]!, top[2]!], colors[1]!, '#84907666'); this.polygon(top, colors[2]!, '#b4b39177');
     if (kind === 'container') {
       c.strokeStyle = '#273c3a88'; c.lineWidth = 1;
@@ -349,9 +354,10 @@ export class LiveScene {
     gradient.addColorStop(0, '#39443b'); gradient.addColorStop(1, '#101d18'); c.fillStyle = gradient; c.fillRect(0, 0, this.width, this.height);
     if (!this.snapshot) return;
     const snapshot = this.snapshot, self = snapshot.entities.find(entity => entity.id === snapshot.selfId);
-    this.tile = this.overview ? Math.min(this.width * 1.8 / (snapshot.world.width + snapshot.world.height), Math.max(120, this.height - 95) * 3.6 / (snapshot.world.width + snapshot.world.height)) : (this.width < 480 ? 44 : 54) * this.zoom;
+    const frame = this.cityOverview && snapshot.world.city ? snapshot.world.city : { x: 0, y: 0, width: snapshot.world.width, height: snapshot.world.height };
+    this.tile = this.overview ? Math.min(this.width * 1.8 / (frame.width + frame.height), Math.max(120, this.height - 95) * 3.6 / (frame.width + frame.height)) : (this.width < 480 ? 44 : 54) * this.zoom;
     this.origin = { x: this.width * .5, y: this.height * (this.overview ? .54 : .58) };
-    if (this.overview) this.camera = { x: snapshot.world.width / 2, y: snapshot.world.height / 2 };
+    if (this.overview) this.camera = { x: frame.x + frame.width / 2, y: frame.y + frame.height / 2 };
     else if (self && this.following) this.camera = this.interpolated(this.motions.get(self.id)!, now);
     const world = snapshot.world;
     const corners = [this.unproject(-this.tile, -this.tile), this.unproject(this.width + this.tile, -this.tile), this.unproject(-this.tile, this.height + this.tile), this.unproject(this.width + this.tile, this.height + this.tile)];
@@ -425,9 +431,17 @@ export class LiveScene {
       }
       return false;
     };
+    if (small && world.city) {
+      const p = this.project({ x: world.city.x + world.city.width / 2, y: world.city.y + world.city.height / 2 });
+      placeLabel(world.city.name.toUpperCase(), { x: p.x, y: p.y - 25 }, this.width < 480 ? 15 : 18, '#f0dab0', true);
+    }
     if (small) for (const district of world.districts) {
-      const p = this.project({ x: district.x + district.width / 2, y: district.y + district.height / 2 });
+      const p = this.project(district.labelPoint ?? { x: district.x + district.width / 2, y: district.y + district.height / 2 });
       placeLabel(district.name.toUpperCase(), { x: p.x, y: p.y - 24 }, this.width < 480 ? 11 : 14, '#e5e8c2', true);
+    }
+    if (small && this.cityOverview && world.city) for (const quarter of world.city.quarters) {
+      const p = this.project({ x: quarter.x + quarter.width / 2, y: quarter.y + quarter.height / 2 });
+      placeLabel(quarter.name, { x: p.x, y: p.y - 16 }, this.width < 480 ? 9 : 11, '#e3d3b5', true);
     }
     const pois = [...world.pois].sort((a, b) => Number(this.routePoiIds.includes(b.id)) - Number(this.routePoiIds.includes(a.id)) || b.danger - a.danger || b.width * b.height - a.width * a.height);
     let labelCount = 0;
