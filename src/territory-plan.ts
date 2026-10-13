@@ -1,6 +1,7 @@
 import { getRoomBounds, getRoomFacing, getRoomFootprint, getRoomPosition, getShelterFrontier, getShelterSites, type GameState, type ShelterSite } from "./game/engine";
 import { getShelterLandscape } from "./shelter-landscape";
 import type { ShelterPoint } from "./shelter-motion";
+import { projectShelterBounds } from "./shelter-isometric";
 
 type BoundarySide = "north" | "south" | "east" | "west";
 export interface TerritoryPlanExpansion {
@@ -70,5 +71,8 @@ export function getTerritoryPlanLayout(state: GameState) {
 	const top = Math.min(...rects.map(rect => rect.y), ...expansions.map(item => item.point.y)) - 70;
 	const right = Math.max(...rects.map(rect => rect.x + rect.width), ...expansions.map(item => item.point.x)) + 82;
 	const bottom = Math.max(...rects.map(rect => rect.y + rect.height), ...expansions.map(item => item.point.y)) + 72;
-	return { bounds: { x: left, y: top, width: right - left, height: bottom - top }, landscape, expansions };
+	const bounds = { x: left, y: top, width: right - left, height: bottom - top };
+	const ground = projectShelterBounds(bounds);
+	const projectedBounds = { x: ground.x - 18, y: ground.y - 72, width: ground.width + 36, height: ground.height + 98 };
+	return { bounds, projectedBounds, landscape, expansions };
 }

@@ -10,12 +10,14 @@ import { getHostileVisualLoadout, getRaidVisualLoadout } from "./scav-loadout";
 import type { ShelterCamera, ShelterViewport } from "./shelter-camera";
 import { getSquadRaidFieldFrame, type SquadRaidFieldFrame, type SquadRaidFieldShot } from "./squad-raid-field";
 import type { ScavVisualLoadout } from "./scav-loadout";
+import { getBoss } from './game/bosses';
+import { bossVisualLoadout } from './boss-ui';
 
 type Point = { x: number; y: number };
 type Plan = ReturnType<typeof getRaidFieldPlan>;
 type Frame = ReturnType<typeof getRaidFieldFrame>;
 export interface RaidStreetSnapshot { raids: Raid[]; selectedRaidId?: string | null; history?: RaidReport[]; weapons?: WeaponInstance[]; scavs?: { id: string; personality?: string; appearance?: number }[] }
-type Pawn = { root: Phaser.GameObjects.Container; body: Phaser.GameObjects.Container; poses: Phaser.GameObjects.Image[]; equipment: ScavEquipment; animation: ScavAnimationState; point: Point | null; appearance: number; direction: ScavDirection };
+type Pawn = { root: Phaser.GameObjects.Container; body: Phaser.GameObjects.Container; poses: Phaser.GameObjects.Image[]; equipment: ScavEquipment; animation: ScavAnimationState; point: Point | null; appearance: number; direction: ScavDirection; bossBadge?:Phaser.GameObjects.Text };
 type Occluder = { object: Phaser.GameObjects.Container; x: number; y: number; width: number; height: number };
 const MINI = { width: 136, height: 102, inset: 9, innerWidth: 118, innerHeight: 78 };
 const clamp = Phaser.Math.Clamp;
@@ -71,6 +73,7 @@ export class RaidStreetRenderer {
 	private carriedWeapon: WeaponInstance | null = null;
 	private visualLoadout: ReturnType<typeof getRaidVisualLoadout> | null = null;
 	private hostileLoadouts = new Map<number, ReturnType<typeof getHostileVisualLoadout>>();
+	private bossLoadouts = new Map<string,ScavVisualLoadout>();
 	private builtRaidId: string | null = null;
 	private planInput = "";
 
@@ -340,8 +343,8 @@ export class RaidStreetRenderer {
 		const aim = target && fighting ? Math.atan2(target.y - point.y, target.x - point.x) * 180 / Math.PI : null;
 		const torso = scavTorsoAnchor(pawn.poses.map((image) => ({ weight: image.visible ? image.alpha : 0, torso: (image.frame.customData as { custom?: { torso?: Point } }).custom?.torso })));
 		const head = scavHeadAnchor(pawn.poses.map((image) => ({ weight: image.visible ? image.alpha : 0, head: (image.frame.customData as { custom?: { head?: Point } }).custom?.head })));
-		const loadout = hostile ? this.hostileLoadouts.get(visualAppearance) ?? getHostileVisualLoadout(visualAppearance) : memberLoadout ?? this.visualLoadout ?? { armorModelId: null, packModelId: null, weapon: null };
-		if (hostile) this.hostileLoadouts.set(visualAppearance, loadout);
+		const loadout = memberLoadout ?? (hostile ? this.hostileLoadouts.get(visualAppearance) ?? getHostileVisualLoadout(visualAppearance) : this.visualLoadout ?? { armorModelId: null, packModelId: null, weapon: null });
+		if (hostile&&!memberLoadout) this.hostileLoadouts.set(visualAppearance, loadout);
 		pawn.equipment.update(loadout, pawn.direction, { working: crouching, mode: searching ? "slung" : "held", aim, bodyAngle: pawn.body.angle, hostile, torso, head });
 	}
 	private gunMuzzle(pawn: Pawn): Point {
@@ -537,7 +540,11 @@ export class RaidStreetRenderer {
 			const actor = this.enemies[index] ?? this.makePawn(enemyAppearance, true); if (!this.enemies[index]) this.enemies[index] = actor;
 			this.setPawnAppearance(actor, enemyAppearance);
 			actor.body.setData("appearance", requestedEnemy);
-			this.animatePawn(actor, this.project(enemy), frame, Math.min(100, Math.max(0, delta)), true, requestedEnemy);
+			const boss=plan.boss&&enemy.x===plan.boss.position.x&&enemy.y===plan.boss.position.y?getBoss(plan.boss.id):null;
+			let loadout:ScavVisualLoadout|undefined;
+			if(boss){loadout=this.bossLoadouts.get(boss.id);if(!loadout){loadout=bossVisualLoadout(boss);this.bossLoadouts.set(boss.id,loadout);}if(!actor.bossBadge){actor.bossBadge=this.text(0,-76,`БОСС · ${boss.name}`,10,'#edc08b').setOrigin(.5).setBackgroundColor('#312618ee').setPadding(5,3);actor.root.add(actor.bossBadge);}actor.bossBadge.setText(`БОСС · ${boss.name}`).setVisible(true);}
+			else actor.bossBadge?.setVisible(false);
+			this.animatePawn(actor, this.project(enemy), frame, Math.min(100, Math.max(0, delta)), true, requestedEnemy,loadout);
 		});
 		for (const occluder of this.occluders) {
 			const points = this.squadFrame ? this.squadFrame.members.filter((member) => !member.lostScav).map((member) => this.project(member.position)) : [point];
@@ -598,5 +605,5 @@ export class RaidStreetRenderer {
 		this.updateAlert();
 		this.progress.clear(); this.progress.fillStyle(0x0c1c16, .92).fillRoundedRect(0, 0, Math.min(350, this.viewport.width - 224), 10, 3).fillStyle(0xcbb580).fillRoundedRect(0, 0, Math.min(350, this.viewport.width - 224) * frame.progress, 10, 3);
 	}
-	destroy(): void { this.layer.destroy(true); this.loot.clear(); this.hostileLoadouts.clear(); this.squadPawns.clear(); this.squadLabels.clear(); this.squadFrame = null; this.cachedGroup = []; this.enemies = []; this.occluders = []; this.pawn = null; this.cachedRaid = null; this.visualLoadout = null; }
+	destroy(): void { this.layer.destroy(true); this.loot.clear(); this.hostileLoadouts.clear(); this.bossLoadouts.clear(); this.squadPawns.clear(); this.squadLabels.clear(); this.squadFrame = null; this.cachedGroup = []; this.enemies = []; this.occluders = []; this.pawn = null; this.cachedRaid = null; this.visualLoadout = null; }
 }

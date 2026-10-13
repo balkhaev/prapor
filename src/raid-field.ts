@@ -2,6 +2,7 @@ import type { Raid } from "./game/engine";
 import type { ModuleSlot } from "./game/modules";
 import type { ExpeditionBranch } from "./game/systems";
 import type { Supplies } from "./game/data";
+import { BOSS_SAVE_VERSION, getBoss, type BossId } from './game/bosses';
 
 export interface RaidFieldPoint { x: number; y: number; z?: number }
 export type RaidFieldAction = "move" | "cover" | "search" | "skirmish" | "extract" | "checkpoint";
@@ -31,6 +32,7 @@ export interface RaidFieldPlan {
 	buildings: RaidFieldBuilding[]; props: RaidFieldProp[]; lootSpots: RaidFieldLoot[];
 	entry: RaidFieldPoint; checkpoint: RaidFieldPoint; path: RaidFieldPoint[]; segments: RaidFieldSegment[];
 	walkable: boolean[];
+	boss?: { id: BossId; name: string; position: RaidFieldPoint };
 }
 export interface RaidFieldObservedEvent { id: string; at: number; label: string; text: string; kind: "neutral" | "danger" }
 export interface RaidFieldFrame {
@@ -82,7 +84,13 @@ function generator(seed: number): () => number {
 	return () => { value = Math.imul(value, 1664525) + 1013904223 >>> 0; return value / 4294967296; };
 }
 export function getRaidFieldPlanId(raid: Raid): string {
-	return `${raid.mapId}:${(raid.squad?.routeSeed ?? raid.seed) >>> 0}:${raid.expedition?.stage ?? 1}:${raid.expedition?.branch ?? "scavenge"}:${raid.squad?.members[0]?.tactic ?? raid.tactic}`;
+	const boss = fieldBoss(raid);
+	return `${fieldLayoutId(raid)}${boss ? `:boss:${boss.id}` : ''}`;
+}
+function fieldLayoutId(raid: Raid): string { return `${raid.mapId}:${(raid.squad?.routeSeed ?? raid.seed) >>> 0}:${raid.expedition?.stage ?? 1}:${raid.expedition?.branch ?? "scavenge"}:${raid.squad?.members[0]?.tactic ?? raid.tactic}`; }
+function fieldBoss(raid: Raid) {
+	const boss = raid.bossHunt ? getBoss(raid.bossHunt) : null;
+	return boss && raid.strategy?.objective === 'boss' && (raid.expedition?.lootCatalogVersion ?? 0) >= BOSS_SAVE_VERSION && boss.mapId === raid.mapId && boss.depth === raid.expedition?.stage && raid.expedition.branch === 'combat' ? boss : null;
 }
 const center = (x: number, y: number): RaidFieldPoint => ({ x: x + .5, y: y + .5 });
 const distance = (a: RaidFieldPoint, b: RaidFieldPoint) => Math.hypot(b.x - a.x, b.y - a.y);
@@ -155,7 +163,7 @@ function chooseCategory(mapId: string, branch: ExpeditionBranch, index: number, 
 
 /** Derives the paid expedition's street layout. It neither reads nor consumes simulation RNG. */
 export function getRaidFieldPlan(raid: Raid): RaidFieldPlan {
-	const identity = getRaidFieldPlanId(raid), seed = hash(identity), random = generator(seed);
+	const identity = getRaidFieldPlanId(raid), seed = hash(fieldLayoutId(raid)), random = generator(seed), boss = fieldBoss(raid);
 	const tactic = raid.squad?.members[0]?.tactic ?? raid.tactic;
 	const mapId = Object.hasOwn(THEMES, raid.mapId) ? raid.mapId : "courtyard", theme = THEMES[mapId]!;
 	const width = 24, height = 20, vertical = [2, 8 + Math.floor(random() * 2), 15, 21], horizontal = [2, 8, 13 + Math.floor(random() * 2), 18];
@@ -204,9 +212,10 @@ export function getRaidFieldPlan(raid: Raid): RaidFieldPlan {
 		add("move", path.slice(0, split + 1), Math.max(2, split * .55), i ? "Следующая улица" : "Выход на улицы", `Движение через район «${theme.label}» к точке «${spot.label}».`);
 		const enemy = nearestWalkable(plan, { x: mid.x + (random() < .5 ? 2 : -2), y: mid.y - 2 });
 		const encounter = branch === "combat" || tactic === "bold" ? "skirmish" : "cover";
+		if (boss && i === 0) plan.boss = { id: boss.id, name: boss.name, position: { ...enemy } };
 		add(encounter, [{ ...mid }], encounter === "skirmish" ? 4 : tactic === "cautious" ? 4.8 : 2.8,
-			encounter === "skirmish" ? "Контакт у перекрёстка" : "Наблюдение из укрытия",
-			encounter === "skirmish" ? "Боец удерживает позицию. Итог столкновения станет известен на контрольной точке." : "Боец пережидает патруль и проверяет проход; открытый участок ещё впереди.", null, [enemy]);
+			boss && i === 0 ? `Босс: ${boss.name}` : encounter === "skirmish" ? "Контакт у перекрёстка" : "Наблюдение из укрытия",
+			boss && i === 0 ? `${boss.title}. Исход боя станет известен на контрольной точке; награду нужно эвакуировать.` : encounter === "skirmish" ? "Боец удерживает позицию. Итог столкновения станет известен на контрольной точке." : "Боец пережидает патруль и проверяет проход; открытый участок ещё впереди.", null, [enemy]);
 		add("move", path.slice(split), Math.max(1.5, (path.length - split - 1) * .55), "Переход к объекту", `Подход к точке «${spot.label}» по свободному проходу.`);
 		add("search", [{ ...spot.approach }], branch === "scavenge" ? 4.5 : 3.1, `Осмотр: ${spot.label}`, "Осмотр объекта. Добыча будет учтена после достижения контрольной точки.", spot.id);
 		cursor = spot.approach;

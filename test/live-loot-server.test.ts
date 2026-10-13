@@ -11,6 +11,8 @@ import { getLiveMap, isLiveWalkable, LIVE_MAPS } from "../src/game/live-maps";
 import { LOOT_MODELS } from "../src/game/loot";
 import { createHealth, createMedicalInventory, type MedicalInventory } from "../src/game/health";
 import { readLiveSnapshot } from "../src/live-client";
+import { getBoss } from "../src/game/bosses";
+import { getLiveBossArena } from "../src/game/live-boss-arenas";
 
 const ORIGIN = "https://game.delopusk.ru";
 interface Session { cookie: string; gameId: string; owner: string; id?: string }
@@ -116,9 +118,10 @@ beforeEach(async () => {
 afterEach(async () => { service.close(); await rm(directory, { recursive: true, force: true }); });
 
 describe("multiplayer loot and durable headquarters economy", () => {
-  test("all 32 trophy and junk models occur in authored pools, legendary finds follow danger, and drops carry private source UUIDs", async () => {
+  test("all ordinary trophy and junk models occur in authored pools, boss trophies require a defeat, and drops carry private source UUIDs", async () => {
     const models = new Set(LIVE_MAPS.flatMap(map => map.lootSpawns.flatMap(point => getLiveLootPool(map.id, point).map(entry => entry.model.id))));
-    expect([...models].sort()).toEqual(LOOT_MODELS.map(model => model.id).sort());
+    expect([...models].sort()).toEqual(LOOT_MODELS.filter(model => !model.bossId).map(model => model.id).sort());
+    for (const model of LOOT_MODELS.filter(model => model.bossId)) expect(models.has(model.id)).toBe(false);
     expect(getLiveLootPool("perimeter", { x: 0, y: 0 }).every(entry => entry.model.minDepth === 1)).toBe(true);
     const contested = getLiveMap("perimeter").pois.find(poi => poi.danger === 3 && poi.districtId === "depot")!;
     expect(getLiveLootPool("perimeter", { x: contested.x + 10, y: contested.y + 10 }).some(entry => entry.model.id === "secure-drive")).toBe(true);
@@ -319,6 +322,61 @@ describe("multiplayer loot and durable headquarters economy", () => {
       expect(stored().filter(drop => drop.id.startsWith("city-body-"))).toEqual(remaining);
       expect(JSON.stringify(restored).includes(secret.id)).toBe(false);
     }
+  });
+
+  test("G3 boss bodies relocate without healing, restarting a defeated cycle or duplicating its trophy and headquarters receipt", async () => {
+    const first = await enter(), map = getLiveMap("perimeter"), woundedBody = createHealth(64), deadBody = createHealth();
+    woundedBody.parts.leftLeg.fracture = true; woundedBody.parts.rightArm.maxHp = 48; woundedBody.parts.rightArm.hp = 31; deadBody.parts.head.hp = 0;
+    const trophyItem = trophy(getBoss("komendant")!.trophyModelId), waitingItem = trophy(getBoss("lesnik")!.trophyModelId), deadline = time + 90_000, corpseExpiry = time + 120_000;
+    const parcel: LiveDelivery = { id: randomUUID(), owner: first.session.owner, gameId: first.session.gameId, createdAt: time - 5000, items: [waitingItem], money: 5 };
+    const medicine = createMedicalInventory({ medkit: 27, bandage: 0, tourniquet: 0, splint: 1, painkiller: 0, surgery: 0 });
+    blocked = true;
+    restart(db => {
+      const saved = JSON.parse(db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!.state);
+      saved.geometryVersion = "perimeter-g3-b38b4b0d";
+      saved.drops = saved.drops.filter((drop: { containerId?: string }) => /^poi-[0-7]-[0-3]-/.test(drop.containerId ?? ""));
+      saved.drops.push({ id: "g3-boss-corpse", bossId: "komendant", source: "body", mapId: "perimeter", x: 0, y: 0, amount: 350, items: [trophyItem], expiresAt: corpseExpiry });
+      db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify(saved));
+      for (const row of db.query<{ boss_id: string; state: string }, []>("SELECT boss_id,state FROM live_bosses").all()) {
+        const boss = JSON.parse(row.state); Object.assign(boss, { x: 0, y: 0, home: { x: 0, y: 0 }, route: [{ x: 0, y: 0 }], nextMove: time + 1_000_000, nextAttack: time + 1_000_000, healthAt: time });
+        if (row.boss_id === "lesnik") Object.assign(boss, { body: woundedBody, health: 64, bossCycle: 7, bossDeathSettled: false, respawnAt: 0 });
+        if (row.boss_id === "komendant") Object.assign(boss, { body: deadBody, health: 0, bossCycle: 9, bossDeathSettled: true, respawnAt: deadline });
+        db.query("UPDATE live_bosses SET state=? WHERE boss_id=?").run(JSON.stringify(boss), row.boss_id);
+      }
+      const row = db.query<{ identity: string; state: string }, []>("SELECT identity,state FROM live_players").get()!, player = JSON.parse(row.state);
+      Object.assign(player, { x: 0, y: 0, ammo: 17, medicine, cargo: 0, stash: 0, kills: 4, bossKills: 1, lastCombatAt: 0, safeUntil: time + 120_000 });
+      db.query("UPDATE live_players SET state=? WHERE identity=?").run(JSON.stringify(player), row.identity);
+      db.query("INSERT INTO live_boss_kill_credits(boss_id,cycle,identity,player_id,created_at) VALUES(?,?,?,?,?)").run("komendant", 9, first.session.owner, first.session.id!, time - 5000);
+      db.query("INSERT INTO live_economy_outbox(id,identity,kind,payload,message) VALUES(?,?,'delivery',?,'Ожидает места')").run(parcel.id, first.session.owner, JSON.stringify(parcel));
+    });
+    const durable = () => {
+      const db = new Database(dbPath, { readonly: true });
+      const bosses = db.query<{ boss_id: string; state: string }, []>("SELECT boss_id,state FROM live_bosses").all().map(row => ({ id: row.boss_id, state: JSON.parse(row.state) }));
+      const world = JSON.parse(db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!.state), credits = db.query<{ count: number }, []>("SELECT count(*) AS count FROM live_boss_kill_credits WHERE boss_id='komendant' AND cycle=9").get()!.count;
+      db.close(); return { bosses, world, credits };
+    };
+    for (let retry = 0; retry < 3; retry++) {
+      if (retry) restart(); const restored = (await enter(first.session)).state, saved = durable();
+      const wounded = saved.bosses.find(boss => boss.id === "lesnik")!.state, defeated = saved.bosses.find(boss => boss.id === "komendant")!.state;
+      const arena = getLiveBossArena(map, "lesnik");
+      expect(wounded).toMatchObject({ body: woundedBody, bossCycle: 7, bossDeathSettled: false, respawnAt: 0 });
+      expect(wounded.x >= arena.area.x && wounded.y >= arena.area.y && wounded.x < arena.area.x + arena.area.width && wounded.y < arena.area.y + arena.area.height).toBe(true);
+      expect(isLiveWalkable(map, wounded)).toBe(true); expect(wounded.health).toBeGreaterThan(0); expect(wounded.health).toBeLessThan(100);
+      expect(defeated).toMatchObject({ body: deadBody, health: 0, bossCycle: 9, bossDeathSettled: true, respawnAt: deadline });
+      expect(saved.world.drops.filter((drop: { bossId?: string }) => drop.bossId === "komendant")).toEqual([{ id: "g3-boss-corpse", bossId: "komendant", source: "body", mapId: "perimeter", x: 0, y: 0, amount: 350, items: [trophyItem], expiresAt: corpseExpiry }]);
+      expect(saved.credits).toBe(1); expect(restored.self).toMatchObject({ ammo: 17, medicine, kills: 4, bossKills: 1 });
+      expect(pending()).toBe(1); expect(delivered).toEqual([]);
+    }
+    time = deadline - 1; await enter(first.session); service.tick(); expect(durable().bosses.find(boss => boss.id === "komendant")!.state).toMatchObject({ health: 0, bossCycle: 9, respawnAt: deadline });
+    time = deadline + 249; await enter(first.session); service.tick(); expect(durable().bosses.find(boss => boss.id === "komendant")!.state).toMatchObject({ health: 100, bossCycle: 10, bossDeathSettled: false });
+    expect(durable().credits).toBe(1); expect(durable().world.drops.filter((drop: { bossId?: string }) => drop.bossId === "komendant")).toHaveLength(1);
+    const picked = await act(first.session, { type: "loot", id: "g3-boss-corpse" }); expect(picked.self.lootItems).toEqual([trophyItem]); expect(picked.self.cargo).toBe(350);
+    expect((await call("action", { type: "loot", id: "g3-boss-corpse" }, first.session)).status).toBe(409);
+    editPlayers([{ session: first.session }]); await enter(first.session); blocked = false; time += 1000; service.tick(); await act(first.session, { type: "extract" });
+    expect(delivered.map(item => item.id).sort()).toEqual([waitingItem.id, trophyItem.id].sort()); expect(credited).toBe(355); expect(deliveries.size).toBe(2); expect(pending()).toBe(0);
+    restart(); const again = (await enter(first.session)).state; await act(first.session, { type: "extract" });
+    expect(again.self.bossKills).toBe(1); expect(durable().credits).toBe(1); expect(deliveries.size).toBe(2); expect(delivered).toHaveLength(2); expect(credited).toBe(355);
+    expect(durable().world.drops.some((drop: { id: string }) => drop.id === "g3-boss-corpse")).toBe(false);
   });
 
   test("one shared named drop has one winner, weight and item count are hard limits, and trophy price is not a cash capacity", async () => {

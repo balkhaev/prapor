@@ -437,7 +437,8 @@ describe("shared endless live server", () => {
     const district = getLiveMap("perimeter").districts.find(district => district.id === "depot")!;
     expect(restored.entities.find(entity => entity.id === guest.session.id)).toMatchObject({ x: district.x, y: district.y });
     expect(restored.drops.find(drop => drop.id === "legacy-body")).toMatchObject({ x: district.x + 1, y: district.y, amount: 73 });
-    expect(restored.server.maps[0]!.npcs).toBe(getLiveMap("perimeter").npcSpawns.length); expect(service.healthy()).toBe(true);
+    expect(restored.server.bosses).toHaveLength(4);
+    expect(restored.server.maps[0]!.npcs).toBe(getLiveMap("perimeter").npcSpawns.length + restored.server.bosses!.filter(boss => boss.state === 'alive').length); expect(service.healthy()).toBe(true);
   });
   test.each(["perimeter-g2-a827381f", "perimeter-g3-b38b4b0d"])("expanding saved geometry %s preserves global body positions, private kit and durable loose cargo across two restarts", async geometryVersion => {
     const guest = await enter(), map = getLiveMap("perimeter"), point = { x: 0, y: 0 };

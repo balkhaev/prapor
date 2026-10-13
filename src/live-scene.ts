@@ -1,6 +1,10 @@
 import { LIVE_TERRAIN_CODES, type LiveCommand, type LiveDrop, type LiveEntity, type LiveEvent, type LiveLandscapePath, type LiveObstacle, type LivePoint, type LiveSnapshot, type LiveTerrain, type LiveWorld } from './game/live';
 import { scavDirection, type ScavDirection } from './scav-isometric';
 import { liveDropLabel, liveLootTotals } from './live-loot-ui';
+import { getBoss } from './game/bosses';
+import { WEAPON_BY_ID } from './game/data';
+import { bossWeapon } from './boss-ui';
+import { weaponActorArt } from './armory-art';
 
 type AtlasFrame = { frame: { x: number; y: number; w: number; h: number }; spriteSourceSize: { x: number; y: number; w: number; h: number }; sourceSize: { w: number; h: number } };
 type Atlas = { image: HTMLImageElement; frames: Record<string, AtlasFrame> };
@@ -19,6 +23,7 @@ export class LiveScene {
   private snapshot: LiveSnapshot | null = null;
   private motions = new Map<string, Motion>();
   private atlases = new Map<number, Atlas | null>();
+  private bossWeapons = new Map<string, HTMLImageElement | null>();
   private frame = 0;
   private paintedAt = 0;
   private active = false;
@@ -90,6 +95,7 @@ export class LiveScene {
       const dx = facing.x - facing.y, dy = facing.x + facing.y;
       this.motions.set(entity.id, { from, to: { x: entity.x, y: entity.y }, at, direction: scavDirection(dx, dy, existing?.direction) });
       this.loadAtlas(entity.appearance);
+      if(entity.bossId)this.loadBossWeapon(entity.bossId);
     }
     for (const id of this.motions.keys()) if (!snapshot.entities.some(entity => entity.id === id)) this.motions.delete(id);
     for (const event of snapshot.events) {
@@ -482,11 +488,12 @@ export class LiveScene {
   private paintEntity(entity: LiveEntity, now: number): void {
     const snapshot = this.snapshot!, motion = this.motions.get(entity.id)!, point = this.interpolated(motion, now), p = this.project(point), c = this.context;
     if (p.x < -40 || p.x > this.width + 40 || p.y < -50 || p.y > this.height + 100) return;
-    const own = entity.id === snapshot.selfId, selected = entity.id === this.selected, color = own ? '#f2d49a' : entity.kind === 'player' ? '#8dd5e4' : entity.faction === 'raiders' ? '#e48971' : '#d2a082';
+    const boss=entity.bossId?getBoss(entity.bossId):null;
+    const own = entity.id === snapshot.selfId, selected = entity.id === this.selected, color = own ? '#f2d49a' : boss ? '#f0b267' : entity.kind === 'player' ? '#8dd5e4' : entity.faction === 'raiders' ? '#e48971' : '#d2a082';
     if (this.overview || this.tile < 28) {
       c.fillStyle = color; c.strokeStyle = '#15241a'; c.lineWidth = 1.5; c.beginPath(); c.arc(p.x, p.y, own || selected ? 4.5 : 2.8, 0, Math.PI * 2); c.fill(); c.stroke();
       if (entity.aimUntil && entity.aimUntil > snapshot.now && entity.aimTargetId === snapshot.selfId) this.label('ЦЕЛИТСЯ В ТЕБЯ', p.x, p.y - 14, '#fac09b', 8);
-      if (own || selected) this.label(own ? 'ТЫ' : entity.name, p.x, p.y - 10, color, 9);
+      if (own || selected || boss) this.label(own ? 'ТЫ' : boss?`БОСС · ${boss.name}`:entity.name, p.x, p.y - 10, color, 9);
       this.hitTargets.push({ entity, x: p.x, y: p.y }); return;
     }
     const zoom = this.tile / (this.width < 480 ? 44 : 54);
@@ -501,9 +508,11 @@ export class LiveScene {
     if (atlas && frame) c.drawImage(atlas.image, frame.frame.x, frame.frame.y, frame.frame.w, frame.frame.h, p.x + (frame.spriteSourceSize.x - frame.sourceSize.w * .5) * scale, p.y + (frame.spriteSourceSize.y - 480) * scale, frame.frame.w * scale, frame.frame.h * scale);
     else { c.fillStyle = color; c.fillRect(p.x - 7, p.y - 34, 14, 27); c.beginPath(); c.arc(p.x, p.y - 39, 6, 0, Math.PI * 2); c.fill(); }
     c.restore();
+    const bossGun=boss?this.bossWeapons.get(boss.id):null;
+    if(bossGun&&entity.health>0){const gunWidth=38*zoom,gunHeight=gunWidth*bossGun.height/bossGun.width;c.drawImage(bossGun,p.x+3*zoom,p.y-34*zoom,gunWidth,gunHeight);}
     const top = p.y - 70 * zoom;
     this.label(own ? `ТЫ · ${entity.name}` : entity.name, p.x, top, color, own ? 11 : 10);
-    this.label(entity.kind === 'player' ? own ? 'ТВОЙ БОЕЦ' : 'ИГРОК' : entity.faction === 'raiders' ? 'РЕЙДЕР · NPC' : 'ДИКИЙ · NPC', p.x, top + 13, own ? '#e8d8b6' : entity.kind === 'player' ? '#90c4ce' : '#ad9b88', 7);
+    this.label(boss?`БОСС · ${WEAPON_BY_ID[boss.weaponId]!.name}`:entity.kind === 'player' ? own ? 'ТВОЙ БОЕЦ' : 'ИГРОК' : entity.faction === 'raiders' ? 'РЕЙДЕР · NPC' : 'ДИКИЙ · NPC', p.x, top + 13, boss?'#e7bc86':own ? '#e8d8b6' : entity.kind === 'player' ? '#90c4ce' : '#ad9b88', 7);
     c.fillStyle = '#14271a'; c.fillRect(p.x - 17, top + 18, 34, 3); c.fillStyle = entity.health > 35 ? '#b6cc85' : '#e09d82'; c.fillRect(p.x - 17, top + 18, 34 * entity.health / 100, 3);
     if (entity.safeUntil > snapshot.now) this.label('ЗАЩИТА', p.x, p.y + 20, '#bddbb7', 8);
     if (entity.aimUntil && entity.aimUntil > snapshot.now) {
@@ -532,8 +541,16 @@ export class LiveScene {
       const px = x + point.x * scale, py = y + point.y * scale;
       c.fillStyle = '#e8ce90'; c.beginPath(); c.arc(px, py, 3.5, 0, Math.PI * 2); c.fill(); c.fillStyle = '#24321f'; c.textAlign = 'center'; c.font = '700 6px Manrope, sans-serif'; c.fillText(String(index + 1), px, py + 2);
     }
-    for (const entity of snapshot.entities) { c.fillStyle = entity.id === snapshot.selfId ? '#ffe0a4' : entity.kind === 'player' ? '#81d0e3' : entity.faction === 'raiders' ? '#e48971' : '#ce9778'; c.beginPath(); c.arc(x + entity.x * scale, y + entity.y * scale, entity.id === snapshot.selfId ? 2.8 : 1.6, 0, Math.PI * 2); c.fill(); }
+    for (const entity of snapshot.entities) { c.fillStyle = entity.id === snapshot.selfId ? '#ffe0a4' : entity.bossId?'#f0b267':entity.kind === 'player' ? '#81d0e3' : entity.faction === 'raiders' ? '#e48971' : '#ce9778'; c.beginPath(); const px=x+entity.x*scale,py=y+entity.y*scale;if(entity.bossId){c.moveTo(px,py-3);c.lineTo(px+3,py);c.lineTo(px,py+3);c.lineTo(px-3,py);c.closePath();}else c.arc(px,py,entity.id===snapshot.selfId?2.8:1.6,0,Math.PI*2);c.fill(); }
     this.label(snapshot.world.name.toUpperCase(), x + width / 2, y + height + 14, '#a9b596', 8);
+  }
+  private loadBossWeapon(id:string):void {
+    if(this.bossWeapons.has(id))return;
+    const boss=getBoss(id);if(!boss)return;
+    this.bossWeapons.set(id,null);
+    const art=weaponActorArt(bossWeapon(boss)),image=new Image();
+    image.onload=()=>{this.bossWeapons.set(id,image);if(!this.active)this.paint();};
+    image.src=`data:image/svg+xml;charset=utf-8,${encodeURIComponent(art.svg)}`;
   }
   private loadAtlas(appearance: number): void {
     if (this.atlases.has(appearance)) return;

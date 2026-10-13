@@ -2,6 +2,7 @@ import { LIVE_TERRAIN_CODES, type LiveCityRegion, type LiveContainerAnchor, type
 import type { LiveMapDefinition, LiveNpcSpawn } from './live-maps';
 import { cityStreetPlan, generateLandscape } from './world-landscape';
 import { prefabObstacles } from './world-prefabs';
+import { BOSSES } from './bosses';
 
 export const LIVE_GENERATOR_VERSION = 4;
 export const LIVE_WORLD_SEED = 'perimeter-alpha-01';
@@ -114,7 +115,7 @@ const CITY_NAMES = ['Больница на Северной', 'Универма�
 const intersects = (a: { x: number; y: number; width: number; height: number }, b: { x: number; y: number; width: number; height: number }, margin = 0): boolean =>
   a.x < b.x + b.width + margin && a.y < b.y + b.height + margin && a.x + a.width + margin > b.x && a.y + a.height + margin > b.y;
 function recommendedRoutes(districts: LiveDistrict[], pois: LivePoi[]): LiveWorldRoute[] {
-  const labels: Record<LivePurpose, { name: string; description: string }> = {
+  const labels: Record<Exclude<LivePurpose, 'boss'>, { name: string; description: string }> = {
     pvp: { name: 'Бои в центре', description: 'Через окраину к площади и спорным постам Ольховска. Все четыре входа ведут в общий городской центр.' },
     pve: { name: 'Городские посты', description: 'Посты на подходе и охраняемые здания Ольховска. В городских дворах можно встретить других игроков.' },
     loot: { name: 'Окраина и город', description: 'Начни с ближних сумок, затем осмотри городские хранилища и дворы. Содержимое определяет сервер.' },
@@ -288,6 +289,19 @@ export function generateLiveWorld(seed = LIVE_WORLD_SEED): LiveMapDefinition {
   const landscape = generateLandscape({ width: LIVE_WORLD_SIZE, height: LIVE_WORLD_SIZE, obstacles, pois, extracts, city }, seed);
   obstacles.push(...landscape.water);
   const routes = recommendedRoutes(districts, pois);
+  // Boss arenas stay at the outer authored settlements. Tagging happens after the
+  // regular population and route composition, so it does not move any saved loot slot.
+  const entryDistance = (poi: LivePoi): number => Math.min(...poi.entrances.flatMap(port => extracts.map(exit => Math.hypot(port.x - exit.x, port.y - exit.y))));
+  for (const boss of BOSSES) {
+    const outer = pois.filter(poi => poi.districtId === boss.districtId && !poi.tags.includes('city'));
+    const exact = outer.filter(poi => poi.templateId === boss.poiTemplateId);
+    const options = exact.length ? exact : outer;
+    const safe = options.filter(poi => entryDistance(poi) >= boss.live.aggroRange + 8);
+    const arena = [...(safe.length ? safe : options)].sort((a, b) => entryDistance(b) - entryDistance(a) || a.id.localeCompare(b.id))[0]!;
+    arena.danger = 3;
+    arena.tags = [...new Set([...arena.tags.filter(tag => tag !== 'peripheral'), 'contested', `boss-arena:${boss.id}`])];
+    for (const zone of zones) if (zone.x === arena.x && zone.y === arena.y && zone.width === arena.width && zone.height === arena.height) zone.danger = 3;
+  }
   const layout = { seed, generatorVersion: LIVE_GENERATOR_VERSION, chunkSize: LIVE_CHUNK_SIZE, width: LIVE_WORLD_SIZE, height: LIVE_WORLD_SIZE, districts, obstacles, zones, pois, containers, terrainRows: landscape.terrainRows, paths: landscape.paths, routes, city };
   const version = `perimeter-g${LIVE_GENERATOR_VERSION}-${hash32(JSON.stringify({ ...layout, npcSpawns })).toString(16).padStart(8, '0')}`;
   return { id: 'perimeter', name: 'Большой Периметр', description: 'Общий мир дорог, промышленных дворов, лесных троп и речных переправ. Выбери точку входа и свободно исследуй весь Периметр.', theme: 'mixed', version, ...layout, extracts, npcSpawns, lootSpawns: containers.map(({ x, y }) => ({ x, y })) };

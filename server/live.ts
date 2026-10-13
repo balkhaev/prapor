@@ -11,6 +11,8 @@ import { type LootModel } from "../src/game/loot";
 import { getLiveLootSource, getLiveNamedLootPool } from '../src/game/live-loot-pool';
 import { getLiveLootDefinition, getLiveLootWeight, readEconomyLootItems } from '../src/game/live-loot';
 import { getLiveLootFamilyOdds, rollLiveLootModel } from '../src/game/live-physical-loot';
+import { BOSSES, getBoss, type BossId } from '../src/game/bosses';
+import { getLiveBossArenas } from '../src/game/live-boss-arenas';
 import type { AccountService } from "./accounts";
 import { LiveEconomyError, type EconomyLoot, type LiveDelivery, type LiveEconomy, type LiveEconomyIdentity, type LiveSupplyRequest } from "./live-economy";
 
@@ -54,7 +56,10 @@ interface Scav extends LiveEntity, PathCache {
   mapId: LiveMapId; faction: "scavs" | "raiders"; role: "patrol" | "guard" | "marksman";
   home: LivePoint; route: LivePoint[]; routeIndex: number; spawnIndex: number;
   respawnAt: number; nextMove: number; nextAttack: number;
+  bossCycle?: number; bossDeathSettled?: boolean;
+  bossLastHit?: { identity: string; playerId: string; at: number };
 }
+interface BossKillCredit { bossId: BossId; cycle: number; identity: string; playerId: string; at: number }
 const isParticipant = (entity: Participant | Scav): entity is Participant => entity.kind === "player";
 interface Drop extends LiveDrop { mapId: LiveMapId; expiresAt: number; source?: "supply" | "body" }
 interface MapEvent extends LiveEvent { mapId: LiveMapId; point?: LivePoint }
@@ -79,7 +84,7 @@ const worldFor = (id: LiveMapId): LiveWorld => {
 };
 const navigation = new Map(LIVE_MAPS.map(map => [map.id, createLiveNavigation(map)]));
 const districtFrom = (value: unknown): LiveDistrictId | null => ["customs", "sawmill", "depot", "village"].includes(value as string) ? value as LiveDistrictId : null;
-const purposeFrom = (value: unknown): LivePurpose | null => ["pvp", "pve", "loot", "quests"].includes(value as string) ? value as LivePurpose : null;
+const purposeFrom = (value: unknown): LivePurpose | null => ["pvp", "pve", "loot", "quests", "boss"].includes(value as string) ? value as LivePurpose : null;
 const districtAt = (point: LivePoint): LiveDistrictId => {
   const districts = maps.get(DEFAULT_MAP)!.districts;
   return districts.find(district => point.x >= district.x && point.y >= district.y && point.x < district.x + district.width && point.y < district.y + district.height)?.id
@@ -104,6 +109,7 @@ export function getLiveLootPool(mapId: LiveMapId, point: LivePoint): { model: Lo
 class LiveError extends Error {
   constructor(readonly status: number, readonly code: string, readonly retryAfter?: number) { super(code); }
 }
+class BossSpawnBlockedError extends Error {}
 function response(body: unknown, status = 200, extra: Record<string, string> = {}): Response {
   return Response.json(body, { status, headers: {
     "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
@@ -186,12 +192,16 @@ export function createLiveService(options: LiveOptions): LiveService {
     CREATE TABLE IF NOT EXISTS live_guests(token_hash TEXT PRIMARY KEY, identity TEXT NOT NULL, expires_at INTEGER NOT NULL);
     CREATE INDEX IF NOT EXISTS live_guest_expiry ON live_guests(expires_at);
     CREATE TABLE IF NOT EXISTS live_world(id INTEGER PRIMARY KEY CHECK(id=1), state TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS live_bosses(boss_id TEXT PRIMARY KEY, state TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS live_boss_kill_credits(boss_id TEXT NOT NULL, cycle INTEGER NOT NULL, identity TEXT NOT NULL, player_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(boss_id,cycle));
     CREATE TABLE IF NOT EXISTS live_game_owners(owner_key TEXT PRIMARY KEY, game_id TEXT NOT NULL, live_identity TEXT NOT NULL UNIQUE);
     CREATE TABLE IF NOT EXISTS live_economy_outbox(id TEXT PRIMARY KEY, identity TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL, message TEXT NOT NULL, acknowledged INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0);
     CREATE INDEX IF NOT EXISTS live_outbox_pending ON live_economy_outbox(acknowledged,identity);`);
   if (!db.query<{ name: string }, []>("PRAGMA table_info(live_economy_outbox)").all().some(column => column.name === "attempts"))
     db.exec("ALTER TABLE live_economy_outbox ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0");
   const players = new Map<string, Participant>(), scavs = new Map<string, Scav>(), drops = new Map<string, Drop>();
+  const bossArenas = new Map(getLiveBossArenas(maps.get(DEFAULT_MAP)!).map(arena => [arena.bossId, arena]));
+  let preparedBossCredits: BossKillCredit[] = [];
   const lootCooldowns = new Map<string, number>();
   const lootKey = (mapId: LiveMapId, point: LivePoint, containerId?: string): string => containerId ? `container:${containerId}` : `${mapId}:${point.x}:${point.y}`;
   const freshPath = (): PathCache => ({ path: [], pathGoal: null, replanAt: 0 });
@@ -290,15 +300,25 @@ export function createLiveService(options: LiveOptions): LiveService {
     }
     return pickPoint(DEFAULT_MAP, true, districtId);
   };
-  const publicEntity = (entity: Participant | Scav): LiveEntity => ({ id: entity.id, kind: entity.kind, name: entity.name, appearance: entity.appearance, health: entity.health, action: entity.action, safeUntil: entity.safeUntil, x: entity.x, y: entity.y, ...(entity.faction ? { faction: entity.faction } : {}), ...(entity.role ? { role: entity.role } : {}), bleeding: BODY_PARTS.some(part => entity.body.parts[part].bleeding !== "none"), limping: injuryEffects(entity.body, now()).movement < 1, ...(entity.aim ? { aimUntil: entity.aim.endsAt, aimTargetId: entity.aim.targetId } : {}) });
+  const publicEntity = (entity: Participant | Scav): LiveEntity => ({ id: entity.id, kind: entity.kind, name: entity.name, appearance: entity.appearance, health: entity.health, action: entity.action, safeUntil: entity.safeUntil, x: entity.x, y: entity.y, ...(entity.faction ? { faction: entity.faction } : {}), ...(entity.role ? { role: entity.role } : {}), ...(entity.bossId ? { bossId: entity.bossId } : {}), bleeding: BODY_PARTS.some(part => entity.body.parts[part].bleeding !== "none"), limping: injuryEffects(entity.body, now()).movement < 1, ...(entity.aim ? { aimUntil: entity.aim.endsAt, aimTargetId: entity.aim.targetId } : {}) });
   const persist = (): void => {
     db.transaction(() => {
       for (const player of players.values()) savePlayer.run(player.identity, JSON.stringify(durable(player)));
       for (const binding of preparedBindings) db.query("INSERT INTO live_game_owners(owner_key,game_id,live_identity) VALUES(?,?,?)").run(binding.owner_key, binding.game_id, binding.live_identity);
       for (const row of prepared) insertOutbox.run(row.id, row.identity, row.kind, row.payload, row.message);
-      saveWorld.run(JSON.stringify({ version: WORLD_VERSION, geometryVersion: maps.get(DEFAULT_MAP)!.version, startedAt, scavs: [...scavs.values()].map(durable), drops: [...drops.values()], events, lootCooldowns: [...lootCooldowns] }));
+      for (const boss of scavs.values()) if (boss.bossId) db.query("INSERT INTO live_bosses(boss_id,state) VALUES(?,?) ON CONFLICT(boss_id) DO UPDATE SET state=excluded.state").run(boss.bossId, JSON.stringify(durable(boss)));
+      for (const credit of preparedBossCredits) {
+        const recorded = db.query("INSERT OR IGNORE INTO live_boss_kill_credits(boss_id,cycle,identity,player_id,created_at) VALUES(?,?,?,?,?)").run(credit.bossId, credit.cycle, credit.identity, credit.playerId, credit.at);
+        if (recorded.changes !== 1) continue;
+        const loaded = players.get(credit.identity), row = loaded ? undefined : readPlayer.get(credit.identity);
+        const player = loaded ?? (row ? JSON.parse(row.state) as Participant : undefined);
+        if (!player || player.id !== credit.playerId) continue;
+        player.kills++; player.bossKills = (player.bossKills ?? 0) + 1;
+        savePlayer.run(credit.identity, JSON.stringify(durable(player)));
+      }
+      saveWorld.run(JSON.stringify({ version: WORLD_VERSION, geometryVersion: maps.get(DEFAULT_MAP)!.version, startedAt, scavs: [...scavs.values()].filter(scav => !scav.bossId).map(durable), drops: [...drops.values()], events, lootCooldowns: [...lootCooldowns] }));
     })();
-    prepared = []; preparedBindings = [];
+    prepared = []; preparedBindings = []; preparedBossCredits = [];
     lastSave = now();
   };
   const prepare = (player: Participant, kind: OutboxRow["kind"], payload: LiveDelivery | LiveSupplyRequest): void => {
@@ -386,6 +406,45 @@ export function createLiveService(options: LiveOptions): LiveService {
       home: { ...spawn.point }, route: spawn.route.length ? spawn.route.map(point => ({ ...point })) : [{ ...spawn.point }], routeIndex: Math.max(0, spawn.route.findIndex(point => point.x === spawn.point.x && point.y === spawn.point.y)), spawnIndex: index,
       health: point ? 100 : 0, body: storedBody(undefined, point ? 100 : 0), healthAt: now(), aim: null, action: point ? "idle" : "downed", safeUntil: 0, respawnAt: point ? 0 : now() + 1000, nextMove: now() + 750, nextAttack: now() + 1000 };
   };
+  const insideBossArena = (bossId: BossId, point: LivePoint): boolean => {
+    const arena = bossArenas.get(bossId)!, area = arena.area;
+    return districtAt(point) === getBoss(bossId)!.districtId && point.x >= area.x && point.y >= area.y && point.x < area.x + area.width && point.y < area.y + area.height
+      && distance(arena.home, point) <= 16 && walkable(DEFAULT_MAP, point);
+  };
+  const bossSpawnPoint = (bossId: BossId): LivePoint => {
+    const arena = bossArenas.get(bossId)!, candidates: LivePoint[] = [];
+    for (let y = arena.area.y; y < arena.area.y + arena.area.height; y++) for (let x = arena.area.x; x < arena.area.x + arena.area.width; x++) {
+      const point = { x, y };
+      if (insideBossArena(bossId, point) && clear(DEFAULT_MAP, point, `boss-${bossId}`)) candidates.push(point);
+    }
+    const point = candidates.sort((a, b) => distance(arena.home, a) - distance(arena.home, b) || a.y - b.y || a.x - b.x)[0];
+    if (!point) throw new BossSpawnBlockedError(`Boss arena has no available spawn: ${bossId}`);
+    return point;
+  };
+  const spawnBoss = (bossId: BossId, cycle = 1): Scav => {
+    const definition = getBoss(bossId)!, arena = bossArenas.get(bossId)!, point = bossSpawnPoint(bossId);
+    return { ...point, ...freshPath(), id: `boss-${bossId}`, bossId, bossCycle: cycle, bossDeathSettled: false,
+      mapId: DEFAULT_MAP, kind: 'scav', name: definition.name, appearance: 28 + BOSSES.findIndex(boss => boss.id === bossId), faction: 'raiders', role: 'guard',
+      home: { ...arena.home }, route: [{ ...arena.home }], routeIndex: 0, spawnIndex: -1, health: 100, body: createHealth(), healthAt: now(),
+      aim: null, action: 'idle', safeUntil: 0, respawnAt: 0, nextMove: now() + 750, nextAttack: now() + 1000 };
+  };
+  const loadBoss = (bossId: BossId): Scav => {
+    const row = db.query<{ state: string }, [string]>("SELECT state FROM live_bosses WHERE boss_id=?").get(bossId);
+    if (!row) return spawnBoss(bossId);
+    const stored = JSON.parse(row.state) as Scav;
+    if (stored.bossId !== bossId || stored.id !== `boss-${bossId}` || !Number.isSafeInteger(stored.bossCycle) || stored.bossCycle! < 1
+      || typeof stored.bossDeathSettled !== 'boolean' || !Number.isSafeInteger(stored.respawnAt) || stored.respawnAt < 0
+      || !Number.isSafeInteger(stored.healthAt) || stored.healthAt < 0) throw new Error('Invalid stored live boss');
+    const arena = bossArenas.get(bossId)!, definition = getBoss(bossId)!;
+    stored.body = parseHealth(stored.body); stored.health = isAlive(stored.body) ? healthPercent(stored.body) : 0;
+    if (stored.bossDeathSettled && stored.health > 0) throw new Error('Invalid living settled boss');
+    if (stored.bossLastHit && (!isObject(stored.bossLastHit) || typeof stored.bossLastHit.identity !== 'string' || typeof stored.bossLastHit.playerId !== 'string'
+      || !Number.isSafeInteger(stored.bossLastHit.at) || stored.bossLastHit.at < 0)) throw new Error('Invalid stored boss hit');
+    if (!insideBossArena(bossId, stored)) Object.assign(stored, bossSpawnPoint(bossId));
+    Object.assign(stored, freshPath(), { mapId: DEFAULT_MAP, kind: 'scav', name: definition.name, faction: 'raiders', role: 'guard', home: { ...arena.home }, route: [{ ...arena.home }], routeIndex: 0, spawnIndex: -1, aim: null });
+    stored.healthAt = Math.min(now(), stored.healthAt);
+    return stored;
+  };
   const rollItems = (mapId: LiveMapId, point: LivePoint): EconomyLoot[] => {
     const pool = getLiveLootPool(mapId, point), location = liveLootLocation(mapId, point);
     const odds = getLiveLootFamilyOdds(location.world.containers.find(anchor => anchor.x === point.x && anchor.y === point.y)?.lootTable);
@@ -396,12 +455,12 @@ export function createLiveService(options: LiveOptions): LiveService {
     }
     return result;
   };
-  const addDrop = (mapId: LiveMapId, point: LivePoint, amount: number, source: Drop["source"] = "body", items?: EconomyLoot[]): void => {
+  const addDrop = (mapId: LiveMapId, point: LivePoint, amount: number, source: Drop["source"] = "body", items?: EconomyLoot[], boss?: { bossId: BossId; expiresAt: number }): void => {
     const id = randomUUID();
     const generated = options.economy && items === undefined ? rollItems(mapId, point) : items;
     const container = source === "supply" ? maps.get(mapId)!.containers.find(anchor => anchor.x === point.x && anchor.y === point.y) : undefined;
     drops.set(id, { mapId, id, x: point.x, y: point.y, amount: generated && items === undefined ? 0 : amount, source, ...(generated ? { items: structuredClone(generated) } : {}),
-      ...(container ? { containerId: container.id, containerKind: container.kind } : {}), expiresAt: container ? Number.MAX_SAFE_INTEGER : now() + 120_000 });
+      ...(container ? { containerId: container.id, containerKind: container.kind } : {}), ...(boss ? { bossId: boss.bossId } : {}), expiresAt: boss?.expiresAt ?? (container ? Number.MAX_SAFE_INTEGER : now() + 120_000) });
   };
   const stored = db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get();
   if (stored) {
@@ -409,6 +468,7 @@ export function createLiveService(options: LiveOptions): LiveService {
     startedAt = world.startedAt;
     // Old NPC layouts are replaced once; verified player bodies and dropped cargo are retained.
     for (const [index, scav] of (world.version === WORLD_VERSION && world.geometryVersion === maps.get(DEFAULT_MAP)!.version ? world.scavs : []).entries()) {
+      if (scav.bossId || scav.id.startsWith('boss-')) continue;
       scav.mapId = mapFrom(scav.mapId) ?? DEFAULT_MAP;
       if (!walkable(scav.mapId, scav)) Object.assign(scav, pickPoint(scav.mapId));
       scav.faction = scav.faction === "raiders" ? "raiders" : "scavs";
@@ -424,6 +484,7 @@ export function createLiveService(options: LiveOptions): LiveService {
     const claimedAnchors = new Set<string>(), currentWorld = maps.get(DEFAULT_MAP)!;
     for (const drop of world.drops) {
       if (drop.items) drop.items = readEconomyLootItems(drop.items, LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT);
+      if (drop.bossId && (!getBoss(drop.bossId) || drop.source !== 'body' || drop.containerId)) throw new Error('Invalid stored boss corpse');
       // A geometry revision moves existing cycles; it never rolls replacements for their contents.
       if (drop.source === "supply" && drop.containerId) {
         const anchor = migratedContainerAnchor(currentWorld, drop.containerId);
@@ -449,15 +510,20 @@ export function createLiveService(options: LiveOptions): LiveService {
     }
   }
   for (const map of LIVE_MAPS) {
-    if (![...scavs.values()].some(scav => scav.mapId === map.id)) for (let index = 0; index < map.npcSpawns.length; index++) {
+    if (![...scavs.values()].some(scav => scav.mapId === map.id && !scav.bossId)) for (let index = 0; index < map.npcSpawns.length; index++) {
       const scav = spawnScav(map.id, index); scavs.set(scav.id, scav);
     }
     for (const anchor of map.containers) if (![...drops.values()].some(drop => drop.containerId === anchor.id) && (lootCooldowns.get(lootKey(map.id, anchor, anchor.id)) ?? 0) <= now()) addDrop(map.id, anchor, 10 + Math.floor(random() * 21), "supply");
   }
+  for (const definition of BOSSES) { const boss = loadBoss(definition.id); scavs.set(boss.id, boss); }
   const routeSummaries = (maps.get(DEFAULT_MAP)!.routes ?? []).map(route => ({ id: route.id, name: route.name, description: route.description,
     districtId: route.districtId, purpose: route.purpose, stops: route.poiIds.map(id => maps.get(DEFAULT_MAP)!.pois.find(poi => poi.id === id)!.name) }));
   const status = (includeRoutes = true): LiveStatus => ({ id: LIVE_SERVER_ID, name: LIVE_SERVER_NAME, online: [...players.values()].filter(player => player.online).length, capacity: LIVE_CAPACITY, startedAt,
     ...(includeRoutes ? { routes: routeSummaries } : {}),
+    bosses: BOSSES.map(definition => {
+      const boss = scavs.get(`boss-${definition.id}`)!, arena = bossArenas.get(definition.id)!;
+      return { bossId: definition.id, name: definition.name, districtId: definition.districtId, poiId: arena.poiId, area: { ...arena.area }, state: boss.health > 0 ? 'alive' : 'defeated', respawnAt: boss.health > 0 ? 0 : boss.respawnAt };
+    }),
     maps: LIVE_MAPS.map(map => ({ id: map.id, name: map.name, description: map.description, theme: map.theme, width: map.width, height: map.height,
       ...(includeRoutes && map.city ? { city: map.city } : {}),
       online: [...players.values()].filter(player => player.online && player.mapId === map.id).length, npcs: [...scavs.values()].filter(scav => scav.mapId === map.id && scav.health > 0).length })),
@@ -472,7 +538,7 @@ export function createLiveService(options: LiveOptions): LiveService {
     for (let y = chunkY - 1; y <= chunkY + 1; y++) for (let x = chunkX - 1; x <= chunkX + 1; x++) if (x >= 0 && y >= 0 && x * world.chunkSize < world.width && y * world.chunkSize < world.height) visibleChunks.push({ x, y });
     return {
       server: status(false), now: now(), ...(request?.headers.get("x-prapor-world-version") === world.version ? {} : { world }), worldVersion: world.version, visibleChunks, selfId: player.id,
-      self: { id: player.id, ammo: player.ammo, medkits: Math.ceil(player.medicine.medkit / 40), cargo: player.cargo, stash: player.stash, kills: player.kills, respawnAt: player.respawnAt, patrol: player.patrol, targetId: player.targetId, travelReadyAt: player.travelReadyAt,
+      self: { id: player.id, ammo: player.ammo, medkits: Math.ceil(player.medicine.medkit / 40), cargo: player.cargo, stash: player.stash, kills: player.kills, bossKills: player.bossKills ?? 0, respawnAt: player.respawnAt, patrol: player.patrol, targetId: player.targetId, travelReadyAt: player.travelReadyAt,
         body: player.body, medicine: player.medicine, treatment: player.treatment, leaveAt: player.leaveAt, districtId: player.districtId, purpose: player.purpose, searching: player.searching ? { ...player.searching } : null,
         ...(options.economy ? { gameId: player.gameId, lootItems: structuredClone(player.lootItems ?? []),
           pendingDelivery: pendingRows.all(player.identity).filter(row => row.kind === "delivery").map(row => {
@@ -489,6 +555,7 @@ export function createLiveService(options: LiveOptions): LiveService {
         || distance(player, a) - distance(player, b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).slice(0, VISIBLE_DROP_CAPACITY).map(drop => {
         const searched = player.searchedDropIds.includes(drop.id);
         return { id: drop.id, x: drop.x, y: drop.y, amount: !drop.containerId || searched ? drop.amount : 0,
+          ...(drop.bossId ? { bossId: drop.bossId } : {}),
           ...(drop.containerId ? { containerId: drop.containerId, containerKind: drop.containerKind, searched } : {}),
           ...(drop.items && (!drop.containerId || searched) ? { items: structuredClone(drop.items) } : {}) };
       }),
@@ -513,7 +580,27 @@ export function createLiveService(options: LiveOptions): LiveService {
     if (!step || !clear(entity.mapId, step, entity.id)) return null;
     entity.path.shift(); return step;
   };
-  const down = (target: Participant | Scav, attacker?: Participant | Scav): void => {
+  const down = (target: Participant | Scav, attacker?: Participant | Scav, defeatedAt = now()): void => {
+    if (!isParticipant(target) && target.bossId) {
+      if (target.bossDeathSettled) return;
+      const definition = getBoss(target.bossId)!;
+      const items: EconomyLoot[] = [
+        { id: randomUUID(), modelId: definition.trophyModelId, foundAt: defeatedAt },
+        { id: randomUUID(), modelId: definition.lootModelId, foundAt: defeatedAt },
+        { id: randomUUID(), kind: 'gear', modelId: definition.gearModelId, durability: 90, foundAt: defeatedAt },
+        { id: randomUUID(), kind: 'module', modelId: definition.moduleModelId, durability: 90, foundAt: defeatedAt },
+      ];
+      // The complete authored reward is validated, never trimmed or rolled again on a retry.
+      readEconomyLootItems(items, LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT);
+      target.health = 0; target.action = 'downed'; target.aim = null; target.bossDeathSettled = true;
+      target.respawnAt = defeatedAt + definition.live.respawnMs;
+      addDrop(target.mapId, target, definition.bounty, 'body', items, { bossId: target.bossId, expiresAt: defeatedAt + definition.live.corpseMs });
+      const direct = attacker && isParticipant(attacker) ? { identity: attacker.identity, playerId: attacker.id, at: defeatedAt } : undefined;
+      const credit = direct ?? (target.bossLastHit && defeatedAt >= target.bossLastHit.at && defeatedAt - target.bossLastHit.at <= DISCONNECT_GRACE_MS ? target.bossLastHit : undefined);
+      if (credit) preparedBossCredits.push({ ...credit, bossId: target.bossId, cycle: target.bossCycle! });
+      event(target.mapId, 'combat', `${definition.name} повержен. Трофеи лежат на месте боя; новый выход через ${definition.live.respawnMs / 60_000} минут.`, direct?.playerId ?? credit?.playerId, target.id);
+      return;
+    }
     target.health = 0; target.action = "downed"; target.respawnAt = now() + RESPAWN_MS; target.aim = null;
     const amount = "cargo" in target ? target.cargo : 25 + Math.floor(random() * 26);
     if ("cargo" in target) {
@@ -524,9 +611,20 @@ export function createLiveService(options: LiveOptions): LiveService {
     if (attacker && "kills" in attacker) attacker.kills++;
     event(target.mapId, "combat", attacker ? `${attacker.name} победил ${target.name}.` : `${target.name} погиб от кровопотери.`, attacker?.id, target.id);
   };
+  const settleBossHealth = (boss: Scav, time: number): void => {
+    if (!boss.bossId || boss.bossDeathSettled) return;
+    const elapsed = Math.max(0, time - boss.healthAt);
+    const rate = BODY_PARTS.reduce((sum, part) => sum + (boss.body.parts[part].bleeding === 'heavy' ? 250 : boss.body.parts[part].bleeding === 'light' ? 50 : 0), 0);
+    const fatalMs = rate ? Math.min(Math.ceil(boss.body.parts.head.hp * 1_000_000 / rate), Math.ceil(boss.body.parts.chest.hp * 1_000_000 / rate)) : Infinity;
+    const defeatedAt = boss.healthAt + Math.min(elapsed, fatalMs);
+    advanceBleeding(boss.body, elapsed); boss.healthAt = time;
+    boss.health = isAlive(boss.body) ? healthPercent(boss.body) : 0;
+    if (boss.health <= 0) down(boss, undefined, Math.max(0, defeatedAt));
+  };
   const findTarget = (id: string): Participant | Scav | undefined => [...players.values(), ...scavs.values()].find(target => target.id === id);
-  const rangeOf = (entity: Participant | Scav): number => entity.kind === "player" || "role" in entity && entity.role === "marksman" ? 7 : 5;
+  const rangeOf = (entity: Participant | Scav): number => entity.bossId ? getBoss(entity.bossId)!.live.range : entity.kind === "player" || "role" in entity && entity.role === "marksman" ? 7 : 5;
   const attackTarget = (attacker: Participant | Scav, target: Participant | Scav): void => {
+    if (!isParticipant(attacker) && (target.bossId || attacker.bossId && !isParticipant(target))) throw new LiveError(409, 'target_unavailable');
     if (target.mapId !== attacker.mapId || target.health <= 0 || attacker.health <= 0 || target.id === attacker.id || "online" in target && !exposed(target)) throw new LiveError(409, "target_unavailable");
     if (now() < target.safeUntil) throw new LiveError(409, "spawn_protection");
     if (distance(attacker, target) > rangeOf(attacker) || !lineOfSight(attacker.mapId, attacker, target)) throw new LiveError(409, "target_out_of_range");
@@ -542,11 +640,13 @@ export function createLiveService(options: LiveOptions): LiveService {
     if (isParticipant(attacker)) attacker.lastCombatAt = now();
     if (isParticipant(target)) target.lastCombatAt = now();
     attacker.safeUntil = 0; attacker.action = "combat"; attacker.aim = null;
-    const damage = aimed ? 45 : attacker.kind === "player" ? 40 : "faction" in attacker && attacker.faction === "raiders" ? 33 : 25;
+    const outgoing = attacker.bossId ? getBoss(attacker.bossId)!.live.outgoingDamage : 1, incoming = target.bossId ? getBoss(target.bossId)!.live.incomingDamage : 1;
+    const damage = (aimed ? 45 : attacker.kind === "player" ? 40 : "faction" in attacker && attacker.faction === "raiders" ? 33 : 25) * outgoing * incoming;
     const roll = random(), result = applyHit(target.body, part, damage, { protection: LIVE_PROTECTION[part] ?? 0, penetration: .1,
       ...(roll < .16 ? { bleeding: "heavy" as const } : roll < .4 ? { bleeding: "light" as const } : {}),
       ...(!["head", "chest", "stomach"].includes(part) && roll < .2 ? { fracture: true } : {}) });
     if (result.damage > 0 && isParticipant(target)) { cancelTreatment(target); target.searching = null; Object.assign(target, freshPath()); }
+    if (result.damage > 0 && target.bossId && !isParticipant(target) && isParticipant(attacker)) target.bossLastHit = { identity: attacker.identity, playerId: attacker.id, at: now() };
     target.health = isAlive(target.body) ? healthPercent(target.body) : 0;
     const wound = target.body.parts[part];
     event(attacker.mapId, "combat", `${attacker.name} → ${target.name}: ${BODY_PART_LABELS[part]}, −${Math.round(result.damage)} HP${result.absorbed > 0 ? `; броня остановила ${Math.round(result.absorbed)}` : ""}${wound.bleeding !== "none" ? `; ${wound.bleeding === "heavy" ? "тяжёлое" : "лёгкое"} кровотечение` : ""}${wound.fracture ? "; перелом" : ""}${wound.hp <= 0 ? "; зона выбита" : ""}.`, attacker.id, target.id, { from: { x: attacker.x, y: attacker.y }, to: { x: target.x, y: target.y }, damage: result.damage });
@@ -564,7 +664,7 @@ export function createLiveService(options: LiveOptions): LiveService {
     attacker.safeUntil = 0;
     if (aimed || attacker.kind === "scav") {
       attacker.aim = { targetId: target.id, endsAt: now() + Math.ceil((aimed ? 1800 : 1000) / slowdown), part: aimed ? "head" : randomPart() };
-      attacker.action = "combat"; attacker.nextAttack = attacker.aim.endsAt + Math.ceil((aimed ? 2000 : 1500) / slowdown);
+      attacker.action = "combat"; attacker.nextAttack = attacker.bossId ? now() + Math.ceil(getBoss(attacker.bossId)!.live.attackMs / slowdown) : attacker.aim.endsAt + Math.ceil((aimed ? 2000 : 1500) / slowdown);
       if ("dangerUntil" in attacker) attacker.dangerUntil = now() + DISCONNECT_GRACE_MS;
       if ("dangerUntil" in target) target.dangerUntil = now() + DISCONNECT_GRACE_MS;
       if (isParticipant(attacker)) attacker.lastCombatAt = now();
@@ -665,13 +765,13 @@ export function createLiveService(options: LiveOptions): LiveService {
       savePlayer.run(identity, JSON.stringify(durable(player))); players.delete(identity);
     }
   };
-  const leashOf = (scav: Scav): number => scav.role === "patrol" ? Math.max(14, ...scav.route.map(point => distance(scav.home, point) + 9)) : scav.role === "marksman" ? 10 : 8;
+  const leashOf = (scav: Scav): number => scav.bossId ? getBoss(scav.bossId)!.live.aggroRange : scav.role === "patrol" ? Math.max(14, ...scav.route.map(point => distance(scav.home, point) + 9)) : scav.role === "marksman" ? 10 : 8;
   const nearestTarget = (entity: Participant | Scav): Participant | Scav | undefined => {
     const targets: Array<Participant | Scav> = "identity" in entity
-      ? [...scavs.values()].filter(scav => scav.mapId === entity.mapId && scav.health > 0)
+      ? [...scavs.values()].filter(scav => scav.mapId === entity.mapId && scav.health > 0 && (entity.purpose !== 'boss' || scav.bossId))
       : [...players.values(), ...scavs.values()].filter(target => target.id !== entity.id && target.mapId === entity.mapId && target.health > 0 && target.safeUntil <= now()
-        && (isParticipant(target) ? exposed(target) : target.faction !== entity.faction)
-        && distance(entity, target) <= (entity.role === "marksman" ? 11 : entity.role === "patrol" ? 9 : 7)
+        && (isParticipant(target) ? exposed(target) : !entity.bossId && !target.bossId && target.faction !== entity.faction)
+        && distance(entity, target) <= (entity.bossId ? getBoss(entity.bossId)!.live.aggroRange : entity.role === "marksman" ? 11 : entity.role === "patrol" ? 9 : 7)
         && distance(entity.home, target) <= leashOf(entity));
     return targets.sort((a, b) => distance(entity, a) - distance(entity, b))[0];
   };
@@ -683,6 +783,7 @@ export function createLiveService(options: LiveOptions): LiveService {
   const simulate = (): void => {
     for (const entity of [...players.values(), ...scavs.values()]) {
       const time = now();
+      if (!isParticipant(entity) && entity.bossId) settleBossHealth(entity, time);
       if (entity.health <= 0) { entity.healthAt = time; continue; }
       if (isParticipant(entity) && entity.online) {
         const cancellationAt = Math.min(entity.heartbeat + HEARTBEAT_MS, entity.leaveAt > 0 ? entity.leaveAt : Infinity);
@@ -721,7 +822,16 @@ export function createLiveService(options: LiveOptions): LiveService {
     for (const map of LIVE_MAPS) for (const anchor of map.containers) if ((lootCooldowns.get(lootKey(map.id, anchor, anchor.id)) ?? 0) <= now() && ![...drops.values()].some(drop => drop.containerId === anchor.id)) addDrop(map.id, anchor, 10 + Math.floor(random() * 21), "supply");
     for (const scav of scavs.values()) {
       if (scav.health <= 0) {
-        if (scav.respawnAt <= now()) { Object.assign(scav, spawnScav(scav.mapId, scav.spawnIndex, scav.id)); event(scav.mapId, "respawn", `${scav.name} появился в районе.`, scav.id); }
+        if (scav.respawnAt <= now()) {
+          if (scav.bossId) {
+            let fresh: Scav;
+            try { fresh = spawnBoss(scav.bossId, scav.bossCycle! + 1); }
+            catch (error) { if (error instanceof BossSpawnBlockedError) continue; throw error; }
+            delete scav.bossLastHit; Object.assign(scav, fresh);
+          }
+          else Object.assign(scav, spawnScav(scav.mapId, scav.spawnIndex, scav.id));
+          event(scav.mapId, "respawn", `${scav.name} появился в районе.`, scav.id);
+        }
         continue;
       }
       const target = nearestTarget(scav);
@@ -736,9 +846,9 @@ export function createLiveService(options: LiveOptions): LiveService {
         const destination = target ?? (scav.role === "patrol" ? scav.route[scav.routeIndex]! : scav.home);
         const approach = target || occupied(scav.mapId, destination, scav.id);
         const goal = approach ? [{ x: destination.x + 1, y: destination.y }, { x: destination.x - 1, y: destination.y }, { x: destination.x, y: destination.y + 1 }, { x: destination.x, y: destination.y - 1 }]
-          .filter(point => clear(scav.mapId, point, scav.id) && (!target || distance(scav.home, point) <= leashOf(scav))).sort((a, b) => distance(scav, a) - distance(scav, b))[0] : destination;
+          .filter(point => clear(scav.mapId, point, scav.id) && (!target || distance(scav.home, point) <= leashOf(scav)) && (!scav.bossId || insideBossArena(scav.bossId, point))).sort((a, b) => distance(scav, a) - distance(scav, b))[0] : destination;
         const step = goal ? pathStep(scav, goal) : null;
-        if (step) { scav.x = step.x; scav.y = step.y; scav.action = "moving"; }
+        if (step && (!scav.bossId || insideBossArena(scav.bossId, step))) { scav.x = step.x; scav.y = step.y; scav.action = "moving"; }
         scav.aim = null; scav.nextMove = now() + Math.ceil(750 / Math.max(.25, injuryEffects(scav.body, now()).movement));
       }
     }
@@ -778,7 +888,8 @@ export function createLiveService(options: LiveOptions): LiveService {
           if (drop.containerId && !player.searchedDropIds.includes(drop.id)) { search(player, drop.id, true); continue; }
           loot(player, drop.id); player.destination = null;
         }
-        if (!player.destination) player.destination = drop ?? pickPoint(player.mapId);
+        if (player.purpose === 'boss' && target) player.destination = { x: target.x, y: target.y };
+        else if (!player.destination) player.destination = drop ?? pickPoint(player.mapId);
       }
       if (player.destination && player.nextMove <= now()) {
         const step = pathStep(player, player.destination);
@@ -974,6 +1085,7 @@ export function createLiveService(options: LiveOptions): LiveService {
       failed = true; console.error("Live request failed:", error); return response({ code: "service_unavailable" }, 503);
     }
   };
+  for (const boss of scavs.values()) if (boss.bossId) settleBossHealth(boss, now());
   persist(); flushEconomy();
   const timer = options.automaticTicks === false ? undefined : setInterval(tick, TICK_MS);
   timer?.unref();

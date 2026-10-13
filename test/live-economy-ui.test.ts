@@ -5,6 +5,8 @@ import { LOOT_MODELS } from '../src/game/loot';
 import type { EconomyLoot, LiveSnapshot } from '../src/game/live';
 import { getLiveMap, isLiveWalkable } from '../src/game/live-maps';
 import { createHealth, createMedicalInventory } from '../src/game/health';
+import { BOSSES } from '../src/game/bosses';
+import { getLiveBossArena } from '../src/game/live-boss-arenas';
 
 const GAME='cba21a6d-2936-4590-9433-dfa2b58c8dc8', NEXT='4ad58c2f-7616-4600-8134-83b7a210814d';
 const loot=(modelId='gold-ring',suffix=1):EconomyLoot=>({id:`532cfa7a-5ca1-4742-a07c-ffefdc785d${String(suffix).padStart(2,'0')}`,modelId,foundAt:1000});
@@ -55,6 +57,34 @@ function harness(run:(url:string,init:RequestInit)=>Promise<Response>,getGameId:
 }
 
 describe('live loot and headquarters presentation',()=>{
+  test('walking across city districts keeps the initial hunt arena until an explicit boss choice without revealing or moving unseen NPCs',async()=>{
+    const state=fixture();state.self.purpose='boss';
+    state.server.bosses=BOSSES.map(boss=>{const arena=getLiveBossArena(state.world,boss.id);return {bossId:boss.id,name:boss.name,districtId:boss.districtId,poiId:arena.poiId,area:arena.area,state:'alive',respawnAt:0};});
+    const h=harness(async url=>{
+      if(url.endsWith('/status'))return response(state.server);
+      if(url.endsWith('/leave'))return response({ok:true});
+      return response(url.endsWith('/join')?state:{...state,world:undefined,server:{...state.server,maps:state.server.maps.map(({city:_city,...map})=>map)}});
+    });
+    h.mode.show();await h.pump();h.dock.click('join');await h.pump();
+    const first=state.server.bosses.find(boss=>boss.districtId==='customs')!;
+    expect(h.routeUpdates.at(-1)).toEqual([first.poiId]);
+    const city=state.world.city!, district=state.world.districts.find(district=>district.id==='sawmill')!;
+    let crossing:{x:number;y:number}|undefined;
+    for(let y=Math.max(city.y,district.y);!crossing&&y<Math.min(city.y+city.height,district.y+district.height);y++)for(let x=Math.max(city.x,district.x);x<Math.min(city.x+city.width,district.x+district.width);x++)if(isLiveWalkable(state.world,{x,y})){crossing={x,y};break;}
+    expect(crossing).toBeDefined();Object.assign(state.entities[0]!,crossing);state.self.districtId='sawmill';
+    h.firePoll();await h.pump();
+    expect(h.routeUpdates.at(-1)).toEqual([first.poiId]);
+    expect(h.dock.innerHTML).toContain(`data-live-button="poi:${first.poiId}"`);
+    expect(h.dock.innerHTML).not.toContain('class="live-boss-weapon"');
+    expect(h.updates.at(-1)?.entities.some(entity=>entity.bossId)).toBe(false);
+    expect(h.calls.some(call=>call.url.endsWith('/action'))).toBe(false);
+    const next=state.server.bosses.find(boss=>boss.districtId==='sawmill')!;
+    h.dock.click(`boss-area:${next.bossId}`);
+    expect(h.routeUpdates.at(-1)).toEqual([next.poiId]);
+    expect(state.entities[0]).toMatchObject(crossing!);
+    expect(h.calls.some(call=>call.url.endsWith('/action'))).toBe(false);
+    expect(h.updates.at(-1)?.world.city).toEqual(state.world.city);
+  });
   test('a city crossing preserves the starting route and cached landmarks while a confirmed respawn selects a new starting route',async()=>{
     const state=fixture(), side=Math.floor(state.world.width/4);
     state.world.city={name:'Ольховск',x:side,y:side,width:side*2,height:side*2,quarters:[

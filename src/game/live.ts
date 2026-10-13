@@ -1,5 +1,6 @@
 /** Shared wire contract. The server owns every live position, clock and reward. */
 import type { BodyPart, HealthState, MedicalInventory, TreatmentType } from './health';
+import type { BossId } from './bosses';
 export type { EconomyLoot } from "../../server/live-economy";
 import type { EconomyLoot } from "../../server/live-economy";
 export { getLiveLootDefinition, getLiveLootWeight, readEconomyLoot, readEconomyLootItems, type LiveLootDefinition } from './live-loot';
@@ -17,7 +18,7 @@ export const LIVE_PENDING_CAPACITY = 32;
 export type LivePoint = { x: number; y: number };
 export type LiveMapId = "perimeter";
 export type LiveDistrictId = "customs" | "sawmill" | "depot" | "village";
-export type LivePurpose = "pvp" | "pve" | "loot" | "quests";
+export type LivePurpose = "pvp" | "pve" | "loot" | "quests" | "boss";
 export type LiveContainerKind = "duffel" | "jacket" | "toolbox" | "medbag" | "cabinet" | "crate";
 export type LiveTerrain = "road" | "concrete" | "forest" | "water" | "yard" | "grass" | "path" | "rail" | "sand";
 /** Static geometry only. Row codes keep the ground layer compact on first join. */
@@ -108,6 +109,7 @@ export interface LiveEntity extends LivePoint {
   aimTargetId?: string;
   faction?: "scavs" | "raiders";
   role?: "patrol" | "guard" | "marksman";
+  bossId?: BossId;
 }
 export interface LiveTreatment { type: TreatmentType; part: BodyPart; startedAt: number; endsAt: number }
 export interface LivePlayer {
@@ -117,6 +119,7 @@ export interface LivePlayer {
   cargo: number;
   stash: number;
   kills: number;
+  bossKills?: number;
   respawnAt: number;
   patrol: boolean;
   body: HealthState;
@@ -136,6 +139,7 @@ export interface LivePlayer {
 }
 export interface LiveDrop extends LivePoint {
   id: string; amount: number; items?: EconomyLoot[];
+  bossId?: BossId;
   containerId?: string; containerKind?: LiveContainerKind;
   searched?: boolean;
 }
@@ -150,6 +154,12 @@ export interface LiveEvent {
   to?: LivePoint;
   damage?: number;
 }
+export interface LiveBossStatus {
+  bossId: BossId; name: string; districtId: LiveDistrictId; poiId: string;
+  /** Authored arena only; the invisible NPC's current position remains private. */
+  area: LivePoint & { width: number; height: number };
+  state: 'alive' | 'defeated'; respawnAt: number;
+}
 export interface LiveStatus {
   id: string;
   name: string;
@@ -159,6 +169,7 @@ export interface LiveStatus {
   maps: LiveMapSummary[];
   districts: Array<LiveDistrict & { online: number; npcs: number }>;
   routes?: LiveRouteSummary[];
+  bosses?: LiveBossStatus[];
 }
 export interface LiveSnapshot {
   server: LiveStatus;

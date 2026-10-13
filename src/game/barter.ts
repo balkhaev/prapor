@@ -50,6 +50,10 @@ export const BARTER_OFFERS: readonly BarterOffer[] = [
 	offer("padded_vest", [["hemostatic", 1], ["painkillers", 1]], "-supplies"),
 	offer("padded_vest", [["screws", 2], ["sewing-kit", 1]], "-textiles"),
 	offer("steel_helmet", [["gunpowder", 2], ["primer", 1]], "-ammunition"),
+	offer('patrol_armor', [['boss-bugor-sign', 1]], '-boss-bugor'),
+	offer('expedition_pack', [['boss-lesnik-compass', 1]], '-boss-lesnik'),
+	offer('plate_armor', [['boss-liteyshchik-key', 1]], '-boss-liteyshchik'),
+	offer('heavy_armor', [['boss-komendant-seal', 1]], '-boss-komendant'),
 ];
 export const getBarterOffers = (): readonly BarterOffer[] => BARTER_OFFERS;
 export function getBarterQuote(state: GameState, offerId: string): BarterQuote {

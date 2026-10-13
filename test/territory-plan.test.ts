@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createGame, getRoomBounds, getShelterFrontier, saveGame } from "../src/game/engine";
+import { shelterBuildingHitPolygon, shelterRectPolygon } from "../src/shelter-isometric";
 import { getTerritoryPlanLayout } from "../src/territory-plan";
 import { territoryPlan } from "../src/territory-ui";
 
@@ -47,11 +48,28 @@ describe("continuous territory map geometry", () => {
 		expect(html).toContain('data-plan-building-y="207.625"');
 		expect(html).toContain('data-plan-building-width="100"');
 		expect(html).toContain('data-plan-building-height="172"');
-		expect(html).toContain(`data-plan-width="${layout.bounds.width}"`);
-		expect(html).toContain(`data-plan-height="${layout.bounds.height}"`);
+		expect(html).toContain(`data-plan-width="${layout.projectedBounds.width}"`);
+		expect(html).toContain(`data-plan-height="${layout.projectedBounds.height}"`);
+		expect(html).toContain('data-plan-projection="isometric"');
 		expect(layout.bounds.x).toBeLessThan(rect.x);
 		expect(layout.bounds.x + layout.bounds.width).toBeGreaterThan(rect.x + rect.width);
 		expect(html).not.toContain("grid-column:");
 		expect(html).not.toContain("grid-row:");
+	});
+
+	test("projected map bounds include the continuous ground and raised building hulls", () => {
+		const state = createGame(NOW);
+		state.shelter.sites.push({ column: -1, row: 2 }, { column: 3, row: 3 });
+		for (const facing of [0, 1, 2, 3] as const) {
+			state.shelter.rooms[0]!.facing = facing;
+			const { landscape, projectedBounds: frame } = getTerritoryPlanLayout(state);
+			const points = [...landscape.lots.flatMap(shelterRectPolygon), ...state.shelter.rooms.flatMap(room => shelterBuildingHitPolygon(getRoomBounds(room)))];
+			for (const point of points) {
+				expect(point.x).toBeGreaterThanOrEqual(frame.x);
+				expect(point.x).toBeLessThanOrEqual(frame.x + frame.width);
+				expect(point.y).toBeGreaterThanOrEqual(frame.y);
+				expect(point.y).toBeLessThanOrEqual(frame.y + frame.height);
+			}
+		}
 	});
 });
