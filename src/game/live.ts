@@ -20,11 +20,20 @@ export type LiveDistrictId = "customs" | "sawmill" | "depot" | "village";
 export type LivePurpose = "pvp" | "pve" | "loot" | "quests";
 export type LiveContainerKind = "duffel" | "jacket" | "toolbox" | "medbag" | "cabinet" | "crate";
 export type LiveTerrain = "road" | "concrete" | "forest" | "water" | "yard" | "grass" | "path" | "rail" | "sand";
-/** Static geometry only. Row codes keep the 128² ground layer compact on first join. */
+/** Static geometry only. Row codes keep the ground layer compact on first join. */
 export const LIVE_TERRAIN_CODES = { r: "road", c: "concrete", f: "forest", w: "water", y: "yard", g: "grass", p: "path", t: "rail", s: "sand" } as const satisfies Record<string, LiveTerrain>;
 export interface LiveLandscapePath {
   id: string; name: string; kind: "road" | "trail" | "rail" | "river";
   width: number; points: LivePoint[];
+}
+/** Suggested exploration stops; these are guidance, not rewarded quest assignments. */
+export interface LiveWorldRoute {
+  id: string; name: string; description: string;
+  districtId: LiveDistrictId; purpose: LivePurpose; poiIds: string[];
+}
+export interface LiveRouteSummary {
+  id: string; name: string; description: string;
+  districtId: LiveDistrictId; purpose: LivePurpose; stops: string[];
 }
 export interface LiveObstacle extends LivePoint {
   width: number; height: number;
@@ -56,9 +65,10 @@ export interface LiveWorld {
   districts: LiveDistrict[];
   pois: LivePoi[];
   containers: LiveContainerAnchor[];
-  /** Older world/fixture contracts can omit these; generated V2 worlds always provide both. */
+  /** Older world/fixture contracts can omit these; generated V2 and later worlds provide both. */
   terrainRows?: string[];
   paths?: LiveLandscapePath[];
+  routes?: LiveWorldRoute[];
 }
 export interface LiveDistrict extends LivePoint {
   id: LiveDistrictId; name: string; description: string;
@@ -141,6 +151,7 @@ export interface LiveStatus {
   startedAt: number;
   maps: LiveMapSummary[];
   districts: Array<LiveDistrict & { online: number; npcs: number }>;
+  routes?: LiveRouteSummary[];
 }
 export interface LiveSnapshot {
   server: LiveStatus;

@@ -166,18 +166,21 @@ describe("multiplayer loot and durable headquarters economy", () => {
     expect((await enter(withoutLiveCookie)).state.self.id).toBe(legacy.selfId);
   });
 
-  test("a V1 geometry revision moves exact and fallback container slots without rerolling contents, cargo or medical supplies", async () => {
+  test.each(["perimeter-g1-legacy-fixture", "perimeter-g2-a827381f"])("geometry %s expands exact and fallback container slots without rerolling contents, cargo or medical supplies", async geometryVersion => {
     const first = await enter(), second = await enter(), map = getLiveMap("perimeter");
     const [exact, fallback] = map.containers, inBag = trophy("coffee"), inExact = trophy("gold-ring"), inFallback = trophy("old-watch"), retiredItem = trophy("bandage-roll"), bodyItem = trophy("coffee"), pendingItem = trophy("local-map");
     const fallbackId = fallback!.id.replace(/-[a-z]+-(\d+)$/, "-retired-$1");
     const body = createHealth(73); body.parts.leftLeg.fracture = true; body.parts.rightArm.maxHp = 48; body.parts.rightArm.hp = 35;
     const medicine = createMedicalInventory({ medkit: 27, bandage: 1, tourniquet: 0, splint: 1, painkiller: 0, surgery: 0 });
     const parcel: LiveDelivery = { id: randomUUID(), owner: first.session.owner, gameId: first.session.gameId, createdAt: time - 5000, items: [pendingItem], money: 11 };
+    let existingCycles: Array<{ id: string; containerId: string; amount: number; items?: EconomyLoot[]; expiresAt: number }> = [];
     blocked = true;
     restart(db => {
       const saved = JSON.parse(db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!.state);
-      saved.geometryVersion = "perimeter-g1-legacy-fixture";
+      saved.geometryVersion = geometryVersion;
+      if (geometryVersion.startsWith("perimeter-g2-")) saved.drops = saved.drops.filter((drop: { containerId?: string }) => /^poi-[0-3]-[0-3]-/.test(drop.containerId ?? ""));
       saved.drops = saved.drops.filter((drop: { containerId?: string }) => ![exact!.id, fallback!.id].includes(drop.containerId ?? ""));
+      existingCycles = saved.drops.filter((drop: { containerId?: string }) => drop.containerId).map(({ id, containerId, amount, items, expiresAt }: typeof existingCycles[number]) => structuredClone({ id, containerId, amount, items, expiresAt }));
       saved.drops.push(
         { id: "old-searched-container", mapId: "perimeter", x: 0, y: 0, source: "supply", amount: 13, items: [inExact], containerId: exact!.id, containerKind: exact!.kind, expiresAt: time + 123_456 },
         { id: "old-unsearched-container", mapId: "perimeter", x: 1, y: 0, source: "supply", amount: 0, items: [inFallback], containerId: fallbackId, containerKind: "crate", expiresAt: Number.MAX_SAFE_INTEGER },
@@ -201,6 +204,10 @@ describe("multiplayer loot and durable headquarters economy", () => {
     expect(initial.geometryVersion).toBe(map.version);
     const itemIds = initial.drops.flatMap(drop => drop.items?.map(item => item.id) ?? []);
     expect(new Set(itemIds).size).toBe(itemIds.length);
+    for (const cycle of existingCycles) {
+      expect(initial.drops.find(drop => drop.id === cycle.id)).toMatchObject(cycle);
+      expect(initial.drops.filter(drop => drop.containerId === cycle.containerId)).toHaveLength(1);
+    }
     expect(initial.drops.find(drop => drop.id === "old-searched-container")).toMatchObject({ x: exact!.x, y: exact!.y, items: [inExact], amount: 13, containerId: exact!.id, containerKind: exact!.kind, expiresAt: time + 123_456 });
     expect(initial.drops.find(drop => drop.id === "old-unsearched-container")).toMatchObject({ x: fallback!.x, y: fallback!.y, items: [inFallback], amount: 0, containerId: fallback!.id, containerKind: fallback!.kind, expiresAt: Number.MAX_SAFE_INTEGER });
     expect(initial.drops.filter(drop => drop.containerId === exact!.id)).toHaveLength(1);
@@ -231,12 +238,13 @@ describe("multiplayer loot and durable headquarters economy", () => {
     expect(delivered).toHaveLength(3); expect(credited).toBe(56); expect(deliveries.size).toBe(2);
   });
 
-  test("V1 depleted container cooldowns merge by logical slot and survive two restarts before one private refill", async () => {
+  test.each(["perimeter-g1-legacy-fixture", "perimeter-g2-a827381f"])("geometry %s depleted container cooldowns merge by logical slot and survive two restarts before one private refill", async geometryVersion => {
     const first = await enter(), map = getLiveMap("perimeter"), anchor = map.containers[2]!, deadline = time + 30_000;
     const legacyId = anchor.id.replace(/-[a-z]+-(\d+)$/, "-retired-$1");
     restart(db => {
       const row = db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!, saved = JSON.parse(row.state);
-      saved.geometryVersion = "perimeter-g1-legacy-fixture";
+      saved.geometryVersion = geometryVersion;
+      if (geometryVersion.startsWith("perimeter-g2-")) saved.drops = saved.drops.filter((drop: { containerId?: string }) => /^poi-[0-3]-[0-3]-/.test(drop.containerId ?? ""));
       saved.drops = saved.drops.filter((drop: { containerId?: string }) => drop.containerId !== anchor.id);
       saved.lootCooldowns = [[`container:${anchor.id}`, time + 1000], [`container:${legacyId}`, deadline], ["perimeter:0:0", deadline]];
       db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify(saved));

@@ -3,7 +3,7 @@ import { createLiveMode } from '../src/live-ui';
 import { liveDropDetails, liveDropLabel, liveEconomyChanged, liveLootCargo, liveLootTotals } from '../src/live-loot-ui';
 import { LOOT_MODELS } from '../src/game/loot';
 import type { EconomyLoot, LiveSnapshot } from '../src/game/live';
-import { getLiveMap } from '../src/game/live-maps';
+import { getLiveMap, isLiveWalkable } from '../src/game/live-maps';
 import { createHealth, createMedicalInventory } from '../src/game/health';
 
 const GAME='cba21a6d-2936-4590-9433-dfa2b58c8dc8', NEXT='4ad58c2f-7616-4600-8134-83b7a210814d';
@@ -40,20 +40,73 @@ function harness(run:(url:string,init:RequestInit)=>Promise<Response>,getGameId:
   const timers=new Map<number,()=>void>();let timer=0;
   Object.defineProperty(globalThis,'document',{configurable:true,value:{createElement:()=>new Element(),querySelector:()=>null,activeElement:null,addEventListener:()=>{},removeEventListener:()=>{}}});
   Object.defineProperty(globalThis,'window',{configurable:true,value:{setTimeout:(callback:()=>void)=>{timers.set(++timer,callback);return timer;},clearTimeout:(id:number)=>timers.delete(id)}});
-  const world=new Element(),dock=new Element(),updates:LiveSnapshot[]=[];
+  const world=new Element(),dock=new Element(),updates:LiveSnapshot[]=[],routeUpdates:string[][]=[];
   let economicChanges=0,marketOpens=0;
   const calls:{url:string;init:RequestInit}[]=[];
   const mode=createLiveMode({world:world as unknown as HTMLElement,dock:dock as unknown as HTMLElement,getAccountId,getGameId,getStock:()=>({ammo:100,medicine:3}),
     onExit:()=>{},onAccount:()=>{},onMarket:()=>{marketOpens++;},onEconomyChange:()=>{economicChanges++;},
-    sceneFactory:()=>({show:()=>{},hide:()=>{},clear:()=>{},setSelected:()=>{},update:snapshot=>updates.push(snapshot),destroy:()=>{}}),
+    sceneFactory:()=>({show:()=>{},hide:()=>{},clear:()=>routeUpdates.push([]),setSelected:()=>{},setRoute:ids=>routeUpdates.push([...ids]),update:snapshot=>updates.push(snapshot),destroy:()=>{}}),
     fetch:(async (url:string,init:RequestInit)=>{calls.push({url,init});return run(url,init);}) as unknown as typeof fetch,
   });
   cleanup=()=>{mode.destroy();if(originalDocument)Object.defineProperty(globalThis,'document',originalDocument);else Reflect.deleteProperty(globalThis,'document');if(originalWindow)Object.defineProperty(globalThis,'window',originalWindow);else Reflect.deleteProperty(globalThis,'window');};
   const pump=async()=>{await tick();await tick();};
-  return {mode,dock,calls,updates,pump,get economicChanges(){return economicChanges;},get marketOpens(){return marketOpens;},firePoll(){const next=timers.entries().next().value;if(next){timers.delete(next[0]);next[1]();}}};
+  return {mode,dock,calls,updates,routeUpdates,pump,get economicChanges(){return economicChanges;},get marketOpens(){return marketOpens;},firePoll(){const next=timers.entries().next().value;if(next){timers.delete(next[0]);next[1]();}}};
 }
 
 describe('live loot and headquarters presentation',()=>{
+  test('guidance clears on a confirmed injury and identity change, resumes after return and resets on a new world revision',async()=>{
+    const state=fixture();let game=GAME;
+    const h=harness(async url=>url.endsWith('/status')?response(state.server):url.endsWith('/leave')?response({ok:true}):response(state),()=>game);
+    h.mode.show();await h.pump();h.dock.click('join');await h.pump();
+    const selected=state.world.routes!.find(route=>route.purpose==='loot'&&route.districtId==='sawmill')!;
+    h.dock.click(`route:${selected.id}`);expect(h.routeUpdates.at(-1)).toEqual(selected.poiIds);
+    state.entities[0]!.health=0;state.entities[0]!.action='downed';state.self.respawnAt=state.now+10_000;
+    h.firePoll();await h.pump();expect(h.routeUpdates.at(-1)).toEqual([]);
+    expect(h.dock.innerHTML).not.toContain('live-route-districts');
+    state.entities[0]!.health=100;state.entities[0]!.action='idle';state.self.respawnAt=0;
+    h.firePoll();await h.pump();expect(h.routeUpdates.at(-1)).toEqual(selected.poiIds);
+    state.world.version+='-revision';state.worldVersion=state.world.version;
+    h.firePoll();await h.pump();
+    expect(h.routeUpdates.at(-1)).toEqual(state.world.routes!.find(route=>route.purpose==='loot'&&route.districtId==='customs')!.poiIds);
+    game=NEXT;h.mode.resetIdentity();await h.pump();expect(h.routeUpdates.at(-1)).toEqual([]);
+    expect(h.dock.innerHTML).not.toContain('live-route-districts');
+  });
+  test('routes show real stops, choose guidance locally and request movement to a walkable entrance with cached geometry',async()=>{
+    const state=fixture();
+    state.server.routes=state.world.routes!.map(({id,name,description,districtId,purpose,poiIds})=>({id,name,description,districtId,purpose,stops:poiIds.map(id=>state.world.pois.find(poi=>poi.id===id)!.name)}));
+    const h=harness(async url=>{
+      if(url.endsWith('/status'))return response(state.server);
+      if(url.endsWith('/action'))return response({...state,world:undefined});
+      if(url.endsWith('/leave'))return response({ok:true});
+      return response(state);
+    });
+    h.mode.show();await h.pump();
+    h.dock.click('district:sawmill');h.dock.click('purpose:quests');
+    const scouting=state.server.routes.find(route=>route.districtId==='sawmill'&&route.purpose==='quests')!;
+    expect(h.dock.innerHTML).toContain(scouting.name);
+    for(const stop of scouting.stops)expect(h.dock.innerHTML).toContain(stop);
+    expect(h.calls.some(call=>call.url.endsWith('/action'))).toBe(false);
+    h.dock.click('join');await h.pump();
+    const original=state.world.routes!.find(route=>route.purpose===state.self.purpose&&route.districtId===state.self.districtId)!;
+    expect(h.routeUpdates.at(-1)).toEqual(original.poiIds);
+    const selected=state.world.routes!.find(route=>route.purpose===state.self.purpose&&route.districtId==='sawmill')!;
+    const before=h.calls.length;
+    h.dock.click(`route:${selected.id}`);
+    expect(h.calls).toHaveLength(before);
+    expect(h.routeUpdates.at(-1)).toEqual(selected.poiIds);
+    expect(h.dock.innerHTML).toContain(selected.name);
+    const poi=state.world.pois.find(poi=>poi.id===selected.poiIds[0])!;
+    h.dock.click(`poi:${poi.id}`);await h.pump();
+    const request=h.calls.find(call=>call.url.endsWith('/action'))!;
+    const command=JSON.parse(request.init.body as string);
+    expect(command.type).toBe('move');
+    expect(poi.entrances).toContainEqual({x:command.x,y:command.y});
+    expect(isLiveWalkable(state.world,command)).toBe(true);
+    expect(request.init.headers).toMatchObject({'x-prapor-game':GAME,'x-prapor-world-version':state.world.version});
+    expect(h.routeUpdates.at(-1)).toEqual(selected.poiIds);
+    expect(h.updates.at(-1)?.world.routes).toEqual(state.world.routes);
+    expect(h.updates.at(-1)?.self.gameId).toBe(GAME);
+  });
   test('every catalog item has the same weight and guide value in live mode as on the flea market',()=>{
     for(const model of LOOT_MODELS){
       const item=loot(model.id),player=fixture().self;player.lootItems=[item];

@@ -1720,3 +1720,12 @@ button.social-person-link {border:0;background:transparent;text-align:left;paddi
  .social-raid-heading>strong {font-size:12px}.social-raid-heading>b {font-size:11px}.social-raid-supporter,.social-raid-panel>p {font-size:11px}.social-quiet {gap:9px;padding:12px}.social-quiet>p {font-size:12px}
 }
 @media(prefers-reduced-motion:reduce) {.social-choice {transition:none}}
+/* The route is guidance through the shared world, separate from medical and loot controls. */
+.live-goal .live-route-districts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;margin:10px 0}
+.live-goal .live-route-districts button{padding:7px 5px;border:1px solid #93a57855;border-radius:3px;background:#263d2a;color:#c1ceaa;font:9px Manrope,sans-serif;cursor:pointer}
+.live-goal .live-route-districts button[aria-pressed=true]{background:#64734866;border-color:#d4c18c;color:#eee0b9}
+.live-goal .live-route-name{display:block;font-size:12px;color:#ead9ad;margin:10px 0 4px;line-height:1.5}
+.live-goal .live-poi-route>i{display:flex;align-items:center;justify-content:center;width:21px;height:21px;flex:none;border-radius:50%;background:#d2be86;color:#263a25;font-size:10px;font-style:normal;font-weight:800}
+.live-lobby-route{margin:13px 0;padding:11px;border:1px solid #b6b67b55;border-radius:4px;background:#58664133}
+.live-lobby-route>strong{display:block;font-size:12px;margin:8px 0 5px;color:#eadcb5}.live-lobby-route>p{font-size:9px;line-height:1.7;color:#bac9a8;margin:5px 0 9px}
+.live-lobby-route>ol{font-size:10px;line-height:1.9;color:#d1d7b5;margin:0;padding-left:21px}.live-lobby-route>ol li{padding-left:4px}
