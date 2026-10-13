@@ -3,7 +3,7 @@ import { createGame, saveGame, getLootCapacity, type Raid, type RaidReport } fro
 import { GEAR_MODELS, type GearItem } from '../src/game/systems';
 import { MODULE_MODELS, MODULE_SLOTS, MODULE_SLOT_LABELS } from '../src/game/modules';
 import { getConfirmedRaidCargo } from '../src/raid-ui';
-import { catalogGroupFilter, fleaPage, pendingLootParcels, physicalLootCatalog, raidGearReceipt, type FleaView } from '../src/flea-ui';
+import { catalogGroupFilter, fleaPage, pendingLootParcels, physicalLootCatalog, raidGearReceipt, raidLootReceipt, type FleaView } from '../src/flea-ui';
 import { getLiveLootDefinition } from '../src/game/live-loot';
 import { liveDropDetails, liveDropLabel, liveLootCargo, liveLootTotals } from '../src/live-loot-ui';
 import type { EconomyLoot, LivePlayer } from '../src/game/live';
@@ -49,6 +49,12 @@ test('catalogue exposes real equipment models and module slots with searchable c
   for(const slot of MODULE_SLOTS)expect(modules).toContain(MODULE_SLOT_LABELS[slot]);expect(modules).toContain('Ствольная коробка, ствол');expect(modules).not.toContain('<h4>Грузовая рама</h4>');
   const packs=physicalLootCatalog({catalogGroup:'gear',search:'рюкзак'});expect(packs).toContain('Рамный рюкзак');expect(packs).not.toContain('<h4>Стальная каска</h4>');
   expect(catalogGroupFilter('medicine')).toContain('value="medicine" selected');expect(saveGame(state)).toBe(before);
+  for(const [modelId,exact] of [['faded-receipt','0.03'],['rusty-nail','0.04'],['gemstone','0.05']] as const){
+    const loot={id:'loot-99',modelId,foundAt:NOW},receipt=raidLootReceipt([loot]);
+    expect(receipt).toContain(`${exact} кг`);expect(receipt).not.toContain('0.0 кг');
+    expect(liveLootCargo({gameId:'guest-test',lootItems:[loot],pendingDelivery:[]} as unknown as LivePlayer)).toContain(`${exact.replace('.',',')} кг`);
+    expect(fleaPage(state,{...view,search:modelId==='gemstone'?'Огранённый камень':modelId==='rusty-nail'?'Ржавый гвоздь':'Выцветший чек'})).toContain(`${exact} кг`);
+  }
 });
 test('multiplayer mixed inventory uses real module and armour definitions, condition and images without invalid loot lookup',()=>{
   const module=MODULE_MODELS.find(model=>model.slot==='optic')!,items:EconomyLoot[]=[{id:crypto.randomUUID(),kind:'gear',modelId:item.modelId,foundAt:NOW,durability:50},{id:crypto.randomUUID(),kind:'module',modelId:module.id,foundAt:NOW,durability:64},{id:crypto.randomUUID(),modelId:'gold-ring',foundAt:NOW}];
