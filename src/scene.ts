@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import { getRaidPhase, type Raid, type RaidReport, type RoomInstance, type WeaponInstance, getShelterSites, getShelterFrontier, type ShelterSite, type ShelterExpansion } from "./game/engine";
+import { getRaidPhase, type Raid, type RaidReport, type RoomInstance, type WeaponInstance, getShelterSites, getShelterFrontier, type ShelterSite, type ShelterExpansion, ROOM_DEFINITIONS, getRoomWorkerCapacity } from "./game/engine";
 import { type BaseRoom } from "./game/data";
 import { advanceShelterRoute, clientToShelterPoint } from "./shelter-motion";
 import { clampShelterCamera, getMinShelterZoom, shelterOverviewCamera, focusShelterRect, panShelterCamera, projectShelterRect, resizeShelterCamera, shelterViewportForSize, viewportToShelter, zoomShelterCamera, type ShelterCamera, type ShelterRect, type ShelterViewport, type ClientRect } from "./shelter-camera";
@@ -87,6 +87,7 @@ export interface WorldInteractions {
 	canDrag?: () => boolean;
 	canCamera?: () => boolean;
 	onCameraChange?: (state: WorldCameraState) => void;
+	onHover?: (info: { title: string; detail: string } | null) => void;
 	getAssignmentReason?: (scavId: string, roomId: string) => string | null;
 	onAssignScav?: (scavId: string, roomId: string) => void;
 	onDragState?: (state: { scavId: string; roomId: string | null; reason: string | null } | null) => void;
@@ -115,6 +116,7 @@ export interface WorldController {
 	resetCamera: () => void;
 	setPanMode: (enabled: boolean) => void;
 	focusRoom: (id: string) => boolean;
+	focusBase: () => void;
 	projectShelterRect: (rect: ShelterRect) => (ClientRect & { visible: boolean }) | null;
 }
 type ShelterCell = {
@@ -356,6 +358,7 @@ export function createWorld(
 		show(view: View): void {
 			if (view !== requestedView) { this.cancelScavDrag(); this.cancelCameraGesture(); }
 			requestedView = view;
+			interactions.onHover?.(null);
 			if (!this.baseLayer) return;
 			this.baseLayer.setVisible(view === "base");
 			this.mapLayer.setVisible(view === "map");
@@ -459,6 +462,7 @@ export function createWorld(
 			this.baseLayer?.setScale(this.viewCamera.zoom).setPosition(-this.viewCamera.x * this.viewCamera.zoom, -this.viewCamera.y * this.viewCamera.zoom);
 			this.mapLayer?.setPosition((this.viewport.width - WIDTH) / 2, (this.viewport.height - HEIGHT) / 2 + 30);
 			this.input?.setDefaultCursor(this.panMode || this.spacePressed || requestedView === "raid" ? "grab" : "default");
+			if (this.panMode || this.spacePressed || requestedView !== "base") interactions.onHover?.(null);
 			interactions.onCameraChange?.(this.getCameraState());
 		}
 
@@ -499,6 +503,18 @@ export function createWorld(
 		panBy(dx: number, dy: number): void { if (this.cameraAllowed()) { if (requestedView === "raid") this.raidStreet.panBy(dx, dy); else this.viewCamera = panShelterCamera(this.viewCamera, dx, dy, this.viewport, this.worldBounds); this.applyCamera(); } }
 		resetCamera(): void { if (this.cameraAllowed()) { if (requestedView === "raid") this.raidStreet.resetCamera(); else this.viewCamera = shelterOverviewCamera(this.viewport, this.worldBounds); this.applyCamera(); } }
 		setPanMode(enabled: boolean): void { this.panMode = Boolean(enabled); this.cancelPan(); if (enabled) this.cancelScavDrag(); this.applyCamera(); }
+		focusBase(): void {
+			if (!this.cameraAllowed() || requestedView !== "base") return;
+			const rooms = snapshot().shelter?.rooms ?? [];
+			if (!rooms.length) { this.resetCamera(); return; }
+			const bounds = rooms.map((room) => projectShelterBounds({ ...cellPosition(room.column, room.row), width: ROOM_WIDTH, height: ROOM_HEIGHT }));
+			const left = Math.min(...bounds.map((p) => p.x)), top = Math.min(...bounds.map((p) => p.y)) - 42;
+			const width = Math.max(...bounds.map((p) => p.x + p.width)) - left, height = Math.max(...bounds.map((p) => p.y + p.height)) - top;
+			const zoom = Math.min(2, Math.max(1.15, Math.min(this.viewport.width / (width + 96), this.viewport.height / (height + 100))));
+			this.viewCamera = focusShelterRect(this.viewCamera, { x: left, y: top, width, height }, zoom, this.viewport, this.worldBounds);
+			this.panMode = false; this.applyCamera();
+		}
+
 		focusRoom(id: string): boolean {
 			if (!this.baseLayer || requestedView !== "base" || document.hidden) return false;
 			const room = snapshot().shelter?.rooms.find((candidate) => candidate.id === id);
@@ -704,6 +720,12 @@ export function createWorld(
 			}, options);
 			canvas.addEventListener("pointercancel", () => { this.cancelScavDrag(); this.cancelCameraGesture(); }, options);
 			canvas.addEventListener("lostpointercapture", () => { if (this.gesture) this.cancelScavDrag(); if (this.panGesture) this.cancelCameraGesture(); }, options);
+			canvas.addEventListener("dblclick", (event) => {
+				if (requestedView !== "base" || !this.cameraAllowed()) return;
+				const point = this.clientWorld(event.clientX, event.clientY), site = point ? getShelterLayoutCell(point) : null;
+				const room = site ? this.cells.get(`${site.column}:${site.row}`)?.room : null;
+				if (room) { event.preventDefault(); this.focusRoom(room.id); }
+			}, options);
 			canvas.addEventListener("wheel", (event) => {
 				if (!this.cameraAllowed() || event.target !== canvas) return;
 				event.preventDefault(); this.zoomBy(Math.exp(-Phaser.Math.Clamp(event.deltaY, -160, 160) * .0025), event.clientX, event.clientY);
@@ -828,8 +850,8 @@ export function createWorld(
 			this.baseLayer.add([root, chrome, zone.setDepth(-100_000_000)]);
 			const cell: ShelterCell = { root, chrome, open: false, expansion: null, art, frame, progress, animation, stationClock: 0, stationJob: null, production: null, productLabel, label, status, lamp, zone, signature: "", column, row, hovered: false, room: null, working: false, operational: "empty", feedback, lastCycles: null, completedAt: -10000 };
 			this.cells.set(`${column}:${row}`, cell);
-			zone.on("pointerover", (pointer: Phaser.Input.Pointer) => { if (this.acceptsPointer(pointer, "base")) { cell.hovered = true; this.paintCellFrame(cell); } });
-			zone.on("pointerout", () => { cell.hovered = false; this.paintCellFrame(cell); });
+			zone.on("pointerover", (pointer: Phaser.Input.Pointer) => { if (this.acceptsPointer(pointer, "base")) { cell.hovered = true; this.paintCellFrame(cell); this.describeCell(cell); } });
+			zone.on("pointerout", () => { cell.hovered = false; this.paintCellFrame(cell); interactions.onHover?.(null); });
 			zone.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
 				if (!this.acceptsPointer(pointer, "base")) return;
 				this.clickFeedback(projectShelterPoint({ x: p.x + 86, y: p.y + 50 }), this.baseLayer);
@@ -839,6 +861,17 @@ export function createWorld(
 				} else if (interactions.onBuildSite) interactions.onBuildSite({ column, row });
 				else interactions.onShelterSite?.(column, row);
 			});
+		}
+
+		private describeCell(cell: ShelterCell): void {
+			if (cell.room) {
+				const room = cell.room, production = this.viewState?.roomProduction?.[room.id];
+				const eta = production?.remainingSeconds != null ? ` · ${Math.ceil(production.remainingSeconds)} с` : "";
+				interactions.onHover?.({ title: `${ROOM_DEFINITIONS[room.type].label} · ур. ${room.level || 1}`,
+					detail: `${room.workerIds.length}/${getRoomWorkerCapacity(room)} работников · ${production?.reason ?? production?.status ?? "На базе"}${eta}` });
+			} else if (cell.expansion) {
+				interactions.onHover?.({ title: "Расширяем здание", detail: `${Math.ceil((cell.expansion.workRequired - cell.expansion.workDone) / 1_000_000)} с до новой площадки` });
+			} else interactions.onHover?.(cell.open ? { title: "Свободная площадка", detail: "Нажми, чтобы выбрать новую комнату" } : { title: "Наружная стена", detail: "Пробить: 60 ₽ и 2 детали · новая площадка за 20 с" });
 		}
 
 		private paintCellFrame(cell: ShelterCell): void {
@@ -957,11 +990,12 @@ export function createWorld(
 				const signature = room ? `${room.id}:${room.type}:${room.level}:${room.status}` : `${cell.open}:${Boolean(cell.expansion)}`;
 				if (cell.signature !== signature) { cell.signature = signature; this.paintRoom(cell); }
 				this.paintCellFrame(cell);
+				if (cell.hovered) this.describeCell(cell);
 				cell.progress.clear();
 				if (room) {
 					if (cell.lastCycles !== null && room.cycles > cell.lastCycles) {
 						cell.completedAt = this.time.now;
-						cell.feedback.setText(`+${room.cycles - cell.lastCycles} ГОТОВО`).setVisible(true).setAlpha(1).setY(projectShelterPoint({ ...cellPosition(cell.column, cell.row), x: cellPosition(cell.column, cell.row).x + 86, y: cellPosition(cell.column, cell.row).y + 93 }).y - 23);
+						cell.feedback.setText(`+${room.cycles - cell.lastCycles} ПАРТИЯ`).setVisible(true).setAlpha(1).setY(projectShelterPoint({ ...cellPosition(cell.column, cell.row), x: cellPosition(cell.column, cell.row).x + 86, y: cellPosition(cell.column, cell.row).y + 93 }).y - 23);
 					}
 					cell.lastCycles = room.cycles;
 					const construction = room.construction;
@@ -1145,6 +1179,8 @@ export function createWorld(
 				g.clear();
 				const selected = cell.room ? this.viewState?.selectedRoomId === cell.room.id : this.viewState?.selectedSite?.column === cell.column && this.viewState.selectedSite.row === cell.row;
 				cell.status.setVisible(this.viewCamera.zoom >= 1.4 || cell.hovered || Boolean(selected) || Boolean(cell.expansion));
+				const labelScale = 1 / Math.max(1, this.viewCamera.zoom / 1.8);
+				cell.label.setScale(labelScale); cell.status.setScale(labelScale);
 				cell.productLabel.setVisible(Boolean(cell.production?.jobId) && (this.viewCamera.zoom >= 1.6 || cell.hovered || this.viewState?.selectedRoomId === cell.room?.id));
 				if (!cell.room) {
 					if (cell.expansion) {
@@ -1158,6 +1194,7 @@ export function createWorld(
 				const elapsed = time - cell.completedAt, p = cellPosition(cell.column, cell.row);
 				const badge = projectShelterPoint({ x: p.x + 86, y: p.y + 93 });
 				cell.feedback.setVisible(elapsed >= 0 && elapsed < 1800).setAlpha(reducedMotion ? 1 : Phaser.Math.Clamp(1 - elapsed / 1800, 0, 1)).setY(badge.y - 23 - (reducedMotion ? 0 : Math.max(0, elapsed) / 120));
+				if (cell.working) cell.lamp.setAlpha(reducedMotion ? .18 : .16 + (Math.sin(time / 1300 + cell.column + cell.row) + 1) * .025);
 				if (cell.production) cell.stationClock = advanceShelterStationClock(cell.stationClock, delta, cell.production, reducedMotion);
 				paintIsometricProduction(g, cell.column, cell.row, cell.room, cell.production, cell.stationClock, reducedMotion);
 			}
@@ -1644,6 +1681,7 @@ export function createWorld(
 		resetCamera: () => scene.resetCamera(),
 		setPanMode: (enabled) => scene.setPanMode(enabled),
 		focusRoom: (id) => scene.focusRoom(id),
+		focusBase: () => scene.focusBase(),
 		projectShelterRect: (rect) => scene.projectShelterRect(rect),
 	};
 }

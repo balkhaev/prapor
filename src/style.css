@@ -1188,3 +1188,101 @@ body{font-size:13px}.content{padding:20px 16px}.topbar{padding:13px 16px}.resour
 @media(max-width:640px){
 .command-main.raid-watching{grid-template-rows:36px minmax(0,1fr) max-content max-content;overflow:hidden}.raid-watching .command-stage-layout{grid-template-rows:minmax(160px,.95fr) minmax(230px,1fr)}.command-main .view-switch button{width:38px;min-width:38px;height:38px;padding:4px;font-size:0;gap:0}.command-main .view-switch button svg{width:17px;height:17px}.command-main .world-head .room-index-button{display:none}.command-main .world-head{gap:4px}.command-main .camera-controls{margin-left:auto}.live-raid-head>div{display:flex;align-items:center;gap:10px;min-width:0}.live-raid-head .eyebrow{max-width:200px}.live-raid-head h2{font-size:13px;white-space:nowrap}.live-raid-status p{font-size:11px;margin:4px 0}.live-raid-status small{font-size:9px}.live-watch-picker label{font-size:10px}.live-watch-picker select{font-size:12px;min-height:32px}.live-cargo strong small{font-size:11px}.live-event>i{margin-top:2px}.live-camera-note{display:none}
 }
+
+/* The play space follows its width; nearby decisions stay compact and legible. */
+.command-main .world-head{flex-wrap:wrap;align-items:flex-start;gap:7px}
+.scene-sound{display:flex;align-items:center;justify-content:center;gap:5px;min-width:36px;min-height:36px;padding:6px 8px;border:1px solid #899575;border-radius:6px;background:#20382bea;color:#dce4c9;font-size:11px;box-shadow:0 3px 9px #0004;pointer-events:auto}
+.scene-sound.active{border-color:#d2c38e;background:#626c45;color:#fff0c2}
+.scene-sound:not(.active) svg{opacity:.6}
+.scene-sound:hover,.scene-sound:focus-visible{border-color:#f0d6a0;background:#596a46}
+.scene-hover{position:absolute;z-index:4;left:14px;bottom:43px;display:flex;flex-direction:column;gap:3px;width:max-content;max-width:calc(100% - 28px);padding:9px 12px;border:1px solid #b4b18388;border-radius:7px;background:#132a22ee;box-shadow:0 4px 14px #0005;pointer-events:none}
+.scene-hover strong{font-size:13px;line-height:1.45;color:#ffedc5}
+.scene-hover>span{font-size:12px;line-height:1.45;color:#d5dfbd}
+.system-symbol{flex:0 0 27px;display:grid;place-items:center;align-self:center;color:#d9d5a3}
+.next-raid{border-color:#d6b77e;background:linear-gradient(120deg,#726041,#485636)}
+@media(min-width:851px){
+.command-main{grid-template-rows:42px clamp(350px,calc(60vw - 204px),620px) 88px max-content max-content;align-content:start;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin}
+.command-stage-layout{grid-template-columns:minmax(0,1fr) clamp(268px,25vw,312px);gap:12px}
+.command-dock:not(.context-open):not(.raid-dock){height:100%;grid-template-rows:max-content max-content max-content;align-content:start;overflow-y:auto;scrollbar-width:thin;overscroll-behavior:contain}
+.command-dock:not(.context-open):not(.raid-dock) .command-system-grid{grid-template-rows:repeat(3,max-content);height:auto;gap:6px;padding:10px;grid-template-columns:1fr 1fr}
+.command-dock:not(.context-open):not(.raid-dock) .command-system{flex-direction:row;align-items:center;gap:7px;min-height:62px;height:auto;padding:8px;justify-content:flex-start}
+.command-dock:not(.context-open):not(.raid-dock) .command-system>span:last-of-type{min-width:0}
+.command-dock:not(.context-open):not(.raid-dock) .command-system strong{font-size:12px;line-height:1.35}
+.command-dock:not(.context-open):not(.raid-dock) .command-system b{font-size:10px;line-height:1.5;font-weight:500;margin-top:4px;color:#d9e0c1}
+.command-overview-head{padding:11px 13px}
+.command-overview-head .eyebrow{font-size:10px}
+.command-overview-head>strong{font-size:16px;line-height:1.5}
+.command-overview-head>small{font-size:11px;line-height:1.55}
+.command-priority-band{padding:10px 10px 0;gap:7px}
+.command-next-action{padding:9px;min-height:56px}
+.command-next-copy strong{font-size:11px;white-space:normal;line-height:1.4}
+.command-next-copy small{font-size:12px;line-height:1.5;margin-top:3px}
+.command-flow-status{min-height:56px}
+.command-flow-status strong{font-size:12px}
+.command-flow-status small{font-size:11px}
+.command-main .view-switch button{min-height:34px;font-size:11px;padding:6px 9px}
+.camera-controls button{width:34px;min-width:34px;height:34px}
+.camera-controls .camera-fit{width:auto;font-size:11px;padding:4px 7px}
+.camera-scale{font-size:10px;min-width:35px}
+.command-main .world-coordinate{display:none}
+.command-main .world-bottom{font-size:11px;padding:8px 12px;min-height:32px}
+.command-main .world-bottom>span:last-child{font-size:10px}
+.command-tools button{font-size:12px;min-height:38px;padding:7px 11px}
+.command-heading h1{font-size:16px}
+.command-hud .resource label{font-size:10px}
+.command-hud .resource strong{font-size:16px}
+.command-strip-head h2{font-size:14px}
+.command-strip-head h2>span,.command-strip-head .text-button,.crew-drag-help{font-size:11px}
+.crew-chip-copy strong{font-size:13px}
+.crew-chip-copy small{font-size:11px}
+.sector-chip{min-height:60px}
+.sector-chip strong{font-size:12px}
+.sector-chip small{font-size:10px}
+.command-context-head .eyebrow{font-size:10px}
+.command-context-head h2{font-size:19px}
+.command-room-banner strong{font-size:12px}
+.command-room-banner small,.command-room-meta{font-size:11px}
+.context-tabs button{font-size:12px}
+.command-dock .room-panel-section h3{font-size:14px}
+.command-dock .room-panel-section>p,.command-dock .room-management-head p,.command-dock .field-label,.command-dock .worker-row p,.command-dock .worker-fit,.command-dock .room-job p,.command-dock .room-job-foot>span,.command-dock .shelter-build-option p,.command-dock .room-module-recipe p,.command-dock .room-queue-empty{font-size:12px;line-height:1.6}
+.command-dock .worker-row strong,.command-dock .room-job-head strong,.command-dock .room-module-recipe h4{font-size:13px}
+.command-dock .button,.command-dock select{font-size:12px;min-height:40px}
+.command-dock .quote-note,.command-dock .cost-reason,.command-room-reason,.command-dock .loadout-stats>span{font-size:11px;line-height:1.55}
+.production-focus-head,.production-detail,.production-product small{font-size:11px}
+.production-product strong{font-size:13px}
+.production-stages>span{font-size:10px;line-height:1.45}
+.live-watch-picker label,.live-raid-head .eyebrow,.live-raid-status small,.live-kit small,.live-cargo p,.live-event p,.live-camera-note,.live-objective p,.live-route-state,.live-cargo-empty,.live-part-id,.live-cargo-part small,.live-cargo-part p{font-size:11px;line-height:1.55}
+.live-watch-picker select,.live-event strong,.live-raid-events-head h3,.live-objective strong,.live-cargo-part strong,.live-perks button strong,.live-branches button strong{font-size:12px}
+.live-raid-status strong{font-size:14px}
+.live-raid-status b{font-size:12px}
+.live-raid-status p,.live-decision>p,.live-perks button small,.live-branches button small,.live-branches button span{font-size:12px;line-height:1.55}
+.live-raid-status.danger,.live-raid-status.failed{border-left:3px solid #e6a173}
+.live-raid-status.choice{border-left:3px solid #e7c47c;background:#67593477}
+.live-decision{border:1px solid #c9b58188;border-radius:8px;padding:12px;background:#48533a55}
+.live-decision>.button{min-height:42px;font-size:13px}
+.live-perks button,.live-branches button{min-height:44px;padding:10px}
+.command-dock.raid-dock{height:100%}
+}
+@media(max-width:850px){
+.scene-sound{width:38px;height:38px;padding:4px}
+.scene-sound>span{display:none}
+.scene-hover{left:9px;bottom:34px;max-width:calc(100% - 18px);padding:7px 10px}
+.scene-hover strong{font-size:12px}.scene-hover>span{font-size:11px}
+.command-dock:not(.context-open):not(.raid-dock) .system-symbol{display:none}
+}
+@media(max-width:640px){
+.command-main{grid-template-rows:40px auto 100px max-content max-content;align-content:start;overflow-y:auto;scrollbar-width:thin}
+.command-stage-layout{grid-template-rows:minmax(240px,calc(65vw - 13px)) 88px}
+.raid-watching .command-stage-layout{grid-template-rows:minmax(220px,.95fr) minmax(230px,1fr)}
+.command-main .world-head .view-switch{order:1}
+.command-main .world-head .scene-sound{order:2;margin-left:auto}
+.command-main .world-head .camera-controls{order:3;margin-left:0;flex-basis:auto}
+.camera-controls .camera-near{width:38px;min-width:38px}
+.camera-near>span{display:none}
+.worker-placement{top:94px}
+}
+
+.resource.resource-pop{border-color:#dfc88c;box-shadow:inset 0 -2px #dfc88c66}
+.resource.resource-pop::after{content:attr(data-gain);position:absolute;z-index:6;right:4px;top:calc(100% - 4px);padding:2px 6px;border:1px solid #b5b78488;border-radius:4px;background:#203827;color:#e8edb6;font:700 11px "Manrope",sans-serif;pointer-events:none;animation:resource-gain 1.3s ease-out both}
+@keyframes resource-gain{0%{opacity:0;transform:translateY(3px)}15%,75%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(-7px)}}
+@media(prefers-reduced-motion:reduce){.resource.resource-pop::after{animation:none}}
