@@ -171,7 +171,9 @@ export function createGameService(options: GameOptions): GameService {
   };
   const persistSnapshot = (identity: Identity, snapshot: GameSnapshot, before: string, action = false) => {
     const encoded = engine.saveGame(snapshot.state);
-    if (encoded !== before || action) { snapshot.revision++; update.run(encoded, snapshot.revision, identity.name, identity.key); }
+    // Polling advances authoritative time, but only an accepted command consumes a command revision.
+    // Every action still reads and validates against the latest complete state inside its transaction.
+    if (encoded !== before || action) { if (action) snapshot.revision++; update.run(encoded, snapshot.revision, identity.name, identity.key); }
   };
   return { fetch: async (request, clientAddress = 'unknown') => {
     const url = new URL(request.url), path = url.pathname;

@@ -97,16 +97,26 @@ describe('authoritative game state and commands', () => {
     expect((await state(service, two)).state).toEqual(publicFresh());
   });
 
-  test('only server time advances idle progress and stale snapshots cannot replay a command', async () => {
-    const { service, setTime } = setup(), client = await joinClient(service), originalRevision = client.snapshot.revision;
+  test('two windows can poll idle progress without invalidating a command, while accepted commands invalidate replays', async () => {
+    const { service, setTime } = setup(), client = await joinClient(service), otherWindow = await joinClient(service, client.cookie), originalRevision = client.snapshot.revision;
     const expected = structuredClone(client.snapshot.state); advance(expected, NOW + 60_000);
     setTime(NOW + 60_000);
     expect((await state(service, client)).state).toEqual(expected);
     expect(client.snapshot.serverNow).toBe(NOW + 60_000);
-    const stale = await action(service, client, { type: 'sellModule', args: [client.snapshot.state.modules[0]!.id] }, originalRevision);
-    expect(stale.response.status).toBe(409); expect(stale.body.code).toBe('revision_conflict'); expect(stale.body.snapshot!.state).toEqual(expected);
+    expect(client.snapshot.revision).toBe(originalRevision);
+    advance(expected, NOW + 120_000); setTime(NOW + 120_000);
+    expect((await state(service, otherWindow)).state).toEqual(expected);
+    expect(otherWindow.snapshot.revision).toBe(originalRevision);
+    const item = client.snapshot.state.modules[0]!, money = expected.money, value = getModuleSaleValue(item);
+    const accepted = await action(service, client, { type: 'sellModule', args: [item.id] }, originalRevision);
+    expect(accepted.response.status).toBe(200); expect(accepted.body.result.ok).toBe(true);
+    expect(client.snapshot.revision).toBe(originalRevision + 1);
+    expect(client.snapshot.state.money).toBe(money + value);
+    const committed = structuredClone(client.snapshot.state);
+    const stale = await action(service, otherWindow, { type: 'sellModule', args: [item.id] }, originalRevision);
+    expect(stale.response.status).toBe(409); expect(stale.body.code).toBe('revision_conflict'); expect(stale.body.snapshot!.state).toEqual(committed);
     setTime(NOW - 1000); const rollback = await state(service, client);
-    expect(rollback.serverNow).toBe(NOW + 60_000); expect(rollback.state).toEqual(expected);
+    expect(rollback.serverNow).toBe(NOW + 120_000); expect(rollback.state).toEqual(committed);
   });
 
   test('raid settlement and reward extraction are driven by the server and not replayable', async () => {
