@@ -70,7 +70,7 @@ function placePlayers(placements: Array<{ session: Session; x: number; y: number
 }
 function blockedPair(corner = false): [{ x: number; y: number }, { x: number; y: number }] {
   const world = getLiveMap("perimeter");
-  for (const wall of world.obstacles) {
+  for (const wall of world.obstacles.filter(obstacle => obstacle.kind !== "water")) {
     const a = corner ? { x: wall.x - 1, y: wall.y } : { x: wall.x, y: wall.y - 1 };
     const b = corner ? { x: wall.x, y: wall.y - 1 } : { x: wall.x, y: wall.y + wall.height };
     if (isLiveWalkable(world, a) && isLiveWalkable(world, b) && Math.hypot(a.x - b.x, a.y - b.y) <= 7 && !hasLiveLineOfSight(world, a, b)) return [a, b];
