@@ -4,6 +4,7 @@ import type { LiveMapDefinition } from '../src/game/live-maps';
 import { hasLiveLineOfSight, isLiveWalkable } from '../src/game/live-maps';
 import { createLiveNavigation } from '../server/live-navigation';
 import { LIVE_TERRAIN_CODES, type LivePoint } from '../src/game/live';
+import { getLiveBossArena } from '../src/game/live-boss-arenas';
 
 const intersects = (a: { x: number; y: number; width: number; height: number }, b: { x: number; y: number; width: number; height: number }): boolean => a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
 
@@ -189,7 +190,11 @@ function inspect(world: LiveMapDefinition): void {
     expect(places.every(poi => poi)).toBe(true);
     expect(places.some(poi => poi.tags.includes('city'))).toBe(true);
     if (route.purpose === 'pvp') expect(places.filter(poi => poi.tags.includes('city') && poi.danger === 3).length).toBeGreaterThanOrEqual(2);
-    if (route.purpose === 'loot') { expect(places.some(poi => poi.danger === 1)).toBe(true); expect(places.some(poi => !poi.tags.includes('city'))).toBe(true); }
+    if (route.purpose === 'loot') {
+      const safeEntry = places.some(poi => poi.danger === 1);
+      if (!safeEntry) throw new Error(`Loot route ${route.id} lacks a safe entry: ${places.map(poi => `${poi.id}(${poi.templateId}, danger=${poi.danger})`).join(', ')}`);
+      expect(safeEntry).toBe(true); expect(places.some(poi => !poi.tags.includes('city'))).toBe(true);
+    }
   }
   const pvpRoutes = world.routes!.filter(route => route.purpose === 'pvp');
   expect(pvpRoutes[0]!.poiIds.some(id => pvpRoutes.every(route => route.poiIds.includes(id)))).toBe(true);
@@ -218,9 +223,15 @@ describe('deterministic world generation', () => {
   test('one hundred seeds keep every interior, route, loot anchor and extraction connected and bounded', () => {
     for (let seed = 0; seed < 100; seed++) {
       try { inspect(generateLiveWorld(`seed-${seed}`)); }
-      catch (cause) { throw new Error(`Generated world seed-${seed} failed validation`, { cause }); }
+      catch (cause) { throw new Error(`Generated world seed-${seed} failed validation: ${cause instanceof Error ? cause.message : String(cause)}`, { cause }); }
     }
   }, 60_000);
+  test('default and seed-nine city guidance retains connected stops and an accessible first supply', () => {
+    for (const seed of [LIVE_WORLD_SEED, 'seed-9']) inspect(generateLiveWorld(seed));
+    const world = generateLiveWorld('seed-9'), firstForestSupply = world.pois.find(poi => poi.id === 'poi-2-0')!;
+    expect(firstForestSupply.danger).toBe(1);
+    expect(getLiveBossArena(world, 'lesnik').poiId).not.toBe(firstForestSupply.id);
+  });
   test('all verified V3 default containers keep their original logical identities when the city displaces their landmarks', () => {
     // Public identities recorded from the shipped 192×192 layout, independent of V4 placement.
     const legacy = [
