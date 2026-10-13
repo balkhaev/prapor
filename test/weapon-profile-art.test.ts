@@ -372,6 +372,46 @@ describe("complete weapon side-profile audit", () => {
 		}
 	});
 
+	test("modern lower rails have a continuous visible bearing under the fore-end", () => {
+		const families = ["m4a1", "hk416", "mcx", "scarh", "trg42", "g36", "aug", "fal", "sr25", "ash12", "awm"];
+		const gaps: string[] = []; let cases = 0;
+		const contains = (points: [number, number][], x: number, y: number) => {
+			let inside = false;
+			for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+				const [xi, yi] = points[i]!, [xj, yj] = points[j]!;
+				if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+			}
+			return inside;
+		};
+		for (const id of families) {
+			const info = RECEIVER_INFO[id]!;
+			const guards = MODULE_MODELS.filter((model) => model.slot === "handguard" && model.providesMounts.includes("rail-bottom") && (model.id === FACTORY_KITS[id]!.handguard || !model.weaponId && model.platforms.includes(info.platform) && model.calibers.includes(info.caliber)));
+			for (const guard of guards) {
+				cases++;
+				const gun = factory(id); install(gun, guard.id);
+				const group = part(weaponActorArt(gun).svg, "handguard")!;
+				const body = pointsForPath(outline(group).split(/(?=M)/)[0]!);
+				const rails = [...group.matchAll(/<path d="M(-?[\d.]+) (-?[\d.]+)h([\d.]+)v6H[-\d.]+z"/g)].map((match) => ({ x: Number(match[1]), y: Number(match[2]), width: Number(match[3]) }));
+				const lower = rails.sort((a, b) => b.y - a.y)[0]!;
+				const solids = [...group.matchAll(/<path\b[^>]*>/g)].filter(([tag]) => /\bfill="/.test(tag) && !/\bfill="none"/.test(tag)).map(([tag]) => tag.match(/\bd="([^"]+)"/)![1]!.split(/(?=M)/).map(pointsForPath));
+				const left = Math.min(...body.map(([x]) => x)), right = Math.max(...body.map(([x]) => x));
+				for (const fraction of [.25, .5, .75]) {
+					const x = left + (right - left) * fraction;
+					const intersections = body.flatMap(([x1, y1], i) => {
+						const [x2, y2] = body[(i + 1) % body.length]!;
+						return x1 !== x2 && x >= Math.min(x1, x2) && x <= Math.max(x1, x2) ? [y1 + (x - x1) * (y2 - y1) / (x2 - x1)] : [];
+					});
+					const underside = Math.max(...intersections);
+					for (let y = underside + .25; y < lower.y + .1; y += .5) {
+						if (!solids.some((contours) => contours.filter((contour) => contains(contour, x, y)).length % 2 === 1)) { gaps.push(`${id}/${guard.id}: air below fore-end at ${x.toFixed(1)},${y.toFixed(1)}`); break; }
+					}
+				}
+			}
+		}
+		expect(cases).toBeGreaterThanOrEqual(40);
+		expect(gaps).toEqual([]);
+	});
+
 	test("all supported sights place their optical feet on the actual four dovetail adapter rails", () => {
 		let cases = 0, railCases = 0;
 		for (const definition of WEAPONS) {

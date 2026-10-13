@@ -168,7 +168,9 @@ function handguard(gun: ReferenceProfile, a: string, p: ReferencePaint, t: Refer
 	const raised = ["g36", "ash12"].includes(gun.id);
 	const bridge = railed ? raised ? `${t.rail(x, top - 8, w)}${path(`M${x} ${top - 3}h${w}v7h-${w}z`, p.dark)}` : `${t.rail(receiverLeft, s.railTop, end - receiverLeft)}${path(`M${x + 3} ${s.railTop + 5}h10v${top - s.railTop + 3}h-10zM${end - 13} ${s.railTop + 5}h10v${top - s.railTop + 3}h-10z`, p.dark)}` : "";
 	const factoryTop = factory && ["m4a1", "hk416", "mcx", "scarh", "sr25"].includes(gun.id) ? `${t.rail(x - 2, 108, w + 2)}${path(`M${x - 2} 113h${w + 2}v7h-${w + 2}z`, p.dark)}` : "";
-	const bottomRail = hasBottom ? `${t.rail(railLeft, bottom + 10, railRight - railLeft)}${path(`M${x + 4} ${bottom - 1}h9v13h-9zM${end - 12} ${bottom - 1}h9v13h-9z`, p.dark)}` : "";
+	// The rail bears on a continuous metal bed. Two narrow posts alone left
+	// a visible strip of background between the fore-end and its lower rail.
+	const bottomRail = hasBottom ? `<path data-hardware="fore-end-lower-rail-bed" d="M${railLeft} ${bottom - 3}h${railRight - railLeft}v14h-${railRight - railLeft}z" fill="${p.steel}" stroke="#10171b" stroke-width="1"/>${t.seam(`M${railLeft + 2} ${bottom - 2}h${railRight - railLeft - 4}`, true)}${t.fastener(x + 18, bottom + 4, 2)}${t.fastener(end - 20, bottom + 4, 2)}${t.rail(railLeft, bottom + 10, railRight - railLeft)}` : "";
 	const sideRail = railed || factory && !bolt ? t.rail(x + 4, 145, w - 9) : "";
 	const factorySlots = factory && ["g36", "ash12", "mcx"].includes(gun.id) ? t.vents(x + 12, top + 13, Math.max(1, Math.floor((w - 21) / 25)), 13, 7, 25)
 		: factory && ["m4a1", "hk416"].includes(gun.id) ? t.ribs(x + 11, top + 15, Math.max(1, Math.floor((w - 23) / 9)), bottom - top - 23, 9)

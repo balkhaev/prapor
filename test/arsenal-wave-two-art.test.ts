@@ -28,8 +28,8 @@ describe("wave two physical weapon profiles", () => {
 	test("all polished loose profiles and factory actor assemblies retain their reviewed visual snapshots", () => {
 		// Intentional visual polish across the original and expanded catalog.
 		// Physical consistency, mounting and clipping are audited independently below.
-		expect(hash(MODULE_MODELS.map(moduleArt))).toBe("491f0ac1fc2b1e6fdb7a2bd258723c4bbc66c9830e48fb921ddd2c10824bb3b4");
-		expect(hash(WEAPONS.map(({ id }) => JSON.stringify(weaponActorArt(factory(id)))))).toBe("bdfd6c936f73ec3f33cd9b659671767a02d4cc5699601e24950cb8773ca3b8c2");
+		expect(hash(MODULE_MODELS.map(moduleArt))).toBe("549307e19f127969343b808ab44700086f4d9cd0ed30488632371f78f14ee6bc");
+		expect(hash(WEAPONS.map(({ id }) => JSON.stringify(weaponActorArt(factory(id)))))).toBe("9a1c541f0d5e8b1eace8b5834b4a06ba9445e7f983145a6fe3e642de0d097fd6");
 	});
 
 	test("14 distinct receiver silhouettes and all factory parts use identical bench, actor and loose geometry", () => {
