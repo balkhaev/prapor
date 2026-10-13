@@ -5,7 +5,7 @@ import {
 } from "../src/game/engine";
 import { ARSENAL_SAVE_VERSION } from "../src/game/catalog-releases";
 import { useWeaponPlatformFixture } from "./weapon-fixtures";
-import { withoutLoot } from "./legacy-loot-fixture";
+import { withoutBarters, withoutLoot } from "./legacy-loot-fixture";
 import { withoutArsenalLoot } from "./legacy-strategy-fixture";
 import { withoutMedical } from "./legacy-health-fixture";
 import type { AmmoType } from "../src/game/ammunition";
@@ -308,6 +308,13 @@ const V16_FIXTURES = [
 ] as const;
 function v16Fingerprint(state: GameState): string {
 	const raw = withoutMedical(JSON.parse(saveGame(state))); raw.schemaVersion = 16;
+	// These retained fixtures have an empty shelf. Only the empty receipt field
+	// changed when overflow became a parcel; all paid outcomes must remain exact.
+	for (const report of raw.history) if (Object.hasOwn(report, "lootPending")) {
+		expect(report.lootPending).toHaveLength(0);
+		report.lootAutoSold ??= [];
+	}
+	withoutBarters(raw);
 	for (const raid of raw.raids) if (raid.expedition) delete raid.expedition.lootCatalogVersion;
 	return fingerprint(raw);
 }

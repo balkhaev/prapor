@@ -46,9 +46,13 @@ export * from './raid-health';
 import { getLootModel, getLootTraderPrice, parseLootItem, rollRaidLoot, type LootItem } from "./loot";
 export * from "./loot";
 export * from "./trade";
+import { getBarterQuote } from "./barter";
+export * from "./barter";
 
 export const SAVE_KEY = "prapor.save.v1";
-export const SAVE_VERSION = 19;
+export const SAVE_VERSION = 20;
+export const MAX_PENDING_LOOT_DELIVERIES = 128;
+export const PENDING_LOOT_RAID_LIMIT = 96;
 export const MAX_OFFLINE_MS = 8 * 60 * 60 * 1000;
 export const MAX_ROOM_LEVEL = 5;
 
@@ -195,7 +199,10 @@ export interface RaidReport {
 	medical?: { body: HealthState; inventory: import('./health').MedicalInventory };
 	lootItems?: LootItem[];
 	lootAutoSold?: { item: LootItem; money: number }[];
+	/** Intact named trophies awaiting space; historical automatic sales remain historical. */
+	lootPending?: LootItem[];
 }
+export interface LootDelivery { id: string; raidId: string; at: number; items: LootItem[] }
 export interface GameState {
 	schemaVersion: number;
 	createdAt: number;
@@ -221,6 +228,7 @@ export interface GameState {
 	achievements: AchievementState;
 	sectorIntel?: Record<string, SectorIntel>;
 	lootItems?: LootItem[];
+	pendingLoot?: LootDelivery[];
 	stats: {
 		raidsWon: number;
 		raidsCompleted: number;
@@ -306,6 +314,7 @@ function rebaseClock(state: GameState, now: number) {
 			if (member.medical) member.medical.body.painUntil = Math.max(0, member.medical.body.painUntil - shift);
 		}
 	}
+	for (const delivery of state.pendingLoot ?? []) delivery.at = Math.max(0, delivery.at - shift);
 	state.createdAt = Math.min(state.createdAt, now);
 	state.lastUpdated = now;
 }
@@ -1055,6 +1064,31 @@ export function getStorageCapacity(state: GameState): number {
 	return 15 + state.base.storage * 10 + extraStorageLevels(state) * 6 + hangarLevels(state) * 18;
 }
 export function getLootCapacity(state: GameState): number { return Math.min(512, 32 + state.base.storage * 16 + extraStorageLevels(state) * 12); }
+/** Only owned shelf items can be exchanged. The submitted identifiers choose the exact objects. */
+export function barterGear(state: GameState, offerId: string, itemIds: readonly string[]): ActionResult & { gearItemId?: string } {
+	const quote = getBarterQuote(state, offerId);
+	if (quote.reason || !quote.offer) return fail(quote.reason ?? "Обмен не найден.");
+	const expected = quote.offer.requirements.reduce((sum, value) => sum + value.quantity, 0);
+	if (!Array.isArray(itemIds) || itemIds.length !== expected || new Set(itemIds).size !== itemIds.length || itemIds.some(value => typeof value !== "string" || !/^loot-[1-9]\d*$/.test(value))) return fail("Выбери точный набор целых трофеев для обмена.");
+	const selected = itemIds.map(itemId => state.lootItems?.find(item => item.id === itemId));
+	if (selected.some(item => !item)) return fail("Один из трофеев уже отсутствует на складе. Обнови обмен.");
+	if (quote.offer.requirements.some(value => selected.filter(item => item!.modelId === value.modelId).length !== value.quantity)) return fail("Выбранные трофеи не соответствуют условиям обмена.");
+	if (state.nextId >= 1e12 - 1) return fail("Лимит идентификаторов исчерпан.");
+	const gear = { id: id(state, "gear"), modelId: quote.offer.gearModelId, durability: 100 };
+	const ids = new Set(itemIds); state.lootItems = state.lootItems!.filter(item => !ids.has(item.id));
+	state.gearItems.push(gear);
+	pruneAchievementInventory(state);
+	return { ...ok(`${quote.offer.label} получен за трофеи. Выдай снаряжение своему дикому.`), gearItemId: gear.id };
+}
+/** Waiting trophies are never sold or partly claimed to make a parcel fit. */
+export function claimLootDelivery(state: GameState, deliveryId: string): ActionResult {
+	const delivery = state.pendingLoot?.find(value => value.id === deliveryId);
+	if (!delivery) return fail("Посылка с трофеями не найдена или уже получена.");
+	if ((state.lootItems?.length ?? 0) + delivery.items.length > getLootCapacity(state)) return fail(`Для всей посылки нужно ${delivery.items.length} свободных мест на складе трофеев.`);
+	(state.lootItems ??= []).push(...delivery.items);
+	state.pendingLoot = state.pendingLoot!.filter(value => value.id !== delivery.id);
+	return ok(`Посылка получена: ${delivery.items.length} целых трофеев. Их можно оставить, обменять или продать по своему выбору.`);
+}
 export function sellLootItem(state: GameState, itemId: string): ActionResult {
 	const item = state.lootItems?.find(item => item.id === itemId); if (!item) return fail("Трофей не найден.");
 	const value = getLootTraderPrice(item); state.lootItems = state.lootItems!.filter(item => item.id !== itemId); addMoney(state, value);
@@ -1335,6 +1369,7 @@ export function getRaidQuote(state: GameState, scav: Scav, map: RaidMap) {
 	let reason: string | null = null;
 	const weapon = state.weapons.find((item) => item.id === scav.weaponInstanceId);
 	if (scav.status === "raiding") reason = "Боец уже в рейде.";
+	else if ((state.pendingLoot?.length ?? 0) >= PENDING_LOOT_RAID_LIMIT) reason = "Сначала забери посылки с трофеями: место для новых возвращений заканчивается.";
 	else if (scav.assignment) reason = "Боец работает в убежище. Сначала освободи его от работы.";
 	else if (state.level < map.level) reason = `Сектор откроется на ${map.level} уровне.`;
 	else if (!isScavMedicallyReady(scav)) reason = scav.medicalTreatment ? "Боец проходит курс лечения." : "Бойцу нужно восстановить здоровье и подвижность.";
@@ -2201,7 +2236,7 @@ function finishExpedition(state: GameState, raid: Raid, success: boolean, now: n
 		weaponAutoSold: false, description: "", isAuto: raid.isAuto, tactic: raid.tactic, events: [], depth: expedition.stage,
 		discoveries: [...expedition.discoveries], lostCargo: success ? null : structuredClone(expedition.cargo), moduleIds: [],
 		...(raid.strategy ? { strategy: { ...raid.strategy } } : {}), ...(expedition.reconCompleted ? { reconCompleted: true } : {}), ...(raid.fieldKit ? { fieldKit: raid.fieldKit } : {}),
-		...(raid.lootVersion === 1 ? { lootItems: [], lootAutoSold: [] } : {}) };
+		...(raid.lootVersion === 1 ? { lootItems: [], lootPending: [] } : {}) };
 	if (expedition.medical) report.medical = { body: structuredClone(getScavBody(scav)), inventory: structuredClone(expedition.medical.inventory) };
 	state.stats.raidsCompleted++; scav.raids++;
 	if (raid.isAuto) { state.stats.autoRaidsCompleted++; scav.autoRaid.runs++; }
@@ -2236,11 +2271,12 @@ function finishExpedition(state: GameState, raid: Raid, success: boolean, now: n
 		for (const item of expedition.cargo.lootItems ?? []) {
 			state.lootItems ??= [];
 			if (state.lootItems.length < getLootCapacity(state)) { state.lootItems.push(item); report.lootItems!.push(structuredClone(item)); }
-			else { const money = getLootTraderPrice(item); report.lootAutoSold!.push({ item: structuredClone(item), money }); report.money += money; }
+			else report.lootPending!.push(structuredClone(item));
 		}
+		if (report.lootPending?.length) (state.pendingLoot ??= []).push({ id: id(state, "delivery"), raidId: raid.id, at: now, items: structuredClone(report.lootPending) });
 		addMoney(state, report.money);
 		report.description = `Эвакуация после этапа ${expedition.stage}. Груз доставлен${report.weaponAutoSold ? "; лишний трофей продан" : ""}.`;
-		if (report.lootAutoSold?.length) report.description += ` Склад трофеев полон: ${report.lootAutoSold.length} предметов проданы торговцу за ${report.lootAutoSold.reduce((sum, sale) => sum + sale.money, 0)} ₽.`;
+		if (report.lootPending?.length) report.description += ` Склад трофеев полон: ${report.lootPending.length} предметов ждут в посылке. Освободи место и забери их целыми.`;
 		const discarded = getCargoWeight({ money: 0, supplies: {
 			ammo: expedition.cargo.supplies.ammo - report.supplies.ammo, medicine: expedition.cargo.supplies.medicine - report.supplies.medicine,
 			scrap: expedition.cargo.supplies.scrap - report.supplies.scrap, intel: expedition.cargo.supplies.intel - report.supplies.intel }, weaponIds: [], modules: [] });
@@ -3107,7 +3143,7 @@ function parseRaid(value: unknown, version: number): Raid {
 }
 function parseReport(value: unknown, version: number): RaidReport {
 	const source = record(value);
-	fields(source, ["id", "raidId", "scavName", "scavAppearance", "mapId", "at", "success", "lostScav", "lostWeapon", "money", "supplies", "weaponId", "weaponAutoSold", "description", ...(version >= 2 ? ["isAuto", "tactic", "events"] : []), ...(version >= 3 ? ["depth", "discoveries", "lostCargo"] : []), ...(version >= 4 ? ["moduleIds"] : []), ...(version >= 10 ? ["squad"] : []), ...(version >= 12 ? ["strategy", "sectorOutcome", "reconCompleted"] : []), ...(version >= 14 ? ["fieldKit"] : []), ...(version >= 16 ? ["lootItems", "lootAutoSold"] : []), ...(version >= 18 ? ['medical'] : [])]);
+	fields(source, ["id", "raidId", "scavName", "scavAppearance", "mapId", "at", "success", "lostScav", "lostWeapon", "money", "supplies", "weaponId", "weaponAutoSold", "description", ...(version >= 2 ? ["isAuto", "tactic", "events"] : []), ...(version >= 3 ? ["depth", "discoveries", "lostCargo"] : []), ...(version >= 4 ? ["moduleIds"] : []), ...(version >= 10 ? ["squad"] : []), ...(version >= 12 ? ["strategy", "sectorOutcome", "reconCompleted"] : []), ...(version >= 14 ? ["fieldKit"] : []), ...(version >= 16 ? ["lootItems", "lootAutoSold"] : []), ...(version >= 18 ? ['medical'] : []), ...(version >= 20 ? ["lootPending"] : [])]);
 	if (version >= 14 && Object.hasOwn(source, "fieldKit") && !Object.hasOwn(source, "strategy")) throw new Error("field-kit-report");
 	return {
 		id: string(source.id),
@@ -3139,6 +3175,7 @@ function parseReport(value: unknown, version: number): RaidReport {
 		...(version >= 14 && Object.hasOwn(source, "fieldKit") ? { fieldKit: parseFieldKit(source.fieldKit) } : {}),
 		...(version >= 18 && Object.hasOwn(source, 'medical') ? { medical: parseReportMedicine(source.medical) } : {}),
 		...(version >= 16 && Object.hasOwn(source, "lootItems") ? { lootItems: array(source.lootItems, 6, parseLootItem) } : {}),
+		...(version >= 20 && Object.hasOwn(source, "lootPending") ? { lootPending: array(source.lootPending, 6, parseLootItem) } : {}),
 		...(version >= 16 && Object.hasOwn(source, "lootAutoSold") ? { lootAutoSold: array(source.lootAutoSold, 6, value => {
 			const sale = record(value); fields(sale, ["item", "money"]); const item = parseLootItem(sale.item), money = number(sale.money, 10000, 1, true);
 			if (money !== getLootTraderPrice(item)) throw new Error("loot-sale-price"); return { item, money };
@@ -3153,7 +3190,7 @@ export function parseSave(raw: string, options: { publicSnapshot?: boolean } = {
 		const source = record(JSON.parse(raw));
 		if (typeof source.schemaVersion !== "number" || !Number.isInteger(source.schemaVersion) || source.schemaVersion < 1 || source.schemaVersion > SAVE_VERSION) return null;
 		const version = source.schemaVersion;
-		fields(source, ["schemaVersion", "createdAt", "lastUpdated", "money", "supplies", "xp", "level", "base", "scavs", "weapons", "raids", "history", "claimedContracts", "discoveredWeapons", "stats", "clock", "rng", "nextId", ...(version >= 3 ? ["gearItems", "blueprints"] : []), ...(version >= 4 ? ["modules"] : []), ...(version >= 5 ? ["shelter"] : []), ...(version >= 6 ? ["recruitment"] : []), ...(version >= 7 ? ["memorials"] : []), ...(version >= 8 ? ["social"] : []), ...(version >= 9 ? ["achievements"] : []), ...(version >= 12 ? ["sectorIntel"] : []), ...(version >= 16 ? ["lootItems"] : [])]);
+		fields(source, ["schemaVersion", "createdAt", "lastUpdated", "money", "supplies", "xp", "level", "base", "scavs", "weapons", "raids", "history", "claimedContracts", "discoveredWeapons", "stats", "clock", "rng", "nextId", ...(version >= 3 ? ["gearItems", "blueprints"] : []), ...(version >= 4 ? ["modules"] : []), ...(version >= 5 ? ["shelter"] : []), ...(version >= 6 ? ["recruitment"] : []), ...(version >= 7 ? ["memorials"] : []), ...(version >= 8 ? ["social"] : []), ...(version >= 9 ? ["achievements"] : []), ...(version >= 12 ? ["sectorIntel"] : []), ...(version >= 16 ? ["lootItems"] : []), ...(version >= 20 ? ["pendingLoot"] : [])]);
 		const base = record(source.base);
 		const stats = record(source.stats);
 		const clock = record(source.clock);
@@ -3211,6 +3248,10 @@ export function parseSave(raw: string, options: { publicSnapshot?: boolean } = {
 			achievements: version >= 9 ? parseAchievementState(source.achievements, (value) => parseWeapon(value, version)) : createAchievementState(),
 			...(version >= 12 && Object.hasOwn(source, "sectorIntel") ? { sectorIntel: parseSectorIntelRecord(source.sectorIntel) } : {}),
 			...(version >= 16 && Object.hasOwn(source, "lootItems") ? { lootItems: array(source.lootItems, 512, parseLootItem) } : {}),
+			...(version >= 20 && Object.hasOwn(source, "pendingLoot") ? { pendingLoot: array(source.pendingLoot, MAX_PENDING_LOOT_DELIVERIES, value => {
+				const delivery = record(value); fields(delivery, ["id", "raidId", "at", "items"]);
+				return { id: string(delivery.id), raidId: string(delivery.raidId), at: number(delivery.at), items: array(delivery.items, 6, parseLootItem) };
+			}) } : {}),
 			stats: {
 				raidsWon: number(stats.raidsWon, 1e9, 0, true),
 				raidsCompleted: number(stats.raidsCompleted, 1e9, 0, true),
@@ -3258,12 +3299,22 @@ export function parseSave(raw: string, options: { publicSnapshot?: boolean } = {
 			...state.weapons.flatMap((weapon) => Object.values(weapon.modules).map((item) => item.id)),
 			...state.raids.flatMap((raid) => raid.expedition?.cargo.modules.map((item) => item.id) ?? []),
 			...(state.lootItems ?? []).map(item => item.id),
+			...(state.pendingLoot ?? []).flatMap(delivery => [delivery.id, ...delivery.items.map(item => item.id)]),
 			...state.raids.flatMap(raid => raid.expedition?.cargo.lootItems?.map(item => item.id) ?? []),
 			...state.shelter.rooms.flatMap((room) => room.queue.map((job) => job.id)),
 			...state.shelter.rooms.filter(room => /^room-[1-9]\d*$/.test(room.id)).map(room => room.id),
 		];
 		unique(allIds);
 		if ((state.lootItems?.length ?? 0) > getLootCapacity(state)) throw new Error("loot-inventory");
+		if ((state.pendingLoot?.length ?? 0) + state.raids.filter(raid => raid.lootVersion === 1).length > MAX_PENDING_LOOT_DELIVERIES) throw new Error("loot-delivery-reserve");
+		unique((state.pendingLoot ?? []).map(delivery => delivery.raidId));
+		for (const delivery of state.pendingLoot ?? []) {
+			if (!/^delivery-[1-9]\d*$/.test(delivery.id) || !/^raid-[1-9]\d*$/.test(delivery.raidId)
+				|| Number(delivery.raidId.slice(5)) >= state.nextId || delivery.at > state.lastUpdated || !delivery.items.length
+				|| state.raids.some(raid => raid.id === delivery.raidId)) throw new Error("loot-delivery");
+			const report = state.history.find(report => report.raidId === delivery.raidId);
+			if (report && (!report.success || report.at !== delivery.at || JSON.stringify(report.lootPending ?? []) !== JSON.stringify(delivery.items))) throw new Error("loot-delivery-receipt");
+		}
 		for (const part of [...state.modules, ...state.weapons.flatMap((weapon) => Object.values(weapon.modules)), ...state.raids.flatMap((raid) => raid.expedition?.cargo.modules ?? [])]) if (!part.id.startsWith("module-")) throw new Error("module-id");
 		unique(state.claimedContracts);
 		unique(state.discoveredWeapons);
@@ -3413,10 +3464,10 @@ export function parseSave(raw: string, options: { publicSnapshot?: boolean } = {
 			if (!report.id.startsWith("report-") || !/^raid-[1-9]\d*$/.test(report.raidId) || Number(report.raidId.slice(5)) >= state.nextId) throw new Error("report-id");
 			if ((report.lostScav && !report.lostWeapon) || (report.success && (report.lostScav || report.lostWeapon))) throw new Error("report-outcome");
 			if (report.medical && report.lostScav === isAlive(report.medical.body)) throw new Error('medical-report');
-			const receipt = [...(report.lootItems ?? []), ...(report.lootAutoSold ?? []).map(sale => sale.item), ...(report.lostCargo?.lootItems ?? [])];
+			const receipt = [...(report.lootItems ?? []), ...(report.lootPending ?? []), ...(report.lootAutoSold ?? []).map(sale => sale.item), ...(report.lostCargo?.lootItems ?? [])];
 			unique(receipt.map(item => item.id));
-			if (receipt.length > 6 || (Object.hasOwn(report, "lootItems") || Object.hasOwn(report, "lootAutoSold") || receipt.length > 0) && !report.strategy
-				|| receipt.some(item => Number(item.id.split("-")[1]) >= state.nextId || getLootModel(item).minDepth > report.depth || getLootModel(item).minSectorLevel > MAP_BY_ID[report.mapId]!.level) || (!report.success && ((report.lootItems?.length ?? 0) > 0 || (report.lootAutoSold?.length ?? 0) > 0))
+			if (receipt.length > 6 || (Object.hasOwn(report, "lootItems") || Object.hasOwn(report, "lootAutoSold") || Object.hasOwn(report, "lootPending") || receipt.length > 0) && !report.strategy
+				|| receipt.some(item => Number(item.id.split("-")[1]) >= state.nextId || getLootModel(item).minDepth > report.depth || getLootModel(item).minSectorLevel > MAP_BY_ID[report.mapId]!.level) || (!report.success && ((report.lootItems?.length ?? 0) > 0 || (report.lootPending?.length ?? 0) > 0 || (report.lootAutoSold?.length ?? 0) > 0))
 				|| (report.lootAutoSold ?? []).reduce((sum, sale) => sum + sale.money, 0) > report.money) throw new Error("loot-receipt");
 			if (version < 3 && report.events.length !== 0 && report.events.length !== 4) throw new Error("story");
 			if (report.events.some((event, index) => event.at > report.at || (index > 0 && event.at < report.events[index - 1]!.at))) throw new Error("story-time");
@@ -3433,7 +3484,7 @@ export function parseSave(raw: string, options: { publicSnapshot?: boolean } = {
 		if (
 			allIds.some(
 				(value) =>
-					!/^(gun|scav|raid|report|gear|module|job|loot|room)-[1-9]\d*$/.test(value) ||
+					!/^(gun|scav|raid|report|gear|module|job|loot|room|delivery)-[1-9]\d*$/.test(value) ||
 					Number(value.split("-")[1]) >= state.nextId
 			)
 		)

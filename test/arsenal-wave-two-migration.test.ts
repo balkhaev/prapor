@@ -6,6 +6,7 @@ import { RELEASED_V17_FIXTURES } from "./released-v17-arsenal-fixtures";
 import { RELEASED_V18_FIXTURES } from "./released-v18-arsenal-fixtures";
 import { useWeaponPlatformFixture } from "./weapon-fixtures";
 import { withoutMedical } from "./legacy-health-fixture";
+import { withoutBarters } from "./legacy-loot-fixture";
 
 function canonical(value: unknown): string {
 	if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
@@ -15,6 +16,13 @@ function canonical(value: unknown): string {
 const fingerprint = (value: unknown) => new Bun.CryptoHasher("sha256").update(canonical(value)).digest("hex");
 function releasedFormat(state: GameState, version = ARSENAL_SAVE_VERSION) {
 	const raw = JSON.parse(saveGame(state)); if (version < 18) withoutMedical(raw); raw.schemaVersion = version;
+	// This fixture has space for all trophies. Convert only the empty receipt
+	// property to its released spelling; retain every actual outcome and ID.
+	for (const report of raw.history) if (Object.hasOwn(report, "lootPending")) {
+		expect(report.lootPending).toHaveLength(0);
+		report.lootAutoSold ??= [];
+	}
+	withoutBarters(raw);
 	return raw;
 }
 const stateFingerprint = (state: GameState, version = ARSENAL_SAVE_VERSION) => fingerprint(releasedFormat(state, version));

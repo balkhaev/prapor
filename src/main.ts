@@ -156,7 +156,8 @@ import { mountAccountUI } from "./account-ui";
 
 import { readAccountEmailLink, isAccountEmailFragment, type AccountEmailLink } from "./account-link";
 import { createLiveMode } from "./live-ui";
-import { fleaPage, fleaPricePreview, readFleaOrder, readFleaInteger, raidLootReceipt, raidLootOverflow, type FleaView, type FleaTab, type TradeKindFilter } from './flea-ui';
+import { fleaPage, fleaPricePreview, readFleaOrder, readFleaInteger, raidLootReceipt, raidLootOverflow, barterConfirmation, barterPurpose, type FleaView, type FleaTab, type TradeKindFilter } from './flea-ui';
+import { getBarterQuote } from './game/barter';
 import { getTradeInventory, getTradeQuote, LOOT_MODEL_BY_ID } from './game/engine';
 import { MARKET_MAX_ACTIVE } from './game/flea';
 
@@ -288,6 +289,7 @@ const selectedPerks = new Map<string, RunPerk>();
 let contractFilter: "open" | "done" | "all" = "open";
 let achievementFilter: AchievementFilter = "all";
 const fleaView: FleaView = {tab:'inventory',search:'',kind:'all',draft:null,market:null,loading:false,error:'',busy:false};
+let barterDraft: {offerId:string;itemIds:string[]} | null = null;
 let fleaReadGeneration=0;
 let achievementNoticeTimer: ReturnType<typeof setTimeout> | null = null;
 let achievementNoticeSchedule: ReturnType<typeof setTimeout> | null = null;
@@ -329,10 +331,10 @@ function applySession(session: GameSession) {
 	moduleRarityFilter = session.filters.moduleRarity as typeof moduleRarityFilter; roomModuleSearch = session.filters.roomModuleSearch; roomModuleSlot = session.filters.roomModuleSlot;
 	moduleCraftForWeapon = session.filters.craftForWeapon; contractFilter = session.filters.contracts;
 	achievementFilter = readAchievementFilter(session.filters.achievements);
-	fleaView.tab=session.flea.tab; fleaView.search=session.flea.search; fleaView.kind=session.flea.kind;
+	fleaView.tab=session.flea.tab; fleaView.search=session.flea.search; fleaView.kind=session.flea.kind; fleaView.barterModelId=session.flea.barterModelId??null;
 }
 function captureSession(): GameSession {
-	return readGameSession({version:1,page,view:worldView,mapId:selectedMap,weaponId:selectedWeapon,scavId:selectedScav,roomId:selectedRoomId,raidId:selectedRaidId,squadDraft,context:contextMode,site:selectedShelterSite,roomTab:roomContextTab,armoryTab:arsenalTab,moduleSlot:selectedModuleSlot,benchModuleId:selectedBenchModule,workshopId:productionWorkshopId,perks:[...selectedPerks].flatMap(([raidId,perk])=>{const raid=state.raids.find(item=>item.id===raidId);return raid?.expedition?[{raidId,perk,stage:raid.expedition.stage,seed:raid.seed}]:[]}),flea:{tab:fleaView.tab,search:fleaView.search,kind:fleaView.kind},journal:[...document.querySelectorAll<HTMLDetailsElement>('details[data-report][open]')].map(item=>item.dataset.report),filters:{weaponSearch,category,collection,moduleSearch,benchSearch:benchPartSearch,moduleSlot:moduleSlotFilter,moduleRarity:moduleRarityFilter,roomModuleSearch,roomModuleSlot,craftForWeapon:moduleCraftForWeapon,contracts:contractFilter,achievements:achievementFilter},presentation:world?.getPresentationState() ?? presentationFallback},state);
+	return readGameSession({version:1,page,view:worldView,mapId:selectedMap,weaponId:selectedWeapon,scavId:selectedScav,roomId:selectedRoomId,raidId:selectedRaidId,squadDraft,context:contextMode,site:selectedShelterSite,roomTab:roomContextTab,armoryTab:arsenalTab,moduleSlot:selectedModuleSlot,benchModuleId:selectedBenchModule,workshopId:productionWorkshopId,perks:[...selectedPerks].flatMap(([raidId,perk])=>{const raid=state.raids.find(item=>item.id===raidId);return raid?.expedition?[{raidId,perk,stage:raid.expedition.stage,seed:raid.seed}]:[]}),flea:{tab:fleaView.tab,search:fleaView.search,kind:fleaView.kind,barterModelId:fleaView.barterModelId},journal:[...document.querySelectorAll<HTMLDetailsElement>('details[data-report][open]')].map(item=>item.dataset.report),filters:{weaponSearch,category,collection,moduleSearch,benchSearch:benchPartSearch,moduleSlot:moduleSlotFilter,moduleRarity:moduleRarityFilter,roomModuleSearch,roomModuleSlot,craftForWeapon:moduleCraftForWeapon,contracts:contractFilter,achievements:achievementFilter},presentation:world?.getPresentationState() ?? presentationFallback},state);
 }
 function scheduleSessionSave() {
 	if (!serverReady || saveConflict || protectedSave) return;
@@ -584,7 +586,7 @@ async function loadServerProgress() {
         return;
     productionReserveDraft = null;
     roomStockTargetDrafts.clear();
-    fleaReadGeneration++; fleaView.market=null; fleaView.draft=null; fleaView.loading=false; fleaView.error='';
+    fleaReadGeneration++; fleaView.market=null; fleaView.draft=null; fleaView.barterModelId=null; fleaView.receivedGearId=null; barterDraft=null; fleaView.loading=false; fleaView.error='';
     const presentation = storedSession();
     serverReady = false;
     serverSnapshot = null;
@@ -1480,6 +1482,7 @@ function setOverlayState() {
 	document.body.classList.toggle("overlay-open", modalOpen || drawerOpen || toolsOpen || mobileContext);
 }
 function closeModal() {
+	barterDraft = null;
 	document.querySelector("#modal-root")!.innerHTML = "";
 	setOverlayState();
 	if (modalOrigin?.isConnected) modalOrigin.focus();
@@ -1831,7 +1834,7 @@ function contractCard(contract: Contract) {
 	return `<article data-contract="${e(contract.id)}" class="contract ${lockReason && !claimed ? "contract-locked" : ""}"><div class="contract-mark">${icon(claimed ? "check" : lockReason ? "lock" : "contracts", 21)}</div><div class="contract-copy"><h3>${e(contract.name)}</h3><p>${e(contract.description)}</p><div class="progress"><i style="width:${Math.min(100, (progress / contract.target) * 100)}%"></i></div><small>${n(Math.min(contract.target, progress))} / ${n(contract.target)}</small>${lockReason && !claimed ? `<div class="contract-lock">${icon("lock", 11)} ${e(lockReason)}</div>` : ""}<div class="reward-supplies">${supplies}</div></div><div class="contract-reward"><span>+${n(contract.reward.money)} ₽</span><span class="muted">+${contract.reward.xp} опыта</span><button class="button secondary small" data-action="claim" data-id="${contract.id}" ${!ready || claimed ? "disabled" : ""}>${claimed ? "Выполнено" : lockReason ? "Закрыт" : ready ? "Забрать" : "В работе"}</button></div></article>`;
 }
 function journalCard(report: RaidReport) {
-	return `<details class="journal-entry" data-report="${report.id}"><summary><time>${new Date(report.at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</time><div class="journal-copy"><strong>${e(report.scavName)} · ${e(MAP_BY_ID[report.mapId]!.name)}</strong><p>${e(report.description)}</p><div class="journal-meta"><span>${report.isAuto ? "АВТОВЫХОД" : "ЭКСПЕДИЦИЯ"} · этапов ${report.depth} · ${e(TACTICS[report.tactic].label)}</span><span>${report.money ? `+${n(report.money)} ₽ · ` : ""}Детали +${report.supplies.scrap} · патроны +${report.supplies.ammo}</span></div></div><b class="tag report-result ${report.success ? "success" : "failure"}">${report.success ? "ВЕРНУЛСЯ" : report.lostScav ? "ПОТЕРЯН" : "ПРОВАЛ"}</b><span class="journal-expand">${icon("arrow", 14)}</span></summary><div class="journal-detail">${raidLootReceipt(report.success?report.lootItems:report.lostCargo?.lootItems,report.success?"delivered":"lost")}${raidLootOverflow(report.lootAutoSold)}${report.moduleIds.length ? `<div class="module-loot-strip">${report.moduleIds.map((id) => { const model = MODULE_BY_ID[id]; return model ? `<span class="cargo-module" style="--rarity:${RARITY_COLORS[model.rarity]}">${moduleArt(model)}<span><strong>${e(model.label)}</strong><small>Доставлено на базу</small></span></span>` : ""; }).join("")}</div>` : ""}${report.discoveries.length ? `<div class="report-memory">${icon("intel", 18)} Сохранены открытия: ${report.discoveries.map((id) => e(BLUEPRINTS[id]?.label ?? id)).join(" · ")}</div>` : ""}${report.lostCargo ? `<p class="risk-note">Потеряна добыча из рюкзака: ≈ ${n(getCargoValue(report.lostCargo))} ₽. Постоянные открытия остались у базы.</p>` : ""}${report.weaponId ? `<div class="report-trophy" style="--rarity:${RARITY_COLORS[WEAPON_BY_ID[report.weaponId]!.rarity]}">${icon("arsenal", 21)}<div><strong>${e(WEAPON_BY_ID[report.weaponId]!.name)}</strong><span>${report.weaponAutoSold ? "Продано: арсенал заполнен" : "Найдено и отправлено в арсенал"}</span></div></div>` : ""}<ol class="route-timeline">${report.events.map((event, i) => `<li class="event-${event.kind}"><div class="timeline-marker">${String(i + 1).padStart(2, "0")}</div><div><div class="timeline-label"><strong>${e(event.label)}</strong><time>${new Date(event.at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time></div><p>${e(event.text)}</p></div></li>`).join("")}</ol><div class="report-bottom"><span>Разведданные +${report.supplies.intel} · медикаменты +${report.supplies.medicine}</span><span>${report.lostScav ? "Боец потерян" : report.lostWeapon ? "Оружие потеряно" : "Отчёт закрыт"}</span></div></div></details>`;
+	return `<details class="journal-entry" data-report="${report.id}"><summary><time>${new Date(report.at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</time><div class="journal-copy"><strong>${e(report.scavName)} · ${e(MAP_BY_ID[report.mapId]!.name)}</strong><p>${e(report.description)}</p><div class="journal-meta"><span>${report.isAuto ? "АВТОВЫХОД" : "ЭКСПЕДИЦИЯ"} · этапов ${report.depth} · ${e(TACTICS[report.tactic].label)}</span><span>${report.money ? `+${n(report.money)} ₽ · ` : ""}Детали +${report.supplies.scrap} · патроны +${report.supplies.ammo}</span></div></div><b class="tag report-result ${report.success ? "success" : "failure"}">${report.success ? "ВЕРНУЛСЯ" : report.lostScav ? "ПОТЕРЯН" : "ПРОВАЛ"}</b><span class="journal-expand">${icon("arrow", 14)}</span></summary><div class="journal-detail">${raidLootReceipt(report.success?report.lootItems:report.lostCargo?.lootItems,report.success?"delivered":"lost")}${raidLootReceipt(report.success?report.lootPending:undefined,"pending")}${raidLootOverflow(report.lootAutoSold)}${report.moduleIds.length ? `<div class="module-loot-strip">${report.moduleIds.map((id) => { const model = MODULE_BY_ID[id]; return model ? `<span class="cargo-module" style="--rarity:${RARITY_COLORS[model.rarity]}">${moduleArt(model)}<span><strong>${e(model.label)}</strong><small>Доставлено на базу</small></span></span>` : ""; }).join("")}</div>` : ""}${report.discoveries.length ? `<div class="report-memory">${icon("intel", 18)} Сохранены открытия: ${report.discoveries.map((id) => e(BLUEPRINTS[id]?.label ?? id)).join(" · ")}</div>` : ""}${report.lostCargo ? `<p class="risk-note">Потеряна добыча из рюкзака: ≈ ${n(getCargoValue(report.lostCargo))} ₽. Постоянные открытия остались у базы.</p>` : ""}${report.weaponId ? `<div class="report-trophy" style="--rarity:${RARITY_COLORS[WEAPON_BY_ID[report.weaponId]!.rarity]}">${icon("arsenal", 21)}<div><strong>${e(WEAPON_BY_ID[report.weaponId]!.name)}</strong><span>${report.weaponAutoSold ? "Продано: арсенал заполнен" : "Найдено и отправлено в арсенал"}</span></div></div>` : ""}<ol class="route-timeline">${report.events.map((event, i) => `<li class="event-${event.kind}"><div class="timeline-marker">${String(i + 1).padStart(2, "0")}</div><div><div class="timeline-label"><strong>${e(event.label)}</strong><time>${new Date(event.at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time></div><p>${e(event.text)}</p></div></li>`).join("")}</ol><div class="report-bottom"><span>Разведданные +${report.supplies.intel} · медикаменты +${report.supplies.medicine}</span><span>${report.lostScav ? "Боец потерян" : report.lostWeapon ? "Оружие потеряно" : "Отчёт закрыт"}</span></div></div></details>`;
 }
 function renderOfflineSummary() {
 	const node = document.querySelector<HTMLElement>("#offline-summary")!;
@@ -2342,6 +2345,27 @@ document.addEventListener("click", async (event) => {
 	}
 	const id = target.dataset.id ?? "";
 	switch (target.dataset.action) {
+		case 'flea-barter-model':{
+			const modelId=target.dataset.model;
+			if(!modelId||!Object.hasOwn(LOOT_MODEL_BY_ID,modelId))break;
+			fleaView.tab='barter';fleaView.barterModelId=modelId;fleaView.search='';render();break;
+		}
+		case 'flea-clear-barter-filter':fleaView.barterModelId=null;render();break;
+		case 'flea-close-receipt':fleaView.receivedGearId=null;render();break;
+		case 'flea-claim-delivery':act(await gameAction({type:'claimLootDelivery',args:[id]}));break;
+		case 'flea-barter':{
+			const quote=getBarterQuote(state,id);
+			if(!quote.offer||quote.reason){toast(quote.reason??'Обмен недоступен.',false);break;}
+			barterDraft={offerId:id,itemIds:[...quote.itemIds]};
+			document.querySelector('#modal-root')!.innerHTML=barterConfirmation(state,id);focusModal();break;
+		}
+		case 'flea-confirm-barter':{
+			if(!barterDraft||barterDraft.offerId!==id)break;
+			const draft=barterDraft,gearBefore=new Set(state.gearItems.map(item=>item.id));barterDraft=null;closeModal();
+			const result=await gameAction({type:'barterGear',args:[id,draft.itemIds]});
+			if(result.ok){fleaView.receivedGearId=state.gearItems.find(item=>!gearBefore.has(item.id))?.id??null;if(fleaView.draft?.ref.kind==='loot'&&draft.itemIds.includes(fleaView.draft.ref.id))fleaView.draft=null;}
+			act(result);break;
+		}
 		case 'flea-refresh':void refreshFleaMarket();break;
 		case 'flea-close-draft':fleaView.draft=null;render();panel.querySelector<HTMLButtonElement>('[data-flea-tab="inventory"]')?.focus({preventScroll:true});break;
 		case 'flea-select':{
@@ -2376,8 +2400,9 @@ document.addEventListener("click", async (event) => {
 		case 'flea-recycle-loot':{
 			const item=state.lootItems?.find(item=>item.id===id),model=item?LOOT_MODEL_BY_ID[item.modelId]:null,row=getTradeInventory(state).find(item=>item.ref.kind==='loot'&&item.ref.id===id);
 			if(!model||!row)break;
+			const purpose=barterPurpose(model.id);
 			const sale=target.dataset.action==='flea-sell-loot',salvage=Object.entries(model.salvage).filter(([,value])=>value>0).map(([key,value])=>`${n(value)} ${({ammo:'патронов',medicine:'медикаментов',scrap:'деталей',intel:'разведданных'} as Record<string,string>)[key]}`).join(' · ');
-			document.querySelector('#modal-root')!.innerHTML=`<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="loot-disposal-title"><h2 id="loot-disposal-title">${sale?'Продать торговцу':'Разобрать'} ${e(row.label)}?</h2><p>${sale?`Торговец сразу выплатит ${n(row.traderPrice??0)} ₽. На барахолке ориентир ${n(row.guidePrice)} ₽; покупатель может предложить другую ценность.`:`Предмет будет израсходован. Убежище получит: ${e(salvage)}. Для ресурсов должно хватать места на складе.`}</p><div class="detail-actions"><button class="button danger" data-action="flea-confirm-disposal" data-id="${e(id)}" data-kind="${sale?'sale':'recycle'}">${sale?'Продать':'Разобрать'}</button><button class="button ghost" data-action="close-modal">Оставить</button></div></section></div>`;focusModal();break;
+			document.querySelector('#modal-root')!.innerHTML=`<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="loot-disposal-title"><h2 id="loot-disposal-title">${sale?'Продать торговцу':'Разобрать'} ${e(row.label)}?</h2><p>${sale?`Торговец сразу выплатит ${n(row.traderPrice??0)} ₽. На барахолке ориентир ${n(row.guidePrice)} ₽; покупатель может предложить другую ценность.`:`Предмет будет израсходован. Убежище получит: ${e(salvage)}. Для ресурсов должно хватать места на складе.`}</p>${purpose?`<p>Этот предмет нужен для бартера: <b>${e(purpose)}</b>. После ${sale?"продажи":"разбора"} он исчезнет из набора.</p>`:""}<div class="detail-actions"><button class="button danger" data-action="flea-confirm-disposal" data-id="${e(id)}" data-kind="${sale?'sale':'recycle'}">${sale?'Продать':'Разобрать'}</button><button class="button ghost" data-action="close-modal">Оставить</button></div></section></div>`;focusModal();break;
 		}
 		case 'flea-confirm-disposal':{
 			closeModal();act(await gameAction(target.dataset.kind==='sale'?{type:'sellLootItem',args:[id]}:{type:'recycleLootItem',args:[id]}));break;
@@ -2916,7 +2941,7 @@ document.addEventListener("input", (event) => {
 document.addEventListener("keydown", (event) => {
 	if ((!serverReady || saveConflict || protectedSave) && !document.querySelector('#modal-root .modal')) return;
 	if(event.target instanceof HTMLElement&&event.target.dataset.fleaTab&&['ArrowLeft','ArrowRight','Home','End'].includes(event.key)){
-		const tabs:FleaTab[]=['inventory','market','mine','catalog'],current=tabs.indexOf(fleaView.tab),next=event.key==='Home'?0:event.key==='End'?tabs.length-1:(current+(event.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;
+		const tabs:FleaTab[]=['inventory','barter','market','mine','catalog'],current=tabs.indexOf(fleaView.tab),next=event.key==='Home'?0:event.key==='End'?tabs.length-1:(current+(event.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;
 		event.preventDefault();fleaView.tab=tabs[next]!;render();panel.querySelector<HTMLButtonElement>(`[data-flea-tab="${fleaView.tab}"]`)?.focus({preventScroll:true});scheduleSessionSave();return;
 	}
 	if ((workerPlacement || crewPointer) && event.key === "Escape") { event.preventDefault(); cancelWorkerPlacement(true, true); return; }
@@ -3079,7 +3104,7 @@ const readyContracts = () =>
 const rosterStatus = () => `${state.scavs.map((scav) => `${scav.id}:${scav.status}:${scav.autoRaid.enabled}:${scav.assignment}:${scav.story.pending?.eventId}:${scav.story.bond}:${scav.story.stress}`).join(";")}|${state.raids.map((raid) => `${raid.id}:${raid.expedition?.stage}:${raid.expedition?.status}`).join(";")}|${getSocialPresentationKey(state)}`;
 const shelterStatus = () => `${state.shelter.sites.map((p) => `${p.column}:${p.row}`).join(";")}|${state.shelter.expansions.map((p) => `${p.column}:${p.row}:${Math.floor(p.workDone / p.workRequired * 100)}`).join(";")}|` + state.shelter.rooms.map((room) => `${room.id}:${room.column}:${room.row}:${room.rotation ?? 0}:${room.status}:${room.level}:${room.queue.map((job) => job.id).join(",")}:${room.workerIds.join(",")}:${room.recipeId}:${room.repeat}:${room.pending}:${room.cycles}`).join(";");
 const achievementPresentationKey = () => getAchievementViews(state).map(view => `${view.id}:${view.unlocked}:${view.active}:${view.steps.map(step => Number(step.done)).join('')}`).join('|');
-const inventoryPresentationKey = () => JSON.stringify({ weapons:state.weapons, modules:state.modules, gear:state.gearItems, scavs:state.scavs.map(({health, ...scav})=>({...scav, healthy:isScavMedicallyReady({...scav,health})})), recruitment:state.recruitment,loot:state.lootItems,kits:getFieldKitStock(state) });
+const inventoryPresentationKey = () => JSON.stringify({ weapons:state.weapons, modules:state.modules, gear:state.gearItems, scavs:state.scavs.map(({health, ...scav})=>({...scav, healthy:isScavMedicallyReady({...scav,health})})), recruitment:state.recruitment,loot:state.lootItems,pendingLoot:state.pendingLoot,kits:getFieldKitStock(state) });
 function interacting() {
 	return Boolean(workerPlacement || crewPointer) || (document.activeElement?.tagName === "SELECT" && !document.activeElement.hasAttribute("data-live-raid-select")) || document.activeElement?.tagName === "INPUT" || Boolean(document.querySelector("#modal-root .modal"));
 }
