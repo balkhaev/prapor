@@ -5,19 +5,19 @@ import { WEAPON_BY_ID } from "./game/data";
 import type { WeaponInstance } from "./game/engine";
 import type { ScavDirection } from "./scav-isometric";
 import { weaponCarryTransform } from "./weapon-attachment";
+import { WeaponTextureKeys } from "./weapon-texture-keys";
 import { getHostileVisualLoadout, weaponVisualSignature, type ScavVisualLoadout } from "./scav-loadout";
 import { scavGearHeight, scavGearTexture } from "./scav-gear-art";
 
 type Point = { x: number; y: number };
 type WeaponArt = ReturnType<typeof weaponActorArt>;
-type WeaponTextures = { pending: Set<string>; retry: Map<string, number>; art: Map<string, WeaponArt> };
+type WeaponTextures = { keys: WeaponTextureKeys; pending: Set<string>; retry: Map<string, number>; art: Map<string, WeaponArt> };
 const weaponTextures = new WeakMap<Phaser.Textures.TextureManager, WeaponTextures>();
-const hash = (value: string) => { let n = 2166136261; for (const c of value) n = Math.imul(n ^ c.charCodeAt(0), 16777619); return (n >>> 0).toString(36); };
 
 function ensureWeaponTexture(scene: Phaser.Scene, weapon: WeaponInstance): { key: string; art: WeaponArt } | null {
 	let cache = weaponTextures.get(scene.textures);
-	if (!cache) { cache = { pending: new Set(), retry: new Map(), art: new Map() }; weaponTextures.set(scene.textures, cache); }
-	const signature = `${weaponVisualSignature(weapon)}:${modularWeaponArtRevision(weapon)}`, key = `scav-weapon-${hash(signature)}`;
+	if (!cache) { cache = { keys: new WeaponTextureKeys(), pending: new Set(), retry: new Map(), art: new Map() }; weaponTextures.set(scene.textures, cache); }
+	const signature = `${weaponVisualSignature(weapon)}:${modularWeaponArtRevision(weapon)}`, key = cache.keys.keyFor(signature, (candidate) => scene.textures.exists(candidate));
 	let art = cache.art.get(key);
 	if (!art) { art = weaponActorArt(weapon); cache.art.set(key, art); }
 	if (scene.textures.exists(key)) return { key, art };
@@ -95,7 +95,7 @@ export class ScavEquipment {
 		const texture = ensureWeaponTexture(this.scene, loadout.weapon);
 		if (!texture) { this.weapon.setVisible(false); return; }
 		const { art, key } = texture, category = WEAPON_BY_ID[loadout.weapon.weaponId]?.category ?? "rifle";
-		const placement = weaponCarryTransform(art, category, direction, { ...options, torso });
+		const placement = weaponCarryTransform(art, category, direction, { ...options, torso, bodyAngle: this.body.angle, bodyScale: { x: this.body.scaleX, y: this.body.scaleY } });
 		this.weapon.setTexture(key).setOrigin(placement.origin.x, placement.origin.y).setPosition(placement.position.x, placement.position.y)
 			.setScale(placement.scale.x, placement.scale.y).setAngle(placement.angle).setTint(options.hostile ? 0xb9ad99 : 0xffffff).setVisible(true);
 		this.muzzle = placement.muzzle;

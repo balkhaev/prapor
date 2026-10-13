@@ -236,4 +236,34 @@ describe("complete weapon side-profile audit", () => {
 		const shortBarrel = weaponActorArt(gun); install(gun, "barrel-ak-5.45x39-long"); const longer = weaponActorArt(gun);
 		for (const slot of ["mount", "flashlight", "laser"] as const) { expect(offset(part(longer.svg, slot)!)[0]! - offset(part(shortBarrel.svg, slot)!)[0]!).toBe(20); expect(outline(part(longer.svg, slot)!)).toBe(outline(part(shortBarrel.svg, slot)!)); }
 	});
+
+	test("all supported sights place their optical feet on the actual four dovetail adapter rails", () => {
+		let cases = 0, railCases = 0;
+		for (const definition of WEAPONS) {
+			if (!getResolvedModuleMounts(factory(definition.id).modules).includes("dovetail")) continue;
+			for (const mount of MODULE_MODELS.filter((model) => model.slot === "mount" && model.appearance.startsWith("dovetail-"))) {
+				for (const optic of MODULE_MODELS.filter((model) => model.slot === "optic")) {
+					const gun = factory(definition.id); install(gun, mount.id); install(gun, optic.id);
+					if (getWeaponBuildIssues(gun).length) continue;
+					cases++;
+					const actor = weaponActorArt(gun), group = part(actor.svg, "optic")!, bench = weaponBuildArt(gun);
+					expect(group).toBe(part(bench, "optic")!); expect(outline(group)).toBe(outline(part(moduleArt(optic), "optic")!));
+					expectInside(actor.svg, `${definition.id}/${mount.id}/${optic.id}`); expectInside(bench, `${definition.id}/${mount.id}/${optic.id}/bench`);
+					// Direct dovetail sights retain their own side clamp. Rail sights
+					// must rest on the adapter deck rather than the former receiver rail.
+					if (optic.requiresMount !== "rail-top") continue;
+					railCases++;
+					const mountGroup = part(actor.svg, "mount")!, [mountX = 0, mountY = 0] = offset(mountGroup);
+					const rails = [...mountGroup.matchAll(/<path d="M(-?[\d.]+) (-?[\d.]+)h([\d.]+)v6H[-\d.]+z"/g)].map((match) => [Number(match[1]) + mountX, Number(match[2]) + mountY, Number(match[1]) + Number(match[3]) + mountX, Number(match[2]) + 6 + mountY]);
+					const subpaths = outline(group).split(/(?=M)/), opening = group.slice(0, group.indexOf(">") + 1);
+					const feet = ["scope", "longscope", "scout", "prism"].includes(optic.appearance) ? subpaths.slice(-2) : subpaths.slice(0, 1);
+					for (const foot of feet) {
+						const [left = 0, top = 0, right = 0, bottom = 0] = geometryBounds(`${opening}<path d="${foot}"/></g>`);
+						expect(rails.some(([x = 0, y = 0, end = 0, lower = 0]) => left >= x - .01 && right <= end + .01 && bottom >= y && top <= lower), `${definition.id}/${mount.id}/${optic.id} optical foot supported`).toBe(true);
+					}
+				}
+			}
+		}
+		expect(cases).toBe(324); expect(railCases).toBe(252);
+	});
 });

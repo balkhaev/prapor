@@ -30,6 +30,17 @@ export function modularWeaponArtFamily(model: ModuleModel): ModularWeaponArtId |
 		?? (model.slot === "muzzle" ? model.calibers.map((caliber) => caliberArt[caliber]).find(Boolean) : undefined);
 }
 
+/** Installed donor parts need their own material even when absent from storage. */
+export function modularWeaponArtFamilies(weapon: Pick<WeaponInstance, "weaponId" | "modules">): ModularWeaponArtId[] {
+	const ids = new Set<ModularWeaponArtId>();
+	if (MODULAR_WEAPON_ART_IDS.includes(weapon.weaponId as ModularWeaponArtId)) ids.add(weapon.weaponId as ModularWeaponArtId);
+	for (const instance of Object.values(weapon.modules)) {
+		const model = instance ? MODULE_BY_ID[instance.modelId] : undefined, family = model ? modularWeaponArtFamily(model) : undefined;
+		if (family) ids.add(family);
+	}
+	return [...ids];
+}
+
 /** Read alpha bounds without modifying generated pixels or exporting cropped art. */
 export function modularAtlasCellBounds(alpha: Uint8ClampedArray, width: number, height: number, index: number): SourceBounds {
 	const cellWidth = width / 4, cellHeight = height / 2;
