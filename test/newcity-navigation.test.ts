@@ -134,7 +134,8 @@ describe('city passages use the actual server collision grid', () => {
     expect((await call('action', { type: 'engage', targetId: second.session.id }, first.session)).status).toBe(409);
     const badMove = await call('action', { type: 'move', ...pair.wall }, first.session); expect(badMove.status).toBe(400);
     let destination = indoorPoint(pair.building);
-    if (!navigation.hasLineOfSight(destination, pair.second) || destination.x === pair.second.x && destination.y === pair.second.y) {
+    if (Math.hypot(destination.x - pair.second.x, destination.y - pair.second.y) > 7
+      || !navigation.hasLineOfSight(destination, pair.second) || destination.x === pair.second.x && destination.y === pair.second.y) {
       const candidates: LivePoint[] = [];
       for (let y = pair.building.y + 1; y < pair.building.y + pair.building.height - 1; y++) for (let x = pair.building.x + 1; x < pair.building.x + pair.building.width - 1; x++) {
         const point = { x, y };

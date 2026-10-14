@@ -5,7 +5,7 @@ import { getBoss } from './game/bosses';
 import { WEAPON_BY_ID } from './game/data';
 import { bossWeapon } from './boss-ui';
 import { weaponActorArt } from './armory-art';
-import { BuildingMaterialArt, buildingNeedsCutaway, buildingPalette, PropArtCache, SceneryIndex } from './live-map-art';
+import { BuildingMaterialArt, buildingFacadeCadence, buildingNeedsCutaway, buildingPalette, buildingWallHeight, PropArtCache, sceneBuildings, SceneryIndex } from './live-map-art';
 import { buildSurfaceMasks, paintRoadSurface, paintTerrainTexture, terrainTextureResolution, type SurfaceMasks } from './live-ground-art';
 
 type AtlasFrame = { frame: { x: number; y: number; w: number; h: number }; spriteSourceSize: { x: number; y: number; w: number; h: number }; sourceSize: { w: number; h: number } };
@@ -236,11 +236,12 @@ export class LiveScene {
     }
     this.walkableGround = Uint8Array.from(this.terrain, terrain => Number(terrain !== 'water'));
     this.buildingForObstacle.clear();
-    const buildings = world.citySites?.flatMap(site => site.buildings) ?? [];
+    const buildings = sceneBuildings(world);
     for (const [index, obstacle] of world.obstacles.entries()) {
       for (let y = obstacle.y; y < obstacle.y + obstacle.height; y++) for (let x = obstacle.x; x < obstacle.x + obstacle.width; x++) this.walkableGround[y * world.width + x] = 0;
       const cx = obstacle.x + obstacle.width / 2, cy = obstacle.y + obstacle.height / 2;
-      const building = buildings.find(building => cx >= building.x && cy >= building.y && cx < building.x + building.width && cy < building.y + building.height);
+      const building = buildings.find(building => cx >= building.x && cy >= building.y && cx < building.x + building.width && cy < building.y + building.height
+        && obstacle.x >= building.x && obstacle.y >= building.y && obstacle.x + obstacle.width <= building.x + building.width && obstacle.y + obstacle.height <= building.y + building.height);
       if (building) this.buildingForObstacle.set(index, building);
     }
     const scenery: StaticScenery[] = [];
@@ -251,7 +252,7 @@ export class LiveScene {
     for (const prop of world.props ?? []) scenery.push({ ...prop, type: 'prop', prop, depth: prop.x + prop.y + (prop.width + prop.height) / 2 });
     for (const building of buildings) scenery.push({ ...building, type: 'architecture', building, depth: building.x + building.y + building.width + building.height - 1.1 });
     this.scenery = new SceneryIndex(scenery, world.chunkSize); this.propArt.clear(); this.buildingArt.clear(); this.cutawayBuildings.clear();
-    this.surfaceMasks = buildSurfaceMasks(world, this.terrain, this.walkableGround);
+    this.surfaceMasks = buildSurfaceMasks(world, this.terrain, this.walkableGround, buildings);
     const texture = document.createElement('canvas'), resolution = terrainTextureResolution(world.width, world.height);
     texture.width = world.width * resolution; texture.height = world.height * resolution;
     const ground = texture.getContext('2d');
@@ -393,7 +394,7 @@ export class LiveScene {
   private paintBuilding(building: LiveCityBuilding): void {
     const c = this.context, x = building.x - .5, y = building.y - .5, w = building.width, h = building.height;
     const floors = building.floors ?? (building.kind === 'apartment' ? 2 : 1), colors = buildingPalette(building);
-    const height = this.tile * (.62 + floors * .54), base = this.quad(x, y, w, h), top = this.quad(x, y, w, h, height);
+    const height = this.tile * buildingWallHeight(building), base = this.quad(x, y, w, h), top = this.quad(x, y, w, h, height);
     if (this.cutawayBuildings.has(building.id) && this.tile >= 14) {
       // An open roof is a presentation of the existing room, never an extra walkable surface.
       c.strokeStyle = '#d0c6a36b'; c.lineWidth = Math.max(1, this.tile * .025); c.beginPath();
@@ -407,26 +408,28 @@ export class LiveScene {
     const seed = [...building.id].reduce((sum, char) => Math.imul(sum, 31) + char.charCodeAt(0), 0) >>> 0;
     for (const [a, b, length] of [[base[3]!, base[2]!, w], [base[2]!, base[1]!, h]] as const) {
       if (this.tile >= 24) this.paintMaterialFace(this.buildingArt.facade(building, length), { x: a.x, y: a.y - height }, { x: b.x, y: b.y - height }, a);
-      this.facade(a, b, height, length, floors, seed);
+      this.facade(a, b, height, length, floors, seed, building);
       c.strokeStyle = '#d2cbb158'; c.lineWidth = Math.max(1, this.tile * .03); c.beginPath(); c.moveTo(a.x, a.y - height + 3); c.lineTo(b.x, b.y - height + 3); c.stroke();
       c.strokeStyle = '#33473db3'; c.lineWidth = Math.max(1, this.tile * .065); c.beginPath(); c.moveTo(a.x, a.y - this.tile * .08); c.lineTo(b.x, b.y - this.tile * .08); c.stroke();
     }
     const roof = building.roof ?? (building.kind === 'workshop' ? 'sawtooth' : building.kind === 'apartment' ? 'gable' : 'flat');
     if (roof === 'gable') {
-      const ridgeA = this.project({ x, y: y + h / 2 }, height + this.tile * .42), ridgeB = this.project({ x: x + w, y: y + h / 2 }, height + this.tile * .42);
-      this.polygon([top[0]!, top[1]!, ridgeB, ridgeA], building.facade === 'brick' ? '#8c8276' : '#909888', '#b7b79b66');
-      this.polygon([ridgeA, ridgeB, top[2]!, top[3]!], building.facade === 'brick' ? '#5d6861' : '#5e7468', '#b7b79b66');
-      if (this.tile >= 24) { const material = this.buildingArt.roof({ ...building, roof: 'gable' }, w, h / 2); this.paintMaterialFace(material, top[0]!, top[1]!, ridgeA); this.paintMaterialFace(material, ridgeA, ridgeB, top[3]!); }
-      this.polygon([top[1]!, top[2]!, ridgeB], colors[0], '#273e3888');
-      c.strokeStyle = '#253f367a'; c.lineWidth = .7;
-      for (let t = .6 / w; t < 1; t += .65 / w) { const a = { x: ridgeA.x + (ridgeB.x - ridgeA.x) * t, y: ridgeA.y + (ridgeB.y - ridgeA.y) * t }, b = { x: top[3]!.x + (top[2]!.x - top[3]!.x) * t, y: top[3]!.y + (top[2]!.y - top[3]!.y) * t }; c.beginPath(); c.moveTo(a.x, a.y); c.lineTo(b.x, b.y); c.stroke(); }
+      const axis = building.roofAxis ?? (w >= h ? 'x' : 'y'), lift = this.tile * (building.kind === 'workshop' ? .2 : .31);
+      const ridgeA = this.project(axis === 'x' ? { x, y: y + h / 2 } : { x: x + w / 2, y }, height + lift), ridgeB = this.project(axis === 'x' ? { x: x + w, y: y + h / 2 } : { x: x + w / 2, y: y + h }, height + lift);
+      const light = axis === 'x' ? [top[0]!, top[1]!, ridgeB, ridgeA] : [top[0]!, ridgeA, ridgeB, top[3]!], dark = axis === 'x' ? [ridgeA, ridgeB, top[2]!, top[3]!] : [ridgeA, top[1]!, top[2]!, ridgeB];
+      const greenhouse = building.id.includes('greenhouse'), tones = building.facade === 'brick' ? seed % 2 ? ['#8c938e', '#5d716a'] : ['#a08d79', '#766d5d'] : building.facade === 'metal' ? ['#8eaba5', '#63857d'] : seed % 3 ? ['#858e7d', '#5d715d'] : ['#9a8d76', '#6c6954'];
+      this.polygon(light, greenhouse ? '#a0c1b587' : tones[0]!, '#b7b79b66'); this.polygon(dark, greenhouse ? '#739c8f88' : tones[1]!, '#8f9c8166');
+      if (this.tile >= 24) { const material = this.buildingArt.roof({ ...building, roof: 'gable' }, axis === 'x' ? w : h, axis === 'x' ? h / 2 : w / 2); this.paintMaterialFace(material, light[0]!, light[axis === 'x' ? 1 : 3]!, light[axis === 'x' ? 3 : 1]!); this.paintMaterialFace(material, dark[0]!, dark[axis === 'x' ? 1 : 3]!, dark[axis === 'x' ? 3 : 1]!); }
+      this.polygon(axis === 'x' ? [top[1]!, top[2]!, ridgeB] : [top[2]!, top[3]!, ridgeB], colors[0], '#273e3888');
+      c.strokeStyle = greenhouse ? '#d8e1c3b3' : '#c1c0a373'; c.lineWidth = Math.max(.8, this.tile * .022); c.beginPath(); c.moveTo(ridgeA.x, ridgeA.y); c.lineTo(ridgeB.x, ridgeB.y); c.stroke();
     } else if (roof === 'sawtooth') {
-      const count = Math.max(2, Math.round(h / 3)), band = h / count;
+      const axis = building.roofAxis ?? (w >= h ? 'x' : 'y'), count = Math.max(2, Math.round((axis === 'x' ? h : w) / 4.5)), band = (axis === 'x' ? h : w) / count;
       for (let row = 0; row < count; row++) {
-        const yy = y + row * band, upper = height + this.tile * .28;
-        this.polygon([this.project({ x, y: yy }, upper), this.project({ x: x + w, y: yy }, upper), this.project({ x: x + w, y: yy + band }, height), this.project({ x, y: yy + band }, height)], row % 2 ? '#86998f' : '#a0aaa0', '#284d4155');
-        if (this.tile >= 24) this.paintMaterialFace(this.buildingArt.roof({ ...building, roof: 'sawtooth' }, w, band), this.project({ x, y: yy }, upper), this.project({ x: x + w, y: yy }, upper), this.project({ x, y: yy + band }, height));
-        this.polygon([this.project({ x, y: yy }, height), this.project({ x: x + w, y: yy }, height), this.project({ x: x + w, y: yy }, upper), this.project({ x, y: yy }, upper)], '#3a605b', '#c0c7ae55');
+        const xx = x + row * band, yy = y + row * band, upper = height + this.tile * .19;
+        const a = axis === 'x' ? { x, y: yy } : { x: xx, y }, b = axis === 'x' ? { x: x + w, y: yy } : { x: xx, y: y + h }, d = axis === 'x' ? { x, y: yy + band } : { x: xx + band, y }, e = axis === 'x' ? { x: x + w, y: yy + band } : { x: xx + band, y: y + h };
+        this.polygon([this.project(a, upper), this.project(b, upper), this.project(e, height), this.project(d, height)], row % 2 ? '#86998f' : '#a0aaa0', '#284d4155');
+        if (this.tile >= 24) this.paintMaterialFace(this.buildingArt.roof({ ...building, roof: 'sawtooth' }, axis === 'x' ? w : h, band), this.project(a, upper), this.project(b, upper), this.project(d, height));
+        this.polygon([this.project(a, height), this.project(b, height), this.project(b, upper), this.project(a, upper)], '#3a605b', '#c0c7ae55');
       }
     } else {
       if (this.tile >= 24) this.paintMaterialFace(this.buildingArt.roof({ ...building, roof: 'flat' }, w, h), top[0]!, top[1]!, top[3]!);
@@ -443,15 +446,17 @@ export class LiveScene {
       for (const entry of building.entrances) {
         const frontY = Math.abs(entry.y - (building.y + h - 1)) < .5, frontX = Math.abs(entry.x - (building.x + w - 1)) < .5;
         if (!frontY && !frontX) continue;
-        const a = this.project({ x: frontY ? entry.x - .5 : x + w, y: frontY ? y + h : entry.y - .5 }), b = this.project({ x: frontY ? entry.x + 1.5 : x + w, y: frontY ? y + h : entry.y + 1.5 });
-        const doorHeight = this.tile * .73;
+        const loading = building.kind === 'workshop' || building.kind === 'garage', doorWidth = loading ? 1.8 : .76;
+        const center = frontY ? entry.x + .5 : entry.y + .5;
+        const a = this.project({ x: frontY ? center - doorWidth / 2 : x + w, y: frontY ? y + h : center - doorWidth / 2 }), b = this.project({ x: frontY ? center + doorWidth / 2 : x + w, y: frontY ? y + h : center + doorWidth / 2 });
+        const doorHeight = this.tile * (loading ? .61 : .48);
         this.polygon([a, b, { x: b.x, y: b.y - doorHeight }, { x: a.x, y: a.y - doorHeight }], '#253e35', '#bcb99888');
         c.strokeStyle = '#d4c4a255'; c.lineWidth = 1; c.beginPath(); c.moveTo((a.x + b.x) / 2, (a.y + b.y) / 2); c.lineTo((a.x + b.x) / 2, (a.y + b.y) / 2 - doorHeight); c.stroke();
         if (frontY) {
-          for (let step = 0; step < 2; step++) this.polygon(this.quad(entry.x - .5, y + h + step * .22, 2, .22, (1 - step) * this.tile * .04), step ? '#939782' : '#b9b59a', '#3b554677');
+          for (let step = 0; step < 2; step++) this.polygon(this.quad(center - doorWidth / 2 - .12, y + h + step * .17, doorWidth + .24, .17, (1 - step) * this.tile * .025), step ? '#939782' : '#b9b59a', '#3b554677');
           if (building.kind === 'shop' || building.kind === 'service') {
-            const z = doorHeight + this.tile * .09; this.polygon(this.quad(entry.x - .7, y + h, 2.4, .65, z), building.kind === 'shop' ? '#79845f' : '#697e76', '#b7c2a766');
-            c.strokeStyle = '#d4c3a290'; c.lineWidth = Math.max(1, this.tile * .025); const awning = this.quad(entry.x - .7, y + h + .65, 2.4, .01, z); c.beginPath(); c.moveTo(awning[0]!.x, awning[0]!.y); c.lineTo(awning[1]!.x, awning[1]!.y); c.stroke();
+            const z = doorHeight + this.tile * .07; this.polygon(this.quad(center - .68, y + h, 1.36, .46, z), building.kind === 'shop' ? '#79845f' : '#697e76', '#b7c2a766');
+            c.strokeStyle = '#d4c3a290'; c.lineWidth = Math.max(.7, this.tile * .018); const awning = this.quad(center - .68, y + h + .46, 1.36, .01, z); c.beginPath(); c.moveTo(awning[0]!.x, awning[0]!.y); c.lineTo(awning[1]!.x, awning[1]!.y); c.stroke();
           }
         }
       }
@@ -463,7 +468,7 @@ export class LiveScene {
       c.beginPath(); path.points.forEach((point, index) => index ? c.lineTo(point.x + .5, point.y + .5) : c.moveTo(point.x + .5, point.y + .5)); c.strokeStyle = color; c.lineWidth = width; c.stroke();
     };
     c.save(); c.lineJoin = 'round'; c.lineCap = 'round';
-    paintRoadSurface(c, world, this.terrain, this.surfaceMasks);
+    paintRoadSurface(c, world, this.surfaceMasks);
     // Roads may cross a river only on cells the authoritative raster marks as road.
     for (const kind of ['trail', 'rail', 'river'] as const) {
       const paths = world.paths?.filter(path => path.kind === kind) ?? [];
@@ -551,7 +556,7 @@ export class LiveScene {
     }
     const city = this.snapshot?.world.city;
     const architecture = this.buildingForObstacle.get(index);
-    if (architecture && kind === 'wall' && !this.cutawayBuildings.has(architecture.id)) return;
+    if (architecture && (kind === 'building' || kind === 'wall' && !this.cutawayBuildings.has(architecture.id))) return;
     const urban = !!city && obstacle.x + obstacle.width / 2 >= city.x && obstacle.y + obstacle.height / 2 >= city.y && obstacle.x + obstacle.width / 2 < city.x + city.width && obstacle.y + obstacle.height / 2 < city.y + city.height;
     const elevation = this.tile * (kind === 'wall' ? architecture ? .58 : .65 : kind === 'barricade' ? .3 : kind === 'container' ? .7 : urban ? 1.4 + (index % 4) * .19 : 1.15);
     const base = this.quad(obstacle.x - .5, obstacle.y - .5, obstacle.width, obstacle.height), top = this.quad(obstacle.x - .5, obstacle.y - .5, obstacle.width, obstacle.height, elevation);
@@ -633,14 +638,14 @@ export class LiveScene {
     if (obstacle.label && !architecture && !this.overview && this.tile > 28) this.label(obstacle.label.toUpperCase(), p.x, p.y - elevation + 3, '#efe1b2', 8);
   }
 
-  private facade(a: LivePoint, b: LivePoint, height: number, length: number, floors: number, seed: number): void {
-    const c = this.context, columns = Math.min(10, Math.max(1, Math.floor(length / 1.7)));
+  private facade(a: LivePoint, b: LivePoint, height: number, length: number, floors: number, seed: number, building?: LiveCityBuilding): void {
+    const c = this.context, cadence = building ? buildingFacadeCadence(building, length) : { columns: Math.max(1, Math.floor(length / 3)), width: .63, height: .2, industrial: false }, columns = cadence.columns;
     for (let floor = 0; floor < floors; floor++) {
-      const y = height * (.2 + .6 * (floor + .5) / floors), windowHeight = Math.min(this.tile * .25, height * .43 / floors);
-      if (floors > 1 && floor) { c.strokeStyle = '#b6ac9277'; c.lineWidth = 1; c.beginPath(); c.moveTo(a.x, a.y - height * .5); c.lineTo(b.x, b.y - height * .5); c.stroke(); }
+      const y = cadence.industrial ? height * .78 : this.tile * (.39 + floor * .57), windowHeight = Math.min(this.tile * cadence.height, height * .3);
+      if (floors > 1 && floor) { const band = this.tile * (.18 + floor * .57); c.strokeStyle = '#b6ac9255'; c.lineWidth = Math.max(.7, this.tile * .013); c.beginPath(); c.moveTo(a.x, a.y - band); c.lineTo(b.x, b.y - band); c.stroke(); }
       for (let column = 0; column < columns; column++) {
-        const t = (column + .5) / columns, half = Math.min(.22 / columns, .1), left = { x: a.x + (b.x - a.x) * (t - half), y: a.y + (b.y - a.y) * (t - half) - y }, right = { x: a.x + (b.x - a.x) * (t + half), y: a.y + (b.y - a.y) * (t + half) - y };
-        this.polygon([{ x: left.x, y: left.y - windowHeight / 2 }, { x: right.x, y: right.y - windowHeight / 2 }, { x: right.x, y: right.y + windowHeight / 2 }, { x: left.x, y: left.y + windowHeight / 2 }], (seed + floor * 7 + column) % 9 === 0 ? '#ab9c6480' : '#203d36', '#c5c4a377');
+        const t = (column + .5) / columns, half = Math.min(cadence.width / (2 * length), .16), left = { x: a.x + (b.x - a.x) * (t - half), y: a.y + (b.y - a.y) * (t - half) - y }, right = { x: a.x + (b.x - a.x) * (t + half), y: a.y + (b.y - a.y) * (t + half) - y };
+        this.polygon([{ x: left.x, y: left.y - windowHeight / 2 }, { x: right.x, y: right.y - windowHeight / 2 }, { x: right.x, y: right.y + windowHeight / 2 }, { x: left.x, y: left.y + windowHeight / 2 }], (seed + floor * 7 + column) % 13 === 0 ? '#a7986380' : '#3b5559', '#d1ccb078');
         c.lineWidth = .6; c.strokeStyle = '#aaa98a88'; c.beginPath(); c.moveTo((left.x + right.x) / 2, (left.y + right.y) / 2 - windowHeight / 2); c.lineTo((left.x + right.x) / 2, (left.y + right.y) / 2 + windowHeight / 2); c.stroke();
         if (column % 3 === seed % 3) { c.strokeStyle = '#17372955'; c.lineWidth = Math.max(1, this.tile * .03); c.beginPath(); c.moveTo(left.x - 2, left.y + windowHeight / 2); c.lineTo(left.x - 3, left.y + windowHeight / 2 + height * .15); c.stroke(); }
       }
@@ -689,7 +694,7 @@ export class LiveScene {
     for (const entity of snapshot.entities) {
       activity.push(entity);
       const motion = this.motions.get(entity.id);
-      if (motion) activity.push(motion.from, this.interpolated(motion, now));
+      if (motion) activity.push(this.interpolated(motion, now));
     }
     this.cutawayBuildings.clear();
     for (const item of visible) if (item.type === 'architecture' && buildingNeedsCutaway(item.building, activity)) this.cutawayBuildings.add(item.building.id);

@@ -24,7 +24,10 @@ describe('inhabited district ground and access', () => {
     expect(count('residential', 'g')).toBeGreaterThanOrEqual(300);
     expect(count('industrial', 'y')).toBeGreaterThanOrEqual(1000);
     expect(count('industrial', 'y')).toBeGreaterThan(count('old-center', 'y'));
-    expect(count('station', 't')).toBeGreaterThanOrEqual(100);
+    const station = world.city!.quarters.find(quarter => quarter.id === 'station')!;
+    const stationRailGround = landscape.terrainRows.slice(station.y, station.y + station.height).map(row => row.slice(station.x - 18, station.x - 13)).join('');
+    expect(stationRailGround.split('t').length - 1).toBeGreaterThanOrEqual(100);
+    expect(count('station', 't')).toBe(0);
     for (const plan of cityStreetPlan(world.city!)) expect(landscape.paths.find(path => path.id === plan.id)).toEqual(plan);
     for (const site of world.citySites!) {
       const walks = landscape.paths.filter(path => path.id.startsWith(`footway-${site.id}-`));
@@ -47,6 +50,14 @@ describe('inhabited district ground and access', () => {
     }
     const railFacilities = world.pois.filter(poi => !poi.tags.includes('city') && poi.districtId === 'depot' && ['wagons', 'depot', 'coal'].includes(poi.templateId));
     expect(railFacilities.length).toBeGreaterThan(0);
-    for (const poi of railFacilities) expect(landscape.paths.some(path => path.id === `siding-${poi.id}` && path.kind === 'rail')).toBe(true);
+    for (const poi of railFacilities) {
+      const dedicated = landscape.paths.some(path => path.id === `siding-${poi.id}` && path.kind === 'rail');
+      const adjacentFreight = landscape.paths.filter(path => path.id === 'rail-freight').some(path => path.points.slice(1).some((end, index) => {
+        const start = path.points[index]!, length = Math.max(Math.abs(end.x - start.x), Math.abs(end.y - start.y));
+        return Array.from({ length: length + 1 }, (_, step) => ({ x: start.x + (end.x - start.x) * step / length, y: start.y + (end.y - start.y) * step / length }))
+          .some(point => Math.hypot(Math.max(poi.x - point.x, 0, point.x - poi.x - poi.width + 1), Math.max(poi.y - point.y, 0, point.y - poi.y - poi.height + 1)) <= 3);
+      }));
+      expect(dedicated || adjacentFreight).toBe(true);
+    }
   });
 });

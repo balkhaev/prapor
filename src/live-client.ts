@@ -124,13 +124,13 @@ function readCitySites(value: unknown, city: LiveWorld['city'], pois: LiveWorld[
     const quarter = city.quarters.find(quarter => quarter.id === site.quarterId), poi = pois.find(poi => poi.id === site.poiId);
     if (!quarter || !within(site, quarter) || !poi || !poi.tags.includes('city') || poi.x !== site.x || poi.y !== site.y || poi.width !== site.width || poi.height !== site.height) return invalid();
     const buildings = site.buildings.map(building => {
-      if (!rectangle(building, bounds) || !keys(building, ['id', 'name', 'kind', 'x', 'y', 'width', 'height', 'entrances', 'floors', 'roof', 'facade']) || !within(building, site)
+      if (!rectangle(building, bounds) || !keys(building, ['id', 'name', 'kind', 'x', 'y', 'width', 'height', 'entrances', 'floors', 'roof', 'roofAxis', 'facade']) || !within(building, site)
         || !text(building.id, 100) || !text(building.name, 80) || !['apartment', 'shop', 'workshop', 'garage', 'service'].includes(building.kind as string)
-        || !(building.floors === undefined || integer(building.floors, 1, 4)) || !(building.roof === undefined || ['gable', 'flat', 'sawtooth'].includes(building.roof as string)) || !(building.facade === undefined || ['brick', 'plaster', 'panel', 'metal'].includes(building.facade as string))
+        || !(building.floors === undefined || integer(building.floors, 1, 4)) || !(building.roof === undefined || ['gable', 'flat', 'sawtooth'].includes(building.roof as string)) || !(building.roofAxis === undefined || ['x', 'y'].includes(building.roofAxis as string)) || !(building.facade === undefined || ['brick', 'plaster', 'panel', 'metal'].includes(building.facade as string))
         || !Array.isArray(building.entrances) || building.entrances.length < 2 || building.entrances.length > 8) return invalid();
       const entrances = locations(building.entrances, building);
       if (new Set(entrances.map(port => `${port.x}:${port.y}`)).size !== entrances.length) return invalid();
-      return { ...rect(building), id: building.id, name: building.name, kind: building.kind as LiveCitySite['buildings'][number]['kind'], entrances, ...(building.floors === undefined ? {} : { floors: building.floors as 1 | 2 | 3 | 4 }), ...(building.roof === undefined ? {} : { roof: building.roof as 'gable' | 'flat' | 'sawtooth' }), ...(building.facade === undefined ? {} : { facade: building.facade as 'brick' | 'plaster' | 'panel' | 'metal' }) };
+      return { ...rect(building), id: building.id, name: building.name, kind: building.kind as LiveCitySite['buildings'][number]['kind'], entrances, ...(building.floors === undefined ? {} : { floors: building.floors as 1 | 2 | 3 | 4 }), ...(building.roof === undefined ? {} : { roof: building.roof as 'gable' | 'flat' | 'sawtooth' }), ...(building.roofAxis === undefined ? {} : { roofAxis: building.roofAxis as 'x' | 'y' }), ...(building.facade === undefined ? {} : { facade: building.facade as 'brick' | 'plaster' | 'panel' | 'metal' }) };
     });
     const passages = site.passages.map(passage => {
       if (!Array.isArray(passage) || passage.length < 2 || passage.length > 64) return invalid();

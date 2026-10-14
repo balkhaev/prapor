@@ -1,4 +1,5 @@
 import type { LiveCitySite, LiveContainerAnchor, LiveDistrict, LiveObstacle, LivePoi, LivePoint, LiveWorld, LiveWorldProp } from './live';
+import { legacyHallEnvelopes } from './world-building-envelope';
 
 type Rect = LivePoint & { width: number; height: number };
 type PropKind = LiveWorldProp['kind'];
@@ -29,12 +30,15 @@ export function generateWorldProps(world: SceneryWorld, seed: string): { props: 
   };
   world.obstacles.forEach(rect => cells(rect, index => { physical[index] = 1; }));
   world.citySites.flatMap(site => site.buildings).forEach(rect => cells(rect, index => { interiors[index] = 1; }));
+  const legacyHalls = legacyHallEnvelopes(world);
+  legacyHalls.forEach(rect => cells(rect, index => { interiors[index] = 1; }));
   const protect = (point: LivePoint, radius: number): void => cells({ x: point.x - radius, y: point.y - radius, width: radius * 2 + 1, height: radius * 2 + 1 }, index => { reserved[index] = 1; });
   world.extracts.forEach(point => protect(point, 4));
   world.districts.flatMap(district => district.spawns).forEach(point => protect(point, 4));
   world.containers.forEach(point => protect(point, 1));
   world.pois.flatMap(poi => poi.entrances).forEach(point => protect(point, 1));
   world.citySites.flatMap(site => site.buildings.flatMap(building => building.entrances)).forEach(point => protect(point, 1));
+  legacyHalls.flatMap(hall => hall.entrances).forEach(point => protect(point, 1));
   const protectLine = (a: LivePoint, b: LivePoint, radius: number): void => {
     const steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) * 2));
     for (let step = 0; step <= steps; step++) protect({ x: a.x + (b.x - a.x) * step / steps, y: a.y + (b.y - a.y) * step / steps }, radius);
@@ -47,19 +51,24 @@ export function generateWorldProps(world: SceneryWorld, seed: string): { props: 
   const material = (x: number, y: number): string => world.terrainRows?.[Math.floor(y)]?.[Math.floor(x)] ?? 'g';
   const transport = (code: string) => code === 'r' || code === 't' || code === 'p' || code === 'w';
   for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) if (transport(material(x, y))) reserved[y * width + x] = 1;
+  const fixtureSpacing: Partial<Record<PropKind, number>> = { lamp: 7, 'power-pole': 18, sign: 12, bench: 6, hydrant: 15, playground: 24, transformer: 12 };
+  const fixtures = new Map<PropKind, LivePoint[]>();
 
   const add = (kind: PropKind, x: number, y: number, orientation: 'x' | 'y', source: string, indoor = false): boolean => {
     const [long, short] = sizes[kind] ?? [1, 1], w = orientation === 'x' ? long : short, h = orientation === 'x' ? short : long;
     const blocking = solidKinds.has(kind) && !indoor;
     const rect = { x: blocking ? Math.round(x) : Math.round(x * 4) / 4, y: blocking ? Math.round(y) : Math.round(y * 4) / 4, width: w, height: h };
     if (rect.x < 2 || rect.y < 2 || rect.x + w >= width - 2 || rect.y + h >= height - 2 || props.length >= 6000) return false;
+    const spacing = indoor ? 0 : fixtureSpacing[kind] ?? 0;
+    if (spacing && fixtures.get(kind)?.some(point => Math.hypot(point.x - rect.x, point.y - rect.y) < spacing)) return false;
     let suitable = true;
-    cells(rect, index => { if (physical[index] || occupied[index] || reserved[index] || blocking && interiors[index]) suitable = false; });
+    cells(rect, index => { if (physical[index] || occupied[index] || reserved[index] || !indoor && interiors[index]) suitable = false; });
     // A full one-cell free ring proves that a new solid rectangle cannot seal any walkable component.
     if (blocking) cells(rect, index => { if (physical[index] || interiors[index]) suitable = false; }, 1);
     if (!suitable) return false;
     const id = `prop-${source}-${props.length}`, variant = hash(`${seed}:${source}:${x}:${y}`) % 4;
     props.push({ ...rect, id, kind, orientation, variant, blocking });
+    if (spacing) { const placed = fixtures.get(kind) ?? []; placed.push(rect); fixtures.set(kind, placed); }
     cells(rect, index => { occupied[index] = 1; if (blocking) physical[index] = 1; });
     if (blocking) obstacles.push({ ...rect, kind: kind === 'shed' || kind === 'kiosk' ? 'building' : 'container', label: labels[kind], propId: id });
     return true;
@@ -107,15 +116,19 @@ export function generateWorldProps(world: SceneryWorld, seed: string): { props: 
   // Loading yards, station aprons and inhabited courtyards use different object vocabularies.
   for (const poi of world.pois) {
     const profile = profiles[useOf(poi)];
+    const limits: Partial<Record<PropKind, number>> = { playground: 1, garden: 2, shed: 1, kiosk: 1, transformer: 1, 'power-pole': 1, fence: 3, 'market-stall': 2, dumpster: 1, car: 3, truck: 2, bus: 1 };
+    const localCounts = new Map<PropKind, number>();
     let placed = 0;
     for (let y = poi.y + 1; y < poi.y + poi.height - 1; y += 2) for (let x = poi.x + 1; x < poi.x + poi.width - 1; x += 2) {
       const roll = hash(`${seed}:${poi.id}:${x}:${y}`), kind = profile[roll % profile.length]!;
       if (placed >= (poi.tags.includes('city-site') ? 18 : 24) || interiors[y * width + x]) continue;
+      if ((localCounts.get(kind) ?? 0) >= (limits[kind] ?? 6)) continue;
       const vehicle = ['car', 'van', 'truck', 'bus', 'railcar'].includes(kind);
       const edge = Math.min(x - poi.x, y - poi.y, poi.x + poi.width - x, poi.y + poi.height - y);
       if (vehicle && edge > 4) continue;
+      if (vehicle && !['c', 'y'].includes(material(x, y))) continue;
       // Parking and freight rows align with their long frontage; fixtures follow the same service apron.
-      if (add(kind, x, y, poi.width >= poi.height ? 'x' : 'y', poi.id)) placed++;
+      if (add(kind, x, y, poi.width >= poi.height ? 'x' : 'y', poi.id)) { placed++; localCounts.set(kind, (localCounts.get(kind) ?? 0) + 1); }
     }
   }
   // Furniture sits beside interior circulation, so a room no longer reads as an empty shell.
@@ -125,21 +138,42 @@ export function generateWorldProps(world: SceneryWorld, seed: string): { props: 
     for (let y = building.y + 1; y < building.y + building.height - 1 && placed < 3; y++) for (let x = building.x + 1; x < building.x + building.width - 1 && placed < 3; x++)
       if (add(kinds[placed % kinds.length]!, x, y, 'x', building.id, true)) placed++;
   }
-  // Regular frontage furniture follows actual roads rather than a screen-sized random scatter.
-  for (let y = 3; y < height - 3; y += 3) for (let x = 3; x < width - 3; x += 3) {
-    if (transport(material(x, y)) || physical[y * width + x] || interiors[y * width + x]) continue;
-    const horizontal = material(x, y - 2) === 'r' || material(x, y + 2) === 'r';
-    const vertical = material(x - 2, y) === 'r' || material(x + 2, y) === 'r';
-    if (!horizontal && !vertical) continue;
-    const roll = hash(`${seed}:frontage:${x}:${y}`), inCity = world.city && inside({ x, y }, world.city);
-    const kind: PropKind = roll % 9 === 0 ? 'car' : roll % 5 === 0 ? 'bench' : roll % 4 === 0 ? 'sign' : inCity ? 'lamp' : 'power-pole';
-    add(kind, x, y, horizontal ? 'x' : 'y', 'frontage');
+  // Urban lamps stand along pavements. Rural power lines use one verge and much
+  // longer spans; roads do not acquire random parked cars or benches in fields.
+  for (const path of world.paths ?? []) {
+    if (path.kind !== 'road') continue;
+    let length = 0, next = 4;
+    for (let segment = 1; segment < path.points.length; segment++) {
+      const a = path.points[segment - 1]!, b = path.points[segment]!, dx = b.x - a.x, dy = b.y - a.y, span = Math.hypot(dx, dy);
+      if (!span) continue;
+      while (next <= length + span) {
+        const ratio = (next - length) / span, center = { x: a.x + dx * ratio, y: a.y + dy * ratio };
+        const urban = !!world.city && inside(center, world.city), verge = path.width / 2 + 1.5;
+        const sides = urban ? [-1, 1] : [1];
+        for (const side of sides) {
+          const x = center.x - dy / span * verge * side, y = center.y + dx / span * verge * side;
+          if (urban && !['c', 'y'].includes(material(x, y))) continue;
+          add(urban ? 'lamp' : 'power-pole', x, y, Math.abs(dx) >= Math.abs(dy) ? 'x' : 'y', `frontage-${path.id}`);
+        }
+        next += urban ? 9 : 22;
+      }
+      length += span;
+    }
   }
   // Dense, coherent groves follow the forest raster; urban greenery fills free garden ground.
-  for (let y = 3; y < height - 3; y += 3) for (let x = 3; x < width - 3; x += 3) {
+  let greeneryWeight = 0;
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    const code = material(x, y);
+    if (code === 'f') greeneryWeight += 6 / 7;
+    else if (code === 'g') greeneryWeight += world.city && inside({ x, y }, world.city) ? 1 / 3 : 1 / 6;
+  }
+  // Budget the complete landscape before visiting any region. A bigger forest
+  // cannot consume the wire cap and leave the last district without its trees.
+  const greeneryStep = Math.max(3, Math.ceil(Math.sqrt(greeneryWeight / Math.max(500, 5500 - props.length))));
+  for (let y = 3; y < height - 3; y += greeneryStep) for (let x = 3; x < width - 3; x += greeneryStep) {
     const code = material(x, y), roll = hash(`${seed}:greenery:${x}:${y}`), urban = !!world.city && inside({ x, y }, world.city);
     if (code === 'f' && roll % 7 !== 0) add(roll % 5 === 0 ? 'shrub' : 'tree', x + (roll % 5 - 2) / 4, y + (Math.floor(roll / 5) % 5 - 2) / 4, 'x', 'grove');
-    else if ((code === 'g' || code === 'y') && (urban ? roll % 3 === 0 : roll % 6 === 0)) add(roll % 4 === 0 ? 'tree' : 'shrub', x, y, 'x', urban ? 'garden' : 'hedge');
+    else if (code === 'g' && (urban ? roll % 3 === 0 : roll % 6 === 0)) add(roll % 4 === 0 ? 'tree' : 'shrub', x, y, 'x', urban ? 'garden' : 'hedge');
   }
   return { props, obstacles };
 }

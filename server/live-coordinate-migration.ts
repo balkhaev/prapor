@@ -1,6 +1,5 @@
 import type { Database } from 'bun:sqlite';
 import type { LiveWorld } from '../src/game/live';
-import { LIVE_WORLD_OFFSET } from '../src/game/world-generation';
 
 type Saved = Record<string, unknown>;
 const record = (value: unknown): value is Saved => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -14,11 +13,15 @@ export function migrateExpandedLiveCoordinates(db: Database, current: LiveWorld)
   if (!row || current.generatorVersion < 7) return false;
   const world = JSON.parse(row.state) as Saved;
   const previous = typeof world.geometryVersion === 'string' ? /^perimeter-g(\d+)-/.exec(world.geometryVersion) : undefined;
-  if (world.coordinateExpansionVersion === 7 || previous && Number(previous[1]) >= 7 || !previous && world.geometryVersion !== undefined) return false;
+  if (!previous && world.geometryVersion !== undefined) return false;
+  const targetVersion = current.generatorVersion >= 8 ? 8 : 7, targetOffset = targetVersion === 8 ? 96 : 32;
+  const frameVersion = typeof world.coordinateExpansionVersion === 'number' ? world.coordinateExpansionVersion : previous ? Number(previous[1]) : 0;
+  const previousOffset = frameVersion >= 8 ? 96 : frameVersion >= 7 ? 32 : 0, delta = targetOffset - previousOffset;
+  if (delta <= 0) return false;
   const point = (value: unknown, district?: unknown): void => {
     if (!record(value) || typeof value.x !== 'number' || typeof value.y !== 'number' || !Number.isFinite(value.x) || !Number.isFinite(value.y)) return;
     const origin = typeof district === 'string' ? oldDistricts[district] : undefined;
-    value.x += LIVE_WORLD_OFFSET + (origin?.x ?? 0); value.y += LIVE_WORLD_OFFSET + (origin?.y ?? 0);
+    value.x += (origin ? targetOffset + origin.x : delta); value.y += (origin ? targetOffset + origin.y : delta);
   };
   const entity = (saved: Saved): void => {
     point(saved, saved.mapId); saved.mapId = 'perimeter';
@@ -44,7 +47,7 @@ export function migrateExpandedLiveCoordinates(db: Database, current: LiveWorld)
       if (!match) return pair;
       const at = { x: Number(match[2]), y: Number(match[3]) }; point(at, match[1]); return [`perimeter:${at.x}:${at.y}`, pair[1]];
     });
-    world.coordinateExpansionVersion = 7;
+    world.coordinateExpansionVersion = targetVersion;
     db.query('UPDATE live_world SET state=? WHERE id=1').run(JSON.stringify(world));
   })();
   return true;

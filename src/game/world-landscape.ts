@@ -29,30 +29,64 @@ function riverCurve(controls: LivePoint[], width: number, height: number): LiveP
 /** These streets are reserved before buildings are placed, then rasterized unchanged. */
 export function cityStreetPlan(city: LiveCityRegion): LiveLandscapePath[] {
   const left = city.x, top = city.y, right = left + city.width - 1, bottom = top + city.height - 1;
-  const roads: LiveLandscapePath[] = [{ id: 'city-ring', name: 'Городское кольцо', kind: 'road', width: 5, points: [{ x: left, y: top }, { x: right, y: top }, { x: right, y: bottom }, { x: left, y: bottom }, { x: left, y: top }] }];
-  for (const [index, offset] of [34, 70, 106].entries()) {
-    const x = left + offset, y = top + offset, width = index === 1 ? 6 : 4;
+  const large = city.width >= 200;
+  const roads: LiveLandscapePath[] = [{ id: 'city-ring', name: 'Городское кольцо', kind: 'road', width: large ? 6 : 5, points: [{ x: left, y: top }, { x: right, y: top }, { x: right, y: bottom }, { x: left, y: bottom }, { x: left, y: top }] }];
+  const offsets = large ? [city.width / 4, city.width / 2, city.width * 3 / 4] : [34, 70, 106];
+  for (const [index, offset] of offsets.entries()) {
+    const x = left + offset, y = top + offset, width = index === 1 ? large ? 8 : 6 : large ? 6 : 4;
     roads.push({ id: `city-street-x-${x}`, name: index === 1 ? 'Проспект Победы' : index === 0 ? 'Вокзальная улица' : 'Заводская улица', kind: 'road', width, points: [{ x, y: top }, { x, y: bottom }] });
     roads.push({ id: `city-street-y-${y}`, name: index === 1 ? 'Центральный проспект' : index === 0 ? 'Северная улица' : 'Садовая улица', kind: 'road', width, points: [{ x: left, y }, { x: right, y }] });
   }
   return roads;
 }
 
+/** Regional corridors are reserved before any parcel is populated. Roads never
+ * connect arbitrary pairs of POIs: a gate receives a short branch from a street. */
+export function regionalStreetPlan(width: number, height: number, city: LiveCityRegion): LiveLandscapePath[] {
+  const left = city.x - 44, right = width - 32, top = city.y - 44, bottom = city.y + city.height + 44;
+  const north = city.y + city.height / 4, south = city.y + city.height * 3 / 4;
+  const west = city.x + city.width / 4, east = city.x + city.width * 3 / 4;
+  const road = (id: string, name: string, points: LivePoint[], width = 6): LiveLandscapePath => ({ id, name, kind: 'road', width, points });
+  return [
+    road('arterial-west', 'Западный грузовой тракт', [{ x: 10, y: 10 }, { x: left, y: 10 }, { x: left, y: height - 11 }, { x: 10, y: height - 11 }]),
+    road('arterial-east', 'Восточный пригородный тракт', [{ x: width - 11, y: 10 }, { x: right, y: 10 }, { x: right, y: height - 11 }, { x: width - 11, y: height - 11 }]),
+    road('arterial-north', 'Северная объездная', [{ x: left, y: top }, { x: right, y: top }]),
+    road('arterial-south', 'Южная объездная', [{ x: left, y: bottom }, { x: right, y: bottom }]),
+    road('collector-customs-west', 'Таможенный въезд', [{ x: left, y: north }, { x: city.x, y: north }]),
+    road('collector-sawmill-east', 'Лесозаводской въезд', [{ x: right, y: north }, { x: city.x + city.width - 1, y: north }]),
+    road('collector-depot-west', 'Вокзальный въезд', [{ x: left, y: south }, { x: city.x, y: south }]),
+    road('collector-village-east', 'Пригородный въезд', [{ x: right, y: south }, { x: city.x + city.width - 1, y: south }]),
+    road('collector-customs-north', 'Складская улица', [{ x: west, y: top }, { x: west, y: city.y }]),
+    road('collector-sawmill-north', 'Лесопильная улица', [{ x: east, y: top }, { x: east, y: city.y }]),
+    road('collector-depot-south', 'Товарная улица', [{ x: west, y: bottom }, { x: west, y: city.y + city.height - 1 }]),
+    road('collector-village-south', 'Слободская улица', [{ x: east, y: bottom }, { x: east, y: city.y + city.height - 1 }]),
+  ];
+}
+
+/** The railway stays outside the city street grid and crosses the western road
+ * once at the freight fan; individual rail facilities receive their own sidings. */
+export function regionalRailPlan(width: number, height: number, city: LiveCityRegion): LiveLandscapePath[] {
+  const x = city.x - 16, south = city.y + city.height + 56;
+  return [
+    { id: 'rail-freight', name: 'Западная железнодорожная ветка', kind: 'rail', width: 2, points: [{ x: 1, y: south }, { x, y: south }, { x, y: city.y + city.height / 2 }] },
+    { id: 'rail-distribution', name: 'Южный товарный парк', kind: 'rail', width: 2, points: [{ x, y: south }, { x: city.x + 58, y: south }] },
+  ].filter(path => path.points.every(point => point.x >= 0 && point.y >= 0 && point.x < width && point.y < height)) as LiveLandscapePath[];
+}
+
 /** Ground and transport are independent of streaming sectors and contain no reward rolls. */
 export function generateLandscape(world: LandscapeWorld, seed: string): { terrainRows: string[]; paths: LiveLandscapePath[]; water: LiveObstacle[] } {
   const width = world.width, height = world.height, total = width * height, ground = new Array<string>(total), blocked = new Uint8Array(total), footprints = new Uint8Array(total), indoor = new Uint8Array(total);
-  const offsetX = world.city ? world.city.x - 56 : (width - 256) / 2, offsetY = world.city ? world.city.y - 56 : (height - 256) / 2;
-  const core = (x: number, y: number): LivePoint => ({ x: x + offsetX, y: y + offsetY });
-  const expanded = width > 256 || height > 256;
   const phase = hash(seed) / 0xffffffff * Math.PI * 2;
   const inside = (point: LivePoint): boolean => point.x >= 0 && point.y >= 0 && point.x < width && point.y < height;
   const key = (point: LivePoint): number => point.y * width + point.x;
   for (const obstacle of world.obstacles) for (let y = obstacle.y; y < obstacle.y + obstacle.height; y++) for (let x = obstacle.x; x < obstacle.x + obstacle.width; x++) blocked[y * width + x] = 1;
-  for (const poi of world.pois) for (let y = poi.y; y < poi.y + poi.height; y++) for (let x = poi.x; x < poi.x + poi.width; x++) footprints[y * width + x] = 1;
-  for (const site of world.citySites ?? []) for (const building of site.buildings) for (let y = building.y; y < building.y + building.height; y++) for (let x = building.x; x < building.x + building.width; x++) indoor[y * width + x] = 1;
-  const channel = [[255, 44], [239, 54], [220, 72], [212, 92], [210, 118], [215, 148], [207, 182], [213, 212], [207, 255]].map(([x, y]) => core(x!, y!));
-  if (expanded) { channel.unshift({ x: width - 1, y: offsetY + 26 }); channel.push({ x: offsetX + 193, y: height - 19 }, { x: offsetX + 193, y: height - 1 }); }
-  const paths: LiveLandscapePath[] = [{ id: 'river-east', name: 'Речка Ольховая', kind: 'river', width: 5, points: riverCurve(channel, width, height) }];
+  for (const poi of world.pois.filter(poi => !poi.tags.includes('city-site'))) for (let y = poi.y; y < poi.y + poi.height; y++) for (let x = poi.x; x < poi.x + poi.width; x++) footprints[y * width + x] = 1;
+  for (const site of world.citySites ?? []) for (const building of site.buildings) for (let y = building.y; y < building.y + building.height; y++) for (let x = building.x; x < building.x + building.width; x++) { indoor[y * width + x] = 1; footprints[y * width + x] = 1; }
+  const riverX = width - 64;
+  const channel = [{ x: riverX + 2, y: 0 }, { x: riverX - 4, y: 54 }, { x: riverX + 3, y: 112 },
+    { x: riverX - 5, y: 184 }, { x: riverX + 4, y: 246 }, { x: riverX - 3, y: 312 },
+    { x: riverX + 4, y: 386 }, { x: riverX - 2, y: height - 1 }];
+  const paths: LiveLandscapePath[] = [{ id: 'river-east', name: 'Речка Ольховая', kind: 'river', width: 7, points: riverCurve(channel, width, height) }];
   const river = paths[0]!;
   // The same bounded curve drives the visible path, bank raster and collision water.
   // Index expanded segment bounds by row before evaluating distances near the bank.
@@ -63,27 +97,25 @@ export function generateLandscape(world: LandscapeWorld, seed: string): { terrai
   });
   const riverRows = Array.from({ length: height }, (_, y) => segments.filter(segment => y >= segment.minY && y <= segment.maxY));
   for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
-    const lx = x - offsetX, ly = y - offsetY;
-    const wave = Math.sin(lx / 11 + phase) * .11 + Math.cos(ly / 13 - phase) * .13 + Math.sin((lx + ly) / 17 + phase) * .08;
-    const forest = (((lx - 181) / 67) ** 2 + ((ly - 20) / 35) ** 2 < 1 + wave
-      || ((lx - 32) / 25) ** 2 + ((ly - 144) / 82) ** 2 < .75 + wave
-      || ly > 218 + Math.sin(lx / 21 + phase) * 10 && lx > 67 && lx < 220
-      || expanded && (((x - (width - 56)) / 84) ** 2 + ((y - 18) / 40) ** 2 < 1 + wave || x > width - 36 + Math.sin(y / 24 + phase) * 5 && y < height / 2))
-      && !(expanded && y > height - 36 && x > width / 2 && x < width - 34);
+    const wave = Math.sin(x / 23 + phase) * .11 + Math.cos(y / 29 - phase) * .13;
+    const forest = ((x - width * .76) / 110) ** 2 + ((y - 28) / 88) ** 2 < 1 + wave
+      || x > width - 43 + Math.sin(y / 30 + phase) * 7 && y < height / 2
+      || x < 18 + Math.sin(y / 35 + phase) * 5 && y > 32 && y < height - 42
+      || ((x - width * .53) / 88) ** 2 + ((y - (height - 41)) / 29) ** 2 < .9 + wave;
     ground[y * width + x] = forest ? 'f' : 'g';
     let riverDistance = Infinity;
     for (const segment of riverRows[y]!) if (x >= segment.minX && x <= segment.maxX) riverDistance = Math.min(riverDistance, segmentDistance({ x, y }, segment.a, segment.b));
-    const lake = ((lx - 210) / 4) ** 2 + ((ly - 157) / 10) ** 2;
-    if (riverDistance < river.width / 2 + wave * .6 || lake < .9 + wave * .3) ground[y * width + x] = 'w';
-    else if (riverDistance < river.width / 2 + 1.8 || lake < 1.5 + wave * .4) ground[y * width + x] = 's';
+    if (riverDistance < river.width / 2 + wave * .6) ground[y * width + x] = 'w';
+    else if (riverDistance < river.width / 2 + 1.8) ground[y * width + x] = 's';
     const quarter = world.city?.quarters.find(quarter => contains({ x, y }, quarter));
     if (quarter) {
       // Paving belongs to streets, platforms and working yards. Residential lots
       // retain their lawns; broad green strips soften the boundary of the city.
       ground[y * width + x] = quarter.id === 'residential' ? 'g' : quarter.id === 'old-center' ? 'c' : 'y';
-      if (quarter.id === 'old-center' && (lx >= 78 && lx <= 84 && ly >= 62 && ly <= 84 || lx >= 95 && lx <= 115 && ly >= 106 && ly <= 116)) ground[y * width + x] = 'g';
-      if (quarter.id === 'station' && lx >= 95 && lx <= 118 && ly >= 172 && ly <= 191) ground[y * width + x] = 'g';
-      if (quarter.id === 'industrial' && (lx >= 191 && ly >= 62 && ly <= 121 || ly >= 60 && ly <= 65 && lx >= 131 && lx <= 157)) ground[y * width + x] = 'g';
+      const qx = x - quarter.x, qy = y - quarter.y;
+      if (quarter.id === 'old-center' && qx >= 20 && qx <= 44 && qy >= 20 && qy <= 44
+        || quarter.id === 'station' && qx >= 65 && qx <= 100 && qy >= 66 && qy <= 100
+        || quarter.id === 'industrial' && (qx > quarter.width - 7 || qy < 7)) ground[y * width + x] = 'g';
     }
   }
   const fill = (rectangle: Rect, code: string, replaceWater = false): void => {
@@ -95,12 +127,8 @@ export function generateLandscape(world: LandscapeWorld, seed: string): { terrai
   // Logistics occupies connected service ground around the north terminals and
   // the western freight fan, rather than floating as eight unrelated islands.
   for (const rectangle of [
-    { x: 15, y: 15, width: 100, height: 36 }, { x: 13, y: 51, width: 30, height: 72 },
-    { x: 14, y: 134, width: 34, height: 99 }, { x: 48, y: 207, width: 66, height: 35 },
-  ]) fill({ ...rectangle, ...core(rectangle.x, rectangle.y) }, 'y');
-  if (expanded) for (const rectangle of [
-    { x: 11, y: 7, width: width / 2 - 28, height: 22 }, { x: 7, y: 74, width: 22, height: 72 },
-    { x: 7, y: height / 2 + 17, width: 22, height: height / 2 - 45 }, { x: 14, y: height - 29, width: width / 2 - 28, height: 22 },
+    { x: 28, y: 28, width: 165, height: 30 }, { x: 28, y: 58, width: 64, height: 151 },
+    { x: 26, y: height - 208, width: 64, height: 184 }, { x: 88, y: height - 92, width: 104, height: 41 },
   ]) fill(rectangle, 'y');
   // The outer places use broad clearings or working aprons; city land use is
   // authored by its neighbourhood, never by a generic ellipse around every POI.
@@ -169,7 +197,7 @@ export function generateLandscape(world: LandscapeWorld, seed: string): { terrai
   }
 
   // Transport may cross the channel only inside the authored bridge corridors.
-  const route = (start: LivePoint, goal: LivePoint, outsideRooms = false, bounds?: Rect, vehicleRadius = 0): LivePoint[] => {
+  const route = (start: LivePoint, goal: LivePoint, outsideRooms = false, bounds?: Rect, vehicleRadius = 0, orthogonal = false, avoidLots = false): LivePoint[] => {
     const end = key(goal), costs = new Float64Array(total).fill(Infinity), parent = new Int32Array(total).fill(-1), closed = new Uint8Array(total);
     const heap: Array<{ cell: number; score: number }> = [];
     const push = (node: { cell: number; score: number }): void => { let i = heap.length; heap.push(node); while (i > 0) { const p = (i - 1) >>> 1; if (heap[p]!.score <= node.score) break; heap[i] = heap[p]!; i = p; } heap[i] = node; };
@@ -186,11 +214,13 @@ export function generateLandscape(world: LandscapeWorld, seed: string): { terrai
       const point = { x: cell % width, y: Math.floor(cell / width) };
       for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
         const next = { x: point.x + dx!, y: point.y + dy! };
-        if (!clear(next) || bounds && !contains(next, bounds) || outsideRooms && indoor[key(next)] && key(next) !== end
+        if (orthogonal && dx && dy || !clear(next) || bounds && !contains(next, bounds) || avoidLots && footprints[key(next)]
+          || outsideRooms && indoor[key(next)] && key(next) !== end
           || dx && dy && (!clear({ x: next.x, y: point.y }) || !clear({ x: point.x, y: next.y })
             || outsideRooms && (indoor[point.y * width + next.x] || indoor[next.y * width + point.x]))) continue;
         const nextKey = key(next), material = ground[nextKey], endpoint = distance(next, start) < 6 || distance(next, goal) < 6;
-        const cost = costs[cell]! + (dx && dy ? 1.414 : 1) * (material === 'r' || material === 'p' ? 1 : material === 'w' ? 5 : 1.8)
+        const previous = parent[cell], turns = orthogonal && previous! >= 0 && (point.x - previous! % width !== dx || point.y - Math.floor(previous! / width) !== dy);
+        const cost = costs[cell]! + (dx && dy ? 1.414 : 1) * (material === 'r' || material === 'p' ? 1 : material === 'w' ? 5 : 1.8) + (turns ? 2 : 0)
           + (footprints[nextKey] && !endpoint && !bounds ? 12 : 0)
           + (!endpoint && !bridgeCorridors[nextKey] && vehicleRadius ? Math.max(0, vehicleRadius + 1 - clearance[nextKey]!) * 5 : 0);
         if (cost >= costs[nextKey]!) continue;
@@ -199,18 +229,22 @@ export function generateLandscape(world: LandscapeWorld, seed: string): { terrai
     }
     throw new Error(`No terrain connection between declared ports ${start.x},${start.y} and ${goal.x},${goal.y}`);
   };
-  const simplify = (points: LivePoint[]): LivePoint[] => points.filter((point, i) => {
-    if (i === 0 || i === points.length - 1) return true;
-    const ax = point.x - points[i - 1]!.x, ay = point.y - points[i - 1]!.y, bx = points[i + 1]!.x - point.x, by = points[i + 1]!.y - point.y;
-    return ax * by !== ay * bx || ax * bx + ay * by < 0;
-  });
-  const smooth = (cells: LivePoint[], pathWidth: number): LivePoint[] => {
+  const simplify = (input: LivePoint[]): LivePoint[] => {
+    const points = input.filter((point, index) => index === 0 || point.x !== input[index - 1]!.x || point.y !== input[index - 1]!.y);
+    return points.filter((point, i) => {
+      if (i === 0 || i === points.length - 1) return true;
+      const ax = point.x - points[i - 1]!.x, ay = point.y - points[i - 1]!.y, bx = points[i + 1]!.x - point.x, by = points[i + 1]!.y - point.y;
+      return ax * by !== ay * bx || ax * bx + ay * by < 0;
+    });
+  };
+  const smooth = (cells: LivePoint[], pathWidth: number, outsideRooms = false): LivePoint[] => {
     const start = cells[0]!, goal = cells.at(-1)!, radius = pathWidth / 2;
     const direct = (a: LivePoint, b: LivePoint): boolean => {
       const steps = Math.max(1, Math.ceil(distance(a, b) * 2)); let previous = a;
       for (let step = 0; step <= steps; step++) {
         const point = { x: Math.round(a.x + (b.x - a.x) * step / steps), y: Math.round(a.y + (b.y - a.y) * step / steps) }, cell = key(point);
-        if (!clear(point) || point.x !== previous.x && point.y !== previous.y && (!clear({ x: previous.x, y: point.y }) || !clear({ x: point.x, y: previous.y }))) return false;
+        if (!clear(point) || outsideRooms && indoor[cell] && distance(point, start) > 1 && distance(point, goal) > 1
+          || point.x !== previous.x && point.y !== previous.y && (!clear({ x: previous.x, y: point.y }) || !clear({ x: point.x, y: previous.y }))) return false;
         const atPort = distance(point, start) < 6 || distance(point, goal) < 6;
         if (!atPort && (footprints[cell] || !bridgeCorridors[cell] && clearance[cell]! < radius + .5)) return false;
         previous = point;
@@ -233,162 +267,161 @@ export function generateLandscape(world: LandscapeWorld, seed: string): { terrai
         if (code !== 'r' && code !== 't' && (ground[cell] === 'r' || ground[cell] === 't')) continue;
         const offset = segmentDistance({ x, y }, start, end);
         if (!blocked[cell] && (!waterMask[cell] || bridgeCorridors[cell]) && (!footprints[cell] || ground[cell] === 'w' || withinLots && !indoor[cell])) {
-          if (offset <= pathWidth / 2) ground[cell] = code;
-          else if (code === 'r' && offset <= pathWidth / 2 + 1 && !['r', 't', 'p', 'w'].includes(ground[cell]!)) ground[cell] = world.city && contains({ x, y }, world.city) ? 'c' : 'y';
+          // Raster cells cover their square area, while the renderer strokes a
+          // continuous carriageway. Half a cell diagonal reserves its corners.
+          if (offset <= pathWidth / 2 + (code === 'r' ? Math.SQRT1_2 : 0)) ground[cell] = code;
+          else if (code === 'r' && offset <= pathWidth / 2 + 1.5 && !['r', 't', 'p', 'w'].includes(ground[cell]!)) ground[cell] = world.city && contains({ x, y }, world.city) ? 'c' : 'y';
         }
       }
     }
     // Centre cells of a connection remain traversable even at a doorway or bridge.
     for (const point of points) if (ground[key(point)] === 'w' && bridgeCorridors[key(point)]) ground[key(point)] = code;
   };
-  const connect = (a: LivePoint, b: LivePoint, id: string, kind: 'road' | 'trail' = 'road', name?: string): LivePoint[] => {
-    const pathWidth = kind === 'trail' ? 2 : 3.5, cells = route(a, b, false, undefined, kind === 'road' ? pathWidth / 2 : 0), points = smooth(cells, pathWidth);
-    // A yard's metadata rectangle cannot punch holes into a clear carriageway;
-    // actual rooms and cover retain their floor and collision independently.
-    paint(points, pathWidth, kind === 'trail' ? 'p' : 'r', kind === 'road');
-    paths.push({ id, name: name ?? (kind === 'trail' ? 'Пешеходная тропа' : 'Местная дорога'), kind, width: pathWidth, points });
-    return cells;
+  const nearestClear = (point: LivePoint): LivePoint => {
+    for (let radius = 0; radius < 24; radius++) for (let y = point.y - radius; y <= point.y + radius; y++) for (let x = point.x - radius; x <= point.x + radius; x++) if (clear({ x, y }) && !footprints[y * width + x]) return { x, y };
+    throw new Error(`Transport corridor has no clear port near ${point.x},${point.y}`);
   };
-  const nodes = world.pois.map(poi => poi.entrances[0]!).concat(world.extracts), linked = new Set([0]);
-  const nearestClear = (point: LivePoint): LivePoint => { for (let radius = 0; radius < 24; radius++) for (let y = point.y - radius; y <= point.y + radius; y++) for (let x = point.x - radius; x <= point.x + radius; x++) if (clear({ x, y }) && !footprints[y * width + x]) return { x, y }; throw new Error('Transport corridor has no clear port'); };
-  const approaches: Array<{ deck: LivePoint[]; id: string; name: string }> = [];
+  if (!world.city) throw new Error('An authored city is required for the regional street hierarchy');
+  const streets = [...cityStreetPlan(world.city), ...regionalStreetPlan(width, height, world.city)];
+  const railways = regionalRailPlan(width, height, world.city);
   const crossings = [
-    { id: 'bridge-mill', name: 'Лесопильная переправа', y: offsetY + 92, kind: 'road' as const },
-    { id: 'bridge-stone', name: 'Каменный мост', y: offsetY + 148, kind: 'road' as const },
-    { id: 'bridge-meadow', name: 'Луговой настил', y: offsetY + 212, kind: 'trail' as const },
+    { id: 'bridge-north', name: 'Северный мост', y: world.city.y - 44, width: 6, kind: 'road' as const },
+    { id: 'bridge-mill', name: 'Лесозаводской мост', y: world.city.y + world.city.height / 4, width: 6, kind: 'road' as const },
+    { id: 'bridge-stone', name: 'Слободской мост', y: world.city.y + world.city.height * 3 / 4, width: 6, kind: 'road' as const },
+    { id: 'bridge-meadow', name: 'Пешеходный мост', y: world.city.y + world.city.height + 8, width: 2, kind: 'trail' as const },
+    { id: 'bridge-farmland', name: 'Южный мост', y: world.city.y + world.city.height + 44, width: 6, kind: 'road' as const },
   ];
-  if (expanded) crossings.unshift({ id: 'bridge-north', name: 'Северная переправа', y: offsetY + 44, kind: 'road' });
-  if (expanded) crossings.push({ id: 'bridge-farmland', name: 'Полевой мост', y: height - 38, kind: 'road' });
-  const proposals = crossings.map(crossing => {
-    const options: LivePoint[][] = [];
-    for (let radius = 0; radius < height; radius++) for (const y of radius ? [crossing.y - radius, crossing.y + radius] : [crossing.y]) {
-      if (y < 3 || y > height - 4) continue;
-      let deck: LivePoint[] | undefined;
-      const riverCenter = river.points.reduce((near, point) => Math.abs(point.y - y) < Math.abs(near.y - y) ? point : near).x;
-      for (let x = Math.round(riverCenter) - 10; x <= Math.round(riverCenter) + 10 && !deck; x++) {
-        if (!waterMask[y * width + x]) continue;
-        const first = x; while (waterMask[y * width + x + 1]) x++;
-        if (x - first < 2 || x - first > 18) continue;
-        const candidate = Array.from({ length: x - first + 7 }, (_, index) => ({ x: first - 3 + index, y }));
-        const bankRemains = (direction: number): boolean => {
-          for (let dy = 3; dy <= 8; dy++) for (let nx = first - 2; nx <= x + 2; nx++) {
-            const point = { x: nx, y: y + dy * direction };
-            if (inside(point) && waterMask[key(point)] && !blocked[key(point)]) return true;
-          }
-          return false;
-        };
-        if (candidate.every(baseClear) && candidate[0]!.x >= 1 && candidate.at(-1)!.x < width - 1 && bankRemains(-1) && bankRemains(1)) deck = candidate;
-      }
-      if (deck) options.push(deck);
+  // Bridge positions belong to the reserved street plan. They do not wander to
+  // the first gap between buildings, and all carriageway cells share the deck.
+  for (const crossing of crossings) {
+    const wet = Array.from({ length: width }, (_, x) => x).filter(x => waterMask[crossing.y * width + x]);
+    if (!wet.length) throw new Error(`Missing river at authored crossing ${crossing.id}`);
+    const left = wet[0]! - 3, right = wet.at(-1)! + 3, half = Math.ceil(crossing.width / 2 + Math.SQRT1_2);
+    for (let y = crossing.y - half; y <= crossing.y + half; y++) for (let x = left; x <= right; x++) {
+      const point = { x, y };
+      if (!baseClear(point)) throw new Error(`Cover obstructs reserved bridge ${crossing.id}`);
+      bridgeCorridors[key(point)] = 1;
     }
-    return options;
-  });
-  // Choose the sites together: one valid early deck must not consume the only
-  // clear lower bank left between a greenhouse and the other riverside buildings.
-  const chooseDecks = (index: number, chosen: LivePoint[][]): LivePoint[][] | undefined => {
-    if (index === crossings.length) return chosen;
-    for (const deck of proposals[index]!) {
-      if (chosen.some(previous => Math.abs(previous[0]!.y - deck[0]!.y) < 18)) continue;
-      const result = chooseDecks(index + 1, [...chosen, deck]);
-      if (result) return result;
+    const points = [{ x: left, y: crossing.y }, { x: right, y: crossing.y }];
+    paint(points, crossing.width, crossing.kind === 'road' ? 'r' : 'p');
+    paths.push({ id: crossing.id, name: crossing.name, kind: crossing.kind, width: crossing.width, points });
+  }
+  const centerCells = (points: LivePoint[]): LivePoint[] => {
+    const result: LivePoint[] = [];
+    for (let index = 1; index < points.length; index++) {
+      const a = points[index - 1]!, b = points[index]!, steps = Math.max(1, Math.ceil(distance(a, b) * 2));
+      for (let step = 0; step <= steps; step++) result.push({ x: Math.round(a.x + (b.x - a.x) * step / steps), y: Math.round(a.y + (b.y - a.y) * step / steps) });
     }
-    return undefined;
+    return result;
   };
-  const decks = chooseDecks(0, []);
-  if (!decks) throw new Error('No clear banks for authored crossings');
-  for (const [index, crossing] of crossings.entries()) {
-    const deck = decks[index]!;
-    const pathWidth = crossing.kind === 'trail' ? 2 : 4;
-    for (let y = deck[0]!.y - pathWidth / 2; y <= deck[0]!.y + pathWidth / 2; y++) for (let x = deck[0]!.x; x <= deck.at(-1)!.x; x++) {
-      const point = { x, y }; if (baseClear(point)) bridgeCorridors[key(point)] = 1;
+  for (const street of streets) {
+    if (!centerCells(street.points).every(clear)) throw new Error(`Reserved street ${street.id} contains cover or unbridged water`);
+    paint(street.points, street.width, 'r'); paths.push(street);
+  }
+  // The footbridge connects the two bank walks, without adding a fifth asphalt
+  // collector or an oblique shortcut across the southern residential plots.
+  const meadow = crossings.find(crossing => crossing.id === 'bridge-meadow')!;
+  const meadowWalk = [{ x: world.city.x + world.city.width - 1, y: meadow.y }, { x: width - 32, y: meadow.y }];
+  const meadowCells = route(meadowWalk[0]!, meadowWalk[1]!, true);
+  const meadowPoints = smooth(meadowCells, 2, true);
+  paint(meadowPoints, 2, 'p'); paths.push({ id: 'trail-river-meadows', name: 'Береговой проход', kind: 'trail', width: 2, points: meadowPoints });
+
+  const project = (point: LivePoint, a: LivePoint, b: LivePoint): LivePoint => {
+    const dx = b.x - a.x, dy = b.y - a.y, denominator = dx * dx + dy * dy;
+    const t = denominator ? Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / denominator)) : 0;
+    return { x: Math.round(a.x + dx * t), y: Math.round(a.y + dy * t) };
+  };
+  const streetPorts = (point: LivePoint): Array<{ point: LivePoint; street: LiveLandscapePath; score: number }> => {
+    const candidates = streets.flatMap(street => street.points.slice(1).map((b, index) => {
+      const at = project(point, street.points[index]!, b);
+      return { point: at, street, score: Math.abs(at.x - point.x) + Math.abs(at.y - point.y) };
+    }));
+    // A short gate branch stays on its own bank. The named collectors are the
+    // only motor roads crossing the channel, preventing incidental bridges.
+    return candidates.filter(candidate => (candidate.point.x < riverX - 12) === (point.x < riverX - 12) || candidate.score < 16)
+      .sort((a, b) => a.score - b.score || a.street.id.localeCompare(b.street.id));
+  };
+  const exteriorPort = (poi: LandscapeWorld['pois'][number], door: LivePoint): LivePoint => {
+    if (poi.tags.includes('city-site')) return door;
+    const sides = [
+      { gap: Math.abs(door.y - poi.y), point: { x: door.x, y: poi.y - 3 } },
+      { gap: Math.abs(door.y - (poi.y + poi.height - 1)), point: { x: door.x, y: poi.y + poi.height + 2 } },
+      { gap: Math.abs(door.x - poi.x), point: { x: poi.x - 3, y: door.y } },
+      { gap: Math.abs(door.x - (poi.x + poi.width - 1)), point: { x: poi.x + poi.width + 2, y: door.y } },
+    ];
+    sides.sort((a, b) => a.gap - b.gap);
+    return nearestClear(sides[0]!.point);
+  };
+  const driveClear = (points: LivePoint[]): boolean => centerCells(points).every(point => {
+    if (!clear(point) || footprints[key(point)] || waterMask[key(point)]) return false;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const side = { x: point.x + dx, y: point.y + dy };
+      if (!clear(side) || footprints[key(side)]) return false;
     }
-    paint(deck, pathWidth, crossing.kind === 'trail' ? 'p' : 'r');
-    paths.push({ id: crossing.id, name: crossing.name, kind: crossing.kind, width: pathWidth, points: [deck[0]!, deck.at(-1)!] });
-    approaches.push({ deck, id: crossing.id, name: crossing.name });
-  }
-  if (world.city) {
-    for (const street of cityStreetPlan(world.city)) { paint(street.points, street.width, 'r', true); paths.push(street); }
-    for (let y = offsetY + 118; y <= offsetY + 136; y++) for (let x = offsetX + 118; x <= offsetX + 136; x++) if (!blocked[y * width + x]) ground[y * width + x] = 'r';
-  }
-  for (const crossing of approaches) {
-    for (const [index, end] of [crossing.deck[0]!, crossing.deck.at(-1)!].entries()) {
-      const bankNodes = nodes.filter(point => index === 0 ? point.x <= end.x : point.x >= end.x);
-      const sameBank = (bankNodes.length ? bankNodes : [...nodes]).sort((a, b) => distance(a, end) - distance(b, end))[0]!;
-      connect(end, sameBank, `${crossing.id}-approach-${index}`, 'trail', `${crossing.name}: подход`);
-    }
-  }
-  let connection = 0;
-  while (linked.size < nodes.length) {
-    let first = 0, second = 0, minimum = Infinity;
-    for (const a of linked) for (let b = 0; b < nodes.length; b++) if (!linked.has(b) && distance(nodes[a]!, nodes[b]!) < minimum) { first = a; second = b; minimum = distance(nodes[a]!, nodes[b]!); }
-    const target = world.pois[second], pedestrian = target?.districtId === 'sawmill' || target?.tags.includes('city');
-    connect(nodes[first]!, nodes[second]!, `road-${connection++}`, pedestrian ? 'trail' : 'road'); linked.add(second);
-  }
-  // The freight roads connect district clusters; extra forest paths create flank approaches.
-  for (const [a, b] of [[0, 5], [1, 9], [4, 12], [6, 10], [9, 14], [10, 15], [16, 21], [18, 22], [20, 25], [23, 27], [24, 29], [26, 30]] as const) connect(nodes[a]!, nodes[b]!, `road-${connection++}`);
+    return true;
+  });
   for (const poi of world.pois) {
-    const access: LivePoint[] = [poi.entrances[0]!];
-    for (let index = 1; index < poi.entrances.length; index++) {
-      const cells = route(poi.entrances[0]!, poi.entrances[index]!);
-      paint(simplify(cells), 2, 'p'); access.push(...cells.slice(1), ...cells.slice(0, -1).reverse());
+    const options = poi.entrances.map(door => {
+      const exterior = exteriorPort(poi, door), nearest = streetPorts(exterior)[0]!;
+      return { door, exterior, nearest, score: nearest.score + distance(door, exterior) };
+    }).sort((a, b) => a.score - b.score);
+    const entry = options[0]!;
+    const forest = poi.districtId === 'sawmill' && !['sawmill', 'logging', 'fuel', 'checkpoint'].includes(poi.templateId);
+    const pedestrian = forest || poi.tags.includes('city');
+    const street = entry.nearest.point;
+    if (pedestrian) {
+      const cells = route(street, entry.door, true), points = smooth(cells, 2, true);
+      paint(points, 2, 'p', true);
+      if (points.length > 1) paths.push({ id: `trail-${poi.id}`, name: `${poi.name}: пеший подход`, kind: 'trail', width: 2, points });
+    } else {
+      const end = entry.exterior;
+      const bends = [[street, { x: end.x, y: street.y }, end], [street, { x: street.x, y: end.y }, end]].map(simplify);
+      const points = bends.find(driveClear) ?? simplify(route(street, end, true, undefined, 1.25, true, true));
+      paint(points, 2.5, 'r');
+      if (points.length > 1) paths.push({ id: `driveway-${poi.id}`, name: `${poi.name}: подъезд к воротам`, kind: 'road', width: 2.5, points });
+      const doorstep = route(end, entry.door, true), foot = simplify(doorstep);
+      paint(foot, 2, 'p', true);
+      if (foot.length > 1) paths.push({ id: `trail-${poi.id}`, name: `${poi.name}: вход`, kind: 'trail', width: 2, points: foot });
+    }
+    // Other entrances are footways, never another equal-priority through road.
+    // Return branches are explicit, so simplifying the wire path cannot invent
+    // a shortcut between doors on opposite sides of a room.
+    const access: LivePoint[] = [entry.door];
+    for (const door of poi.entrances.filter(door => door !== entry.door)) {
+      const cells = route(entry.door, door, poi.tags.includes('city-site'));
+      paint(cells, 2, 'p', true); access.push(...cells.slice(1), ...cells.slice(0, -1).reverse());
     }
     const points = simplify(access);
-    if (points.length > 1) paths.push({ id: `access-${poi.id}`, name: `${poi.name}: подходы`, kind: 'trail', width: 2, points });
+    if (points.length > 1) paths.push({ id: `access-${poi.id}`, name: `${poi.name}: пешеходные подходы`, kind: 'trail', width: 2, points });
   }
-  const highways = [
-    { id: 'highway-north', name: 'Северный въезд', points: [{ x: 6, y: 6 }, { x: 24, y: 40 }, { x: 48, y: 52 }, { x: 56, y: 90 }, { x: 90, y: 126 }, { x: 126, y: 126 }] },
-    { id: 'highway-forest', name: 'Лесной въезд', points: [{ x: 249, y: 6 }, { x: 228, y: 30 }, { x: 228, y: 92 }, { x: 199, y: 90 }, { x: 162, y: 126 }, { x: 126, y: 126 }] },
-    { id: 'highway-cargo', name: 'Грузовой въезд', points: [{ x: 6, y: 249 }, { x: 28, y: 225 }, { x: 48, y: 205 }, { x: 56, y: 162 }, { x: 90, y: 126 }, { x: 126, y: 126 }] },
-    { id: 'highway-south', name: 'Южный въезд', points: [{ x: 249, y: 249 }, { x: 231, y: 228 }, { x: 227, y: 212 }, { x: 199, y: 162 }, { x: 162, y: 162 }, { x: 126, y: 126 }] },
-    { id: 'trail-meadows', name: 'Обход окраин', points: [{ x: 5, y: 70 }, { x: 6, y: 166 }, { x: 52, y: 207 }, { x: 176, y: 247 }, { x: 228, y: 207 }] },
-  ];
-  for (const [index, highway] of highways.entries()) {
-    highway.points = highway.points.map(point => core(point.x, point.y));
-    if (expanded && index < 4) {
-      const west = index === 0 || index === 2, north = index < 2;
-      highway.points.unshift({ x: west ? 10 : width - 11, y: north ? 42 : height - 42 });
-      highway.points.unshift({ x: west ? 10 : width - 11, y: north ? 10 : height - 11 });
-    }
+  // Legacy secondary evacuation points retain foot access to the nearest street.
+  for (const [index, exit] of world.extracts.entries()) {
+    const nearest = streetPorts(exit)[0]!.point;
+    if (distance(nearest, exit) < 1) continue;
+    const cells = route(nearest, exit, true), points = smooth(cells, 2, true);
+    paint(points, 2, 'p'); paths.push({ id: `trail-extract-${index}`, name: 'Тропа к выходу', kind: 'trail', width: 2, points });
   }
-  if (expanded) highways.push(
-    { id: 'highway-outer-north', name: 'Северный грузовой тракт', points: [{ x: 40, y: 36 }, { x: 122, y: 36 }, { x: 194, y: 36 }, { x: width - 40, y: 36 }] },
-    { id: 'highway-outer-west', name: 'Западная объездная', points: [{ x: 36, y: 40 }, { x: 36, y: 122 }, { x: 36, y: 194 }, { x: 36, y: height - 40 }] },
-    { id: 'highway-outer-east', name: 'Заречный тракт', points: [{ x: width - 36, y: 40 }, { x: width - 36, y: 122 }, { x: width - 36, y: 194 }, { x: width - 36, y: height - 40 }] },
-    { id: 'highway-outer-south', name: 'Южная станционная дорога', points: [{ x: 40, y: height - 36 }, { x: 122, y: height - 36 }, { x: 194, y: height - 36 }, { x: width - 40, y: height - 36 }] },
-  );
-  for (const highway of highways) {
-    const cells: LivePoint[] = [];
-    const trail = highway.id.startsWith('trail'), pathWidth = trail ? 2 : 4;
-    for (let index = 1; index < highway.points.length; index++) cells.push(...route(nearestClear(highway.points[index - 1]!), nearestClear(highway.points[index]!), false, undefined, trail ? 0 : pathWidth / 2).slice(index === 1 ? 0 : 1));
-    const points = smooth(cells, pathWidth);
-    paint(points, pathWidth, trail ? 'p' : 'r', !trail); paths.push({ id: highway.id, name: highway.name, kind: trail ? 'trail' : 'road', width: pathWidth, points });
+  for (const railway of railways) {
+    const cells = centerCells(railway.points);
+    if (!cells.every(clear)) throw new Error(`Reserved railway ${railway.id} contains cover`);
+    paint(railway.points, 5, 'y'); paint(railway.points, railway.width, 't');
+    paths.push(railway);
   }
-  const railPoints = [[1, 225], [43, 218], [56, 181], [73, 162], [90, 145], [90, 126], [56, 90], [32, 63]].map(([x, y]) => core(x!, y!));
-  if (expanded) railPoints.unshift({ x: 1, y: offsetY + 225 });
-  const rail: LivePoint[] = [];
-  for (let index = 1; index < railPoints.length; index++) rail.push(...route(nearestClear(railPoints[index - 1]!), nearestClear(railPoints[index]!)).slice(index === 1 ? 0 : 1));
-  const freight = smooth(rail, 2);
-  paint(freight, 2, 't'); paths.push({ id: 'rail-freight', name: 'Грузовая ветка', kind: 'rail', width: 2, points: freight });
-  if (expanded) {
-    const controls = [{ x: 36, y: height - 40 }, { x: 46, y: height - 31 }, { x: 138, y: height - 31 }], distribution: LivePoint[] = [];
-    const first = nearestClear(controls[0]!), junction = rail.reduce((near, point) => distance(point, first) < distance(near, first) ? point : near);
-    let start = junction;
-    for (const control of controls) { const end = nearestClear(control); distribution.push(...route(start, end).slice(distribution.length ? 1 : 0)); start = end; }
-    const points = smooth(distribution, 2);
-    paint(points, 6, 'y'); paint(points, 2, 't'); rail.push(...distribution);
-    paths.push({ id: 'rail-distribution', name: 'Южный товарный парк', kind: 'rail', width: 2, points });
-  }
-
-  // Sidings terminate at the outside loading edge, leaving the authored search
-  // rooms and their anchors untouched. They belong to rail facilities only.
+  // Dedicated loading sidings have one turnout and remain on the depot side.
   for (const poi of world.pois.filter(poi => !poi.tags.includes('city') && poi.districtId === 'depot' && ['wagons', 'depot', 'coal'].includes(poi.templateId))) {
-    const end = nearestClear({ x: poi.x + Math.floor(poi.width / 2), y: poi.y - 2 });
-    const start = rail.reduce((near, point) => distance(point, end) < distance(near, end) ? point : near);
-    const cells = route(start, end), points = smooth(cells, 1.5);
+    const options = poi.entrances.flatMap(door => {
+      const end = exteriorPort(poi, door);
+      return railways.flatMap(railway => railway.points.slice(1).map((b, index) => {
+        const start = project(end, railway.points[index]!, b);
+        const bends = [[start, { x: end.x, y: start.y }, end], [start, { x: start.x, y: end.y }, end]].map(simplify);
+        return { start, end, direct: bends.find(driveClear), score: Math.abs(start.x - end.x) + Math.abs(start.y - end.y) };
+      }));
+    }).sort((a, b) => a.score - b.score);
+    const siding = options.find(option => option.direct) ?? options[0]!;
+    const points = siding.direct ?? simplify(route(siding.start, siding.end, true, undefined, .75, true, true));
     paint(points, 5, 'y'); paint(points, 1.5, 't');
-    if (cells.length > 1) paths.push({ id: `siding-${poi.id}`, name: `${poi.name}: погрузочная ветка`, kind: 'rail', width: 1.5, points });
+    if (points.length > 1) paths.push({ id: `siding-${poi.id}`, name: `${poi.name}: погрузочная ветка`, kind: 'rail', width: 1.5, points });
   }
-
   // A pair of compact exterior walks serves every actual doorway in a lot.
   // Repeated branches form one public path per gate, keeping the static wire
   // graph small without drawing shortcut lines through a house or its walls.

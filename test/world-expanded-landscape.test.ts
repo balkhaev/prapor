@@ -1,42 +1,79 @@
 import { describe, expect, test } from 'bun:test';
 import { generateLiveWorld, validateGeneratedWorld } from '../src/game/world-generation';
-import type { LivePoint } from '../src/game/live';
+import { cityStreetPlan, regionalStreetPlan, regionalRailPlan } from '../src/game/world-landscape';
+import type { LiveLandscapePath, LivePoint } from '../src/game/live';
 
-describe('expanded working outskirts and road geometry', () => {
-  for (const seed of ['perimeter-alpha-01', 'outer-road-check', 'river-bank-check']) test(`the outer settlements have real land use and clear roads for ${seed}`, () => {
-    const world = generateLiveWorld(seed);
-    expect(world.width).toBe(320); expect(world.height).toBe(320);
-    expect(validateGeneratedWorld(world).chunks).toBe(100);
+const distanceToSegment = (point: LivePoint, a: LivePoint, b: LivePoint): number => {
+  const dx = b.x - a.x, dy = b.y - a.y, denominator = dx * dx + dy * dy;
+  const t = denominator ? Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / denominator)) : 0;
+  return Math.hypot(point.x - a.x - dx * t, point.y - a.y - dy * t);
+};
+const onPath = (point: LivePoint, path: LiveLandscapePath): boolean => path.points.slice(1).some((b, index) => distanceToSegment(point, path.points[index]!, b) < .01);
+
+describe('authored district road hierarchy', () => {
+  for (const seed of ['perimeter-alpha-01', 'outer-road-check', 'river-bank-check']) test(`parcels, banks and transport share a coherent plan for ${seed}`, () => {
+    const world = generateLiveWorld(seed), city = world.city!;
+    expect(world.width).toBe(448); expect(world.height).toBe(448);
+    expect(validateGeneratedWorld(world).chunks).toBe(196);
     expect(world.paths!.length).toBeLessThanOrEqual(384);
+    expect(world.paths!.every(path => path.points.length <= 256)).toBe(true);
+    expect(world.paths!.some(path => /^road-\d|^highway-/.test(path.id))).toBe(false);
+    const streets = [...cityStreetPlan(city), ...regionalStreetPlan(world.width, world.height, city)];
+    expect(streets).toHaveLength(19);
+    const plannedRails = regionalRailPlan(world.width, world.height, city);
+    for (const plan of [...streets, ...plannedRails]) expect(world.paths!.find(path => path.id === plan.id)).toEqual(plan);
     const blocked = new Uint8Array(world.width * world.height);
     for (const obstacle of world.obstacles) for (let y = obstacle.y; y < obstacle.y + obstacle.height; y++) for (let x = obstacle.x; x < obstacle.x + obstacle.width; x++) blocked[y * world.width + x] = 1;
     const material = (point: LivePoint) => world.terrainRows![point.y]![point.x]!;
-    const northWest = world.terrainRows!.slice(0, 32).map(row => row.slice(0, 160)).join('');
-    const northEast = world.terrainRows!.slice(0, 32).map(row => row.slice(160)).join('');
-    const southWest = world.terrainRows!.slice(288).map(row => row.slice(0, 160)).join('');
-    const southEast = world.terrainRows!.slice(288).map(row => row.slice(160)).join('');
+    const area = (x: number, y: number) => world.terrainRows!.slice(y, y + 112).map(row => row.slice(x, x + 224)).join('');
     const count = (ground: string, code: string) => ground.split(code).length - 1;
-    expect(count(northWest, 'y')).toBeGreaterThan(1200);
-    expect(count(northEast, 'f')).toBeGreaterThan(1600);
-    expect(count(southWest, 'y')).toBeGreaterThan(1600);
-    expect(count(southWest, 't')).toBeGreaterThan(80);
-    expect(count(southEast, 'g')).toBeGreaterThan(2200);
-    for (const district of world.districts) expect(world.pois.filter(poi => poi.id.startsWith(`fringe-${district.id}-`))).toHaveLength(5);
-    for (const ground of [northWest, northEast, southWest, southEast]) expect(count(ground, 'r')).toBeGreaterThan(100);
-    const primary = [{ x: 10, y: 10 }, { x: 309, y: 10 }, { x: 10, y: 309 }, { x: 309, y: 309 }];
-    for (const exit of primary) { expect(world.extracts).toContainEqual(exit); expect(blocked[exit.y * world.width + exit.x]).toBe(0); }
-    expect(world.paths!.filter(path => /^bridge-(?:north|farmland)$/.test(path.id))).toHaveLength(2);
-    expect(world.paths!.some(path => path.id === 'rail-distribution' && path.kind === 'rail')).toBe(true);
-    const highways = world.paths!.filter(path => path.id.startsWith('highway-'));
-    expect(highways).toHaveLength(8);
-    for (const highway of highways) {
-      expect(highway.points.length).toBeLessThan(60);
-      for (let index = 1; index < highway.points.length; index++) {
-        const a = highway.points[index - 1]!, b = highway.points[index]!, steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) * 3));
-        for (let step = 0; step <= steps; step++) {
-          const point = { x: Math.round(a.x + (b.x - a.x) * step / steps), y: Math.round(a.y + (b.y - a.y) * step / steps) };
-          expect(blocked[point.y * world.width + point.x]).toBe(0);
-          expect(['r', 't']).toContain(material(point));
+    expect(count(area(0, 0), 'y')).toBeGreaterThan(4500);
+    expect(count(area(224, 0), 'f')).toBeGreaterThan(10000);
+    expect(count(area(0, 336), 'y')).toBeGreaterThan(5000);
+    expect(count(area(0, 336), 't')).toBeGreaterThan(700);
+    expect(count(area(224, 336), 'g')).toBeGreaterThan(9000);
+    for (const district of world.districts) expect(world.pois.filter(poi => poi.id.startsWith(`fringe-${district.id}-`))).toHaveLength(7);
+    for (const exit of [{ x: 10, y: 10 }, { x: 437, y: 10 }, { x: 10, y: 437 }, { x: 437, y: 437 }]) {
+      expect(world.extracts).toContainEqual(exit); expect(blocked[exit.y * world.width + exit.x]).toBe(0);
+    }
+    expect(world.paths!.filter(path => path.id.startsWith('bridge-') && path.kind === 'road')).toHaveLength(4);
+    const wideRoads = world.paths!.filter(path => path.kind === 'road' && path.width >= 5);
+    expect(wideRoads).toHaveLength(23);
+    for (const road of wideRoads) {
+      expect(road.points.length).toBeLessThanOrEqual(5);
+      for (let index = 1; index < road.points.length; index++) {
+        const a = road.points[index - 1]!, b = road.points[index]!;
+        expect(a.x === b.x || a.y === b.y).toBe(true);
+        const length = Math.abs(b.x - a.x) + Math.abs(b.y - a.y);
+        for (let step = 0; step <= length; step++) {
+          const center = { x: a.x + (b.x - a.x) * step / length, y: a.y + (b.y - a.y) * step / length };
+          for (let lane = -Math.floor(road.width / 2); lane <= Math.floor(road.width / 2); lane++) {
+            const point = { x: Math.round(center.x + (a.x === b.x ? lane : 0)), y: Math.round(center.y + (a.y === b.y ? lane : 0)) };
+            expect(blocked[point.y * world.width + point.x]).toBe(0);
+            expect(['r', 't']).toContain(material(point));
+          }
+        }
+      }
+    }
+    for (const drive of world.paths!.filter(path => path.id.startsWith('driveway-'))) {
+      expect(drive.width).toBe(2.5);
+      expect(streets.some(street => onPath(drive.points[0]!, street))).toBe(true);
+      for (let index = 1; index < drive.points.length; index++) expect(drive.points[index - 1]!.x === drive.points[index]!.x || drive.points[index - 1]!.y === drive.points[index]!.y).toBe(true);
+    }
+    for (const poi of world.pois.filter(poi => poi.districtId === 'sawmill' && ['camp', 'cabin', 'hunting', 'creekcamp'].includes(poi.templateId))) {
+      expect(world.paths!.some(path => path.id === `driveway-${poi.id}`)).toBe(false);
+      expect(world.paths!.some(path => path.id === `trail-${poi.id}` && path.kind === 'trail')).toBe(true);
+    }
+    // Rail shares only crossings with the street network; no freight segment
+    // follows an asphalt collector for a block or enters the city street grid.
+    for (const railway of plannedRails) for (let index = 1; index < railway.points.length; index++) {
+      const a = railway.points[index - 1]!, b = railway.points[index]!;
+      for (const street of streets) for (let roadIndex = 1; roadIndex < street.points.length; roadIndex++) {
+        const c = street.points[roadIndex - 1]!, d = street.points[roadIndex]!;
+        if (a.x === b.x && c.x === d.x && Math.abs(a.x - c.x) < 6) {
+          expect(Math.min(Math.max(a.y, b.y), Math.max(c.y, d.y)) - Math.max(Math.min(a.y, b.y), Math.min(c.y, d.y))).toBeLessThanOrEqual(0);
+        } else if (a.y === b.y && c.y === d.y && Math.abs(a.y - c.y) < 6) {
+          expect(Math.min(Math.max(a.x, b.x), Math.max(c.x, d.x)) - Math.max(Math.min(a.x, b.x), Math.min(c.x, d.x))).toBeLessThanOrEqual(0);
         }
       }
     }

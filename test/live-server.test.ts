@@ -441,21 +441,21 @@ describe("shared endless live server", () => {
     expect(restored.server.bosses).toHaveLength(4);
     expect(restored.server.maps[0]!.npcs).toBe(getLiveMap("perimeter").npcSpawns.length + restored.server.bosses!.filter(boss => boss.state === 'alive').length); expect(service.healthy()).toBe(true);
   });
-  test.each(["perimeter-g2-a827381f", "perimeter-g3-b38b4b0d", "perimeter-g6-shipped"])("expanding saved geometry %s preserves translated body positions, private kit and durable loose cargo across two restarts", async geometryVersion => {
-    const guest = await enter(), map = getLiveMap("perimeter"), point = { x: 0, y: 0 };
+  test.each(["perimeter-g2-a827381f", "perimeter-g3-b38b4b0d", "perimeter-g6-shipped", "perimeter-g7-shipped"])("expanding saved geometry %s preserves translated body positions, private kit and durable loose cargo across two restarts", async geometryVersion => {
+    const guest = await enter(), map = getLiveMap("perimeter"), previousOffset = geometryVersion.startsWith("perimeter-g7-") ? 32 : 0, point = { x: previousOffset, y: previousOffset };
     expect(isLiveWalkable(map, point)).toBe(true);
     placePlayers([{ session: guest.session, ...point, health: 71, ammo: 17, medkits: 1, cargo: 65, stash: 120 }]);
     editStorage(db => {
       const saved = JSON.parse(db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!.state);
-      saved.geometryVersion = geometryVersion; saved.drops = [{ id: "legacy-loose-cargo", mapId: "perimeter", x: 1, y: 0, source: "body", amount: 73, expiresAt: time + 120_000 }];
+      saved.geometryVersion = geometryVersion; saved.drops = [{ id: "legacy-loose-cargo", mapId: "perimeter", x: point.x + 1, y: point.y, source: "body", amount: 73, expiresAt: time + 120_000 }];
       db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify(saved));
     });
     const restored = (await enter(guest.session)).state;
     expect({ width: restored.world.width, height: restored.world.height, generatorVersion: restored.world.generatorVersion })
-      .toEqual({ width: 320, height: 320, generatorVersion: LIVE_GENERATOR_VERSION });
+      .toEqual({ width: 448, height: 448, generatorVersion: LIVE_GENERATOR_VERSION });
     expect(restored.world.version).toBe(map.version); expect(restored.worldVersion).toBe(map.version);
     expect(restored.self).toMatchObject({ ammo: 17, medkits: 1, cargo: 65, stash: 120 });
-    const translated = { x: point.x + LIVE_WORLD_OFFSET, y: point.y + LIVE_WORLD_OFFSET };
+    const translated = { x: point.x + LIVE_WORLD_OFFSET - previousOffset, y: point.y + LIVE_WORLD_OFFSET - previousOffset };
     expect(restored.entities.find(entity => entity.id === guest.session.id)).toMatchObject(translated);
     expect(restored.entities.find(entity => entity.id === guest.session.id)!.health).toBeCloseTo(71);
     expect(restored.drops.find(drop => drop.id === "legacy-loose-cargo")).toMatchObject({ x: LIVE_WORLD_OFFSET + 1, y: LIVE_WORLD_OFFSET, amount: 73 });
@@ -493,14 +493,14 @@ describe("shared endless live server", () => {
     }
   });
 
-  test('offline fighters migrate before the new world is saved and can join later without a second coordinate shift', async () => {
-    const active = await enter(), offline = await enter(), body = createHealth(71); body.parts.leftLeg.fracture = true;
+  test.each([6, 7])('G%s offline fighters migrate before the new world is saved and can join later without a second coordinate shift', async previousVersion => {
+    const active = await enter(), offline = await enter(), body = createHealth(71), previousOffset = previousVersion === 7 ? 32 : 0; body.parts.leftLeg.fracture = true;
     editStorage(db => {
       for (const row of db.query<{ identity: string; state: string }, []>('SELECT identity,state FROM live_players').all()) {
-        const fighter = JSON.parse(row.state); Object.assign(fighter, { x: fighter.id === active.session.id ? 0 : 1, y: 0, ammo: 17, cargo: 65, stash: 120, body, healthAt: time, safeUntil: time + 120_000 });
+        const fighter = JSON.parse(row.state); Object.assign(fighter, { x: previousOffset + (fighter.id === active.session.id ? 0 : 1), y: previousOffset, ammo: 17, cargo: 65, stash: 120, body, healthAt: time, safeUntil: time + 120_000 });
         db.query('UPDATE live_players SET state=? WHERE identity=?').run(JSON.stringify(fighter), row.identity);
       }
-      const saved = JSON.parse(db.query<{ state: string }, []>('SELECT state FROM live_world').get()!.state); saved.geometryVersion = 'perimeter-g6-offline-fighter';
+      const saved = JSON.parse(db.query<{ state: string }, []>('SELECT state FROM live_world').get()!.state); saved.geometryVersion = `perimeter-g${previousVersion}-offline-fighter`;
       db.query('UPDATE live_world SET state=?').run(JSON.stringify(saved));
     });
     const first = (await enter(active.session)).state;
