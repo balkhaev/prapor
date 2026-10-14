@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { generateLiveWorld, LIVE_WORLD_SEED, worldChunks } from '../src/game/world-generation';
+import { generateLiveWorld, LIVE_WORLD_SEED, validateGeneratedWorld, worldChunks } from '../src/game/world-generation';
 import type { LiveMapDefinition } from '../src/game/live-maps';
 import { hasLiveLineOfSight, isLiveWalkable } from '../src/game/live-maps';
 import { createLiveNavigation } from '../server/live-navigation';
@@ -45,9 +45,9 @@ function inspect(world: LiveMapDefinition): void {
   }
   for (const district of world.districts) {
     const pois = world.pois.filter(poi => poi.districtId === district.id);
-    expect(pois).toHaveLength(12);
+    expect(pois).toHaveLength(18);
     expect(pois.some(poi => poi.danger === 3)).toBe(true);
-    expect(world.containers.filter(container => pois.some(poi => poi.id === container.poiId))).toHaveLength(48);
+    expect(world.containers.filter(container => pois.some(poi => poi.id === container.poiId))).toHaveLength(66);
     // Count actual walking steps to the first find, including doors and detours.
     for (const spawn of district.spawns) {
       const distances = new Int32Array(blocked.length).fill(-1), frontier = [spawn.y * world.width + spawn.x]; distances[frontier[0]!] = 0;
@@ -85,7 +85,7 @@ function inspect(world: LiveMapDefinition): void {
   }
   for (let first = 0; first < world.pois.length; first++) for (let second = first + 1; second < world.pois.length; second++) expect(intersects(world.pois[first]!, world.pois[second]!)).toBe(false);
 
-  // The city is a continuous place with connected streets and dense collision buildings,
+  // The city is a continuous place with connected streets and usable architecture,
   // while every previously shipped landmark has moved out to the surrounding ring.
   const city = world.city!;
   expect(city).toMatchObject({ name: 'Ольховск', x: 56, y: 56, width: 144, height: 144 });
@@ -97,15 +97,60 @@ function inspect(world: LiveMapDefinition): void {
   expect(legacyPois.every(poi => !intersects(poi, city))).toBe(true);
   const inside = (point: LivePoint, rectangle: { x: number; y: number; width: number; height: number } = city): boolean => point.x >= rectangle.x && point.y >= rectangle.y && point.x < rectangle.x + rectangle.width && point.y < rectangle.y + rectangle.height;
   expect(cityPois.every(poi => inside(poi) && inside({ x: poi.x + poi.width - 1, y: poi.y + poi.height - 1 }) && poi.tags.includes('city'))).toBe(true);
-  const fabric = world.obstacles.filter(obstacle => obstacle.kind === 'building' && inside(obstacle) && inside({ x: obstacle.x + obstacle.width - 1, y: obstacle.y + obstacle.height - 1 }) && !world.pois.some(poi => intersects(obstacle, poi)));
-  expect(fabric.length).toBeGreaterThanOrEqual(80);
+  const sites = world.citySites!;
+  expect(sites).toHaveLength(24);
+  const usableBuildings = sites.flatMap(site => site.buildings);
+  expect(usableBuildings.length).toBeGreaterThanOrEqual(40);
+  for (const site of sites) {
+    const poi = world.pois.find(poi => poi.id === site.poiId)!;
+    expect(poi).toMatchObject({ x: site.x, y: site.y, width: site.width, height: site.height });
+    expect(poi.entrances).toHaveLength(2);
+    expect(Math.abs(poi.entrances[0]!.x - poi.entrances[1]!.x) + Math.abs(poi.entrances[0]!.y - poi.entrances[1]!.y)).toBeGreaterThanOrEqual(7);
+    const anchors = world.containers.filter(anchor => anchor.poiId === site.poiId);
+    expect(anchors).toHaveLength(3);
+    expect(anchors.map(anchor => anchor.id)).toEqual([`${site.id}-slot-0`, `${site.id}-slot-1`, `${site.id}-slot-2`]);
+    expect(anchors.filter(anchor => site.buildings.some(building => inside(anchor, building))).length).toBeGreaterThanOrEqual(2);
+    for (const building of site.buildings) {
+      expect(building.width).toBeGreaterThanOrEqual(5); expect(building.height).toBeGreaterThanOrEqual(5);
+      expect(building.entrances).toHaveLength(2);
+      for (const door of building.entrances) for (const at of [door, { x: door.x + 1, y: door.y }]) expect(blocked[at.y * world.width + at.x]).toBe(0);
+      // An advertised interior must contain reachable floor, not a solid roof rectangle.
+      const entrance = building.entrances[0]!, floor = new Set<number>([entrance.y * world.width + entrance.x]), queue = [entrance];
+      for (let at = 0; at < queue.length; at++) {
+        const p = queue[at]!;
+        for (const next of [{ x: p.x + 1, y: p.y }, { x: p.x - 1, y: p.y }, { x: p.x, y: p.y + 1 }, { x: p.x, y: p.y - 1 }]) {
+          const key = next.y * world.width + next.x;
+          if (inside(next, building) && !blocked[key] && !floor.has(key)) { floor.add(key); queue.push(next); }
+        }
+      }
+      expect(floor.size).toBeGreaterThanOrEqual((building.width - 2) * (building.height - 2) - 1);
+      expect(floor.has(building.entrances[1]!.y * world.width + building.entrances[1]!.x)).toBe(true);
+      for (const anchor of anchors.filter(anchor => inside(anchor, building))) expect(floor.has(anchor.y * world.width + anchor.x)).toBe(true);
+    }
+    for (const passage of site.passages) for (let index = 1; index < passage.length; index++) {
+      const a = passage[index - 1]!, b = passage[index]!, dx = Math.sign(b.x - a.x), dy = Math.sign(b.y - a.y);
+      expect(dx === 0 || dy === 0).toBe(true);
+      for (let step = 0; step <= Math.abs(b.x - a.x) + Math.abs(b.y - a.y); step++) expect(blocked[(a.y + dy * step) * world.width + a.x + dx * step]).toBe(0);
+    }
+    const patrol = world.npcSpawns.find(spawn => inside(spawn.point, site));
+    expect(patrol?.role).toBe('patrol'); expect(patrol!.route.length).toBeGreaterThanOrEqual(4);
+    expect(patrol!.route.some(p => site.buildings.some(building => inside(p, building)))).toBe(true);
+    expect(patrol!.route).toContainEqual(poi.entrances[0]!); expect(patrol!.route).toContainEqual(poi.entrances[1]!);
+  }
+  const closedBuildings = world.obstacles.filter(obstacle => obstacle.kind === 'building' && inside(obstacle) && inside({ x: obstacle.x + obstacle.width - 1, y: obstacle.y + obstacle.height - 1 }));
+  const architecture = [...usableBuildings, ...closedBuildings];
+  expect(architecture.length).toBeGreaterThanOrEqual(80);
   for (const quarter of city.quarters) {
     expect(quarter.width).toBe(72); expect(quarter.height).toBe(72);
     expect(inside(quarter) && inside({ x: quarter.x + quarter.width - 1, y: quarter.y + quarter.height - 1 })).toBe(true);
     expect(cityPois.filter(poi => inside(poi, quarter) && inside({ x: poi.x + poi.width - 1, y: poi.y + poi.height - 1 }, quarter))).toHaveLength(4);
-    const buildings = fabric.filter(obstacle => intersects(obstacle, quarter));
-    expect(buildings.length).toBeGreaterThanOrEqual(12);
-    const solidArea = buildings.reduce((sum, obstacle) => sum + Math.max(0, Math.min(obstacle.x + obstacle.width, quarter.x + quarter.width) - Math.max(obstacle.x, quarter.x)) * Math.max(0, Math.min(obstacle.y + obstacle.height, quarter.y + quarter.height) - Math.max(obstacle.y, quarter.y)), 0);
+    expect(sites.filter(site => site.quarterId === quarter.id)).toHaveLength(6);
+    const buildings = architecture.filter(obstacle => intersects(obstacle, quarter));
+    expect(buildings.length).toBeGreaterThanOrEqual(16);
+    const footprintArea = buildings.reduce((sum, obstacle) => sum + Math.max(0, Math.min(obstacle.x + obstacle.width, quarter.x + quarter.width) - Math.max(obstacle.x, quarter.x)) * Math.max(0, Math.min(obstacle.y + obstacle.height, quarter.y + quarter.height) - Math.max(obstacle.y, quarter.y)), 0);
+    expect(footprintArea).toBeGreaterThanOrEqual(quarter.width * quarter.height * .12);
+    let solidArea = 0;
+    for (let y = quarter.y; y < quarter.y + quarter.height; y++) for (let x = quarter.x; x < quarter.x + quarter.width; x++) solidArea += blocked[y * world.width + x]!;
     expect(solidArea).toBeGreaterThanOrEqual(quarter.width * quarter.height * .05);
     let streets = 0;
     for (let y = quarter.y; y < quarter.y + quarter.height; y++) for (let x = quarter.x; x < quarter.x + quarter.width; x++) if (world.terrainRows![y]![x] === 'r' && !blocked[y * world.width + x]) streets++;
@@ -126,7 +171,7 @@ function inspect(world: LiveMapDefinition): void {
     }
   }
   for (const side of perimeterRoads) expect(side.some(point => citySeen[point.y * world.width + point.x])).toBe(true);
-  for (const point of [...cityPois.flatMap(poi => poi.entrances), ...world.containers.filter(anchor => cityPois.some(poi => poi.id === anchor.poiId)), ...world.npcSpawns.flatMap(spawn => [spawn.point, ...spawn.route]).filter(point => inside(point))]) expect(citySeen[point.y * world.width + point.x]).toBe(1);
+  for (const point of [...world.pois.filter(poi => poi.tags.includes('city')).flatMap(poi => poi.entrances), ...world.containers.filter(anchor => inside(anchor)), ...world.npcSpawns.flatMap(spawn => [spawn.point, ...spawn.route]).filter(point => inside(point)), ...sites.flatMap(site => [...site.buildings.flatMap(building => building.entrances), ...site.passages.flat()])]) expect(citySeen[point.y * world.width + point.x]).toBe(1);
 
   expect(world.terrainRows).toHaveLength(world.height);
   const ground = world.terrainRows!.join('');
@@ -212,8 +257,8 @@ describe('deterministic world generation', () => {
   test('POI footprints and placement are independent of streaming chunk origins', () => {
     for (const seed of ['organic-layout', 'another-layout', 'district-roads']) {
       const world = generateLiveWorld(seed);
-      expect(world.generatorVersion).toBe(4);
-      expect(world.pois).toHaveLength(48); expect(world.containers).toHaveLength(192); expect(world.npcSpawns).toHaveLength(128);
+      expect(world.generatorVersion).toBe(5);
+      expect(world.pois).toHaveLength(72); expect(world.containers).toHaveLength(264); expect(world.npcSpawns).toHaveLength(152);
       expect(new Set(world.pois.map(poi => `${poi.width}x${poi.height}`)).size).toBeGreaterThanOrEqual(4);
       expect(new Set(world.pois.map(poi => poi.x % world.chunkSize)).size).toBeGreaterThanOrEqual(5);
       expect(new Set(world.pois.map(poi => poi.y % world.chunkSize)).size).toBeGreaterThanOrEqual(5);
@@ -232,8 +277,20 @@ describe('deterministic world generation', () => {
     expect(firstForestSupply.danger).toBe(1);
     expect(getLiveBossArena(world, 'lesnik').poiId).not.toBe(firstForestSupply.id);
   });
-  test('all verified V3 default containers keep their original logical identities when the city displaces their landmarks', () => {
-    // Public identities recorded from the shipped 192×192 layout, independent of V4 placement.
+  test('architecture validation rejects a blocked doorway and a passage that jumps through its wall', () => {
+    const world = generateLiveWorld();
+    expect(validateGeneratedWorld(world).containers).toBe(264);
+    const door = world.citySites![0]!.buildings[0]!.entrances[0]!;
+    const sealed = structuredClone(world);
+    sealed.obstacles.push({ ...door, width: 2, height: 1, kind: 'wall' });
+    expect(() => validateGeneratedWorld(sealed)).toThrow('Invalid usable city architecture');
+    const shortcut = structuredClone(world), building = shortcut.citySites![0]!.buildings[0]!;
+    // The two endpoints are clear, while the segment crosses the closed side wall.
+    shortcut.citySites![0]!.passages[0] = [{ x: building.x - 1, y: building.y + 2 }, { x: building.x + 1, y: building.y + 2 }];
+    expect(() => validateGeneratedWorld(shortcut)).toThrow('City passage crosses a wall');
+  });
+  test('all 192 shipped default containers keep their logical identities, kinds and loot categories', () => {
+    // Public identities recorded from the shipped G3/G4 layouts, independent of G5 placement.
     const legacy = [
       ['poi-0-0', ['duffel', 'toolbox', 'crate', 'medbag']], ['poi-1-0', ['jacket', 'duffel', 'toolbox', 'cabinet']],
       ['poi-2-0', ['jacket', 'duffel', 'toolbox', 'cabinet']], ['poi-3-0', ['jacket', 'duffel', 'toolbox', 'cabinet']],
@@ -251,9 +308,19 @@ describe('deterministic world generation', () => {
       ['poi-6-2', ['jacket', 'duffel', 'toolbox', 'cabinet']], ['poi-7-2', ['duffel', 'toolbox', 'crate', 'medbag']],
       ['poi-4-3', ['duffel', 'toolbox', 'crate', 'medbag']], ['poi-5-3', ['jacket', 'duffel', 'toolbox', 'crate']],
       ['poi-6-3', ['duffel', 'toolbox', 'crate', 'medbag']], ['poi-7-3', ['jacket', 'duffel', 'medbag', 'crate']],
+      ['poi-8-0', ['jacket', 'duffel', 'medbag', 'crate']], ['poi-9-0', ['duffel', 'toolbox', 'crate', 'medbag']],
+      ['poi-10-0', ['jacket', 'duffel', 'toolbox', 'crate']], ['poi-11-0', ['jacket', 'duffel', 'toolbox', 'crate']],
+      ['poi-8-1', ['jacket', 'duffel', 'toolbox', 'cabinet']], ['poi-9-1', ['jacket', 'duffel', 'toolbox', 'cabinet']],
+      ['poi-10-1', ['duffel', 'toolbox', 'crate', 'medbag']], ['poi-11-1', ['jacket', 'duffel', 'toolbox', 'cabinet']],
+      ['poi-8-2', ['jacket', 'duffel', 'toolbox', 'crate']], ['poi-9-2', ['jacket', 'duffel', 'toolbox', 'crate']],
+      ['poi-10-2', ['duffel', 'toolbox', 'crate', 'medbag']], ['poi-11-2', ['jacket', 'duffel', 'medbag', 'crate']],
+      ['poi-8-3', ['jacket', 'duffel', 'toolbox', 'crate']], ['poi-9-3', ['jacket', 'duffel', 'toolbox', 'cabinet']],
+      ['poi-10-3', ['duffel', 'toolbox', 'crate', 'medbag']], ['poi-11-3', ['jacket', 'duffel', 'toolbox', 'cabinet']],
     ] as const;
     const world = generateLiveWorld(LIVE_WORLD_SEED);
-    for (const [poiId, kinds] of legacy) kinds.forEach((kind, slot) => expect(world.containers.find(anchor => anchor.id === `${poiId}-${kind}-${slot}`)).toMatchObject({ poiId, kind }));
+    const categories = { duffel: 'mixed', toolbox: 'tools', crate: 'provisions', medbag: 'medical', jacket: 'valuables', cabinet: 'intel' } as const;
+    for (const [poiId, kinds] of legacy) kinds.forEach((kind, slot) => expect(world.containers.find(anchor => anchor.id === `${poiId}-${kind}-${slot}`)).toMatchObject({ poiId, kind, lootTable: categories[kind] }));
+    expect(world.containers.filter(anchor => /^poi-(?:[0-9]|10|11)-[0-3]-/.test(anchor.id))).toHaveLength(192);
   });
   test('cached collision and visibility agree with map geometry, and navigation avoids occupied route cells', () => {
     const world = generateLiveWorld('navigation-regression'), navigation = createLiveNavigation(world);

@@ -3,8 +3,9 @@ import type { LiveMapDefinition, LiveNpcSpawn } from './live-maps';
 import { cityStreetPlan, generateLandscape } from './world-landscape';
 import { prefabObstacles } from './world-prefabs';
 import { BOSSES } from './bosses';
+import { cityLandmarkOrigin, generateCitySites } from './world-city';
 
-export const LIVE_GENERATOR_VERSION = 4;
+export const LIVE_GENERATOR_VERSION = 5;
 export const LIVE_WORLD_SEED = 'perimeter-alpha-01';
 export const LIVE_CHUNK_SIZE = 32;
 export const LIVE_WORLD_SIZE = 256;
@@ -142,7 +143,7 @@ function recommendedRoutes(districts: LiveDistrict[], pois: LivePoi[]): LiveWorl
 export function generateLiveWorld(seed = LIVE_WORLD_SEED): LiveMapDefinition {
   if (typeof seed !== 'string' || !seed.length || seed.length > 80) throw new Error('World seed must be 1–80 characters');
   // Legacy content choices keep anchor identities stable; later revisions use their own geometry stream.
-  const legacyRandom = geometryRandom(`1:${seed}`), random = geometryRandom(`${LIVE_GENERATOR_VERSION}:${seed}`), obstacles: LiveObstacle[] = [], zones: LiveZone[] = [], pois: LivePoi[] = [], containers: LiveContainerAnchor[] = [], npcSpawns: LiveNpcSpawn[] = [];
+  const legacyRandom = geometryRandom(`1:${seed}`), random = geometryRandom(`4:${seed}`), obstacles: LiveObstacle[] = [], zones: LiveZone[] = [], pois: LivePoi[] = [], containers: LiveContainerAnchor[] = [], npcSpawns: LiveNpcSpawn[] = [];
   const districts = structuredClone([...LIVE_DISTRICTS]);
   const city = structuredClone(LIVE_CITY), plannedStreets = cityStreetPlan(city), streetMask = new Uint8Array(LIVE_WORLD_SIZE ** 2);
   for (const path of plannedStreets) for (let index = 1; index < path.points.length; index++) {
@@ -175,11 +176,16 @@ export function generateLiveWorld(seed = LIVE_WORLD_SEED): LiveMapDefinition {
   const cityCenters = [73, 108, 145, 181];
   for (let cy = 0; cy < 4; cy++) for (let column = 0; column < 4; column++) {
     const slot = cy * 4 + column, district = districts[(cy < 2 ? 0 : 2) + (column < 2 ? 0 : 1)]!, template = WORLD_TEMPLATES.find(template => template.id === cityTemplates[slot])!;
-    choices.push({ cx: column + 8, cy, slot, district, template, rotation: Math.floor(random() * 4), city: true, width: 19 + slot % 4, height: 17 + (slot * 3) % 4,
+    choices.push({ cx: column + 8, cy, slot, district, template, rotation: Math.floor(random() * 4), city: true, width: 17, height: 15,
       center: p(cityCenters[column]!, cityCenters[cy]!) });
   }
   const packed: Array<{ x: number; y: number; width: number; height: number }> = [];
   for (const choice of [...choices].sort((a, b) => b.width * b.height - a.width * a.height)) {
+    if (choice.city) {
+      choice.origin = cityLandmarkOrigin(choice.cx - 8, choice.cy, choice.width, choice.height, LIVE_WORLD_SIZE, streetMask);
+      packed.push({ ...choice.origin, width: choice.width, height: choice.height });
+      continue;
+    }
     let best: LivePoint | undefined, score = Infinity;
     for (let shrink = 0; !best && shrink < 10; shrink++) {
       const minX = Math.max(3, choice.district.x - 4), minY = Math.max(3, choice.district.y - 4);
@@ -256,29 +262,10 @@ export function generateLiveWorld(seed = LIVE_WORLD_SEED): LiveMapDefinition {
       .sort((a, b) => Math.hypot(a.x - spawn.point.x, a.y - spawn.point.y) - Math.hypot(b.x - spawn.point.x, b.y - spawn.point.y))[0];
     if (rival) spawn.route.push({ ...rival });
   }
-  // The city is continuous fabric, not just sixteen loot compounds. Small houses,
-  // shops and garage rows occupy the land between POIs while the street plan stays clear.
-  const fabricMask = new Uint8Array(LIVE_WORLD_SIZE ** 2);
-  for (const wall of obstacles) for (let y = Math.max(0, wall.y - 1); y < Math.min(LIVE_WORLD_SIZE, wall.y + wall.height + 1); y++) for (let x = Math.max(0, wall.x - 1); x < Math.min(LIVE_WORLD_SIZE, wall.x + wall.width + 1); x++) fabricMask[y * LIVE_WORLD_SIZE + x] = 1;
-  for (const poi of pois) for (let y = Math.max(0, poi.y - 1); y < Math.min(LIVE_WORLD_SIZE, poi.y + poi.height + 1); y++) for (let x = Math.max(0, poi.x - 1); x < Math.min(LIVE_WORLD_SIZE, poi.x + poi.width + 1); x++) fabricMask[y * LIVE_WORLD_SIZE + x] = 1;
-  for (const quarter of city.quarters) {
-    let count = 0;
-    const addHouse = (x: number, y: number, width: number, height: number): boolean => {
-      if (x < quarter.x + 1 || y < quarter.y + 1 || x + width >= quarter.x + quarter.width || y + height >= quarter.y + quarter.height) return false;
-      for (let ny = y; ny < y + height; ny++) for (let nx = x; nx < x + width; nx++) if (streetMask[ny * LIVE_WORLD_SIZE + nx] || fabricMask[ny * LIVE_WORLD_SIZE + nx]) return false;
-      obstacles.push(cover(x, y, width, height, 'building', count % 5 === 0 ? 'Гаражный ряд' : count % 4 === 0 ? 'Лавка' : 'Жилой дом'));
-      for (let ny = y - 1; ny <= y + height; ny++) for (let nx = x - 1; nx <= x + width; nx++) fabricMask[ny * LIVE_WORLD_SIZE + nx] = 1;
-      count++; return true;
-    };
-    for (let attempt = 0; attempt < 1800 && count < 40; attempt++) {
-      const horizontal = random() < .5, short = 3 + Math.floor(random() * 2), long = 5 + Math.floor(random() * 4);
-      addHouse(quarter.x + 1 + Math.floor(random() * 68), quarter.y + 1 + Math.floor(random() * 68), horizontal ? long : short, horizontal ? short : long);
-    }
-    for (let y = quarter.y + 1; y < quarter.y + quarter.height - 5 && count < 40; y++) for (let x = quarter.x + 1; x < quarter.x + quarter.width - 5 && count < 40; x++) {
-      if (!addHouse(x, y, 3, 5)) addHouse(x, y, 5, 3);
-    }
-    if (count < 24) throw new Error(`Urban fabric is too sparse in ${quarter.id}`);
-  }
+  // Shared courtyards and inhabited frontage replace random solid filler houses.
+  const neighbourhoods = generateCitySites(city, LIVE_WORLD_SIZE, streetMask, pois.filter(poi => poi.tags.includes('city')));
+  pois.push(...neighbourhoods.pois); obstacles.push(...neighbourhoods.obstacles); containers.push(...neighbourhoods.containers);
+  npcSpawns.push(...neighbourhoods.npcSpawns); zones.push(...neighbourhoods.zones);
   // Trees form groves across administrative boundaries. A clear ring prevents sealed cells.
   const groves = [p(116, 8), p(157, 7), p(250, 100), p(198, 15), p(8, 88), p(9, 141), p(8, 191), p(150, 247), p(87, 245), p(44, 171), p(234, 159), p(46, 94)];
   for (const grove of groves) for (let index = 0; index < 48; index++) {
@@ -304,7 +291,7 @@ export function generateLiveWorld(seed = LIVE_WORLD_SEED): LiveMapDefinition {
     arena.tags = [...new Set([...arena.tags.filter(tag => tag !== 'peripheral'), 'contested', `boss-arena:${boss.id}`])];
     for (const zone of zones) if (zone.x === arena.x && zone.y === arena.y && zone.width === arena.width && zone.height === arena.height) zone.danger = 3;
   }
-  const layout = { seed, generatorVersion: LIVE_GENERATOR_VERSION, chunkSize: LIVE_CHUNK_SIZE, width: LIVE_WORLD_SIZE, height: LIVE_WORLD_SIZE, districts, obstacles, zones, pois, containers, terrainRows: landscape.terrainRows, paths: landscape.paths, routes, city };
+  const layout = { seed, generatorVersion: LIVE_GENERATOR_VERSION, chunkSize: LIVE_CHUNK_SIZE, width: LIVE_WORLD_SIZE, height: LIVE_WORLD_SIZE, districts, obstacles, zones, pois, containers, terrainRows: landscape.terrainRows, paths: landscape.paths, routes, city, citySites: neighbourhoods.sites };
   const version = `perimeter-g${LIVE_GENERATOR_VERSION}-${hash32(JSON.stringify({ ...layout, npcSpawns })).toString(16).padStart(8, '0')}`;
   return { id: 'perimeter', name: 'Большой Периметр', description: 'Общий мир дорог, промышленных дворов, лесных троп и речных переправ. Выбери точку входа и свободно исследуй весь Периметр.', theme: 'mixed', version, ...layout, extracts, npcSpawns, lootSpawns: containers.map(({ x, y }) => ({ x, y })) };
 }
@@ -343,10 +330,33 @@ export function validateGeneratedWorld(world: LiveMapDefinition): { walkableTile
   }
   for (let y = 0; y < world.height; y++) for (let x = 0; x < world.width; x++) if ((world.terrainRows[y]![x] === 'w') !== Boolean(water[y * world.width + x])) throw new Error('Water raster and physical bank disagree');
   const clear = (point: LivePoint) => inside(point) && !blocked[point.y * world.width + point.x];
-  const required = [...world.extracts, ...world.districts.flatMap(district => district.spawns), ...world.pois.flatMap(poi => poi.entrances), ...world.containers, ...world.npcSpawns.flatMap(spawn => [spawn.point, ...spawn.route])];
+  const sites = world.citySites ?? [];
+  const inRect = (point: LivePoint, rect: { x: number; y: number; width: number; height: number }) => point.x >= rect.x && point.y >= rect.y && point.x < rect.x + rect.width && point.y < rect.y + rect.height;
+  const contained = (a: { x: number; y: number; width: number; height: number }, b: { x: number; y: number; width: number; height: number }) => [a.x, a.y, a.width, a.height].every(Number.isInteger) && a.width > 0 && a.height > 0 && inRect(a, b) && inRect({ x: a.x + a.width - 1, y: a.y + a.height - 1 }, b);
+  if (world.generatorVersion >= 5 && sites.length !== 24 || sites.length > 64 || new Set(sites.map(site => site.id)).size !== sites.length
+    || new Set(sites.flatMap(site => site.buildings.map(building => building.id))).size !== sites.reduce((count, site) => count + site.buildings.length, 0)) throw new Error('Invalid city site identities');
+  for (const site of sites) {
+    const quarter = city.quarters.find(quarter => quarter.id === site.quarterId), poi = world.pois.find(poi => poi.id === site.poiId);
+    if (!quarter || !poi || !contained(site, quarter) || [site.x, site.y, site.width, site.height].some((value, index) => value !== [poi.x, poi.y, poi.width, poi.height][index])
+      || !contained(site.courtyard, site) || !['courtyard', 'arcade', 'workyard', 'service-yard'].includes(site.kind) || site.buildings.length < 1 || site.buildings.length > 6
+      || site.buildings.some(building => !contained(building, site) || building.width < 5 || building.height < 5 || !['apartment', 'shop', 'workshop', 'garage', 'service'].includes(building.kind)
+        || building.entrances.length !== 2 || building.entrances.some(door => !inRect(door, building) || !clear(door) || !clear({ x: door.x + 1, y: door.y })))
+      || poi.entrances.length !== 2 || Math.hypot(poi.entrances[0]!.x - poi.entrances[1]!.x, poi.entrances[0]!.y - poi.entrances[1]!.y) < 6
+      || site.passages.length < 2 || site.passages.length > 4) throw new Error(`Invalid usable city architecture ${site.id}`);
+    for (const path of site.passages) {
+      if (path.length < 2 || path.length > 16 || path.some(point => !inRect(point, site) || !clear(point))) throw new Error(`Invalid city passage ${site.id}`);
+      for (let index = 1; index < path.length; index++) {
+        const a = path[index - 1]!, b = path[index]!, dx = Math.sign(b.x - a.x), dy = Math.sign(b.y - a.y);
+        if (dx && dy) throw new Error(`City passage cuts a corner ${site.id}`);
+        for (let step = 0; step <= Math.abs(b.x - a.x) + Math.abs(b.y - a.y); step++) if (!clear({ x: a.x + dx * step, y: a.y + dy * step })) throw new Error(`City passage crosses a wall ${site.id}`);
+      }
+    }
+  }
+  const required = [...world.extracts, ...world.districts.flatMap(district => district.spawns), ...world.pois.flatMap(poi => poi.entrances), ...world.containers, ...world.npcSpawns.flatMap(spawn => [spawn.point, ...spawn.route]), ...sites.flatMap(site => [...site.buildings.flatMap(building => building.entrances), ...site.passages.flat()])];
   if (!required.every(clear)) throw new Error('Door, spawn, container or route inside cover');
   if (world.npcSpawns.some(spawn => world.extracts.some(exit => Math.hypot(spawn.point.x - exit.x, spawn.point.y - exit.y) < 8))) throw new Error('NPC post too close to an entry');
   if (new Set(world.containers.map(anchor => anchor.id)).size !== world.containers.length || new Set(world.containers.map(anchor => `${anchor.x}:${anchor.y}`)).size !== world.containers.length) throw new Error('Container identity or position duplicated');
+  if (world.containers.length > 512 || world.npcSpawns.length > 256 || new Set(world.npcSpawns.map(spawn => `${spawn.point.x}:${spawn.point.y}`)).size !== world.npcSpawns.length) throw new Error('NPC identity or population invalid');
   const seen = new Uint8Array(total), queue = new Int32Array(total); let head = 0, tail = 1;
   const start = world.extracts[0]!; queue[0] = start.y * world.width + start.x; seen[queue[0]!] = 1;
   while (head < tail) {

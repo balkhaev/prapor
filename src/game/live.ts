@@ -31,6 +31,20 @@ export interface LiveCityRegion extends LivePoint {
   name: string; width: number; height: number;
   quarters: Array<LivePoint & { id: string; name: string; width: number; height: number }>;
 }
+export interface LiveCityBuilding extends LivePoint {
+  id: string; name: string; width: number; height: number;
+  kind: 'apartment' | 'shop' | 'workshop' | 'garage' | 'service';
+  /** Authored gaps in collision walls, not a client movement permission. */
+  entrances: LivePoint[];
+}
+/** Public architecture only. Loot contents and nearby actors remain server-owned. */
+export interface LiveCitySite extends LivePoint {
+  id: string; poiId: string; quarterId: string; name: string; width: number; height: number;
+  kind: 'courtyard' | 'arcade' | 'workyard' | 'service-yard';
+  courtyard: LivePoint & { width: number; height: number };
+  buildings: LiveCityBuilding[];
+  passages: LivePoint[][];
+}
 /** Suggested exploration stops; these are guidance, not rewarded quest assignments. */
 export interface LiveWorldRoute {
   id: string; name: string; description: string;
@@ -76,6 +90,8 @@ export interface LiveWorld {
   paths?: LiveLandscapePath[];
   routes?: LiveWorldRoute[];
   city?: LiveCityRegion;
+  /** Available from V5; reused with the immutable world, never repeated in status. */
+  citySites?: LiveCitySite[];
 }
 export interface LiveDistrict extends LivePoint {
   id: LiveDistrictId; name: string; description: string;

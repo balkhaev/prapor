@@ -11,9 +11,10 @@ describe('shared generated perimeter', () => {
     expect(world).toMatchObject({ width: 256, height: 256, chunkSize: 32, theme: 'mixed', city: { name: 'Ольховск', x: 56, y: 56, width: 144, height: 144 } });
     expect(world.width / world.chunkSize * world.height / world.chunkSize).toBe(64);
     expect(world.districts.map(district => district.id).sort()).toEqual(['customs', 'depot', 'sawmill', 'village']);
-    expect(world.pois).toHaveLength(48);
-    expect(world.containers).toHaveLength(192);
-    expect(world.npcSpawns).toHaveLength(128);
+    expect(world.pois).toHaveLength(72);
+    expect(world.containers).toHaveLength(264);
+    expect(world.npcSpawns).toHaveLength(152);
+    expect(world.citySites).toHaveLength(24);
     expect(new Set(world.containers.map(container => container.kind))).toEqual(new Set(['duffel', 'jacket', 'toolbox', 'medbag', 'cabinet', 'crate']));
     expect(world.containers.every(container => container.searchMs >= 2000 && container.searchMs <= 5000)).toBe(true);
     for (const district of world.districts) {

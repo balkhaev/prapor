@@ -87,6 +87,7 @@ describe('live loot and headquarters presentation',()=>{
   });
   test('a city crossing preserves the starting route and cached landmarks while a confirmed respawn selects a new starting route',async()=>{
     const state=fixture(), side=Math.floor(state.world.width/4);
+    delete state.world.citySites; // The synthetic city region below has no authored V5 sites.
     state.world.city={name:'Ольховск',x:side,y:side,width:side*2,height:side*2,quarters:[
       {id:'old-center',name:'Старый центр',x:side,y:side,width:side,height:side},
       {id:'industrial',name:'Промышленный квартал',x:side*2,y:side,width:side,height:side},

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { createLiveMode } from '../src/live-ui';
 import { createHealth, createMedicalInventory } from '../src/game/health';
-import type { LiveSnapshot } from '../src/game/live';
+import type { LivePoint, LiveSnapshot } from '../src/game/live';
 import { getLiveMap } from '../src/game/live-maps';
 import { BOSSES } from '../src/game/bosses';
 import { getLiveBossArena } from '../src/game/live-boss-arenas';
@@ -29,7 +29,7 @@ let time: number, world: ElementStub, dock: ElementStub, exited: number, marketO
 let server: LiveSnapshot, mode: ReturnType<typeof createLiveMode> | undefined;
 let nextTimer: number, timers: Map<number, { delay: number; run: () => void }>, replacements: Map<string, PropertyDescriptor | undefined>;
 let clockSpy: ReturnType<typeof spyOn<typeof Date, 'now'>>;
-let sceneRoute:string[],commands:unknown[];
+let sceneRoute:string[],commands:unknown[],sceneFocus:LivePoint[];
 function replace(key: string, value: unknown) {
   replacements.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
   Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
@@ -45,7 +45,7 @@ async function poll() {
 }
 beforeEach(() => {
   time = 1_800_000_000_000; exited = 0; marketOpened = 0; joins = 0; leaves = 0; failedReads = 0;
-  sceneRoute=[];commands=[];
+  sceneRoute=[];commands=[];sceneFocus=[];
   nextTimer = 0; timers = new Map(); replacements = new Map(); world = new ElementStub(); dock = new ElementStub();
   clockSpy = spyOn(Date, 'now').mockImplementation(() => time);
   replace('window', { devicePixelRatio: 1, setTimeout: (run: () => void, delay: number) => { timers.set(++nextTimer, { delay, run }); return nextTimer; }, clearTimeout: (id: number) => timers.delete(id) });
@@ -80,7 +80,7 @@ beforeEach(() => {
     throw new Error(`Unexpected request ${url}`);
   });
   mode = createLiveMode({ world: world as unknown as HTMLElement, dock: dock as unknown as HTMLElement, onExit: () => { exited++; }, onAccount() {}, onMarket: () => { marketOpened++; }, getAccountId: () => null, getGameId: () => server.self.gameId ?? null,
-    sceneFactory: () => ({ show() {}, hide() {}, clear() {}, setSelected() {}, update() {}, destroy() {},setRoute(ids){sceneRoute=[...ids];} }),
+    sceneFactory: () => ({ show() {}, hide() {}, clear() {}, setSelected() {}, update() {}, destroy() {},setRoute(ids){sceneRoute=[...ids];},focusPoint(point){sceneFocus.push({...point});} }),
   });
 });
 afterEach(() => {
@@ -89,6 +89,21 @@ afterEach(() => {
 });
 
 describe('visible server-confirmed live exit', () => {
+  test('inspecting a published courtyard keeps departure and position; walking uses a real entrance', async () => {
+    const site = server.world.citySites![0]!, poi = server.world.pois.find(poi => poi.id === site.poiId)!;
+    mode!.show(); await settle(); await click('join'); await click('exit');
+    const position = { x: server.entities[0]!.x, y: server.entities[0]!.y }, deadline = server.self.leaveAt;
+    await click(`site-view:${site.id}`);
+    expect(sceneFocus).toEqual([{ x: site.courtyard.x + site.courtyard.width / 2, y: site.courtyard.y + site.courtyard.height / 2 }]);
+    expect(commands).toHaveLength(0); expect(joins).toBe(1); expect(leaves).toBe(1);
+    expect(server.self.leaveAt).toBe(deadline);
+    expect({ x: server.entities[0]!.x, y: server.entities[0]!.y }).toEqual(position);
+    await click('site-view:foreign-site'); expect(sceneFocus).toHaveLength(1);
+    await click(`poi:${site.poiId}`);
+    expect(commands).toHaveLength(1);
+    expect(poi.entrances.some(port => (commands[0] as { type: string; x: number; y: number }).type === 'move' && port.x === (commands[0] as LivePoint).x && port.y === (commands[0] as LivePoint).y)).toBe(true);
+    expect(server.self.leaveAt).toBe(0);
+  });
   test('boss guidance marks its authored arena and changing boss does not move or teleport the player',async()=>{
     server.self.purpose='boss';server.server.bosses=BOSSES.map(boss=>{const arena=getLiveBossArena(server.world,boss.id);return {bossId:boss.id,name:boss.name,districtId:boss.districtId,poiId:arena.poiId,area:arena.area,state:'alive',respawnAt:0};});
     mode!.show();await settle();await click('boss-route:bugor');await click('join');
