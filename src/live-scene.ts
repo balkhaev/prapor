@@ -1,19 +1,20 @@
-import { LIVE_TERRAIN_CODES, type LiveCityBuilding, type LiveCommand, type LiveDrop, type LiveEntity, type LiveEvent, type LiveLandscapePath, type LiveObstacle, type LivePoint, type LiveSnapshot, type LiveTerrain, type LiveWorld, type LiveWorldProp } from './game/live';
-import { scavDirection, type ScavDirection } from './scav-isometric';
+import { LIVE_TERRAIN_CODES, type LiveCityBuilding, type LiveCommand, type LiveDrop, type LiveEntity, type LiveLandscapePath, type LiveObstacle, type LivePoint, type LiveSnapshot, type LiveTerrain, type LiveWorld, type LiveWorldProp } from './game/live';
+import { PixelCombatAnimation, pixelFacing, samplePixelMotion, stopPixelMotion, updatePixelMotion, type PixelMotion } from './pixel-animation';
 import { liveDropLabel, liveLootTotals } from './live-loot-ui';
 import { getBoss } from './game/bosses';
 import { WEAPON_BY_ID } from './game/data';
 import { buildingNeedsCutaway, buildingPalette, sceneBuildings, SceneryIndex } from './live-map-art';
 import { PixelRaidRenderer, type PixelDetail } from './pixel-renderer';
 import { PixelContainerArt } from './pixel-containers';
-import { PixelActorArt } from './pixel-actors';
+import { PixelActorArt, type PixelActorGear } from './pixel-actors';
+import { pixelWeaponId } from './pixel-weapons';
 import { PixelBuildingArt, pixelBuildingSpriteBytes, pixelBuildingWallHeight } from './pixel-buildings';
 import { PixelPropArt } from './pixel-props';
 import { PixelObstacleArt } from './pixel-obstacles';
 import { PIXEL_TILE } from './pixel-art';
 import { buildSurfaceMasks, paintRoadSurface, paintTerrainTexture, terrainTextureResolution, type SurfaceMasks } from './live-ground-art';
 
-type Motion = { from: LivePoint; to: LivePoint; at: number; direction: ScavDirection };
+type Motion = PixelMotion;
 type LabelBox = { x: number; y: number; width: number; height: number };
 type StaticScenery = LivePoint & { width: number; height: number; depth: number } & ({ type: 'obstacle'; index: number; obstacle: LiveObstacle } | { type: 'prop'; prop: LiveWorldProp } | { type: 'architecture'; building: LiveCityBuilding });
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
@@ -52,8 +53,10 @@ export class LiveScene {
   private cityOverview = false;
   private dragging: { id: number; startX: number; startY: number; camera: LivePoint; moved: boolean } | null = null;
   private ignoreClickUntil = 0;
-  private effects: { event: LiveEvent; at: number }[] = [];
-  private seenEvents = new Set<string>();
+  private combatAnimation = new PixelCombatAnimation();
+  private snapshotAt = 0;
+  private weaponMounts = new Map<string, { point: LivePoint; muzzle: LivePoint; ejection: LivePoint; offset: LivePoint; ejectOffset: LivePoint }>();
+  private shotRigs = new Map<string, { point: LivePoint; target: LivePoint; offset: LivePoint; ejectOffset: LivePoint }>();
   private terrain: LiveTerrain[] = [];
   private overviewTerrain: HTMLCanvasElement | null = null;
   private minimapTerrain: HTMLCanvasElement | null = null;
@@ -96,7 +99,7 @@ export class LiveScene {
 
   show(): void { if (this.active) return; this.active = true; this.resize(); this.animate(); }
   hide(): void { this.active = false; cancelAnimationFrame(this.frame); this.frame = 0; }
-  clear(): void { this.snapshot = null; this.motions.clear(); this.selected = null; this.routePoiIds = []; this.waypointTargets = []; this.hitTargets = []; this.effects = []; this.seenEvents.clear(); this.paint(); }
+  clear(): void { this.snapshot = null; this.motions.clear(); this.selected = null; this.routePoiIds = []; this.waypointTargets = []; this.hitTargets = []; this.combatAnimation.clear(); this.weaponMounts.clear(); this.shotRigs.clear(); this.paint(); }
   setSelected(id: string | null): void { this.selected = id; }
   /** Inspect public architecture without issuing a movement command. */
   focusPoint(point: LivePoint): void {
@@ -113,23 +116,22 @@ export class LiveScene {
   update(snapshot: LiveSnapshot): void {
     const at = performance.now();
     this.overlayBoundsDirty = true;
-    if (this.snapshot?.worldVersion !== snapshot.worldVersion) { this.motions.clear(); this.effects = []; this.seenEvents.clear(); this.selected = null; this.routePoiIds = []; this.waypointTargets = []; this.hitTargets = []; this.following = true; this.overview = false; this.cityOverview = false; this.zoom = 1; this.dragging = null; this.canvas.classList.remove('is-dragging'); this.cacheTerrain(snapshot.world); }
+    if (this.snapshot?.worldVersion !== snapshot.worldVersion) { this.motions.clear(); this.combatAnimation.clear(); this.weaponMounts.clear(); this.shotRigs.clear(); this.selected = null; this.routePoiIds = []; this.waypointTargets = []; this.hitTargets = []; this.following = true; this.overview = false; this.cityOverview = false; this.zoom = 1; this.dragging = null; this.canvas.classList.remove('is-dragging'); this.cacheTerrain(snapshot.world); }
     const cityButton = this.controls.querySelector<HTMLButtonElement>('[data-live-zoom=city]');
     if (cityButton) cityButton.hidden = !snapshot.world.city;
     for (const entity of snapshot.entities) {
       const existing = this.motions.get(entity.id);
-      const from = existing && Math.hypot(entity.x - existing.to.x, entity.y - existing.to.y) <= 4 ? this.interpolated(existing, at) : { x: entity.x, y: entity.y };
-      const shot = entity.action === 'combat' ? [...snapshot.events].reverse().find(event => event.actorId === entity.id && event.from && event.to && snapshot.now - event.at < 1500) : null;
-      const facing = shot?.from && shot.to ? { x: shot.to.x - shot.from.x, y: shot.to.y - shot.from.y } : { x: entity.x - from.x, y: entity.y - from.y };
-      const dx = facing.x - facing.y, dy = facing.x + facing.y;
-      this.motions.set(entity.id, { from, to: { x: entity.x, y: entity.y }, at, direction: scavDirection(dx, dy, existing?.direction) });
+      const shot = [...snapshot.events].reverse().find(event => event.kind === 'combat' && event.actorId === entity.id && event.from && event.to && typeof event.damage === 'number' && snapshot.now - event.at >= 0 && snapshot.now - event.at < 200);
+      const target = entity.aimUntil && entity.aimUntil > snapshot.now ? snapshot.entities.find(target => target.id === entity.aimTargetId) : null;
+      const bearing = shot?.from && shot.to ? { x: shot.to.x - shot.from.x, y: shot.to.y - shot.from.y }
+        : target ? { x: target.x - entity.x, y: target.y - entity.y }
+          : existing ? { x: entity.x - existing.to.x, y: entity.y - existing.to.y } : { x: 0, y: 0 };
+      const facing = pixelFacing(bearing.x - bearing.y, (bearing.x + bearing.y) / 2, existing?.facing);
+      this.motions.set(entity.id, entity.health <= 0 ? stopPixelMotion(existing, entity, at) : updatePixelMotion(existing, entity, at, facing));
     }
     for (const id of this.motions.keys()) if (!snapshot.entities.some(entity => entity.id === id)) this.motions.delete(id);
-    for (const event of snapshot.events) {
-      if (!this.seenEvents.has(event.id) && event.kind === 'combat' && event.from && event.to && snapshot.now - event.at <= 1500) this.effects.push({ event, at });
-      this.seenEvents.add(event.id);
-    }
-    if (this.seenEvents.size > 512) this.seenEvents = new Set(snapshot.events.map(event => event.id));
+    this.combatAnimation.update(snapshot.events, snapshot.now, at);
+    this.snapshotAt = at;
     this.snapshot = snapshot;
     if (!this.active) this.paint();
   }
@@ -151,7 +153,7 @@ export class LiveScene {
     else {
       const scale = this.overview && this.snapshot ? this.viewTile(this.snapshot.world) / (this.width < 480 ? 48 : 64) : this.zoom;
       if (this.overview && this.snapshot) { const frame = this.viewFrame(this.snapshot.world); this.camera = { x: frame.x + frame.width / 2, y: frame.y + frame.height / 2 }; }
-      this.overview = false; this.cityOverview = false; this.zoom = clamp(scale * (action === 'in' ? 1.25 : .8), .02, 1.8);
+      this.overview = false; this.cityOverview = false; this.zoom = clamp(scale * (action === 'in' ? 1.25 : .8), .02, this.width < 480 ? 2.2 : 2.8);
     }
     this.waypointTargets = []; this.hitTargets = []; this.updateCameraControls();
     this.canvas.focus({ preventScroll: true });
@@ -187,7 +189,7 @@ export class LiveScene {
     const rect = this.canvas.getBoundingClientRect(), x = event.clientX - rect.left, y = event.clientY - rect.top;
     const before = this.unproject(x, y);
     const base = this.width < 480 ? 48 : 64;
-    this.zoom = clamp(this.viewTile(this.snapshot.world) / base * Math.exp(-clamp(event.deltaY, -120, 120) * .002), .02, 1.8);
+    this.zoom = clamp(this.viewTile(this.snapshot.world) / base * Math.exp(-clamp(event.deltaY, -120, 120) * .002), .02, this.width < 480 ? 2.2 : 2.8);
     this.overview = false; this.cityOverview = false;
     if (!this.following) {
       this.tile = base * this.zoom;
@@ -219,8 +221,13 @@ export class LiveScene {
     if (this.canvas.hasPointerCapture(event.pointerId)) this.canvas.releasePointerCapture(event.pointerId);
   };
   private pointerCancel = (): void => { this.dragging = null; this.canvas.classList.remove('is-dragging'); this.ignoreClickUntil = performance.now() + 200; };
-  private animate = (at = performance.now()): void => { if (!this.active) return; if (at - this.paintedAt >= 1000 / 30) { this.paint(); this.paintedAt = at; } this.frame = requestAnimationFrame(this.animate); };
-  private interpolated(motion: Motion, at: number): LivePoint { const amount = clamp((at - motion.at) / 350, 0, 1); return { x: motion.from.x + (motion.to.x - motion.from.x) * amount, y: motion.from.y + (motion.to.y - motion.from.y) * amount }; }
+  private animate = (at = performance.now()): void => {
+    if (!this.active) return;
+    const interval = 1000 / 60, elapsed = at - this.paintedAt;
+    if (elapsed >= interval - .5) { this.paint(); this.paintedAt += Math.max(1, Math.floor(elapsed / interval)) * interval; }
+    this.frame = requestAnimationFrame(this.animate);
+  };
+  private interpolated(motion: Motion, at: number): LivePoint { return samplePixelMotion(motion, at).point; }
   private project(point: LivePoint, elevation = 0): LivePoint { return { x: this.origin.x + ((point.x - this.camera.x) - (point.y - this.camera.y)) * this.tile / 2, y: this.origin.y + ((point.x - this.camera.x) + (point.y - this.camera.y)) * this.tile / 4 - elevation }; }
   private polygon(points: LivePoint[], color: string, stroke?: string): void { const c = this.context; c.beginPath(); points.forEach((p, i) => i ? c.lineTo(p.x, p.y) : c.moveTo(p.x, p.y)); c.closePath(); c.fillStyle = color; c.fill(); if (stroke) { c.strokeStyle = stroke; c.lineWidth = .7; c.stroke(); } }
   private quad(x: number, y: number, width = 1, height = 1, elevation = 0): LivePoint[] { return [{ x, y }, { x: x + width, y }, { x: x + width, y: y + height }, { x, y: y + height }].map(p => this.project(p, elevation)); }
@@ -534,8 +541,11 @@ export class LiveScene {
     // Overview dots are navigation markers: roofs must never cover confirmed activity.
     const activityDepth = this.overview || this.tile < 14 ? world.width + world.height + 1 : 0;
     for (const drop of snapshot.drops) objects.push({ depth: drop.x + drop.y + activityDepth, paint: () => this.paintContainer(drop) });
-    this.hitTargets = [];
-    for (const entity of snapshot.entities) objects.push({ depth: entity.x + entity.y + activityDepth + .1, paint: () => this.paintEntity(entity, now) });
+    this.hitTargets = []; this.weaponMounts.clear();
+    for (const entity of snapshot.entities) {
+      const motion = this.motions.get(entity.id), point = motion ? this.interpolated(motion, now) : entity;
+      objects.push({ depth: point.x + point.y + activityDepth + .1, paint: () => this.paintEntity(entity, now) });
+    }
     objects.sort((a, b) => a.depth - b.depth).forEach(object => object.paint());
     this.paintIntent(snapshot, now);
     this.paintLandmarks(world);
@@ -654,21 +664,60 @@ export class LiveScene {
     if (!this.overview && this.tile >= 20) this.label(auto.stage === 'extract' ? 'ЭВАКУАЦИЯ' : auto.stage === 'combat' ? 'КОНТАКТ' : 'ТЕКУЩАЯ ЦЕЛЬ', p.x, p.y - radius - 8, color, 8);
   }
   private paintCombat(now: number): void {
-    this.effects = this.effects.filter(effect => now - effect.at < 850);
-    const c = this.context;
-    for (const { event, at } of this.effects) {
+    const c = this.context, scale = this.tile / (this.width < 480 ? 48 : 64), small = this.overview || this.tile < 28;
+    const activeShots = this.combatAnimation.active(now), activeIds = new Set(activeShots.map(shot => shot.event.id));
+    for (const id of this.shotRigs.keys()) if (!activeIds.has(id)) this.shotRigs.delete(id);
+    for (const { event, at } of activeShots) {
+      const age = now - at;
       if (!event.from || !event.to) continue;
-      const age = now - at, from = this.project(event.from, this.overview ? 3 : 27 * this.zoom), to = this.project(event.to, this.overview ? 3 : 27 * this.zoom);
-      c.save(); c.globalAlpha = Math.max(0, 1 - age / 850);
-      if (age < 280) { c.strokeStyle = event.actorId === this.snapshot?.selfId ? '#ffe3a6' : '#e9b878'; c.lineWidth = this.overview ? 1 : 2; c.beginPath(); c.moveTo(from.x, from.y); c.lineTo(to.x, to.y); c.stroke(); }
-      c.fillStyle = '#f0b876'; c.beginPath(); c.arc(to.x, to.y, this.overview ? 2 : 4, 0, Math.PI * 2); c.fill();
-      if (!this.overview && event.damage) this.label(`−${Math.round(event.damage)}`, to.x, to.y - 15 - age / 55, '#f4c497', 12);
+      const mount = event.actorId ? this.weaponMounts.get(event.actorId) : undefined;
+      let rig = this.shotRigs.get(event.id);
+      if (!rig) {
+        const targetBody = event.targetId ? this.weaponMounts.get(event.targetId) : undefined;
+        rig = { point: mount?.point ?? event.from, target: targetBody?.point ?? event.to, offset: mount?.offset ?? { x: 0, y: -27 }, ejectOffset: mount?.ejectOffset ?? { x: 0, y: -27 } };
+        this.shotRigs.set(event.id, rig);
+      }
+      const ground = this.project(small ? event.from : rig.point), target = this.project(small ? event.to : rig.target, small ? 3 : 27 * scale);
+      const from = small ? this.project(event.from, 3) : { x: ground.x + rig.offset.x * scale, y: ground.y + rig.offset.y * scale };
+      const flash = mount && !small && age < 85 ? mount.muzzle : from;
+      const eject = small ? from : { x: ground.x + rig.ejectOffset.x * scale, y: ground.y + rig.ejectOffset.y * scale };
+      const seed = [...event.id].reduce((value, char) => Math.imul(value, 31) + char.charCodeAt(0), 17) >>> 0;
+      c.save();
+      if (age < 115) {
+        const head = Math.min(1, .18 + age / 75), tail = Math.max(0, head - .36), dx = target.x - from.x, dy = target.y - from.y;
+        c.globalAlpha = Math.max(.15, 1 - age / 140); c.strokeStyle = event.actorId === this.snapshot?.selfId ? '#ffe9a6' : '#e1be8b'; c.lineWidth = small ? 1 : Math.max(1, scale * .9);
+        c.beginPath(); c.moveTo(Math.round(from.x + dx * tail), Math.round(from.y + dy * tail)); c.lineTo(Math.round(from.x + dx * head), Math.round(from.y + dy * head)); c.stroke();
+      }
+      if (!small && age < 85) {
+        const dx = target.x - from.x, dy = target.y - from.y, length = Math.hypot(dx, dy) || 1, size = Math.max(2, Math.round(scale * (age < 35 ? 5 : 3)));
+        const mx = Math.round(flash.x), my = Math.round(flash.y);
+        c.globalAlpha = 1; c.fillStyle = '#ef9c50'; c.fillRect(mx - size, my - 1, size * 2 + 1, 3); c.fillRect(mx - 1, my - size, 3, size * 2 + 1);
+        c.fillStyle = '#fff0b1'; c.fillRect(mx - 1, my - 1, 3, 3);
+        c.fillStyle = '#f0c175'; c.fillRect(Math.round(mx + dx / length * size * 1.5), Math.round(my + dy / length * size * 1.5), Math.max(1, Math.round(scale)), Math.max(1, Math.round(scale)));
+      }
+      if (!small && age < 620) {
+        const t = age / 480, side = seed % 2 ? 1 : -1, ex = Math.round(eject.x + side * (9 + seed % 5) * scale * t), ey = Math.round(eject.y - 12 * scale * t + 18 * scale * t * t);
+        c.globalAlpha = Math.min(1, (620 - age) / 140); c.fillStyle = '#d5b36d'; c.fillRect(ex, ey, Math.max(1, Math.round(2 * scale)), Math.max(1, Math.round(scale))); c.fillStyle = '#806b43'; c.fillRect(ex + Math.max(1, Math.round(scale)), ey + Math.max(1, Math.round(scale)), Math.max(1, Math.round(scale)), 1);
+      }
+      if (age >= 45 && age < 330) {
+        const t = (age - 45) / 285, reach = (small ? 3 : 7 * scale) * t;
+        c.globalAlpha = 1 - t; c.fillStyle = event.damage! > 0 ? '#c8aa82' : '#a9b8ae';
+        for (let spark = 0; spark < (small ? 2 : 5); spark++) {
+          const angle = ((seed >>> (spark * 3)) % 360 + spark * 71) * Math.PI / 180;
+          c.fillRect(Math.round(target.x + Math.cos(angle) * reach), Math.round(target.y + Math.sin(angle) * reach * .6), small ? 1 : Math.max(1, Math.round(scale * 1.5)), small ? 1 : Math.max(1, Math.round(scale)));
+        }
+      }
+      if (!small && age < 440) {
+        const t = age / 440; c.globalAlpha = (1 - t) * .28; c.fillStyle = '#d6d5bb';
+        c.fillRect(Math.round(from.x + (seed % 5 - 2) * scale * t), Math.round(from.y - 11 * scale * t), Math.max(1, Math.round((2 + t * 3) * scale)), Math.max(1, Math.round((1 + t * 2) * scale)));
+      }
+      if (!small && event.damage! > 0) { c.globalAlpha = Math.max(0, 1 - age / 850); this.label(`−${Math.round(event.damage!)}`, target.x, target.y - 15 - age / 55, '#f4c497', 12); }
       c.restore();
     }
   }
   private paintEntity(entity: LiveEntity, now: number): void {
     const snapshot = this.snapshot!, motion = this.motions.get(entity.id)!, point = this.interpolated(motion, now), p = this.project(point), c = this.context;
-    if (p.x < -40 || p.x > this.width + 40 || p.y < -50 || p.y > this.height + 100) return;
+    if (p.x < -65 || p.x > this.width + 65 || p.y < -20 || p.y > this.height + 150) return;
     const boss=entity.bossId?getBoss(entity.bossId):null;
     const own = entity.id === snapshot.selfId, selected = entity.id === this.selected, color = own ? '#f2d49a' : boss ? '#f0b267' : entity.kind === 'player' ? '#8dd5e4' : entity.faction === 'raiders' ? '#e48971' : '#d2a082';
     if (this.overview || this.tile < 28) {
@@ -680,11 +729,16 @@ export class LiveScene {
     const zoom = this.tile / (this.width < 480 ? 48 : 64);
     c.beginPath(); c.ellipse(p.x, p.y, 13 * zoom, 6 * zoom, 0, 0, Math.PI * 2); c.fillStyle = '#0005'; c.fill();
     if (own || selected) { c.strokeStyle = color; c.lineWidth = 2; c.stroke(); }
-    const walking = entity.action === 'moving' && now - motion.at < 650;
-    const pose = entity.health <= 0 ? 'downed' : walking ? Math.floor(now / 190) % 2 ? 'walk-a' : 'walk-b' : entity.action === 'combat' ? 'work' : 'idle';
-    const rifle = !own || snapshot.self.loadout?.weaponId !== 'pm';
-    this.renderer.sprite(this.actorArt.get(entity, motion.direction, pose, rifle), p, .46 * zoom, this.width, this.height);
-    const top = p.y - 70 * zoom;
+    const animation = this.combatAnimation.frame(entity, motion, now, snapshot.now + now - this.snapshotAt);
+    const weapon = pixelWeaponId(own ? snapshot.self.loadout?.weaponId : boss?.weaponId);
+    const gear: PixelActorGear | undefined = own && snapshot.self.loadout ? { profile: snapshot.self.loadout.kitId === 'assault' ? 'assault' : snapshot.self.loadout.kitId === 'scout' ? 'scout' : 'light', helmet: snapshot.self.loadout.helmetProtection > .1, armor: snapshot.self.loadout.armorProtection > .2, backpack: true } : undefined;
+    const sprite = this.actorArt.get(entity, animation, weapon, gear), actorScale = .32 * zoom;
+    this.renderer.sprite(sprite, p, actorScale, this.width, this.height);
+    if (sprite.muzzle && sprite.ejection) {
+      const muzzle = this.renderer.spritePoint(sprite, p, actorScale, sprite.muzzle), ejection = this.renderer.spritePoint(sprite, p, actorScale, sprite.ejection);
+      this.weaponMounts.set(entity.id, { point, muzzle, ejection, offset: { x: (muzzle.x - p.x) / zoom, y: (muzzle.y - p.y) / zoom }, ejectOffset: { x: (ejection.x - p.x) / zoom, y: (ejection.y - p.y) / zoom } });
+    }
+    const top = p.y - 50 * zoom - 24;
     this.label(own ? `ТЫ · ${entity.name}` : entity.name, p.x, top, color, own ? 11 : 10);
     this.label(boss?`БОСС · ${WEAPON_BY_ID[boss.weaponId]!.name}`:entity.kind === 'player' ? own ? 'ТВОЙ БОЕЦ' : 'ИГРОК' : entity.faction === 'raiders' ? 'РЕЙДЕР · NPC' : 'ДИКИЙ · NPC', p.x, top + 13, boss?'#e7bc86':own ? '#e8d8b6' : entity.kind === 'player' ? '#90c4ce' : '#ad9b88', 7);
     c.fillStyle = '#14271a'; c.fillRect(p.x - 17, top + 18, 34, 3); c.fillStyle = entity.health > 35 ? '#b6cc85' : '#e09d82'; c.fillRect(p.x - 17, top + 18, 34 * entity.health / 100, 3);
@@ -693,11 +747,6 @@ export class LiveScene {
       c.strokeStyle = '#f2a07f'; c.lineWidth = 2; c.beginPath(); c.ellipse(p.x, p.y, 18 * zoom, 9 * zoom, 0, 0, Math.PI * 2); c.stroke();
       this.label(entity.aimTargetId === snapshot.selfId ? 'ЦЕЛИТСЯ В ТЕБЯ' : 'ПРИЦЕЛИВАЕТСЯ', p.x, p.y + 22, '#fac09b', 8);
     } else if (entity.bleeding || entity.limping) this.label(entity.bleeding ? 'КРОВОТЕЧЕНИЕ' : 'ХРОМАЕТ', p.x, p.y + 22, '#e4b19a', 7);
-    // A firing cue is brief and tied to a confirmed combat update.
-    if (entity.action === 'combat' && now - motion.at < 300) {
-      const muzzleX = Math.round(p.x + (motion.direction[1] === 'e' ? 1 : -1) * 42 * .46 * zoom), muzzleY = Math.round(p.y - (motion.direction[0] === 'n' ? 66 : 53) * .46 * zoom);
-      c.fillStyle = '#f2bc72'; c.fillRect(muzzleX - 2, muzzleY - 1, 5, 3); c.fillStyle = '#f6dca0'; c.fillRect(muzzleX, muzzleY - 2, 2, 5);
-    }
     this.hitTargets.push({ entity, x: p.x, y: p.y });
   }
   private minimapBounds(snapshot: LiveSnapshot): { x: number; y: number; width: number; height: number; scale: number } {
