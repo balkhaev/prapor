@@ -142,6 +142,23 @@ function compactBarrel(id: string, appearance: string, gun: ReferenceProfile, pa
 	return { material: "steel", bounds: [start - 3, y - 4, end - start + 7, thick + 8], muzzle: { x: end, y: 139 }, outline: `M${start} ${y}h${end - start - collar}v-2h${collar}v${thick + 4}h-${collar}v-2H${start}z`, detail: `${t.seam(`M${start + 4} ${y + 2}h${end - start - 10}`, true)}${path(`M${start + 4} ${y - 2}h20v${thick + 4}h-20z`, paint.dark, pistol ? "pistol-barrel-chamber" : `${id}-barrel-shoulder`)}${t.seam(`M${end - collar} ${y - 2}v${thick + 4}M${end - 5} ${y}v${thick}`)}${appearance === "fluted" ? `${t.seam(`M${start + 28} ${y + 4}h${end - start - 39}`)}${t.seam(`M${start + 28} ${y + thick - 4}h${end - start - 39}`, true)}` : appearance === "heavy" ? t.ribs(end - 25, y + 2, 4, thick - 4, 5) : ""}` };
 }
 
+/** The Vector's tall bolt housing and UMP's raked magazine leave a short,
+ * forward gripping surface. A full-length rifle handstop would cut into them. */
+function compactForegrip(id: string, appearance: string, paint: ReferencePaint, t: ReferenceTools): ReferenceGeometry {
+	// Keep the family placement datum: installedGeometry applies the same
+	// foregrip offset to this shoe and to any bottom-rail adapters.
+	const x = id === "vector" ? 551 : 530, y = 176;
+	const shoe = `M${x} ${y}h52v8h-52z`;
+	const screws = `${t.fastener(x + 5, y + 4, 2)}${t.fastener(x + 47, y + 4, 2)}`;
+	const marker = path(shoe, paint.steel, `${id}-compact-foregrip-shoe`);
+	if (appearance === "angled") return { material: "polymer", bounds: [x - 4, y - 4, 60, 50], outline: `${shoe}M${x} ${y + 8}h44l-24 34h-13l-5-9 18-25zM${x + 11} ${y + 29}l15-21h11l-21 29h-5z`, detail: `${marker}${screws}${t.seam(`M${x + 7} ${y + 36}l4 4h8l24-32`, true)}${path(`M${x + 22} ${y + 33}l12-11 3 3-12 11z`, paint.rubber, "compact-angled-finger-stop")}` };
+	if (appearance === "light") return { material: "polymer", bounds: [x - 4, y - 4, 60, 44], outline: `${shoe}M${x + 2} ${y + 8}h39l-16 27h-16l-5-7 12-20z`, detail: `${marker}${screws}${path(`M${x + 17} ${y + 11}h15l-13 21h-9l-3-4z`, paint.dark, "compact-light-grip-recess")}${t.seam(`M${x + 11} ${y + 30}l12-19`, true)}` };
+	if (appearance === "stubby") return { material: "rubber", bounds: [x - 4, y - 4, 60, 45], outline: `${shoe}M${x + 13} ${y + 8}h31v28h-31z`, detail: `${marker}${screws}${path(`M${x + 17} ${y + 12}h23v19h-23z`, paint.polymer, "compact-stubby-grip")}${t.ribs(x + 20, y + 15, 3, 14, 6)}${path(`M${x + 10} ${y + 33}h37v5h-37z`, paint.rubber)}` };
+	if (appearance === "folding") return { material: "polymer", bounds: [x - 4, y - 4, 75, 64], outline: `${shoe}M${x + 19} ${y + 8}h14v10l29 36-12 9-31-38z`, detail: `${marker}${screws}${t.fastener(x + 26, y + 16, 6)}${t.seam(`M${x + 32} ${y + 29}l25 29`, true)}${path(`M${x + 49} ${y + 55}l12-9 4 5-12 9z`, paint.rubber, "compact-folding-grip-foot")}` };
+	if (appearance === "bipod") return { material: "steel", bounds: [x - 4, y - 4, 75, 114], outline: `${shoe}M${x + 25} ${y + 8}h13v17l23 67h-12l-24-67z`, detail: `${marker}${screws}${t.fastener(x + 31, y + 23, 5)}${t.seam(`M${x + 37} ${y + 35}l20 54`, true)}${path(`M${x + 46} ${y + 91}h21v7h-21z`, paint.rubber, "compact-bipod-foot")}${path(`M${x + 43} ${y + 57}h12v5h-12z`, paint.dark)}` };
+	return { material: "rubber", bounds: [x - 4, y - 4, 60, 75], outline: `${shoe}M${x + 12} ${y + 8}h30l-2 50h-25z`, detail: `${marker}${screws}${path(`M${x + 17} ${y + 13}h21l-2 40h-18z`, paint.polymer, "compact-vertical-grip")}${t.ribs(x + 20, y + 21, 3, 29, 6)}${path(`M${x + 13} ${y + 54}h29v6h-29z`, paint.rubber)}` };
+}
+
 type Feed = { topX: number; topY: number; width: number; depth: number; rake: number };
 const feeds: Record<string, Feed> = {
 	pm: { topX: 338, topY: 186, width: 39, depth: 129, rake: -17 },
@@ -199,6 +216,7 @@ export const compactReferenceGeometry: ReferenceRenderer = (slot, appearance, gu
 		case "magazine": return compactMagazine(gun.id, appearance, paint, tools);
 		case "stock": return pistols.has(gun.id) ? undefined : compactStock(gun.id, appearance, paint, tools);
 		case "handguard": return pistols.has(gun.id) ? undefined : compactHandguard(gun.id, appearance, paint, tools);
+		case "foregrip": return gun.id === "vector" || gun.id === "ump45" ? compactForegrip(gun.id, appearance, paint, tools) : undefined;
 		default: return undefined;
 	}
 };

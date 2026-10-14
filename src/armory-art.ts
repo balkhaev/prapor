@@ -114,7 +114,8 @@ function valBarrelGeometry(gun: Profile, appearance: string, paint: Paint): Geom
 function valHandguardGeometry(appearance: string, paint: Paint): Geometry {
 	const railed = appearance === "rail" || appearance === "carbon", bottom = railed || appearance === "vented";
 	const outline = appearance === "light" ? "M448 127h62v30l-62 13z" : appearance === "wood" ? "M446 123h65q5 0 5 5v28l-70 17z" : appearance === "vented" ? "M444 120h72v37l-72 18zM455 136h13v20h-13zM479 133h14v18h-14z" : appearance === "carbon" ? "M445 123q0-5 7-5h56q9 0 9 10v28l-72 18z" : appearance === "rail" ? "M444 119h72v41l-72 17zM453 135h14v18h-14zM478 132h15v17h-15z" : "M444 119h71l3 7v32l-74 18z";
-	return { material: appearance === "wood" ? "wood" : appearance === "carbon" ? "carbon" : appearance === "vented" ? "steel" : "polymer", fillRule: "evenodd", bounds: [railed ? 331 : bottom ? 432 : 440, railed ? 105 : 115, railed ? 213 : bottom ? 112 : 82, bottom ? 82 : 67], outline, detail: `<path data-mechanism="val-short-fore-end" d="M450 124h59v30l-59 15" fill="none" stroke="#919ea3" stroke-width=".8" opacity=".52"/>${appearance === "wood" ? grain(450, 139, 55, 17) : appearance === "factory" || appearance === "light" ? checkering(455, 133, 48, 20) : ""}${railed ? `${rail(335, 108, 182)}<path data-hardware="val-receiver-bridge-support" d="M432 114h13v15h-13zM506 114h10v12h-10z" fill="${paint.steel}"/>${rail(449, 145, 60)}` : ""}${bottom ? `<path data-hardware="val-bottom-bridge-support" d="M436 165h9v10h-9zM503 156h12v19h-12z" fill="${paint.steel}"/>${rail(436, 174, 104)}` : ""}${fastener(451, 153, 2.1)}${fastener(510, 136, 2.1)}${seam("M513 125v30", true)}` };
+	const rearFerrule = appearance === "light" ? `<path data-hardware="fore-end-rear-ferrule" d="M441 124h11v47h-11z" fill="${paint.dark}"/>${seam("M446 128v40", true)}` : "";
+	return { material: appearance === "wood" ? "wood" : appearance === "carbon" ? "carbon" : appearance === "vented" ? "steel" : "polymer", fillRule: "evenodd", bounds: [railed ? 331 : bottom ? 432 : 440, railed ? 105 : 115, railed ? 213 : bottom ? 112 : 82, bottom ? 82 : 67], outline, detail: `${rearFerrule}<path data-mechanism="val-short-fore-end" d="M450 124h59v30l-59 15" fill="none" stroke="#919ea3" stroke-width=".8" opacity=".52"/>${appearance === "wood" ? grain(450, 139, 55, 17) : appearance === "factory" || appearance === "light" ? checkering(455, 133, 48, 20) : ""}${railed ? `${rail(335, 108, 182)}<path data-hardware="val-receiver-bridge-support" d="M432 114h13v15h-13zM506 114h10v12h-10z" fill="${paint.steel}"/>${rail(449, 145, 60)}` : ""}${bottom ? `<path data-hardware="val-bottom-bridge-support" d="M436 165h9v10h-9zM503 156h12v19h-12z" fill="${paint.steel}"/>${rail(436, 174, 104)}` : ""}${fastener(451, 153, 2.1)}${fastener(510, 136, 2.1)}${seam("M513 125v30", true)}` };
 }
 
 /** Additional silhouettes remain code-native; generated assets only supply paint. */
@@ -737,7 +738,9 @@ function installedGeometry(slot: ModuleSlot, model: ModuleModel | undefined, gun
 	// Factory parts remain the physical part that was installed. VSS and VAL
 	// share a family, but swapping their stocks must swap wood and folding steel.
 	const physical = model ? { ...moduleProfile(model), barrelEnd: gun.barrelEnd } : gun;
-	const shape = model?.id === "mount-fal-bridge" ? falCoverGeometry(paint) : geometry(slot, model?.appearance ?? "factory", physical, paint);
+	// Short bullpup/SMG fore-ends need a fitted mounting shoe and forward grip.
+	// Furniture retains its donor identity; universal grips fit the host's space.
+	const shape = model?.id === "mount-fal-bridge" ? falCoverGeometry(paint) : geometry(slot, model?.appearance ?? "factory", slot === "foregrip" ? gun : physical, paint);
 	const mount = installed.mount ? MODULE_BY_ID[installed.mount.modelId] : undefined;
 	const handguard = installed.handguard ? MODULE_BY_ID[installed.handguard.modelId] : undefined;
 	const layout = referenceLayout(gun);

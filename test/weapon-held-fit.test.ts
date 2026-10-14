@@ -1,16 +1,42 @@
 import { describe, expect, test } from "bun:test";
-import { weaponActorArt } from "../src/armory-art";
+import { weaponActorArt, weaponBuildArt } from "../src/armory-art";
 import { WEAPONS } from "../src/game/data";
 import { getWeaponBuildIssues, type WeaponInstance } from "../src/game/engine";
-import { FACTORY_KITS, MODULE_BY_ID, MODULE_MODELS, RECEIVER_INFO, type ModuleSlot } from "../src/game/modules";
+import { FACTORY_KITS, MODULE_BY_ID, MODULE_MODELS, RECEIVER_INFO, getResolvedModuleMounts, type ModuleModel, type ModuleSlot } from "../src/game/modules";
+import { moduleFitsWeaponFamily } from "../src/module-catalog";
 import { SCAV_DIRECTIONS, scavAttachment } from "../src/scav-isometric";
 import { weaponCarryTransform, weaponGripAnchor, type WeaponAttachmentPoint } from "../src/weapon-attachment";
+import { createWeaponShowcaseBuild } from "../src/weapon-showcase";
 import type Phaser from "phaser";
 
 const TransformMatrix = require("phaser/src/gameobjects/components/TransformMatrix.js") as new () => Phaser.GameObjects.Components.TransformMatrix;
 
 const factory = (weaponId: string): WeaponInstance => ({ id: "held-fit", weaponId, durability: 100, foundAt: 0, attachments: { optic: 0, magazine: 0, stock: 0 }, modules: Object.fromEntries(Object.entries(FACTORY_KITS[weaponId]!).map(([slot, modelId]) => [slot, { id: slot, modelId, durability: 100, foundAt: 0 }])) });
 const install = (gun: WeaponInstance, modelId: string) => { const model = MODULE_BY_ID[modelId]!; gun.modules[model.slot] = { id: modelId, modelId, durability: 100, foundAt: 0 }; };
+
+function compatibleBuild(weaponId: string, model: ModuleModel): { gun?: WeaponInstance; supported: boolean } {
+	const info = RECEIVER_INFO[weaponId]!;
+	let supported = false;
+	for (const source of [factory(weaponId), createWeaponShowcaseBuild(weaponId, "field")]) {
+		for (const prepared of [false, true]) {
+			const gun = structuredClone(source);
+			// A new bracket can replace the former attachment provider. Inspect it
+			// without orphaning the old provider's light, sight or foregrip.
+			for (const slot of ["optic", "foregrip", "flashlight", "laser", "mount"] as const) delete gun.modules[slot];
+			if (prepared) {
+				const handguard = MODULE_BY_ID[`handguard-${info.platform}-carbon`];
+				const barrel = MODULE_BY_ID[`barrel-${info.platform}-${info.caliber}-long`];
+				if (handguard) install(gun, handguard.id);
+				if (barrel) install(gun, barrel.id);
+			}
+			if (model.requiresMount && !getResolvedModuleMounts(gun.modules, model.slot).includes(model.requiresMount)) continue;
+			supported = true;
+			install(gun, model.id);
+			if (!getWeaponBuildIssues(gun).length) return { gun, supported };
+		}
+	}
+	return { supported };
+}
 
 function part(svg: string, slot: ModuleSlot) {
 	const start = svg.indexOf(`<g data-module-slot="${slot}"`), tags = /<g\b[^>]*>|<\/g>/g;
@@ -69,6 +95,42 @@ function projectedMuzzle(placement: ReturnType<typeof weaponCarryTransform>, bod
 }
 
 describe("weapon grip calibration and carried assembly", () => {
+	test("every gun and compatible contact part retains the complete bench geometry when carried", () => {
+		const uncovered: string[] = [];
+		for (const definition of WEAPONS) {
+			const builds = [factory(definition.id), createWeaponShowcaseBuild(definition.id, "field")];
+			for (const model of MODULE_MODELS.filter(model => ["stock", "magazine", "handguard", "mount"].includes(model.slot) && moduleFitsWeaponFamily(model, definition.id))) {
+				const { gun, supported } = compatibleBuild(definition.id, model);
+				if (supported && !gun) uncovered.push(`${definition.id}/${model.id}`);
+				if (gun) builds.push(gun);
+			}
+			const reference = weaponActorArt(factory(definition.id));
+			for (const gun of builds) {
+				const actor = weaponActorArt(gun), bench = weaponBuildArt(gun);
+				const [left, top] = actor.svg.match(/viewBox="([^"]+)"/)![1]!.split(" ").map(Number);
+				// Compare complete nested groups, including offsets, fasteners and
+				// rail beds; a first-path comparison misses the actual contact detail.
+				for (const slot of Object.keys(gun.modules) as ModuleSlot[]) {
+					const group = part(actor.svg, slot);
+					expect(group, `${definition.id}/${gun.modules[slot]!.modelId}`).not.toBe("");
+					expect(group, `${definition.id}/${gun.modules[slot]!.modelId}`).toBe(part(bench, slot));
+				}
+				expect(actor.referenceWidth, definition.id).toBe(reference.referenceWidth);
+				const stock = gun.modules.stock ? MODULE_BY_ID[gun.modules.stock.modelId] : undefined;
+				const grip = weaponGripAnchor(definition.id, stock?.appearance, stock?.weaponId);
+				expect({ x: actor.grip.x + left!, y: actor.grip.y + top! }, definition.id).toEqual(grip);
+				for (const direction of SCAV_DIRECTIONS) {
+					const hand = scavAttachment(direction, true), placement = weaponCarryTransform(actor, definition.category, direction, { working: true });
+					const transform = new TransformMatrix().applyITRS(placement.position.x, placement.position.y, placement.angle * Math.PI / 180, placement.scale.x, placement.scale.y);
+					const placedHand = transform.transformPoint(0, 0);
+					expect(placedHand.x, definition.id).toBeCloseTo(hand.x, 8);
+					expect(placedHand.y, definition.id).toBeCloseTo(hand.y, 8);
+				}
+			}
+		}
+		expect(uncovered).toEqual([]);
+	});
+
 	test("all factory hand anchors contact actual filled receiver or stock geometry", () => {
 		const outside: string[] = [];
 		for (const definition of WEAPONS) {

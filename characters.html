@@ -105,6 +105,7 @@
       .gallery-heading strong { color: #d6cfaf; font-weight: 500; }
       #gallery { width: 100%; min-height: 300px; }
       #gallery canvas { display: block; width: 100%; }
+      .scav-inspection-control { max-width: 330px; margin: 0 0 14px; }
       .note { margin: 17px 3px 0; color: #8b9780; font-size: 11px; line-height: 1.6; }
       .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
       @media (max-width: 850px) { main { padding: 22px 22px 20px; } .controls { grid-template-columns: repeat(3, minmax(100px, 1fr)); } .build-controls { grid-template-columns: repeat(2, minmax(100px, 1fr)); } .weapon-field { grid-column: auto; } .back { margin-top: 0; } .heading { gap: 14px; } }
@@ -166,6 +167,7 @@
         <div class="showcase-grid" id="showcase-cards"></div>
       </details>
       <div class="gallery-heading"><p><strong>Состав · 32 бойца</strong></p><p id="load-status" role="status" aria-live="polite">Загружаем модели…</p></div>
+      <label class="scav-inspection-control">Осмотр бойца<select id="scav-inspection"><option value="all">Все бойцы</option></select></label>
       <section id="gallery" role="img" aria-label="Все 32 диких в выбранной экипировке и ракурсе"></section>
       <ol id="accessible-roster" class="sr-only" aria-label="Список бойцов"></ol>
       <p class="note">Броня, шлем, рюкзак и детали оружия меняются независимо. Прицел, фонарь, лазер и рукоять занимают отдельные места; для них нужны подходящие планки и кронштейны. Примерка не изменяет бойцов или снаряжение в убежище.</p>

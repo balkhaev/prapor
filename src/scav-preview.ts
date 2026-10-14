@@ -22,6 +22,8 @@ const gallery = document.querySelector<HTMLElement>("#gallery")!;
 const status = document.querySelector<HTMLElement>("#load-status")!;
 const select = (id: string) => document.querySelector<HTMLSelectElement>(`#${id}`)!;
 const controls = { direction: select("direction"), pose: select("pose"), armor: select("armor"), helmet: select("helmet"), pack: select("pack"), carry: select("carry"), weapon: select("weapon") };
+const scavInspection = select("scav-inspection");
+for (const look of SCAV_APPEARANCES) scavInspection.add(new Option(`${look.name} · крупно`, String(look.id)));
 const buildControls = document.querySelector<HTMLFormElement>("#build-controls")!;
 for (const slot of MODULE_DISPLAY_SLOTS) {
 	const label = document.createElement("label"), input = document.createElement("select");
@@ -283,7 +285,8 @@ function updateSelections(rebuildOptions = false): void {
 	const count = weapon ? Object.keys(weapon.modules).length : 0;
 	weaponSummary.textContent = !weapon ? "Без оружия" : missing.length ? `Неполная сборка · установлено ${count} / ${MODULE_SLOTS.length} деталей` : `Текущая сборка · установлено ${count} / ${MODULE_SLOTS.length} деталей`;
 	const labels = [controls.direction, controls.pose, controls.armor, controls.helmet, controls.pack, controls.weapon].map((input) => input.selectedOptions[0]!.textContent);
-	gallery.setAttribute("aria-label", `32 диких. ${labels.join(". ")}. ${weaponSummary.textContent}.`);
+	const inspectedLook = SCAV_APPEARANCES.find(look => String(look.id) === scavInspection.value);
+	gallery.setAttribute("aria-label", `${inspectedLook ? `${inspectedLook.name}. Крупный вид бойца` : "32 диких"}. ${labels.join(". ")}. ${weaponSummary.textContent}.`);
 	renderInspection(weapon);
 	renderLibrary(weapon);
 	renderShowcase(false);
@@ -348,14 +351,31 @@ class ScavPreview extends Phaser.Scene {
 		const loaded = this.models.filter((model) => model.poses.length > 0).length;
 		status.textContent = loaded === SCAV_APPEARANCES.length ? "Все модели готовы" : `Готово ${loaded} из ${SCAV_APPEARANCES.length}`;
 		this.layout();
+		scavInspection.addEventListener("change", this.inspectScav);
 		this.observer = new ResizeObserver(() => this.layout()); this.observer.observe(gallery);
-		this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.observer?.disconnect());
+		this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => { this.observer?.disconnect(); scavInspection.removeEventListener("change", this.inspectScav); });
 	}
 	private label(value: string, size: number, color: string): Phaser.GameObjects.Text {
 		return this.add.text(0, 0, value, { fontFamily: "Manrope, sans-serif", fontSize: `${size}px`, color, resolution: Math.min(window.devicePixelRatio || 1, 2) }).setOrigin(.5).setFontStyle("bold");
 	}
+	private inspectScav = (): void => { this.layout(); updateSelections(false); };
 	private layout(): void {
 		const width = Math.max(280, Math.floor(gallery.clientWidth));
+		const inspected = scavInspection.value !== "all";
+		if (inspected) {
+			const height = 570, scale = Math.min(9, (width - 34) / 115);
+			if (this.scale.width !== width || this.scale.height !== height) this.scale.resize(width, height);
+			gallery.style.height = `${height}px`;
+			this.panels.clear().fillStyle(0x202c20, .8).fillRoundedRect(3, 3, width - 6, height - 8, 8).lineStyle(1, 0x536045, .38).strokeRoundedRect(3, 3, width - 6, height - 8, 8);
+			for (const model of this.models) {
+				const visible = String(model.id) === scavInspection.value;
+				for (const item of [model.root, model.name, model.personality, model.badge]) item.setVisible(visible);
+				if (!visible) continue;
+				model.root.setPosition(width / 2 - 7, 505).setScale(scale);
+				model.name.setPosition(width / 2, 535); model.personality.setPosition(width / 2, 554); model.badge.setPosition(16, 15);
+			}
+			return;
+		}
 		this.columns = width >= 1080 ? 8 : width >= 570 ? 4 : 2;
 		this.cellWidth = width / this.columns;
 		const rows = Math.ceil(this.models.length / this.columns), height = rows * this.cellHeight;
@@ -363,6 +383,7 @@ class ScavPreview extends Phaser.Scene {
 		gallery.style.height = `${height}px`;
 		this.panels.clear();
 		this.models.forEach((model, index) => {
+			for (const item of [model.root, model.name, model.personality, model.badge]) item.setVisible(true);
 			const x = index % this.columns * this.cellWidth, y = Math.floor(index / this.columns) * this.cellHeight;
 			this.panels.fillStyle(0x202c20, .8).fillRoundedRect(x + 3, y + 3, this.cellWidth - 6, this.cellHeight - 8, 8).lineStyle(1, 0x536045, .38).strokeRoundedRect(x + 3, y + 3, this.cellWidth - 6, this.cellHeight - 8, 8);
 			const scale = Math.min(2.1, (this.cellWidth - 8) / 80);
