@@ -1,4 +1,4 @@
-import { LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT, LIVE_TERRAIN_CODES, type EconomyLoot, type LiveCitySite, type LiveCommand, type LiveDrop, type LiveEntity, type LiveEvent, type LiveContainerKind, type LiveDistrict, type LiveDistrictId, type LiveMapSummary, type LivePlayer, type LivePurpose, type LiveSnapshot, type LiveStatus, type LiveWorld } from './game/live';
+import { LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT, LIVE_TERRAIN_CODES, LIVE_PROP_KINDS, type EconomyLoot, type LiveCitySite, type LiveCommand, type LiveDrop, type LiveEntity, type LiveEvent, type LiveContainerKind, type LiveDistrict, type LiveDistrictId, type LiveMapSummary, type LivePlayer, type LivePurpose, type LiveSnapshot, type LiveStatus, type LiveWorld } from './game/live';
 import { readEconomyLootItems } from './game/live-loot';
 import { BODY_PARTS, parseHealth, parseMedicalInventory, type BodyPart, type TreatmentType } from './game/health';
 import { getBoss, type BossId } from './game/bosses';
@@ -120,16 +120,17 @@ function readCitySites(value: unknown, city: LiveWorld['city'], pois: LiveWorld[
     if (!rectangle(site, bounds) || !keys(site, ['id', 'poiId', 'quarterId', 'name', 'kind', 'x', 'y', 'width', 'height', 'courtyard', 'buildings', 'passages'])
       || !text(site.id, 64) || !text(site.poiId, 100) || !text(site.quarterId, 64) || !text(site.name, 80) || !['courtyard', 'arcade', 'workyard', 'service-yard'].includes(site.kind as string)
       || !rectangle(site.courtyard, bounds) || !keys(site.courtyard, ['x', 'y', 'width', 'height']) || !within(site.courtyard, site)
-      || !Array.isArray(site.buildings) || site.buildings.length < 1 || site.buildings.length > 6 || !Array.isArray(site.passages) || site.passages.length < 2 || site.passages.length > 4) return invalid();
+      || !Array.isArray(site.buildings) || site.buildings.length < 1 || site.buildings.length > 12 || !Array.isArray(site.passages) || site.passages.length < 2 || site.passages.length > 4) return invalid();
     const quarter = city.quarters.find(quarter => quarter.id === site.quarterId), poi = pois.find(poi => poi.id === site.poiId);
     if (!quarter || !within(site, quarter) || !poi || !poi.tags.includes('city') || poi.x !== site.x || poi.y !== site.y || poi.width !== site.width || poi.height !== site.height) return invalid();
     const buildings = site.buildings.map(building => {
-      if (!rectangle(building, bounds) || !keys(building, ['id', 'name', 'kind', 'x', 'y', 'width', 'height', 'entrances']) || !within(building, site)
+      if (!rectangle(building, bounds) || !keys(building, ['id', 'name', 'kind', 'x', 'y', 'width', 'height', 'entrances', 'floors', 'roof', 'facade']) || !within(building, site)
         || !text(building.id, 100) || !text(building.name, 80) || !['apartment', 'shop', 'workshop', 'garage', 'service'].includes(building.kind as string)
+        || !(building.floors === undefined || integer(building.floors, 1, 4)) || !(building.roof === undefined || ['gable', 'flat', 'sawtooth'].includes(building.roof as string)) || !(building.facade === undefined || ['brick', 'plaster', 'panel', 'metal'].includes(building.facade as string))
         || !Array.isArray(building.entrances) || building.entrances.length < 2 || building.entrances.length > 8) return invalid();
       const entrances = locations(building.entrances, building);
       if (new Set(entrances.map(port => `${port.x}:${port.y}`)).size !== entrances.length) return invalid();
-      return { ...rect(building), id: building.id, name: building.name, kind: building.kind as LiveCitySite['buildings'][number]['kind'], entrances };
+      return { ...rect(building), id: building.id, name: building.name, kind: building.kind as LiveCitySite['buildings'][number]['kind'], entrances, ...(building.floors === undefined ? {} : { floors: building.floors as 1 | 2 | 3 | 4 }), ...(building.roof === undefined ? {} : { roof: building.roof as 'gable' | 'flat' | 'sawtooth' }), ...(building.facade === undefined ? {} : { facade: building.facade as 'brick' | 'plaster' | 'panel' | 'metal' }) };
     });
     const passages = site.passages.map(passage => {
       if (!Array.isArray(passage) || passage.length < 2 || passage.length > 64) return invalid();
@@ -238,6 +239,22 @@ export function readLiveEntry(value: unknown): LiveEntry {
 }
 
 /** Only immutable, versioned geometry may be reused between server responses. */
+function readWorldProps(source: unknown, bounds: Pick<LiveWorld, 'width' | 'height'>): LiveWorld['props'] {
+  if (source === undefined) return undefined;
+  if (!Array.isArray(source) || source.length > 6000) return invalid();
+  const props = source.map(prop => {
+    if (!record(prop) || !keys(prop, ['id', 'kind', 'x', 'y', 'width', 'height', 'orientation', 'variant', 'blocking'])
+      || !text(prop.id, 100) || !LIVE_PROP_KINDS.includes(prop.kind as typeof LIVE_PROP_KINDS[number]) || !point(prop, bounds)
+      || !number(prop.width, .15, 10) || !number(prop.height, .15, 10) || prop.x + prop.width > bounds.width || prop.y + prop.height > bounds.height
+      || !['x', 'y'].includes(prop.orientation as string) || !integer(prop.variant, 0, 3) || typeof prop.blocking !== 'boolean'
+      || prop.blocking && ![prop.x, prop.y, prop.width, prop.height].every(Number.isInteger)) return invalid();
+    return { id: prop.id, kind: prop.kind as typeof LIVE_PROP_KINDS[number], x: prop.x, y: prop.y, width: prop.width, height: prop.height,
+      orientation: prop.orientation as 'x' | 'y', variant: prop.variant, blocking: prop.blocking };
+  });
+  if (new Set(props.map(prop => prop.id)).size !== props.length) return invalid();
+  return props;
+}
+
 export function readLiveWorld(source: unknown): LiveWorld {
   if (!record(source) || source.id !== 'perimeter' || !text(source.name, 80) || !text(source.description, 500) || !['industrial', 'forest', 'urban', 'mixed'].includes(source.theme as string) || !integer(source.width, 2, 256) || !integer(source.height, 2, 256) || !text(source.version, 128) || !text(source.seed, 128) || !integer(source.generatorVersion, 1, 1_000_000) || !integer(source.chunkSize, 1, 128) || !Array.isArray(source.obstacles) || source.obstacles.length > 4096 || !Array.isArray(source.extracts) || !source.extracts.length || source.extracts.length > 64 || !Array.isArray(source.zones) || source.zones.length > 1000 || !Array.isArray(source.districts) || source.districts.length !== 4 || !Array.isArray(source.pois) || source.pois.length > 256 || !Array.isArray(source.containers) || source.containers.length > 512) return invalid();
   const bounds = { width: source.width, height: source.height };
@@ -278,13 +295,17 @@ export function readLiveWorld(source: unknown): LiveWorld {
     return { x: container.x, y: container.y, id: container.id, poiId: container.poiId, kind: container.kind, lootTable: container.lootTable as LiveWorld['containers'][number]['lootTable'], searchMs: container.searchMs };
   });
   if (new Set(containers.map(container => container.id)).size !== containers.length) return invalid();
-  return { ...bounds, id: source.id, name: source.name, description: source.description, theme: source.theme as LiveWorld['theme'], version: source.version, seed: source.seed, generatorVersion: source.generatorVersion, chunkSize: source.chunkSize, districts, pois, containers, ...(city ? { city } : {}), ...(citySites ? { citySites } : {}), ...(terrainRows ? { terrainRows } : {}), ...(paths ? { paths } : {}), ...(routes ? { routes } : {}), obstacles: source.obstacles.map(obstacle => {
-    if (!rectangle(obstacle, bounds) || !(obstacle.kind === undefined || ['building', 'wall', 'container', 'barricade', 'tree', 'water'].includes(obstacle.kind as string)) || !(obstacle.label === undefined || text(obstacle.label, 80))) return invalid();
-    return { x: obstacle.x, y: obstacle.y, width: obstacle.width, height: obstacle.height, ...(obstacle.kind ? { kind: obstacle.kind as LiveWorld['obstacles'][number]['kind'] } : {}), ...(obstacle.label ? { label: obstacle.label as string } : {}) };
+  const props = readWorldProps(source.props, bounds);
+  const decoded: LiveWorld = { ...bounds, id: source.id, name: source.name, description: source.description, theme: source.theme as LiveWorld['theme'], version: source.version, seed: source.seed, generatorVersion: source.generatorVersion, chunkSize: source.chunkSize, districts, pois, containers, ...(props ? { props } : {}), ...(city ? { city } : {}), ...(citySites ? { citySites } : {}), ...(terrainRows ? { terrainRows } : {}), ...(paths ? { paths } : {}), ...(routes ? { routes } : {}), obstacles: source.obstacles.map(obstacle => {
+    if (!rectangle(obstacle, bounds) || !(obstacle.kind === undefined || ['building', 'wall', 'container', 'barricade', 'tree', 'water'].includes(obstacle.kind as string)) || !(obstacle.label === undefined || text(obstacle.label, 80)) || !(obstacle.propId === undefined || text(obstacle.propId, 100))) return invalid();
+    return { x: obstacle.x, y: obstacle.y, width: obstacle.width, height: obstacle.height, ...(obstacle.kind ? { kind: obstacle.kind as LiveWorld['obstacles'][number]['kind'] } : {}), ...(obstacle.label ? { label: obstacle.label as string } : {}), ...(obstacle.propId ? { propId: obstacle.propId as string } : {}) };
   }), extracts: source.extracts.map(extract => point(extract, bounds) && integer(extract.x) && integer(extract.y) ? { x: extract.x, y: extract.y } : invalid()), zones: source.zones.map(zone => {
     if (!rectangle(zone, bounds) || !text(zone.name, 80) || !Object.values(LIVE_TERRAIN_CODES).includes(zone.terrain as LiveWorld['zones'][number]['terrain']) || !integer(zone.danger, 1, 3)) return invalid();
     return { x: zone.x, y: zone.y, width: zone.width, height: zone.height, name: zone.name, terrain: zone.terrain as LiveWorld['zones'][number]['terrain'], danger: zone.danger as 1 | 2 | 3 };
   }) };
+  const byProp = new Map(decoded.obstacles.filter(obstacle => obstacle.propId).map(obstacle => [obstacle.propId!, obstacle]));
+  if (byProp.size !== decoded.obstacles.filter(obstacle => obstacle.propId).length || [...byProp.keys()].some(id => !props?.some(prop => prop.id === id && prop.blocking)) || props?.some(prop => prop.blocking && (!byProp.has(prop.id) || ['x', 'y', 'width', 'height'].some(key => prop[key as 'x' | 'y' | 'width' | 'height'] !== byProp.get(prop.id)![key as 'x' | 'y' | 'width' | 'height'])))) return invalid();
+  return decoded;
 }
 
 export function readLiveSnapshot(value: unknown, cachedWorld?: LiveWorld): LiveSnapshot {

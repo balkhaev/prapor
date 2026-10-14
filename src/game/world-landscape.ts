@@ -1,6 +1,8 @@
 import type { LiveCityRegion, LiveLandscapePath, LiveObstacle, LivePoint, LiveWorld } from './live';
 
-type LandscapeWorld = Pick<LiveWorld, 'width' | 'height' | 'obstacles' | 'pois' | 'extracts' | 'city'>;
+type LandscapeWorld = Pick<LiveWorld, 'width' | 'height' | 'obstacles' | 'pois' | 'extracts' | 'city' | 'citySites'>;
+type Rect = LivePoint & { width: number; height: number };
+const contains = (point: LivePoint, rectangle: Rect): boolean => point.x >= rectangle.x && point.y >= rectangle.y && point.x < rectangle.x + rectangle.width && point.y < rectangle.y + rectangle.height;
 const distance = (a: LivePoint, b: LivePoint): number => Math.hypot(a.x - b.x, a.y - b.y);
 const segmentDistance = (point: LivePoint, a: LivePoint, b: LivePoint): number => {
   const dx = b.x - a.x, dy = b.y - a.y, denominator = dx * dx + dy * dy;
@@ -37,12 +39,13 @@ export function cityStreetPlan(city: LiveCityRegion): LiveLandscapePath[] {
 
 /** Ground and transport are independent of streaming sectors and contain no reward rolls. */
 export function generateLandscape(world: LandscapeWorld, seed: string): { terrainRows: string[]; paths: LiveLandscapePath[]; water: LiveObstacle[] } {
-  const width = world.width, height = world.height, total = width * height, ground = new Array<string>(total), blocked = new Uint8Array(total), footprints = new Uint8Array(total);
+  const width = world.width, height = world.height, total = width * height, ground = new Array<string>(total), blocked = new Uint8Array(total), footprints = new Uint8Array(total), indoor = new Uint8Array(total);
   const phase = hash(seed) / 0xffffffff * Math.PI * 2;
   const inside = (point: LivePoint): boolean => point.x >= 0 && point.y >= 0 && point.x < width && point.y < height;
   const key = (point: LivePoint): number => point.y * width + point.x;
   for (const obstacle of world.obstacles) for (let y = obstacle.y; y < obstacle.y + obstacle.height; y++) for (let x = obstacle.x; x < obstacle.x + obstacle.width; x++) blocked[y * width + x] = 1;
   for (const poi of world.pois) for (let y = poi.y; y < poi.y + poi.height; y++) for (let x = poi.x; x < poi.x + poi.width; x++) footprints[y * width + x] = 1;
+  for (const site of world.citySites ?? []) for (const building of site.buildings) for (let y = building.y; y < building.y + building.height; y++) for (let x = building.x; x < building.x + building.width; x++) indoor[y * width + x] = 1;
   const paths: LiveLandscapePath[] = [{ id: 'river-east', name: 'Речка Ольховая', kind: 'river', width: 5,
     points: riverCurve([{ x: 255, y: 44 }, { x: 239, y: 54 }, { x: 220, y: 72 }, { x: 212, y: 92 }, { x: 210, y: 118 }, { x: 215, y: 148 }, { x: 207, y: 182 }, { x: 213, y: 212 }, { x: 207, y: 255 }], width, height) }];
   const river = paths[0]!;
@@ -65,12 +68,44 @@ export function generateLandscape(world: LandscapeWorld, seed: string): { terrai
     const lake = ((x - 210) / 4) ** 2 + ((y - 157) / 10) ** 2;
     if (riverDistance < river.width / 2 + wave * .6 || lake < .9 + wave * .3) ground[y * width + x] = 'w';
     else if (riverDistance < river.width / 2 + 1.8 || lake < 1.5 + wave * .4) ground[y * width + x] = 's';
-    if (world.city && x >= world.city.x && y >= world.city.y && x < world.city.x + world.city.width && y < world.city.y + world.city.height) ground[y * width + x] = 'c';
+    const quarter = world.city?.quarters.find(quarter => contains({ x, y }, quarter));
+    if (quarter) {
+      // Paving belongs to streets, platforms and working yards. Residential lots
+      // retain their lawns; broad green strips soften the boundary of the city.
+      ground[y * width + x] = quarter.id === 'residential' ? 'g' : quarter.id === 'old-center' ? 'c' : 'y';
+      if (quarter.id === 'old-center' && (x >= 78 && x <= 84 && y >= 62 && y <= 84 || x >= 95 && x <= 115 && y >= 106 && y <= 116)) ground[y * width + x] = 'g';
+      if (quarter.id === 'station' && x >= 95 && x <= 118 && y >= 172 && y <= 191) ground[y * width + x] = 'g';
+      if (quarter.id === 'industrial' && (x >= 191 && y >= 62 && y <= 121 || y >= 60 && y <= 65 && x >= 131 && x <= 157)) ground[y * width + x] = 'g';
+    }
   }
-  // Each place has an irregular apron rather than a district-wide rectangular background.
+  const fill = (rectangle: Rect, code: string, replaceWater = false): void => {
+    for (let y = Math.max(0, rectangle.y); y < Math.min(height, rectangle.y + rectangle.height); y++) for (let x = Math.max(0, rectangle.x); x < Math.min(width, rectangle.x + rectangle.width); x++) {
+      const cell = y * width + x;
+      if (replaceWater || ground[cell] !== 'w') ground[cell] = code;
+    }
+  };
+  // Logistics occupies connected service ground around the north terminals and
+  // the western freight fan, rather than floating as eight unrelated islands.
+  for (const rectangle of [
+    { x: 15, y: 15, width: 100, height: 36 }, { x: 13, y: 51, width: 30, height: 72 },
+    { x: 14, y: 134, width: 34, height: 99 }, { x: 48, y: 207, width: 66, height: 35 },
+  ]) fill(rectangle, 'y');
+  // The outer places use broad clearings or working aprons; city land use is
+  // authored by its neighbourhood, never by a generic ellipse around every POI.
   for (const poi of world.pois) {
+    if (poi.tags.includes('city-site')) continue;
     const center = { x: poi.x + poi.width / 2, y: poi.y + poi.height / 2 };
-    const code = poi.districtId === 'sawmill' ? poi.templateId === 'sawmill' ? 'y' : 'p' : ['wagons', 'containers', 'market'].includes(poi.templateId) ? 'y' : 'c';
+    const city = poi.tags.includes('city');
+    const outdoor = ['wagons', 'containers', 'market', 'fuel', 'coal', 'logging', 'camp', 'creekcamp', 'hunting', 'greenhouse', 'city-mall'].includes(poi.templateId);
+    const code = poi.districtId === 'sawmill' ? ['sawmill', 'logging'].includes(poi.templateId) ? 'y' : 'p'
+      : outdoor ? poi.templateId === 'greenhouse' ? 'p' : 'y' : 'c';
+    if (city) {
+      // Named civic rooms have a paved doorstep. Housing and schools keep
+      // planting outside their walls, while freight landmarks meet hardstanding.
+      const apron = poi.districtId === 'village' ? 1 : 2;
+      fill({ x: poi.x - apron, y: poi.y - apron, width: poi.width + apron * 2, height: poi.height + apron * 2 }, outdoor ? 'y' : 'c');
+      continue;
+    }
     for (let y = Math.max(0, poi.y - 3); y < Math.min(height, poi.y + poi.height + 3); y++) for (let x = Math.max(0, poi.x - 3); x < Math.min(width, poi.x + poi.width + 3); x++) {
       const cell = y * width + x;
       const apron = ((x - center.x) / (poi.width / 2 + 3)) ** 2 + ((y - center.y) / (poi.height / 2 + 3)) ** 2;
@@ -79,6 +114,30 @@ export function generateLandscape(world: LandscapeWorld, seed: string): { terrai
       if (apron < .93 + Math.sin((x + y) / 5 + phase) * .07 && ground[cell] !== 'w' || blocked[cell] && ownFootprint) ground[cell] = code;
       else if (ownFootprint && ground[cell] === 'w') ground[cell] = 's';
     }
+    // Working yards have straight loading edges, with rounded clearings only at
+    // the forest margin. Village gardens are deliberately continuous green lots.
+    if (poi.districtId === 'customs' || poi.districtId === 'depot') {
+      fill({ x: poi.x - 2, y: poi.y + poi.height - 3, width: poi.width + 4, height: 6 }, 'y');
+      if (!outdoor) fill({ x: poi.x + 1, y: poi.y + 1, width: poi.width - 2, height: poi.height - 2 }, 'c');
+    } else if (poi.districtId === 'village' && !['market', 'checkpoint', 'fuel'].includes(poi.templateId)) {
+      for (let y = Math.max(0, poi.y - 3); y < Math.min(height, poi.y + poi.height + 3); y++) for (let x = Math.max(0, poi.x - 3); x < Math.min(width, poi.x + poi.width + 3); x++) {
+        const cell = y * width + x;
+        if (!blocked[cell] && !contains({ x, y }, poi) && ground[cell] !== 'w' && ground[cell] !== 's') ground[cell] = 'g';
+      }
+    }
+  }
+  for (const site of world.citySites ?? []) {
+    const courtCode = site.quarterId === 'residential' ? 'g' : site.quarterId === 'old-center' || site.kind === 'arcade' ? 'c' : 'y';
+    fill(site.courtyard, courtCode);
+    for (const building of site.buildings) fill(building, 'c');
+    // Buildings facing industrial courtyards share real loading aprons; station
+    // buildings have a narrow platform-like paved approach rather than bare lawn.
+    if (site.quarterId === 'industrial' || site.quarterId === 'station') for (const building of site.buildings) for (const door of building.entrances) {
+      const horizontalFacade = door.y === building.y || door.y === building.y + building.height - 1;
+      fill(site.quarterId === 'industrial' ? { x: door.x - 1, y: door.y - 1, width: 4, height: 4 }
+        : horizontalFacade ? { x: building.x - 1, y: door.y - 1, width: building.width + 2, height: 3 }
+          : { x: door.x - 1, y: building.y - 1, width: 3, height: building.height + 2 }, 'c');
+    }
   }
   for (const exit of world.extracts) for (let y = exit.y - 5; y <= exit.y + 5; y++) for (let x = exit.x - 5; x <= exit.x + 5; x++) if (inside({ x, y }) && distance(exit, { x, y }) <= 5) ground[y * width + x] = 'p';
   const waterMask = Uint8Array.from(ground, code => code === 'w' ? 1 : 0), bridgeCorridors = new Uint8Array(total);
@@ -86,7 +145,7 @@ export function generateLandscape(world: LandscapeWorld, seed: string): { terrai
   const clear = (point: LivePoint): boolean => baseClear(point) && (!waterMask[key(point)] || Boolean(bridgeCorridors[key(point)]));
 
   // Transport may cross the fixed channel only inside the three authored bridge corridors.
-  const route = (start: LivePoint, goal: LivePoint): LivePoint[] => {
+  const route = (start: LivePoint, goal: LivePoint, outsideRooms = false, bounds?: Rect): LivePoint[] => {
     const end = key(goal), costs = new Float64Array(total).fill(Infinity), parent = new Int32Array(total).fill(-1), closed = new Uint8Array(total);
     const heap: Array<{ cell: number; score: number }> = [];
     const push = (node: { cell: number; score: number }): void => { let i = heap.length; heap.push(node); while (i > 0) { const p = (i - 1) >>> 1; if (heap[p]!.score <= node.score) break; heap[i] = heap[p]!; i = p; } heap[i] = node; };
@@ -103,23 +162,30 @@ export function generateLandscape(world: LandscapeWorld, seed: string): { terrai
       const point = { x: cell % width, y: Math.floor(cell / width) };
       for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
         const next = { x: point.x + dx!, y: point.y + dy! };
-        if (!clear(next) || dx && dy && (!clear({ x: next.x, y: point.y }) || !clear({ x: point.x, y: next.y }))) continue;
+        if (!clear(next) || bounds && !contains(next, bounds) || outsideRooms && indoor[key(next)] && key(next) !== end
+          || dx && dy && (!clear({ x: next.x, y: point.y }) || !clear({ x: point.x, y: next.y })
+            || outsideRooms && (indoor[point.y * width + next.x] || indoor[next.y * width + point.x]))) continue;
         const nextKey = key(next), material = ground[nextKey], endpoint = distance(next, start) < 6 || distance(next, goal) < 6;
         const cost = costs[cell]! + (dx && dy ? 1.414 : 1) * (material === 'r' || material === 'p' ? 1 : material === 'w' ? 5 : 1.8)
-          + (footprints[nextKey] && !endpoint ? 12 : 0);
+          + (footprints[nextKey] && !endpoint && !bounds ? 12 : 0);
         if (cost >= costs[nextKey]!) continue;
         costs[nextKey] = cost; parent[nextKey] = cell; push({ cell: nextKey, score: cost + heuristic(next) });
       }
     }
-    throw new Error('No terrain connection between declared ports');
+    throw new Error(`No terrain connection between declared ports ${start.x},${start.y} and ${goal.x},${goal.y}`);
   };
-  const simplify = (points: LivePoint[]): LivePoint[] => points.filter((point, i) => i === 0 || i === points.length - 1 || (point.x - points[i - 1]!.x) * (points[i + 1]!.y - point.y) !== (point.y - points[i - 1]!.y) * (points[i + 1]!.x - point.x));
-  const paint = (points: LivePoint[], pathWidth: number, code: string): void => {
+  const simplify = (points: LivePoint[]): LivePoint[] => points.filter((point, i) => {
+    if (i === 0 || i === points.length - 1) return true;
+    const ax = point.x - points[i - 1]!.x, ay = point.y - points[i - 1]!.y, bx = points[i + 1]!.x - point.x, by = points[i + 1]!.y - point.y;
+    return ax * by !== ay * bx || ax * bx + ay * by < 0;
+  });
+  const paint = (points: LivePoint[], pathWidth: number, code: string, withinLots = false): void => {
     for (const [index, end] of points.entries()) {
       const start = points[Math.max(0, index - 1)]!;
       for (let y = Math.max(0, Math.floor(Math.min(start.y, end.y) - pathWidth)); y <= Math.min(height - 1, Math.ceil(Math.max(start.y, end.y) + pathWidth)); y++) for (let x = Math.max(0, Math.floor(Math.min(start.x, end.x) - pathWidth)); x <= Math.min(width - 1, Math.ceil(Math.max(start.x, end.x) + pathWidth)); x++) {
         const cell = y * width + x;
-        if (!blocked[cell] && (!waterMask[cell] || bridgeCorridors[cell]) && segmentDistance({ x, y }, start, end) <= pathWidth / 2 && (!footprints[cell] || ground[cell] === 'w')) ground[cell] = code;
+        if (code !== 'r' && code !== 't' && (ground[cell] === 'r' || ground[cell] === 't')) continue;
+        if (!blocked[cell] && (!waterMask[cell] || bridgeCorridors[cell]) && segmentDistance({ x, y }, start, end) <= pathWidth / 2 && (!footprints[cell] || ground[cell] === 'w' || withinLots && !indoor[cell])) ground[cell] = code;
       }
     }
     // Centre cells of a connection remain traversable even at a doorway or bridge.
@@ -187,7 +253,7 @@ export function generateLandscape(world: LandscapeWorld, seed: string): { terrai
     approaches.push({ deck, id: crossing.id, name: crossing.name });
   }
   if (world.city) {
-    for (const street of cityStreetPlan(world.city)) { paint(street.points, street.width, 'r'); paths.push(street); }
+    for (const street of cityStreetPlan(world.city)) { paint(street.points, street.width, 'r', true); paths.push(street); }
     for (let y = 118; y <= 136; y++) for (let x = 118; x <= 136; x++) if (!blocked[y * width + x]) ground[y * width + x] = 'r';
   }
   for (const crossing of approaches) {
@@ -201,7 +267,8 @@ export function generateLandscape(world: LandscapeWorld, seed: string): { terrai
   while (linked.size < nodes.length) {
     let first = 0, second = 0, minimum = Infinity;
     for (const a of linked) for (let b = 0; b < nodes.length; b++) if (!linked.has(b) && distance(nodes[a]!, nodes[b]!) < minimum) { first = a; second = b; minimum = distance(nodes[a]!, nodes[b]!); }
-    connect(nodes[first]!, nodes[second]!, `road-${connection++}`, world.pois[second]?.districtId === 'sawmill' ? 'trail' : 'road'); linked.add(second);
+    const target = world.pois[second], pedestrian = target?.districtId === 'sawmill' || target?.tags.includes('city');
+    connect(nodes[first]!, nodes[second]!, `road-${connection++}`, pedestrian ? 'trail' : 'road'); linked.add(second);
   }
   // The freight roads connect district clusters; extra forest paths create flank approaches.
   for (const [a, b] of [[0, 5], [1, 9], [4, 12], [6, 10], [9, 14], [10, 15], [16, 21], [18, 22], [20, 25], [23, 27], [24, 29], [26, 30]] as const) connect(nodes[a]!, nodes[b]!, `road-${connection++}`);
@@ -223,6 +290,44 @@ export function generateLandscape(world: LandscapeWorld, seed: string): { terrai
   const rail: LivePoint[] = [];
   for (let index = 1; index < railPoints.length; index++) rail.push(...route(nearestClear(railPoints[index - 1]!), nearestClear(railPoints[index]!)).slice(index === 1 ? 0 : 1));
   paint(rail, 2, 't'); paths.push({ id: 'rail-freight', name: 'Грузовая ветка', kind: 'rail', width: 2, points: simplify(rail) });
+
+  // Sidings terminate at the outside loading edge, leaving the authored search
+  // rooms and their anchors untouched. They belong to rail facilities only.
+  for (const poi of world.pois.filter(poi => !poi.tags.includes('city') && poi.districtId === 'depot' && ['wagons', 'depot', 'coal'].includes(poi.templateId))) {
+    const end = nearestClear({ x: poi.x + Math.floor(poi.width / 2), y: poi.y - 2 });
+    const start = rail.reduce((near, point) => distance(point, end) < distance(near, end) ? point : near);
+    const cells = route(start, end);
+    paint(cells, 5, 'y'); paint(cells, 1.5, 't');
+    if (cells.length > 1) paths.push({ id: `siding-${poi.id}`, name: `${poi.name}: погрузочная ветка`, kind: 'rail', width: 1.5, points: simplify(cells) });
+  }
+
+  // A pair of compact exterior walks serves every actual doorway in a lot.
+  // Repeated branches form one public path per gate, keeping the static wire
+  // graph small without drawing shortcut lines through a house or its walls.
+  for (const site of world.citySites ?? []) {
+    const poi = world.pois.find(poi => poi.id === site.poiId)!;
+    for (const [gateIndex, gate] of poi.entrances.entries()) {
+      const cells: LivePoint[] = [gate];
+      for (const building of site.buildings) {
+        const door = building.entrances[gateIndex]!, approach = route(gate, door, true, { x: site.x - 2, y: site.y - 2, width: site.width + 4, height: site.height + 4 });
+        paint(approach, 2, site.quarterId === 'old-center' ? 'c' : site.quarterId === 'industrial' ? 'y' : 'p', true);
+        cells.push(...approach.slice(1), ...approach.slice(0, -1).reverse());
+      }
+      const points = simplify(cells);
+      if (points.length > 1) paths.push({ id: `footway-${site.id}-${gateIndex}`, name: `${site.name}: пешеходный проход`, kind: 'trail', width: 1.5, points });
+    }
+  }
+
+  // Small planted strips belong to the quiet edges of inhabited courts. Their
+  // straight borders follow the lots; sidewalks, rails and door aprons stay open.
+  for (const site of world.citySites ?? []) if (site.quarterId === 'old-center' || site.quarterId === 'residential' || site.quarterId === 'station' && site.kind === 'courtyard') {
+    const doors = site.buildings.flatMap(building => building.entrances);
+    for (let y = site.y; y < site.y + site.height; y++) for (let x = site.x; x < site.x + site.width; x++) {
+      const cell = y * width + x, point = { x, y };
+      const edge = Math.min(x - site.x, site.x + site.width - 1 - x, y - site.y, site.y + site.height - 1 - y);
+      if (edge <= 1 && !blocked[cell] && !indoor[cell] && ['c', 'y', 'g'].includes(ground[cell]!) && doors.every(door => distance(door, point) > 3)) ground[cell] = 'g';
+    }
+  }
 
   // Fill small shoreline islands that have no door/container; large land regions
   // remain joined by the actual bridge tiles cut by the transport network.

@@ -88,6 +88,90 @@ beforeEach(async () => {
 });
 afterEach(async () => { service.close(); await rm(directory, { recursive: true, force: true }); });
 
+describe('verified G5 courtyard progress in G6 city architecture', () => {
+  test('all 72 courtyard slots retain cycles, depleted timers and private discoveries while a wounded fighter moves out of a new wall', async () => {
+    // Public search positions recorded from the shipped perimeter-g5-5dfb7f6f.
+    // IDs are the durable contract; these old coordinates really move in G6.
+    const oldPositions = [
+      [81, 67], [98, 67], [90, 67], [81, 111], [98, 110], [90, 112], [67, 81], [68, 81], [68, 90], [67, 98], [68, 98], [68, 92], [112, 81], [112, 98], [113, 90], [81, 81], [98, 81], [90, 89],
+      [152, 67], [171, 67], [162, 67], [152, 111], [171, 110], [162, 112], [138, 81], [139, 81], [139, 90], [138, 98], [139, 98], [139, 92], [186, 81], [186, 98], [187, 90], [152, 81], [171, 81], [162, 89],
+      [81, 138], [96, 138], [90, 138], [81, 188], [96, 188], [90, 188], [67, 152], [68, 152], [68, 162], [67, 173], [68, 173], [68, 164], [108, 152], [108, 173], [111, 162], [81, 152], [96, 152], [90, 163],
+      [171, 138], [172, 138], [162, 138], [171, 188], [172, 188], [162, 188], [138, 152], [139, 152], [142, 162], [138, 173], [139, 173], [142, 164], [186, 152], [186, 173], [187, 162], [171, 152], [171, 173], [162, 163],
+    ] as const;
+    const ids = ['old-center', 'industrial', 'station', 'residential'].flatMap(quarter => Array.from({ length: 6 }, (_, site) => Array.from({ length: 3 }, (_, slot) => `city-${quarter}-${site}-slot-${slot}`)).flat());
+    const anchors = ids.map(id => map.containers.find(anchor => anchor.id === id)!);
+    expect(map.generatorVersion).toBe(6); expect(anchors).toHaveLength(72); expect(anchors.every(Boolean)).toBe(true);
+    expect(map.containers.filter(anchor => anchor.id.startsWith('city-')).map(anchor => anchor.id).sort()).toEqual(ids.slice().sort());
+    expect(anchors.filter((anchor, index) => anchor.x !== oldPositions[index]![0] || anchor.y !== oldPositions[index]![1]).length).toBeGreaterThanOrEqual(40);
+    const oldPoint = { x: 81, y: 65 }; // Walkable inside the first G5 workshop, now a G6 exterior wall.
+    expect(map.obstacles.some(obstacle => obstacle.kind === 'wall' && oldPoint.x >= obstacle.x && oldPoint.y >= obstacle.y && oldPoint.x < obstacle.x + obstacle.width && oldPoint.y < obstacle.y + obstacle.height)).toBe(true);
+    expect(isLiveWalkable(map, oldPoint)).toBe(false);
+    const first = await enter(), observer = await enter(), body = stableBody(), inBag = item('old-watch');
+    const medicine = createMedicalInventory({ medkit: 19, bandage: 1, tourniquet: 0, splint: 1, painkiller: 0, surgery: 0 });
+    const depleted = [anchors[1]!, anchors[22]!, anchors[71]!], deadlines = depleted.map((anchor, index) => [`container:${anchor.id}`, time + 30_000 + index * 6000] as [string, number]);
+    let cycles: StoredDrop[] = [], landmarkCycles: StoredDrop[] = [], searched: string[] = [];
+    restart(db => {
+      const saved = world(); saved.geometryVersion = 'perimeter-g5-5dfb7f6f'; saved.scavs = []; saved.events = [];
+      for (const [index, anchor] of anchors.entries()) {
+        const drop = saved.drops.find(drop => drop.containerId === anchor.id)!;
+        Object.assign(drop, { x: oldPositions[index]![0], y: oldPositions[index]![1], amount: 4 + index % 19, items: [item(index % 2 ? 'gold-ring' : 'coffee')], expiresAt: time + 100_000 + index * 123 });
+      }
+      saved.drops = saved.drops.filter(drop => !depleted.some(anchor => drop.containerId === anchor.id));
+      cycles = structuredClone(saved.drops.filter(drop => ids.includes(drop.containerId ?? '')));
+      landmarkCycles = structuredClone(saved.drops.filter(drop => G4_ANCHOR.test(drop.containerId ?? '')));
+      searched = cycles.filter(drop => drop.containerId!.endsWith('-slot-0')).map(drop => drop.id);
+      saved.lootCooldowns = deadlines;
+      db.query('UPDATE live_world SET state=? WHERE id=1').run(JSON.stringify(saved));
+      updatePlayer(db, first.session, { ...oldPoint, body, medicine, healthAt: time, ammo: 11, cargo: 17, stash: 3, kills: 2, lootItems: [inBag], safeUntil: time + 120_000, searchedDropIds: searched,
+        treatment: { type: 'splint', part: 'leftLeg', startedAt: time - 1000, endsAt: time + 3000 } });
+      updatePlayer(db, observer.session, { x: anchors[0]!.x, y: anchors[0]!.y, safeUntil: time + 120_000, searchedDropIds: [] });
+    });
+    expect(cycles).toHaveLength(69); expect(landmarkCycles).toHaveLength(192); expect(searched).toHaveLength(24);
+    const known = cycles.find(drop => drop.containerId === anchors[0]!.id)!;
+    const unknown = cycles.find(drop => drop.containerId === anchors[2]!.id)!;
+    let migratedPosition: LivePoint | undefined;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const saved = world(); expect(saved.geometryVersion).toBe(map.version);
+      for (const cycle of cycles) {
+        const anchor = map.containers.find(anchor => anchor.id === cycle.containerId)!;
+        expect(saved.drops.filter(drop => drop.containerId === anchor.id)).toEqual([{ ...cycle, x: anchor.x, y: anchor.y, containerKind: anchor.kind }]);
+      }
+      for (const cycle of landmarkCycles) expect(saved.drops.find(drop => drop.id === cycle.id)).toEqual(cycle);
+      for (const [index, anchor] of depleted.entries()) {
+        expect(saved.drops.some(drop => drop.containerId === anchor.id)).toBe(false); expect(saved.lootCooldowns).toContainEqual(deadlines[index]!);
+      }
+      expect(new Set(saved.drops.map(drop => drop.id)).size).toBe(saved.drops.length);
+      const restored = (await enter(first.session)).snapshot, foreign = (await enter(observer.session)).snapshot;
+      expect(restored.self).toMatchObject({ id: first.session.id, gameId: first.session.gameId, body, medicine, ammo: 11, cargo: 17, stash: 3, kills: 2, lootItems: [inBag], treatment: null });
+      expect(player(first.session).searchedDropIds).toEqual(searched);
+      const position = restored.entities.find(entity => entity.id === first.session.id)!;
+      expect(isLiveWalkable(map, position)).toBe(true);
+      expect(Math.max(Math.abs(position.x - oldPoint.x), Math.abs(position.y - oldPoint.y))).toBeLessThanOrEqual(16);
+      if (migratedPosition) expect({ x: position.x, y: position.y }).toEqual(migratedPosition); else migratedPosition = { x: position.x, y: position.y };
+      expect(restored.drops.find(drop => drop.id === known.id)).toMatchObject({ searched: true, amount: known.amount, items: known.items });
+      expect(foreign.drops.find(drop => drop.id === known.id)).toMatchObject({ searched: false, amount: 0 });
+      expect(JSON.stringify(foreign).includes(known.items![0]!.id)).toBe(false);
+      expect(JSON.stringify(restored).includes(unknown.items![0]!.id)).toBe(false);
+      expect(deliveries.size).toBe(0);
+      if (attempt < 2) restart();
+    }
+    // The persisted G5 timer still refills only its own slot once, with a fresh
+    // private discovery state; the later timers stay depleted.
+    restart(db => { const saved = world(); quietActors(saved); db.query('UPDATE live_world SET state=? WHERE id=1').run(JSON.stringify(saved)); });
+    time = deadlines[0]![1] - 1; await enter(first.session); service.tick();
+    expect(world().drops.some(drop => drop.containerId === depleted[0]!.id)).toBe(false);
+    time = deadlines[0]![1] + 249; await enter(first.session); service.tick();
+    const refill = world().drops.filter(drop => drop.containerId === depleted[0]!.id); expect(refill).toHaveLength(1); expect(refill[0]!.items?.length).toBeGreaterThan(0);
+    for (const anchor of depleted.slice(1)) expect(world().drops.some(drop => drop.containerId === anchor.id)).toBe(false);
+    expect(player(first.session).searchedDropIds).not.toContain(refill[0]!.id);
+    restart(db => updatePlayer(db, first.session, { x: depleted[0]!.x, y: depleted[0]!.y, healthAt: time }));
+    const hidden = (await enter(first.session)).snapshot.drops.find(drop => drop.id === refill[0]!.id)!;
+    expect(hidden).toMatchObject({ searched: false, amount: 0 }); expect(hidden.items).toBeUndefined();
+    expect((await call(first.session, 'action', { type: 'loot', id: hidden.id })).status).toBe(409);
+    restart(); expect(world().drops.filter(drop => drop.containerId === depleted[0]!.id)).toEqual(refill);
+  });
+});
+
 describe('verified V4 progress in a denser city revision', () => {
   test('all 192 previous anchor cycles and private discoveries survive relocation and two restarts without rerolling or replaying delivery', async () => {
     const first = await enter(), observer = await enter();
