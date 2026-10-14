@@ -218,7 +218,7 @@ export function createLiveMode(options: LiveModeOptions) {
       if (next.selfId !== expected) throw new LiveApiError(401, 'identity_changed');
       const interruptedExit = exitIntent && next.self.leaveAt === 0;
       if (interruptedExit) { exitIntent = false; exitToMarket = false; }
-      acceptSnapshot(next, command); message = interruptedExit ? 'Выход прерван приказом.' : next.self.economyMessage ?? ''; offline = false;
+      acceptSnapshot(next, command); message = interruptedExit ? 'Выход прерван приказом.' : ['resupply', 'extract', 'respawn', 'loot'].includes(command.type) ? next.self.economyMessage ?? '' : ''; offline = false;
     } catch (error) { explain(error, version, account, game); }
     finally { if (version === generation) { controller = null; requestBusy = false; actionBusy = false; render(); schedule(version); } }
   }
