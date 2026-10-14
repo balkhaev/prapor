@@ -1,4 +1,5 @@
-import type { LiveCityBuilding, LivePoint, LiveWorldProp } from './game/live';
+import type { LiveCityBuilding, LivePoint, LiveWorld, LiveWorldProp } from './game/live';
+import { legacyHallEnvelopes } from './game/world-building-envelope';
 
 export type SceneryBounds = LivePoint & { width: number; height: number };
 
@@ -28,9 +29,45 @@ export class SceneryIndex<T extends SceneryBounds> {
   }
 }
 
-/** Includes doorway aprons so a roof cannot blink back over a fighter crossing the threshold. */
-export function buildingNeedsCutaway(building: SceneryBounds, visiblePoints: readonly LivePoint[]): boolean {
-  return visiblePoints.some(point => point.x >= building.x - 1.25 && point.y >= building.y - 1.25 && point.x <= building.x + building.width + .75 && point.y <= building.y + building.height + .75);
+/** Only an occupied interior or a real doorway threshold opens a roof; pavement stays outside. */
+export function buildingNeedsCutaway(building: SceneryBounds & { entrances?: readonly LivePoint[] }, visiblePoints: readonly LivePoint[]): boolean {
+  return visiblePoints.some(point => {
+    if (point.x >= building.x - .45 && point.y >= building.y - .45 && point.x < building.x + building.width - .55 && point.y < building.y + building.height - .55) return true;
+    return building.entrances?.some(door => {
+      const horizontal = door.y === building.y || door.y === building.y + building.height - 1;
+      return horizontal ? Math.abs(point.x - door.x - .5) <= .65 && Math.abs(point.y - door.y) <= 1.05
+        : Math.abs(point.y - door.y - .5) <= .65 && Math.abs(point.x - door.x) <= 1.05;
+    }) ?? false;
+  });
+}
+
+export function buildingWallHeight(building: LiveCityBuilding): number {
+  const floors = building.floors ?? (building.kind === 'apartment' ? 2 : 1);
+  return (building.kind === 'workshop' ? .28 : .18) + floors * .57;
+}
+
+export function buildingFacadeCadence(building: LiveCityBuilding, length: number): { columns: number; width: number; height: number; industrial: boolean } {
+  const industrial = building.kind === 'workshop' || building.kind === 'garage';
+  return { columns: Math.max(1, Math.floor((length - 1.4) / (industrial ? 4.8 : building.kind === 'shop' ? 3.9 : 2.9))), width: industrial ? 1.15 : building.kind === 'shop' ? 1.25 : .63, height: industrial ? .13 : building.kind === 'shop' ? .27 : .2, industrial };
+}
+
+/** Closed colliders and exact six-wall halls give old landmarks an architectural silhouette.
+ * A courtyard/POI box alone is never sufficient evidence for a roof. */
+export function sceneBuildings(world: LiveWorld): LiveCityBuilding[] {
+  const result = [...world.citySites?.flatMap(site => site.buildings) ?? []];
+  const styles = (template: string): Pick<LiveCityBuilding, 'kind' | 'floors' | 'facade' | 'roof'> =>
+    ['workshop', 'sawmill', 'depot', 'city-tram', 'greenhouse'].includes(template) ? { kind: 'workshop', floors: 1, facade: 'metal', roof: template === 'sawmill' ? 'sawtooth' : 'gable' }
+      : template === 'apartments' ? { kind: 'apartment', floors: 2, facade: 'plaster', roof: 'gable' }
+        : ['clinic', 'city-hospital', 'city-police', 'school', 'archive', 'office'].includes(template) ? { kind: 'service', floors: 2, facade: 'brick', roof: template === 'city-hospital' ? 'flat' : 'gable' }
+          : ['city-mall', 'market'].includes(template) ? { kind: 'shop', floors: 1, facade: 'plaster', roof: 'gable' }
+            : { kind: 'garage', floors: 1, facade: 'plaster', roof: 'gable' };
+  for (const [index, obstacle] of world.obstacles.entries()) {
+    if (obstacle.kind !== 'building' || obstacle.propId) continue;
+    const poi = world.pois.find(poi => obstacle.x >= poi.x && obstacle.y >= poi.y && obstacle.x + obstacle.width <= poi.x + poi.width && obstacle.y + obstacle.height <= poi.y + poi.height);
+    result.push({ ...obstacle, id: `solid-${index}`, name: obstacle.label ?? poi?.name ?? 'Корпус', ...styles(poi?.templateId ?? ''), roofAxis: obstacle.width >= obstacle.height ? 'x' : 'y', entrances: [] });
+  }
+  result.push(...legacyHallEnvelopes(world).map(hall => ({ ...hall, ...styles(hall.templateId) })));
+  return result;
 }
 
 export function buildingPalette(building: LiveCityBuilding): readonly [string, string, string] {
@@ -66,7 +103,7 @@ export class BuildingMaterialArt {
   clear(): void { this.images.clear(); }
   facade(building: LiveCityBuilding, length: number): HTMLCanvasElement {
     const floors = building.floors ?? (building.kind === 'apartment' ? 2 : 1);
-    return this.get(building, 'facade', Math.ceil(length * 24), Math.ceil((.62 + floors * .54) * 54));
+    return this.get(building, 'facade', Math.ceil(length * 24), Math.ceil(((building.kind === 'workshop' ? .28 : .18) + floors * .57) * 54));
   }
   roof(building: LiveCityBuilding, width: number, height: number): HTMLCanvasElement {
     return this.get(building, 'roof', Math.ceil(width * 24), Math.ceil(height * 24));

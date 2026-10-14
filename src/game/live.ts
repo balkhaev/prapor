@@ -40,6 +40,7 @@ export interface LiveCityBuilding extends LivePoint {
   entrances: LivePoint[];
   floors?: 1 | 2 | 3 | 4;
   roof?: 'gable' | 'flat' | 'sawtooth';
+  roofAxis?: 'x' | 'y';
   facade?: 'brick' | 'plaster' | 'panel' | 'metal';
 }
 export const LIVE_PROP_KINDS = ['car', 'van', 'truck', 'bus', 'lamp', 'dumpster', 'pallet', 'crate', 'barrel', 'bench', 'planter', 'shed', 'sign', 'fence', 'shrub', 'tree', 'logs', 'railcar', 'transformer', 'playground', 'garden', 'kiosk', 'market-stall', 'workbench', 'hydrant', 'power-pole', 'bollard'] as const;

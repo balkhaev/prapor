@@ -1,17 +1,17 @@
 import type { LiveLandscapePath, LivePoint, LiveTerrain, LiveWorld } from './game/live';
 
 export const TERRAIN_PIGMENTS: Record<LiveTerrain, readonly [number, number, number]> = {
-  road: [64, 69, 69], concrete: [139, 142, 131], forest: [43, 66, 45], water: [36, 74, 82],
+  road: [110, 113, 102], concrete: [139, 142, 131], forest: [43, 66, 45], water: [36, 74, 82],
   yard: [112, 112, 92], grass: [77, 104, 60], path: [140, 119, 82], rail: [102, 105, 93], sand: [161, 149, 109],
 };
-const organic = new Set<LiveTerrain>(['grass', 'forest', 'yard', 'path', 'sand']);
+const organic = new Set<LiveTerrain>(['grass', 'forest', 'yard', 'path', 'sand', 'road']);
 const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
 const hash = (x: number, y: number): number => {
   let value = Math.imul(x + 721, 374761393) ^ Math.imul(y + 191, 668265263);
   value = Math.imul(value ^ value >>> 13, 1274126177); return (value ^ value >>> 16) >>> 0;
 };
 
-/** 320×320 uses 12px/cell; bigger maps stay within a 4096px texture side. */
+/** Detailed close views stay within a 4096px texture side, including the 448-cell perimeter. */
 export function terrainTextureResolution(width: number, height: number): number {
   const longest = Math.max(width, height);
   return Math.max(1, Math.min(longest <= 256 ? 16 : 12, Math.floor(4096 / longest)));
@@ -47,9 +47,9 @@ export function paintTerrainTexture(c: CanvasRenderingContext2D, world: LiveWorl
         const cloud = (a * (1 - fx) + b * fx) * (1 - fy) + (d * (1 - fx) + e * fx) * fy;
         let shade = cloud, red = color[0], green = color[1], blue = color[2];
         if (material === 'road') {
-          shade = cloud * .65 + grain * .62;
-          if (random % 67 === 0) shade += 9;
-          if (random % 97 === 0) shade -= 8;
+          // The raster reserves physical road/shoulder space. Continuous asphalt is painted later.
+          shade = cloud * .8 + grain * .75;
+          if (random % 67 === 0) shade += 8;
         } else if (material === 'concrete') {
           const style = paving[cell];
           if (style === 1) {
@@ -106,16 +106,16 @@ export function paintTerrainTexture(c: CanvasRenderingContext2D, world: LiveWorl
 export type SurfaceRun = { x: number; y: number; width: number };
 export type SurfaceMasks = { road: Uint8Array; indoor: Uint8Array; roadRuns: SurfaceRun[] };
 
-export function buildSurfaceMasks(world: LiveWorld, terrain: readonly LiveTerrain[], walkable: Uint8Array): SurfaceMasks {
+export function buildSurfaceMasks(world: LiveWorld, terrain: readonly LiveTerrain[], walkable: Uint8Array, buildings: readonly Pick<NonNullable<LiveWorld['citySites']>[number]['buildings'][number], 'x' | 'y' | 'width' | 'height'>[] = world.citySites?.flatMap(site => site.buildings) ?? []): SurfaceMasks {
   const indoor = new Uint8Array(world.width * world.height), road = new Uint8Array(world.width * world.height);
-  for (const site of world.citySites ?? []) for (const building of site.buildings) {
+  for (const building of buildings) {
     for (let y = Math.max(0, building.y); y < Math.min(world.height, building.y + building.height); y++) for (let x = Math.max(0, building.x); x < Math.min(world.width, building.x + building.width); x++) indoor[y * world.width + x] = 1;
   }
   const roadRuns: SurfaceRun[] = [];
   for (let y = 0; y < world.height; y++) {
     let start = -1;
     for (let x = 0; x <= world.width; x++) {
-      const cell = y * world.width + x, accepted = x < world.width && terrain[cell] === 'road' && !!walkable[cell] && !indoor[cell];
+      const cell = y * world.width + x, accepted = x < world.width && (terrain[cell] === 'road' || terrain[cell] === 'rail') && !!walkable[cell] && !indoor[cell];
       if (accepted) { road[cell] = 1; if (start < 0) start = x; }
       else if (start >= 0) { roadRuns.push({ x: start, y, width: x - start }); start = -1; }
     }
@@ -126,6 +126,26 @@ export function buildSurfaceMasks(world: LiveWorld, terrain: readonly LiveTerrai
 type RoadSegment = { path: LiveLandscapePath; a: LivePoint; b: LivePoint; dx: number; dy: number; length: number; offset: number };
 export type RoadIntersection = LivePoint & { a: RoadSegment; b: RoadSegment };
 export type RoadSurfacePlan = { segments: RoadSegment[]; intersections: RoadIntersection[] };
+
+export function roadHasMarkings(path: LiveLandscapePath): boolean {
+  return path.width >= 5 && (path.id.startsWith('city-street-') || path.id === 'city-ring' || path.id.startsWith('highway-') || path.id.startsWith('arterial-'));
+}
+export function cityPedestrianCrossings(plan: RoadSurfacePlan): RoadIntersection[] {
+  return plan.intersections.filter(crossing => crossing.a.path.id.startsWith('city-street-') && crossing.b.path.id.startsWith('city-street-')
+    && Math.abs(crossing.a.dx * crossing.b.dy - crossing.a.dy * crossing.b.dx) / (crossing.a.length * crossing.b.length) > .95);
+}
+
+function asphaltPattern(c: CanvasRenderingContext2D): CanvasPattern | null {
+  const image = document.createElement('canvas'); image.width = 192; image.height = 192;
+  const texture = image.getContext('2d'); if (!texture) return null;
+  const pixels = texture.createImageData(image.width, image.height);
+  for (let y = 0; y < image.height; y++) for (let x = 0; x < image.width; x++) {
+    const random = hash(x, y), shade = (random % 19 - 9) * .38 + Math.sin(x * .042 + y * .029) * 1.5, at = (y * image.width + x) * 4;
+    pixels.data[at] = 62 + shade; pixels.data[at + 1] = 67 + shade; pixels.data[at + 2] = 67 + shade; pixels.data[at + 3] = 255;
+  }
+  texture.putImageData(pixels, 0, 0);
+  const pattern = c.createPattern(image, 'repeat'); pattern?.setTransform({ a: 1 / 12, d: 1 / 12 }); return pattern;
+}
 
 /** Intersections follow the actual path geometry, including translated or larger cities. */
 export function buildRoadSurfacePlan(paths: readonly LiveLandscapePath[], road: Uint8Array, width: number, height: number): RoadSurfacePlan {
@@ -156,11 +176,19 @@ export function buildRoadSurfacePlan(paths: readonly LiveLandscapePath[], road: 
 }
 
 /** Cached markings are clipped once against authoritative road, free cover and interior masks. */
-export function paintRoadSurface(c: CanvasRenderingContext2D, world: LiveWorld, terrain: readonly LiveTerrain[], masks: SurfaceMasks): void {
+export function paintRoadSurface(c: CanvasRenderingContext2D, world: LiveWorld, masks: SurfaceMasks): void {
   const { road, roadRuns } = masks, plan = buildRoadSurfacePlan(world.paths ?? [], road, world.width, world.height);
   const stroke = (a: LivePoint, b: LivePoint, color: string, width: number) => { c.beginPath(); c.moveTo(a.x, a.y); c.lineTo(b.x, b.y); c.strokeStyle = color; c.lineWidth = width; c.stroke(); };
   const clip = () => { c.beginPath(); for (const run of roadRuns) c.rect(run.x, run.y, run.width, 1); c.clip(); };
-  c.save(); clip(); c.lineCap = 'butt';
+  c.save(); clip(); c.lineCap = 'round'; c.lineJoin = 'round';
+  const paths = world.paths?.filter(path => path.kind === 'road') ?? [], grain = asphaltPattern(c);
+  const pathStroke = (path: LiveLandscapePath, color: string | CanvasPattern, width: number) => { c.beginPath(); path.points.forEach((point, index) => index ? c.lineTo(point.x + .5, point.y + .5) : c.moveTo(point.x + .5, point.y + .5)); c.strokeStyle = color; c.lineWidth = width; c.stroke(); };
+  // Join all shoulders before asphalt. The smooth centerline, rather than raster squares,
+  // determines the visible road edge; the physical mask remains an absolute safety clip.
+  for (const path of paths) pathStroke(path, path.id.startsWith('city-') ? '#a4ad9b85' : '#aea48785', path.width + .35);
+  for (const path of paths) if (path.id.startsWith('city-')) pathStroke(path, '#b3b9a08c', path.width + .07);
+  for (const path of paths) pathStroke(path, grain ?? '#3e4343', Math.max(1, path.width - .28));
+  c.lineCap = 'butt';
   for (const segment of plan.segments) {
     const ux = segment.dx / segment.length, uy = segment.dy / segment.length;
     // Subtle wheel wear leaves the asphalt grain visible rather than repainting a flat road stroke.
@@ -168,35 +196,23 @@ export function paintRoadSurface(c: CanvasRenderingContext2D, world: LiveWorld, 
       const offset = segment.path.width * .24 * side, a = { x: segment.a.x - uy * offset, y: segment.a.y + ux * offset }, b = { x: segment.b.x - uy * offset, y: segment.b.y + ux * offset };
       stroke(a, b, '#26363819', Math.min(.38, segment.path.width * .11));
     }
-    if (segment.path.width < 3.5) continue;
+    if (!roadHasMarkings(segment.path)) continue;
     for (let distance = (4.4 - segment.offset % 4.4) % 4.4; distance < segment.length; distance += 4.4) {
       const end = Math.min(distance + 1.65, segment.length), mid = { x: segment.a.x + ux * (distance + end) / 2, y: segment.a.y + uy * (distance + end) / 2 };
       if (plan.intersections.some(point => Math.hypot(mid.x - point.x, mid.y - point.y) < Math.max(point.a.path.width, point.b.path.width) * .65 + 2.4)) continue;
-      stroke({ x: segment.a.x + ux * distance, y: segment.a.y + uy * distance }, { x: segment.a.x + ux * end, y: segment.a.y + uy * end }, '#d8d4baab', .105);
-    }
-  }
-  // Kerbs follow real r→c boundaries, including the connected pavement around junctions.
-  for (let y = 0; y < world.height; y++) for (let x = 0; x < world.width; x++) {
-    const cell = y * world.width + x; if (!road[cell]) continue;
-    for (const [dx, dy] of [[0, -1], [0, 1], [-1, 0], [1, 0]] as const) {
-      const nx = x + dx, ny = y + dy;
-      if (nx < 0 || ny < 0 || nx >= world.width || ny >= world.height || terrain[ny * world.width + nx] !== 'concrete') continue;
-      const a = dy ? { x, y: y + (dy > 0 ? 1 : 0) } : { x: x + (dx > 0 ? 1 : 0), y }, b = dy ? { x: x + 1, y: a.y } : { x: a.x, y: y + 1 };
-      stroke({ x: a.x - dx * .1, y: a.y - dy * .1 }, { x: b.x - dx * .1, y: b.y - dy * .1 }, '#303b3abd', .15);
-      stroke({ x: a.x - dx * .025, y: a.y - dy * .025 }, { x: b.x - dx * .025, y: b.y - dy * .025 }, '#c0c1acbb', .1);
-      if ((x + y) % 2 === 0) stroke({ x: a.x - dx * .025, y: a.y - dy * .025 }, { x: a.x - dx * .16, y: a.y - dy * .16 }, '#626e6066', .055);
+      stroke({ x: segment.a.x + ux * distance, y: segment.a.y + uy * distance }, { x: segment.a.x + ux * end, y: segment.a.y + uy * end }, '#d0ceb88c', .085);
     }
   }
   const city = world.city;
-  for (const crossing of plan.intersections) {
+  for (const crossing of cityPedestrianCrossings(plan)) {
     if (!city || crossing.x < city.x || crossing.y < city.y || crossing.x > city.x + city.width || crossing.y > city.y + city.height) continue;
     for (const [along, cross] of [[crossing.a, crossing.b], [crossing.b, crossing.a]] as const) {
       const ux = along.dx / along.length, uy = along.dy / along.length, nx = -uy, ny = ux, half = Math.max(.7, along.path.width / 2 - .55);
       for (const side of [-1, 1]) {
         const distance = (cross.path.width / 2 + 1.05) * side, center = { x: crossing.x + ux * distance, y: crossing.y + uy * distance };
-        for (let across = -half; across < half; across += .59) {
-          const a = { x: center.x + nx * across - ux * .44, y: center.y + ny * across - uy * .44 }, b = { x: center.x + nx * across + ux * .44, y: center.y + ny * across + uy * .44 };
-          stroke(a, b, '#e4dec8bd', .29);
+        for (let across = -half; across < half; across += .72) {
+          const a = { x: center.x + nx * across - ux * .33, y: center.y + ny * across - uy * .33 }, b = { x: center.x + nx * across + ux * .33, y: center.y + ny * across + uy * .33 };
+          stroke(a, b, '#d8d4bd9d', .24);
         }
         const stop = { x: center.x + ux * side * 1.15, y: center.y + uy * side * 1.15 };
         stroke({ x: stop.x - nx * side * .12, y: stop.y - ny * side * .12 }, { x: stop.x - nx * side * half, y: stop.y - ny * side * half }, '#d8d2b9a8', .13);

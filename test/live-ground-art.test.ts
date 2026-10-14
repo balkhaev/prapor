@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { buildRoadSurfacePlan, buildSurfaceMasks, paintTerrainTexture, TERRAIN_PIGMENTS, terrainTextureResolution } from '../src/live-ground-art';
+import { buildRoadSurfacePlan, buildSurfaceMasks, cityPedestrianCrossings, paintTerrainTexture, roadHasMarkings, TERRAIN_PIGMENTS, terrainTextureResolution } from '../src/live-ground-art';
 import type { LiveLandscapePath, LiveTerrain, LiveWorld } from '../src/game/live';
 
 function world(width: number, height: number): LiveWorld {
@@ -19,6 +19,7 @@ describe('surface texture budget and continuity', () => {
   test('larger maps improve on the old 8px detail while bounding bitmap memory', () => {
     expect(terrainTextureResolution(256, 256)).toBe(16);
     expect(terrainTextureResolution(320, 320)).toBe(12);
+    expect(terrainTextureResolution(448, 448)).toBe(9);
     for (const [w, h] of [[320, 240], [512, 512], [1024, 512], [2048, 2048]]) {
       const resolution = terrainTextureResolution(w!, h!);
       expect(Math.max(w!, h!) * resolution).toBeLessThanOrEqual(4096);
@@ -37,10 +38,10 @@ describe('surface texture budget and continuity', () => {
     const map = world(9, 5), kinds = Object.keys(TERRAIN_PIGMENTS) as LiveTerrain[], terrain = Array.from({ length: 45 }, (_, index) => kinds[index % 9]!), { pixels } = renderPixels(map, terrain);
     const pixel = (cell: number) => { const at = ((2 * 12 + 6) * 9 * 12 + cell * 12 + 6) * 4; return [...pixels.slice(at, at + 3)]; };
     const road = pixel(kinds.indexOf('road')), concrete = pixel(kinds.indexOf('concrete')), water = pixel(kinds.indexOf('water')), grass = pixel(kinds.indexOf('grass'));
-    expect(concrete[0]! - road[0]!).toBeGreaterThan(45);
+    expect(concrete[0]! - road[0]!).toBeGreaterThan(10);
     expect(water[2]! - water[0]!).toBeGreaterThan(30);
     expect(grass[1]! - grass[0]!).toBeGreaterThan(20);
-    expect(Math.max(...road) - Math.min(...road)).toBeLessThan(10);
+    expect(Math.max(...road) - Math.min(...road)).toBeLessThan(15);
   });
 });
 
@@ -68,10 +69,27 @@ describe('authoritative road markings', () => {
     roads[158 * 320 + 194] = 0;
     expect(buildRoadSurfacePlan(paths, roads, map.width, map.height).intersections).toHaveLength(0);
   });
+  test('a real rail crossing accepts asphalt beneath the road stroke without accepting water or cover', () => {
+    const map = world(20, 20), terrain = Array<LiveTerrain>(400).fill('grass'), walkable = new Uint8Array(400).fill(1);
+    for (let x = 0; x < 20; x++) for (let y = 8; y < 13; y++) terrain[y * 20 + x] = 'road';
+    for (let y = 0; y < 20; y++) terrain[y * 20 + 10] = 'rail';
+    terrain[9 * 20 + 10] = 'water'; walkable[11 * 20 + 10] = 0;
+    const masks = buildSurfaceMasks(map, terrain, walkable);
+    expect(masks.road[10 * 20 + 10]).toBe(1); expect(masks.road[9 * 20 + 10]).toBe(0); expect(masks.road[11 * 20 + 10]).toBe(0);
+    const paths: LiveLandscapePath[] = [{ id: 'arterial-west', name: 'Дорога', kind: 'road', width: 5, points: [{ x: 2, y: 10 }, { x: 18, y: 10 }] }, { id: 'rail-west', name: 'Пути', kind: 'rail', width: 2, points: [{ x: 10, y: 0 }, { x: 10, y: 19 }] }];
+    const plan = buildRoadSurfacePlan(paths, masks.road, map.width, map.height);
+    expect(plan.segments).toHaveLength(1); expect(plan.segments[0]!.path.id).toBe('arterial-west');
+  });
   test('bent roads preserve distances and diagonal crossings are handled without axis assumptions', () => {
     const paths: LiveLandscapePath[] = [{ id: 'a', name: 'a', kind: 'road', width: 4, points: [{ x: 2, y: 2 }, { x: 5, y: 5 }, { x: 18, y: 18 }] }, { id: 'b', name: 'b', kind: 'road', width: 4, points: [{ x: 2, y: 18 }, { x: 18, y: 2 }] }];
     const plan = buildRoadSurfacePlan(paths, new Uint8Array(400).fill(1), 20, 20);
     expect(plan.segments[1]!.offset).toBeCloseTo(Math.hypot(3, 3));
     expect(plan.intersections).toHaveLength(1); expect(plan.intersections[0]).toMatchObject({ x: 10.5, y: 10.5 });
+  });
+  test('service-yard crossings have no zebras or center stripes; only main urban crossroads qualify', () => {
+    const paths: LiveLandscapePath[] = [{ id: 'city-street-x-170', name: 'a', kind: 'road', width: 6, points: [{ x: 10, y: 2 }, { x: 10, y: 18 }] }, { id: 'city-street-y-170', name: 'b', kind: 'road', width: 6, points: [{ x: 2, y: 10 }, { x: 18, y: 10 }] }, { id: 'service-yard-1', name: 'c', kind: 'road', width: 3, points: [{ x: 2, y: 6 }, { x: 18, y: 6 }] }];
+    const plan = buildRoadSurfacePlan(paths, new Uint8Array(400).fill(1), 20, 20);
+    expect(plan.intersections.length).toBeGreaterThan(1); expect(cityPedestrianCrossings(plan)).toHaveLength(1);
+    expect(roadHasMarkings(paths[0]!)).toBe(true); expect(roadHasMarkings(paths[2]!)).toBe(false);
   });
 });

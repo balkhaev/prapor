@@ -92,7 +92,7 @@ describe('authoritative multiplayer preparation and immutable field kits', () =>
     await f.enter(player); expect((await f.state(player)).state.supplies.ammo).toBe(0);
   });
 
-  test('a lost response before world expansion replays the paid launch journal at translated coordinates across two restarts', async () => {
+  test.each([6, 7])('a lost response on G%s replays the paid launch journal after expansion across two restarts', async previousVersion => {
     const f = await fixture(), player = await f.client(); f.interrupt();
     const failed = await f.call('join', player, { kitId: 'scout', intent: 'deploy', districtId: 'village', purpose: 'quests' });
     expect(failed.status).toBe(409); expect(await failed.json()).toEqual({ code: 'launch_pending' }); expect(f.live.healthy()).toBe(true);
@@ -100,11 +100,12 @@ describe('authoritative multiplayer preparation and immutable field kits', () =>
     expect((await f.call('join', player, { kitId: 'admin' })).status).toBe(400);
     f.restart(db => {
       const row = db.query<{ identity: string; state: string }, []>('SELECT identity,state FROM live_players').get()!, fighter = JSON.parse(row.state);
-      expect(fighter.entryPending).toBeDefined(); Object.assign(fighter, { x: 249, y: 249 }); Object.assign(fighter.entryPending, { x: 249, y: 249 });
+      const previousOffset = previousVersion === 7 ? 32 : 0;
+      expect(fighter.entryPending).toBeDefined(); Object.assign(fighter, { x: 249 + previousOffset, y: 249 + previousOffset }); Object.assign(fighter.entryPending, { x: 249 + previousOffset, y: 249 + previousOffset });
       db.query('UPDATE live_players SET state=? WHERE identity=?').run(JSON.stringify(fighter), row.identity);
-      const saved = JSON.parse(db.query<{ state: string }, []>('SELECT state FROM live_world').get()!.state); saved.geometryVersion = 'perimeter-g6-paid-entry';
+      const saved = JSON.parse(db.query<{ state: string }, []>('SELECT state FROM live_world').get()!.state); saved.geometryVersion = `perimeter-g${previousVersion}-paid-entry`;
       db.query('UPDATE live_world SET state=?').run(JSON.stringify(saved));
-      for (const boss of db.query<{ boss_id: string; state: string }, []>('SELECT boss_id,state FROM live_bosses').all()) { const state = JSON.parse(boss.state); state.x -= LIVE_WORLD_OFFSET; state.y -= LIVE_WORLD_OFFSET; db.query('UPDATE live_bosses SET state=? WHERE boss_id=?').run(JSON.stringify(state), boss.boss_id); }
+      for (const boss of db.query<{ boss_id: string; state: string }, []>('SELECT boss_id,state FROM live_bosses').all()) { const state = JSON.parse(boss.state); state.x -= LIVE_WORLD_OFFSET - previousOffset; state.y -= LIVE_WORLD_OFFSET - previousOffset; db.query('UPDATE live_bosses SET state=? WHERE boss_id=?').run(JSON.stringify(state), boss.boss_id); }
     });
     const resumed = await f.enter(player, 'assault', 'continue'); expect(resumed.selfId).toBe(pending.fighter!.id); expect(resumed.self.loadout?.kitId).toBe('scout'); expect(resumed.self.districtId).toBe('village'); expect(resumed.self.ammo).toBe(24); expect(resumed.self.launchPending).toBeUndefined();
     const translated = { x: 249 + LIVE_WORLD_OFFSET, y: 249 + LIVE_WORLD_OFFSET };

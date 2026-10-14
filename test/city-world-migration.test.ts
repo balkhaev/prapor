@@ -105,8 +105,9 @@ describe('verified G5 courtyard progress in expanded city architecture', () => {
     expect(map.generatorVersion).toBe(LIVE_GENERATOR_VERSION); expect(anchors).toHaveLength(72); expect(anchors.every(Boolean)).toBe(true);
     expect(map.containers.filter(anchor => anchor.id.startsWith('city-')).map(anchor => anchor.id).sort()).toEqual(ids.slice().sort());
     expect(anchors.filter((anchor, index) => anchor.x !== oldPositions[index]![0] || anchor.y !== oldPositions[index]![1]).length).toBeGreaterThanOrEqual(40);
-    const oldPoint = { x: 81, y: 65 }; // Walkable inside the first G5 workshop, now a G6 exterior wall.
-    const translatedPoint = { x: oldPoint.x + LIVE_WORLD_OFFSET, y: oldPoint.y + LIVE_WORLD_OFFSET };
+    const firstBuilding = map.citySites![0]!.buildings[0]!;
+    const translatedPoint = { x: firstBuilding.x, y: firstBuilding.entrances[0]!.y + 2 };
+    const oldPoint = previousPoint(translatedPoint); // A prior-frame body now lies in a rebuilt facade.
     expect(map.obstacles.some(obstacle => obstacle.kind === 'wall' && translatedPoint.x >= obstacle.x && translatedPoint.y >= obstacle.y && translatedPoint.x < obstacle.x + obstacle.width && translatedPoint.y < obstacle.y + obstacle.height)).toBe(true);
     expect(isLiveWalkable(map, translatedPoint)).toBe(false);
     const first = await enter(), observer = await enter(), body = stableBody(), inBag = item('old-watch');

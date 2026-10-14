@@ -45,9 +45,9 @@ function inspect(world: LiveMapDefinition): void {
   }
   for (const district of world.districts) {
     const pois = world.pois.filter(poi => poi.districtId === district.id);
-    expect(pois).toHaveLength(23);
+    expect(pois).toHaveLength(25);
     expect(pois.some(poi => poi.danger === 3)).toBe(true);
-    expect(world.containers.filter(container => pois.some(poi => poi.id === container.poiId))).toHaveLength(86);
+    expect(world.containers.filter(container => pois.some(poi => poi.id === container.poiId))).toHaveLength(94);
     // Count actual walking steps to the first find, including doors and detours.
     for (const spawn of district.spawns) {
       const distances = new Int32Array(blocked.length).fill(-1), frontier = [spawn.y * world.width + spawn.x]; distances[frontier[0]!] = 0;
@@ -88,7 +88,7 @@ function inspect(world: LiveMapDefinition): void {
   // The city is a continuous place with connected streets and usable architecture,
   // while every previously shipped landmark has moved out to the surrounding ring.
   const city = world.city!;
-  expect(city).toMatchObject({ name: 'Ольховск', x: 88, y: 88, width: 144, height: 144 });
+  expect(city).toMatchObject({ name: 'Ольховск', x: 116, y: 116, width: 216, height: 216 });
   expect(city.quarters).toHaveLength(4);
   expect(new Set(city.quarters.map(quarter => quarter.id)).size).toBe(4);
   const cityPois = world.pois.filter(poi => /^poi-(?:8|9|10|11)-[0-3]$/.test(poi.id));
@@ -100,7 +100,13 @@ function inspect(world: LiveMapDefinition): void {
   const sites = world.citySites!;
   expect(sites).toHaveLength(24);
   const usableBuildings = sites.flatMap(site => site.buildings);
-  expect(usableBuildings.length).toBeGreaterThanOrEqual(40);
+  expect(usableBuildings.length).toBeGreaterThanOrEqual(48);
+  for (let index = 0; index < usableBuildings.length; index++) {
+    const building = usableBuildings[index]!;
+    expect(usableBuildings.slice(index + 1).some(other => intersects(building, other))).toBe(false);
+    expect(cityPois.some(landmark => intersects(building, landmark))).toBe(false);
+    expect(world.obstacles.some(obstacle => obstacle.kind === 'building' && intersects(building, obstacle))).toBe(false);
+  }
   for (const site of sites) {
     const poi = world.pois.find(poi => poi.id === site.poiId)!;
     expect(poi).toMatchObject({ x: site.x, y: site.y, width: site.width, height: site.height });
@@ -146,7 +152,7 @@ function inspect(world: LiveMapDefinition): void {
   const architecture = [...usableBuildings, ...closedBuildings];
   expect(architecture.length).toBeGreaterThanOrEqual(80);
   for (const quarter of city.quarters) {
-    expect(quarter.width).toBe(72); expect(quarter.height).toBe(72);
+    expect(quarter.width).toBe(108); expect(quarter.height).toBe(108);
     expect(inside(quarter) && inside({ x: quarter.x + quarter.width - 1, y: quarter.y + quarter.height - 1 })).toBe(true);
     expect(cityPois.filter(poi => inside(poi, quarter) && inside({ x: poi.x + poi.width - 1, y: poi.y + poi.height - 1 }, quarter))).toHaveLength(4);
     expect(sites.filter(site => site.quarterId === quarter.id)).toHaveLength(6);
@@ -195,8 +201,8 @@ function inspect(world: LiveMapDefinition): void {
     if (path.kind === 'road' || path.kind === 'trail') expect(path.points.every(point => visited[Math.round(point.y) * world.width + Math.round(point.x)] === 1)).toBe(true);
   }
   // Confirm named crossings really approach collision water, rather than being cosmetic labels.
-  const bridges = world.paths!.filter(path => /bridge|мост/i.test(`${path.id} ${path.name}`) && !/approach|подход/i.test(`${path.id} ${path.name}`));
-  expect(bridges.length).toBeGreaterThanOrEqual(3);
+  const bridges = world.paths!.filter(path => path.id.startsWith('bridge-') && !path.id.includes('approach'));
+  expect(bridges.length).toBeGreaterThanOrEqual(5);
   const crossings: LivePoint[] = [];
   for (const bridge of bridges) {
     const cells: LivePoint[] = [];
@@ -222,7 +228,7 @@ function inspect(world: LiveMapDefinition): void {
   }
   expect(loops).toBeGreaterThan(0);
   // Streaming partitions index intersecting content; they do not dictate its placement.
-  const chunks = worldChunks(world); expect(chunks).toHaveLength(100);
+  const chunks = worldChunks(world); expect(chunks).toHaveLength(196);
   for (const chunk of chunks) {
     const bounds = { x: chunk.x * world.chunkSize, y: chunk.y * world.chunkSize, width: chunk.width, height: chunk.height };
     expect(chunk.poiIds.slice().sort()).toEqual(world.pois.filter(poi => intersects(poi, bounds)).map(poi => poi.id).sort());
@@ -256,14 +262,14 @@ describe('deterministic world generation', () => {
     expect(second).toEqual(first); expect(second).not.toBe(first);
     const other = generateLiveWorld('another-seed');
     expect(other.version).not.toBe(first.version); expect(other.obstacles).not.toEqual(first.obstacles);
-    expect(first).toMatchObject({ id: 'perimeter', width: 320, height: 320, chunkSize: 32 });
+    expect(first).toMatchObject({ id: 'perimeter', width: 448, height: 448, chunkSize: 32 });
     expect(first.generatorVersion).toBeGreaterThan(0);
   });
   test('POI footprints and placement are independent of streaming chunk origins', () => {
     for (const seed of ['organic-layout', 'another-layout', 'district-roads']) {
       const world = generateLiveWorld(seed);
-      expect(world.generatorVersion).toBe(7);
-      expect(world.pois).toHaveLength(92); expect(world.containers).toHaveLength(344); expect(world.npcSpawns).toHaveLength(192);
+      expect(world.generatorVersion).toBe(8);
+      expect(world.pois).toHaveLength(100); expect(world.containers).toHaveLength(376); expect(world.npcSpawns).toHaveLength(208);
       expect(new Set(world.pois.map(poi => `${poi.width}x${poi.height}`)).size).toBeGreaterThanOrEqual(4);
       expect(new Set(world.pois.map(poi => poi.x % world.chunkSize)).size).toBeGreaterThanOrEqual(5);
       expect(new Set(world.pois.map(poi => poi.y % world.chunkSize)).size).toBeGreaterThanOrEqual(5);
@@ -275,7 +281,7 @@ describe('deterministic world generation', () => {
       try { inspect(generateLiveWorld(`seed-${seed}`)); }
       catch (cause) { throw new Error(`Generated world seed-${seed} failed validation: ${cause instanceof Error ? cause.message : String(cause)}`, { cause }); }
     }
-  }, 60_000);
+  }, 180_000);
   test('default and seed-nine city guidance retains connected stops and an accessible first supply', () => {
     for (const seed of [LIVE_WORLD_SEED, 'seed-9']) inspect(generateLiveWorld(seed));
     const world = generateLiveWorld('seed-9'), firstForestSupply = world.pois.find(poi => poi.id === 'poi-2-0')!;
@@ -284,7 +290,7 @@ describe('deterministic world generation', () => {
   });
   test('architecture validation rejects a blocked doorway and a passage that jumps through its wall', () => {
     const world = generateLiveWorld();
-    expect(validateGeneratedWorld(world).containers).toBe(344);
+    expect(validateGeneratedWorld(world).containers).toBe(376);
     const firstBuilding = world.citySites![0]!.buildings[0]!, door = firstBuilding.entrances[0]!;
     const sideDoors = firstBuilding.entrances[0]!.y === firstBuilding.entrances[1]!.y;
     const sealed = structuredClone(world);

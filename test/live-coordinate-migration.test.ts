@@ -49,3 +49,23 @@ test('an invalid offline row rolls back the whole migration without touching pai
     expect({ players: db.query('SELECT * FROM live_players').all(), world: db.query('SELECT * FROM live_world').all(), bosses: db.query('SELECT * FROM live_bosses').all(), outbox: db.query('SELECT * FROM live_economy_outbox').all() }).toEqual(before);
   } finally { db.close(); }
 });
+
+test.each(['direct G6', 'saved G7', 'interrupted G7 startup'])('G8 cumulative coordinates handle %s once while keeping kit receipts and offline bodies', scenario => {
+  const db = fixture(), expanded = { generatorVersion: 8 } as LiveWorld;
+  try {
+    const outbox = db.query('SELECT * FROM live_economy_outbox').all();
+    if (scenario !== 'direct G6') {
+      expect(migrateExpandedLiveCoordinates(db, current)).toBe(true);
+      if (scenario === 'saved G7') { const saved = world(db); saved.geometryVersion = 'perimeter-g7-shipped'; delete saved.coordinateExpansionVersion; db.query('UPDATE live_world SET state=?').run(JSON.stringify(saved)); }
+    }
+    expect(migrateExpandedLiveCoordinates(db, expanded)).toBe(true);
+    expect(player(db, 'offline')).toMatchObject({ x: 96, y: 96, identity: 'offline', id: 'fighter', body: { wounded: true }, medicine: { splint: 1 }, lootItems: [{ id: 'inventory' }], searchedDropIds: ['cycle'] });
+    expect(player(db, 'paid')).toMatchObject({ x: 345, y: 102, entryPending: { id: 'receipt', x: 345, y: 102, respawn: true, automatic: true } });
+    expect(world(db).drops.find((drop: { id: string }) => drop.id === 'district-corpse')).toMatchObject({ x: 100, y: 229 });
+    const once = { players: db.query('SELECT * FROM live_players').all(), world: world(db), bosses: db.query('SELECT * FROM live_bosses').all() };
+    expect(migrateExpandedLiveCoordinates(db, expanded)).toBe(false);
+    expect({ players: db.query('SELECT * FROM live_players').all(), world: world(db), bosses: db.query('SELECT * FROM live_bosses').all() }).toEqual(once);
+    expect(world(db).coordinateExpansionVersion).toBe(8);
+    expect(db.query('SELECT * FROM live_economy_outbox').all()).toEqual(outbox);
+  } finally { db.close(); }
+});
