@@ -5,6 +5,7 @@ import { dirname } from "node:path";
 import { LIVE_CAPACITY, LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT, LIVE_MEDICAL_CAPACITY, LIVE_PENDING_CAPACITY, LIVE_SERVER_ID, LIVE_SERVER_NAME, liveMedicalSupplyNeeded, type LiveCommand, type LiveDistrictId, type LiveDrop, type LiveEntity, type LiveEvent, type LiveMapId, type LivePlayer, type LivePoint, type LivePurpose, type LiveSnapshot, type LiveStatus, type LiveWorld } from "../src/game/live";
 import { LIVE_MAPS } from "../src/game/live-maps";
 import { createLiveNavigation } from "./live-navigation";
+import { createLiveSortie, type LiveSortiePlan } from './live-autobattle';
 import { migratedContainerAnchor, migratedLootCooldownKey } from "./live-world-migration";
 import { BODY_PARTS, BODY_PART_LABELS, TREATMENT_DURATION_MS, TREATMENT_LABELS, advanceBleeding, applyHit, canTreat, completeTreatment, createHealth, createMedicalInventory, healthPercent, injuryEffects, isAlive, isStable, parseHealth, parseMedicalInventory, selectTreatment, type BodyPart, type HealthState, type TreatmentType } from "../src/game/health";
 import { type LootModel } from "../src/game/loot";
@@ -36,6 +37,8 @@ export interface LiveService {
 }
 interface PathCache { path: LivePoint[]; pathGoal: LivePoint | null; replanAt: number }
 interface Participant extends LiveEntity, LivePlayer, PathCache {
+  sortie?: LiveSortiePlan;
+  threatId?: string;
   mapId: LiveMapId;
   identity: string;
   online: boolean;
@@ -52,7 +55,7 @@ interface Participant extends LiveEntity, LivePlayer, PathCache {
   searchedDropIds: string[];
   economyOwner?: string;
   /** Saved before the headquarters debit, consumed in the same transaction as its acknowledgement. */
-  entryPending?: { id: string; districtId: LiveDistrictId; purpose: LivePurpose; x: number; y: number; respawn: boolean };
+  entryPending?: { id: string; districtId: LiveDistrictId; purpose: LivePurpose; x: number; y: number; respawn: boolean; automatic?: boolean };
 }
 interface Scav extends LiveEntity, PathCache {
   body: HealthState; healthAt: number; aim: { targetId: string; endsAt: number; part: BodyPart } | null;
@@ -160,7 +163,10 @@ function commandFrom(body: Record<string, unknown>, mapId: LiveMapId): LiveComma
   }
   if (["loot", "search"].includes(body.type) && exactKeys(body, ["type", "id"]) && typeof body.id === "string" && /^[a-zA-Z0-9_-]{1,80}$/.test(body.id)) return { type: body.type as "loot" | "search", id: body.id };
   if (body.type === "patrol" && exactKeys(body, ["type", "enabled"]) && typeof body.enabled === "boolean") return { type: "patrol", enabled: body.enabled };
-  if (["heal", "extract", "resupply", "cancelTreatment"].includes(body.type) && exactKeys(body, ["type"])) return { type: body.type as "heal" | "extract" | "resupply" | "cancelTreatment" };
+  if (body.type === 'automation' && (exactKeys(body, ['type', 'enabled']) || exactKeys(body, ['type', 'enabled', 'routeId'])) && typeof body.enabled === 'boolean'
+    && (body.routeId === undefined || typeof body.routeId === 'string' && maps.get(mapId)!.routes?.some(route => route.id === body.routeId)))
+    return { type: 'automation', enabled: body.enabled, ...(typeof body.routeId === 'string' ? { routeId: body.routeId } : {}) };
+  if (["heal", "extract", "resupply", "cancelTreatment", 'recall'].includes(body.type) && exactKeys(body, ["type"])) return { type: body.type as "heal" | "extract" | "resupply" | "cancelTreatment" | 'recall' };
   if (body.type === "respawn" && Object.keys(body).every(key => ["type", "districtId", "purpose", "kitId"].includes(key))
     && (body.districtId === undefined || districtFrom(body.districtId)) && (body.purpose === undefined || purposeFrom(body.purpose)) && (body.kitId === undefined || isLiveKitId(body.kitId)))
     return { type: "respawn", ...(body.districtId ? { districtId: body.districtId as LiveDistrictId } : {}), ...(body.purpose ? { purpose: body.purpose as LivePurpose } : {}), ...(isLiveKitId(body.kitId) ? { kitId: body.kitId } : {}) };
@@ -208,6 +214,16 @@ export function createLiveService(options: LiveOptions): LiveService {
   const lootCooldowns = new Map<string, number>();
   const lootKey = (mapId: LiveMapId, point: LivePoint, containerId?: string): string => containerId ? `container:${containerId}` : `${mapId}:${point.x}:${point.y}`;
   const freshPath = (): PathCache => ({ path: [], pathGoal: null, replanAt: 0 });
+  const startSortie = (player: Participant, routeId?: string): void => {
+    const bossPois = [...bossArenas.values()].sort((a, b) => Number(getBoss(b.bossId)!.districtId === player.districtId) - Number(getBoss(a.bossId)!.districtId === player.districtId)
+      || distance(player, a.home) - distance(player, b.home)).map(arena => arena.poiId);
+    Object.assign(player, createLiveSortie(maps.get(player.mapId)!, player.districtId, player.purpose, now(), routeId, bossPois));
+    player.patrol = false; player.destination = null; player.targetId = null; player.searching = null; Object.assign(player, freshPath());
+  };
+  const pauseSortie = (player: Participant, reason = 'Ручное управление'): void => {
+    if (!player.automation || player.automation.stage === 'complete' || player.automation.stage === 'downed') return;
+    Object.assign(player.automation, { enabled: false, stage: 'paused', goal: 'Автобой приостановлен', reason, target: null, targetId: null });
+  };
   const durable = (entity: Participant | Scav): Omit<Participant | Scav, keyof PathCache> => {
     const { path: _path, pathGoal: _goal, replanAt: _replan, ...state } = entity;
     return state;
@@ -240,7 +256,8 @@ export function createLiveService(options: LiveOptions): LiveService {
     player.body = storedBody(player.body, player.health);
     player.medicine = player.medicine ? parseMedicalInventory(player.medicine) : createMedicalInventory({ medkit: Math.max(0, player.medkits) * 40 });
     player.healthAt = Number.isFinite(player.healthAt) ? player.healthAt : now();
-    advanceBleeding(player.body, Math.max(0, now() - player.healthAt)); player.healthAt = now(); player.health = isAlive(player.body) ? healthPercent(player.body) : 0;
+    if (player.automation?.stage !== 'complete') advanceBleeding(player.body, Math.max(0, now() - player.healthAt));
+    player.healthAt = now(); player.health = isAlive(player.body) ? healthPercent(player.body) : 0;
     player.medkits = Math.ceil(player.medicine.medkit / 40); player.treatment = null; player.aim = null; player.leaveAt = 0;
     player.dangerUntil = Number.isFinite(player.dangerUntil) ? player.dangerUntil : 0; player.graceUntil = Number.isFinite(player.graceUntil) ? player.graceUntil : 0;
     if (player.health <= 0 && !player.respawnAt) player.respawnAt = now() + RESPAWN_MS;
@@ -250,6 +267,7 @@ export function createLiveService(options: LiveOptions): LiveService {
     if (player.lootItems) player.lootItems = readEconomyLootItems(player.lootItems, LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT);
     player.targetId = null; player.travelReadyAt ??= 0; player.lastCombatAt ??= 0; player.disconnectAt = 0;
     player.online = false; player.destination = null; player.patrol = false; player.action = player.health <= 0 ? "downed" : "idle";
+    if (player.automation) { player.automation.target = null; player.automation.targetId = null; }
     if (wasAlive && player.health <= 0) down(player);
     return player;
   };
@@ -262,7 +280,7 @@ export function createLiveService(options: LiveOptions): LiveService {
       if (local.length > 120) { const keep = new Set(local.slice(-120).map(item => item.id)); events = events.filter(item => item.mapId !== map.id || keep.has(item.id)); }
     }
   };
-  const exposed = (player: Participant): boolean => player.online || player.graceUntil > now();
+  const exposed = (player: Participant): boolean => player.automation?.stage !== 'complete' && (player.online || player.graceUntil > now());
   const occupied = (mapId: LiveMapId, point: LivePoint, exceptId?: string): boolean => {
     for (const player of players.values()) if (player.mapId === mapId && player.id !== exceptId && player.health > 0 && exposed(player) && player.x === point.x && player.y === point.y) return true;
     for (const scav of scavs.values()) if (scav.mapId === mapId && scav.id !== exceptId && scav.health > 0 && scav.x === point.x && scav.y === point.y) return true;
@@ -381,7 +399,8 @@ export function createLiveService(options: LiveOptions): LiveService {
           updated.loadout = { ...receipt.loadout };
           updated.safeUntil = now() + 5000;
           if (pending.respawn) {
-            updated.body = createHealth(); updated.health = 100; updated.healthAt = now(); updated.treatment = null; updated.aim = null; updated.leaveAt = 0;
+            updated.body = createHealth(); updated.health = 100;
+            updated.healthAt = now(); updated.treatment = null; updated.aim = null; updated.leaveAt = 0;
             const point = clear(updated.mapId, pending, updated.id) ? pending : nearestFree(pending, pending.districtId);
             updated.x = point.x; updated.y = point.y; updated.districtId = pending.districtId; updated.purpose = pending.purpose;
             updated.cargo = 0; updated.lootItems = []; updated.respawnAt = 0; updated.safeUntil = now() + 5000;
@@ -389,6 +408,7 @@ export function createLiveService(options: LiveOptions): LiveService {
             updated.nextAttack = 0; updated.targetId = null; updated.patrol = false; updated.searching = null; Object.assign(updated, freshPath());
           }
           delete updated.entryPending;
+          if (pending.automatic) startSortie(updated);
         }
         if (updated.ammo + receipt.ammo > (updated.loadout?.maxAmmo ?? 60)) throw new Error("Supply would exceed live capacity");
         updated.ammo += receipt.ammo;
@@ -541,7 +561,7 @@ export function createLiveService(options: LiveOptions): LiveService {
   for (const definition of BOSSES) { const boss = loadBoss(definition.id); scavs.set(boss.id, boss); }
   const routeSummaries = (maps.get(DEFAULT_MAP)!.routes ?? []).map(route => ({ id: route.id, name: route.name, description: route.description,
     districtId: route.districtId, purpose: route.purpose, stops: route.poiIds.map(id => maps.get(DEFAULT_MAP)!.pois.find(poi => poi.id === id)!.name) }));
-  const status = (includeRoutes = true): LiveStatus => ({ id: LIVE_SERVER_ID, name: LIVE_SERVER_NAME, online: [...players.values()].filter(player => player.online).length, capacity: LIVE_CAPACITY, startedAt,
+  const status = (includeRoutes = true): LiveStatus => ({ id: LIVE_SERVER_ID, name: LIVE_SERVER_NAME, online: [...players.values()].filter(player => player.online && exposed(player)).length, capacity: LIVE_CAPACITY, startedAt,
     ...(includeRoutes ? { routes: routeSummaries } : {}),
     bosses: BOSSES.map(definition => {
       const boss = scavs.get(`boss-${definition.id}`)!, arena = bossArenas.get(definition.id)!;
@@ -549,27 +569,32 @@ export function createLiveService(options: LiveOptions): LiveService {
     }),
     maps: LIVE_MAPS.map(map => ({ id: map.id, name: map.name, description: map.description, theme: map.theme, width: map.width, height: map.height,
       ...(includeRoutes && map.city ? { city: map.city } : {}),
-      online: [...players.values()].filter(player => player.online && player.mapId === map.id).length, npcs: [...scavs.values()].filter(scav => scav.mapId === map.id && scav.health > 0).length })),
+      online: [...players.values()].filter(player => player.online && exposed(player) && player.mapId === map.id).length, npcs: [...scavs.values()].filter(scav => scav.mapId === map.id && scav.health > 0).length })),
     districts: maps.get(DEFAULT_MAP)!.districts.map(district => ({ ...district,
-      online: [...players.values()].filter(player => player.online && districtAt(player) === district.id).length,
+      online: [...players.values()].filter(player => player.online && exposed(player) && districtAt(player) === district.id).length,
       npcs: [...scavs.values()].filter(scav => scav.health > 0 && districtAt(scav) === district.id).length })) });
   const lineOfSight = (mapId: LiveMapId, a: LivePoint, b: LivePoint): boolean => navigation.get(mapId)!.hasLineOfSight(a, b);
   const snapshot = (player: Participant, request?: Request): Omit<LiveSnapshot, "world"> & { world?: LiveWorld } => {
     const world = worldFor(player.mapId), visible = (point: LivePoint): boolean => distance(player, point) <= VISION_RADIUS && lineOfSight(player.mapId, player, point);
+    const automation = player.automation ? structuredClone(player.automation) : undefined;
+    if (automation?.targetId) {
+      const target = drops.get(automation.targetId) ?? [...players.values(), ...scavs.values()].find(entity => entity.id === automation.targetId && entity.health > 0);
+      if (!target || !visible(target)) { automation.targetId = null; automation.target = null; }
+    }
     player.districtId = districtAt(player);
     const chunkX = Math.floor(player.x / world.chunkSize), chunkY = Math.floor(player.y / world.chunkSize), visibleChunks: LivePoint[] = [];
     for (let y = chunkY - 1; y <= chunkY + 1; y++) for (let x = chunkX - 1; x <= chunkX + 1; x++) if (x >= 0 && y >= 0 && x * world.chunkSize < world.width && y * world.chunkSize < world.height) visibleChunks.push({ x, y });
     return {
       server: status(false), now: now(), ...(request?.headers.get("x-prapor-world-version") === world.version ? {} : { world }), worldVersion: world.version, visibleChunks, selfId: player.id,
-      self: { id: player.id, ammo: player.ammo, medkits: Math.ceil(player.medicine.medkit / 40), cargo: player.cargo, stash: player.stash, kills: player.kills, bossKills: player.bossKills ?? 0, respawnAt: player.respawnAt, patrol: player.patrol, targetId: player.targetId, travelReadyAt: player.travelReadyAt,
-        ...(player.loadout ? { loadout: { ...player.loadout } } : {}), ...(player.entryPending ? { launchPending: true } : {}),
+      self: { id: player.id, ammo: player.ammo, medkits: Math.ceil(player.medicine.medkit / 40), cargo: player.cargo, stash: player.stash, kills: player.kills, bossKills: player.bossKills ?? 0, respawnAt: player.respawnAt, patrol: player.patrol, targetId: automation?.enabled ? automation.stage === 'combat' ? automation.targetId : null : player.targetId, travelReadyAt: player.travelReadyAt,
+        ...(player.loadout ? { loadout: { ...player.loadout } } : {}), ...(player.entryPending ? { launchPending: true } : {}), ...(automation ? { automation } : {}),
         body: player.body, medicine: player.medicine, treatment: player.treatment, leaveAt: player.leaveAt, districtId: player.districtId, purpose: player.purpose, searching: player.searching ? { ...player.searching } : null,
         ...(options.economy ? { gameId: player.gameId, lootItems: structuredClone(player.lootItems ?? []),
           pendingDelivery: pendingRows.all(player.identity).filter(row => row.kind === "delivery").map(row => {
             const parcel = JSON.parse(row.payload) as LiveDelivery;
             return { items: parcel.items, money: parcel.money, message: row.message };
           }), economyMessage: player.economyMessage ?? "Находки с выхода поступают в убежище; пополнение расходует его запасы." } : {}) },
-      entities: [...players.values()].filter(other => exposed(other) && other.mapId === player.mapId && (other.id === player.id || visible(other))).map(publicEntity)
+      entities: [...players.values()].filter(other => other.mapId === player.mapId && (other.id === player.id || exposed(other) && visible(other))).map(publicEntity)
         .concat([...scavs.values()].filter(scav => scav.mapId === player.mapId && visible(scav)).map(publicEntity)),
       // Dense fights can leave more cargo than one bounded packet can contain.
       // Project a stable page; keep every physical UUID in the durable world.
@@ -631,6 +656,7 @@ export function createLiveService(options: LiveOptions): LiveService {
       if (amount > 0 || target.lootItems?.length) addDrop(target.mapId, target, amount, "body", target.lootItems ?? []);
       target.cargo = 0; if (options.economy) target.lootItems = [];
       target.destination = null; target.patrol = false; target.targetId = null; target.treatment = null; target.searching = null; Object.assign(target, freshPath());
+      if (target.automation) Object.assign(target.automation, { enabled: false, stage: 'downed', goal: 'Боец погиб', target: null, targetId: null, reason: 'Груз остался на месте боя', completedAt: defeatedAt });
     } else if (amount > 0) addDrop(target.mapId, target, amount);
     if (attacker && "kills" in attacker) attacker.kills++;
     event(target.mapId, "combat", attacker ? `${attacker.name} победил ${target.name}.` : `${target.name} погиб от кровопотери.`, attacker?.id, target.id);
@@ -663,6 +689,7 @@ export function createLiveService(options: LiveOptions): LiveService {
     if ("dangerUntil" in target) target.dangerUntil = now() + DISCONNECT_GRACE_MS;
     if (isParticipant(attacker)) attacker.lastCombatAt = now();
     if (isParticipant(target)) target.lastCombatAt = now();
+    if (isParticipant(target)) target.threatId = attacker.id;
     attacker.safeUntil = 0; attacker.action = "combat"; attacker.aim = null;
     const outgoing = attacker.bossId ? getBoss(attacker.bossId)!.live.outgoingDamage : 1, incoming = target.bossId ? getBoss(target.bossId)!.live.incomingDamage : 1;
     const damage = (isParticipant(attacker) && attacker.loadout ? attacker.loadout.damage + (aimed ? 5 : 0) : aimed ? 45 : attacker.kind === "player" ? 40 : "faction" in attacker && attacker.faction === "raiders" ? 33 : 25) * outgoing * incoming;
@@ -694,6 +721,7 @@ export function createLiveService(options: LiveOptions): LiveService {
       if ("dangerUntil" in target) target.dangerUntil = now() + DISCONNECT_GRACE_MS;
       if (isParticipant(attacker)) attacker.lastCombatAt = now();
       if (isParticipant(target)) target.lastCombatAt = now();
+      if (isParticipant(target)) target.threatId = attacker.id;
       event(attacker.mapId, "combat", `${attacker.name} ${aimed ? "готовит прицельный выстрел в голову" : "прицеливается"} в ${target.name}: найди укрытие.`, attacker.id, target.id);
     } else {
       attacker.nextAttack = now() + Math.ceil((isParticipant(attacker) && attacker.loadout ? attacker.loadout.attackMs : 900) / slowdown); shot(attacker, target, randomPart());
@@ -749,6 +777,7 @@ export function createLiveService(options: LiveOptions): LiveService {
     else player.lootItems = [];
     player.respawnAt = 0; player.safeUntil = now() + 5000; player.destination = null; player.action = "idle"; player.nextAttack = 0; player.targetId = null; player.patrol = false;
     player.districtId = districtId; player.purpose = purpose; player.searching = null; Object.assign(player, freshPath());
+    startSortie(player);
     event(player.mapId, "respawn", `${player.name} вернулся в район «${maps.get(player.mapId)!.districts.find(district => district.id === districtId)!.name}».`, player.id);
   };
   const startTreatment = (player: Participant, type: TreatmentType, part: BodyPart): void => {
@@ -758,6 +787,172 @@ export function createLiveService(options: LiveOptions): LiveService {
     player.destination = null; player.aim = null; player.leaveAt = 0; player.targetId = null; player.searching = null; Object.assign(player, freshPath()); player.action = "idle";
     player.treatment = { type, part, startedAt: now(), endsAt: now() + Math.ceil(TREATMENT_DURATION_MS[type] * injuryEffects(player.body, now()).treatment) };
     event(player.mapId, "combat", `${player.name} начинает лечение: ${TREATMENT_LABELS[type]}, ${BODY_PART_LABELS[part]}.`, player.id);
+  };
+  const extractCargo = (player: Participant): void => {
+    if (!maps.get(player.mapId)!.extracts.some(exit => distance(player, exit) <= 1.5)) throw new LiveError(409, 'extract_out_of_range');
+    if (options.economy && player.lastCombatAt > now() - COMBAT_TRAVEL_MS) throw new LiveError(409, 'in_combat');
+    const amount = player.cargo + (options.economy ? player.stash : 0), itemCount = player.lootItems?.length ?? 0;
+    prepareDelivery(player);
+    if (!options.economy) { player.ammo = 60; player.medicine = createMedicalInventory(); player.medkits = Math.ceil(player.medicine.medkit / 40); }
+    player.destination = null; player.patrol = false; player.targetId = null; player.searching = null; Object.assign(player, freshPath());
+    event(player.mapId, 'extract', options.economy ? `${player.name} отправил в убежище: ${itemCount} находок и ${amount} ₽.`
+      : amount ? `${player.name} сохранил груз: ${amount}.` : `${player.name} пополнил боекомплект на выходе.`, player.id);
+  };
+  const returnSortie = (player: Participant, reason: string): void => {
+    if (!player.automation || !player.sortie) startSortie(player);
+    player.sortie!.recalling = true;
+    player.sortie!.extractTarget = null; player.sortie!.blockedExtractKeys = []; player.sortie!.blockedAt = 0;
+    Object.assign(player.automation!, { enabled: true, stage: 'extract', goal: 'Возвращение к выходу', reason, targetId: null, target: null });
+    player.targetId = null; player.destination = null; player.searching = null; player.patrol = false; Object.assign(player, freshPath());
+  };
+  /** Pick a legal adjacent approach if another actor occupies a public landmark. */
+  const approachPoint = (player: Participant, point: LivePoint, corners = false): LivePoint | null => {
+    return [point, { x: point.x + 1, y: point.y }, { x: point.x - 1, y: point.y }, { x: point.x, y: point.y + 1 }, { x: point.x, y: point.y - 1 },
+      ...(corners ? [{ x: point.x - 1, y: point.y - 1 }, { x: point.x + 1, y: point.y - 1 }, { x: point.x - 1, y: point.y + 1 }, { x: point.x + 1, y: point.y + 1 }] : [])]
+      .filter(candidate => clear(player.mapId, candidate, player.id)).sort((a, b) => distance(player, a) - distance(player, b))[0] ?? null;
+  };
+  const automaticOrders = (player: Participant): boolean => {
+    const automatic = player.automation, plan = player.sortie;
+    if (!automatic?.enabled || !plan) return false;
+    const world = maps.get(player.mapId)!, time = now();
+    const observe = (point: LivePoint) => distance(player, point) <= VISION_RADIUS && lineOfSight(player.mapId, player, point);
+    const status = (stage: NonNullable<LivePlayer['automation']>['stage'], goal: string, target: LivePoint | null = null, targetId: string | null = null): void => {
+      Object.assign(automatic, { stage, goal, target: target ? { x: target.x, y: target.y } : null, targetId });
+      player.targetId = stage === 'combat' ? targetId : null;
+    };
+    const navigate = (point: LivePoint, stage: 'route' | 'loot' | 'extract', goal: string, targetId: string | null = null): void => {
+      status(stage, goal, point, targetId);
+      const destination = approachPoint(player, point, stage === 'extract');
+      if (!destination) { player.destination = null; plan.blockedAt ||= time; return; }
+      if (player.destination?.x !== destination.x || player.destination?.y !== destination.y) Object.assign(player, freshPath());
+      player.destination = { x: destination.x, y: destination.y };
+    };
+    const weight = (player.lootItems ?? []).reduce((sum, item) => sum + getLiveLootWeight(item), 0);
+    if (!plan.recalling) {
+      const reason = player.ammo <= Math.max(3, Math.floor((player.loadout?.maxAmmo ?? 60) * .15)) ? 'Боекомплект на исходе'
+        : player.health < 40 ? 'Критическое состояние'
+        : weight >= LIVE_LOOT_WEIGHT * .8 || (player.lootItems?.length ?? 0) >= 24 || player.cargo >= 400 ? 'Рюкзак заполнен'
+        : time - automatic.startedAt >= 12 * 60_000 ? 'Пора возвращаться'
+        : null;
+      if (reason) returnSortie(player, reason);
+    }
+    // Automation has the same sight and protection rules as a browser command.
+    // Non-PvP plans defend against players only when that player threatened them.
+    const hostiles = [...players.values(), ...scavs.values()].filter(target => target.id !== player.id && target.mapId === player.mapId
+      && target.health > 0 && target.safeUntil <= time && (!isParticipant(target) || exposed(target)) && observe(target)
+      && (!isParticipant(target) || player.purpose === 'pvp' || player.threatId === target.id && player.lastCombatAt > time - COMBAT_TRAVEL_MS))
+      .sort((a, b) => Number(b.id === player.threatId) - Number(a.id === player.threatId)
+        || (player.purpose === 'pvp' ? Number(isParticipant(b)) - Number(isParticipant(a)) : 0)
+        || (player.purpose === 'boss' ? Number(Boolean(b.bossId)) - Number(Boolean(a.bossId)) : 0)
+        || distance(player, a) - distance(player, b));
+    const inRange = hostiles.find(target => distance(player, target) <= rangeOf(player));
+    if (inRange && player.ammo > 0 && !(plan.recalling && player.health < 40)) {
+      status('combat', `Бой: ${inRange.name}`, inRange, inRange.id);
+      player.destination = null; player.searching = null;
+      if (player.treatment) cancelTreatment(player);
+      if (!player.aim && player.nextAttack <= time) attack(player, inRange);
+      return true;
+    }
+    if (player.treatment) { status('treat', TREATMENT_LABELS[player.treatment.type]); return true; }
+    if (player.aim) return true;
+    if (!(inRange && plan.recalling && player.health < 40) && (!isStable(player.body) || player.health < 72 || injuryEffects(player.body, time).movement < .75)) {
+      const treatment = selectTreatment(player.body, player.medicine, time);
+      if (treatment) { startTreatment(player, treatment.type, treatment.part); status('treat', TREATMENT_LABELS[treatment.type]); return true; }
+      if (!plan.recalling) returnSortie(player, 'Медицина закончилась');
+    }
+    if (plan.recalling) {
+      plan.blockedExtractKeys ??= [];
+      if (plan.blockedAt && time - plan.blockedAt >= 8_000) {
+        if (plan.extractTarget) plan.blockedExtractKeys.push(`${plan.extractTarget.x},${plan.extractTarget.y}`);
+        plan.extractTarget = null; plan.blockedAt = 0; player.destination = null; Object.assign(player, freshPath());
+      }
+      if (!plan.extractTarget) {
+        const nav = navigation.get(player.mapId)!;
+        const reachable = world.extracts.filter(exit => !plan.blockedExtractKeys.includes(`${exit.x},${exit.y}`)).flatMap(exit => {
+          const approaches = Array.from({ length: 9 }, (_, index) => ({ x: exit.x + index % 3 - 1, y: exit.y + Math.floor(index / 3) - 1 }))
+            .filter(point => clear(player.mapId, point, player.id)).sort((a, b) => distance(player, a) - distance(player, b));
+          for (const approach of approaches) {
+            const path = nav.findPath(player, approach);
+            if (path) return [{ exit, length: path.length }];
+          }
+          return [];
+        }).sort((a, b) => a.length - b.length);
+        plan.extractTarget = reachable[0]?.exit ?? null;
+      }
+      const exit = plan.extractTarget;
+      if (!exit) {
+        pauseSortie(player, 'Выходы временно перекрыты'); player.automation!.goal = 'Возвращение приостановлено';
+        player.destination = null; player.targetId = null; Object.assign(player, freshPath());
+        return true;
+      }
+      navigate(exit, 'extract', 'Возвращение к выходу');
+      if (distance(player, exit) <= 1.5) {
+        player.destination = null;
+        if (player.lastCombatAt > time - COMBAT_TRAVEL_MS) { status('extract', 'Ожидание безопасного выхода', exit); return true; }
+        extractCargo(player);
+        Object.assign(automatic, { enabled: false, stage: 'complete', goal: 'Выход завершён · груз вынесен', target: null, targetId: null, completedAt: time });
+        player.action = 'idle'; player.graceUntil = 0;
+        event(player.mapId, 'leave', `${player.name} завершил автоматический выход.`, player.id);
+        return true;
+      }
+      return false;
+    }
+    const chasing = hostiles.find(target => distance(player, target) <= (player.purpose === 'pvp' || player.purpose === 'boss' ? 14 : rangeOf(player) + 2));
+    if (chasing && player.ammo > 0 && ['pvp', 'pve', 'boss'].includes(player.purpose)) {
+      navigate(chasing, 'route', `Сближение: ${chasing.name}`, chasing.id);
+      return false;
+    }
+    if (player.searching) { status('search', 'Обыск контейнера', drops.get(player.searching.id) ?? null, player.searching.id); return true; }
+    const poi = world.pois.find(poi => poi.id === plan.poiIds[automatic.stopIndex]);
+    if (!poi) { returnSortie(player, 'Маршрут пройден'); return false; }
+    if (plan.blockedAt && time - plan.blockedAt >= 8_000) {
+      const blockedDrop = automatic.targetId ? drops.get(automatic.targetId) : undefined;
+      const blocked = automatic.target;
+      const anchor = blockedDrop?.containerId ? world.containers.find(anchor => anchor.id === blockedDrop.containerId)
+        : blocked && world.containers.find(anchor => anchor.poiId === poi.id && anchor.x === blocked.x && anchor.y === blocked.y);
+      if (blockedDrop) plan.skippedDropIds.push(blockedDrop.id);
+      if (anchor) plan.visitedContainerIds.push(anchor.id);
+      else if (!blockedDrop) { automatic.stopIndex++; plan.enteredStop = -1; }
+      plan.blockedAt = 0; player.destination = null; Object.assign(player, freshPath());
+      return false;
+    }
+    const visibleDrops = [...drops.values()].filter(drop => drop.mapId === player.mapId && drop.expiresAt > time && !plan.skippedDropIds.includes(drop.id) && observe(drop)
+      && (!drop.containerId || !plan.visitedContainerIds.includes(drop.containerId))
+      && (distance(player, drop) <= 5 || plan.enteredStop === automatic.stopIndex && world.containers.some(anchor => anchor.id === drop.containerId && anchor.poiId === poi.id)))
+      .sort((a, b) => distance(player, a) - distance(player, b));
+    const drop = visibleDrops[0];
+    if (drop) {
+      // Unsearched contents are never considered by the planner, including weight.
+      const searched = !drop.containerId || player.searchedDropIds.includes(drop.id);
+      if (searched && !canCarry(player, drop)) {
+        plan.skippedDropIds.push(drop.id);
+        if (drop.containerId) plan.visitedContainerIds.push(drop.containerId);
+        if (player.cargo > 0 || player.lootItems?.length) returnSortie(player, 'Следующая находка не помещается');
+        return false;
+      }
+      navigate(drop, 'loot', drop.containerId ? 'Проверка контейнера' : 'Сбор трофеев', drop.id);
+      if (distance(player, drop) <= 1.5 && lineOfSight(player.mapId, player, drop)) {
+        if (!searched) { search(player, drop.id); status('search', 'Обыск контейнера', drop, drop.id); return true; }
+        loot(player, drop.id);
+        if (drop.containerId) plan.visitedContainerIds.push(drop.containerId);
+        plan.skippedDropIds.push(drop.id); player.destination = null;
+        return true;
+      }
+      return false;
+    }
+    if (plan.enteredStop !== automatic.stopIndex) {
+      const entrance = [...poi.entrances].sort((a, b) => distance(player, a) - distance(player, b))[0]!;
+      if (distance(player, entrance) <= 1.5) { plan.enteredStop = automatic.stopIndex; plan.blockedAt = 0; }
+      else { navigate(entrance, 'route', `Маршрут: ${poi.name}`); return false; }
+    }
+    const anchor = world.containers.filter(anchor => anchor.poiId === poi.id && !plan.visitedContainerIds.includes(anchor.id))
+      .sort((a, b) => distance(player, a) - distance(player, b))[0];
+    if (anchor) {
+      if (distance(player, anchor) <= 1.5 && lineOfSight(player.mapId, player, anchor) && ![...drops.values()].some(drop => drop.containerId === anchor.id)) {
+        plan.visitedContainerIds.push(anchor.id); player.destination = null;
+      } else navigate(anchor, 'route', `Осмотр: ${poi.name}`);
+    } else { automatic.stopIndex++; plan.enteredStop = -1; player.destination = null; Object.assign(player, freshPath()); }
+    return false;
   };
   const limits = new Map<string, { count: number; expires: number }>();
   const limit = (key: string, maximum: number, windowMs = 60_000): void => {
@@ -808,6 +1003,9 @@ export function createLiveService(options: LiveOptions): LiveService {
   const simulate = (): void => {
     for (const entity of [...players.values(), ...scavs.values()]) {
       const time = now();
+      // A completed sortie has returned to headquarters. Preserve its wounds
+      // without simulating further blood loss or replenishing field supplies.
+      if (isParticipant(entity) && entity.automation?.stage === 'complete') { entity.healthAt = time; continue; }
       if (!isParticipant(entity) && entity.bossId) settleBossHealth(entity, time);
       if (entity.health <= 0) { entity.healthAt = time; continue; }
       if (isParticipant(entity) && entity.online) {
@@ -879,8 +1077,24 @@ export function createLiveService(options: LiveOptions): LiveService {
     }
     for (const player of players.values()) {
       if (!player.online || player.health <= 0) continue;
+      if (player.automation?.stage === 'complete') continue;
       player.searchedDropIds = player.searchedDropIds.filter(id => drops.has(id));
       finishSearch(player);
+      if (player.automation?.enabled && !player.leaveAt) {
+        try { if (automaticOrders(player)) continue; }
+        catch (error) {
+          // Expected refusal of one fighter's action (for example a full delivery
+          // journal) must preserve its cargo and keep the shared simulation alive.
+          if (!(error instanceof LiveError)) throw error;
+          pauseSortie(player, error.code === 'delivery_pending_full'
+            ? 'Освободи место для ожидающих доставок в убежище'
+            : 'Действие прервано. Проверь бойца и продолжи рейд');
+          player.automation!.goal = 'Автобой ожидает приказа';
+          player.destination = null; player.targetId = null; player.searching = null; player.aim = null; player.action = 'idle';
+          cancelTreatment(player); Object.assign(player, freshPath());
+          continue;
+        }
+      }
       if (player.searching) continue;
       if (player.treatment || player.aim || player.leaveAt) continue;
       if (player.action === "combat" && player.nextAttack <= now()) player.action = "idle";
@@ -918,8 +1132,8 @@ export function createLiveService(options: LiveOptions): LiveService {
       }
       if (player.destination && player.nextMove <= now()) {
         const step = pathStep(player, player.destination);
-        if (step) { player.x = step.x; player.y = step.y; player.action = "moving"; }
-        else player.action = "idle";
+        if (step) { player.x = step.x; player.y = step.y; player.action = "moving"; if (player.sortie) player.sortie.blockedAt = 0; }
+        else { player.action = "idle"; if (player.sortie && player.automation?.enabled) player.sortie.blockedAt ||= now(); }
         if (player.destination?.x === player.x && player.destination.y === player.y) { player.destination = null; player.action = "idle"; }
         player.nextMove = now() + Math.ceil(350 / Math.max(.25, injuryEffects(player.body, now()).movement));
       }
@@ -984,7 +1198,7 @@ export function createLiveService(options: LiveOptions): LiveService {
     if (!identity) throw new LiveError(401, 'join_required');
     const row = readPlayer.get(identity.identity), player = players.get(identity.identity) ?? (row ? JSON.parse(row.state) as Participant : undefined);
     const stock = identity.economy && options.economy?.entry ? options.economy.entry(identity.economy) : null;
-    const fighter = player ? { id: player.id, name: player.name, x: player.x, y: player.y, health: player.health,
+    const fighter = player && (player.automation?.stage !== 'complete' || player.entryPending) ? { id: player.id, name: player.name, x: player.x, y: player.y, health: player.health,
       body: storedBody(player.body, player.health), medicine: player.medicine ? parseMedicalInventory(player.medicine) : createMedicalInventory({ medkit: player.medkits * 40 }),
       ammo: player.ammo, districtId: districtFrom(player.districtId) ?? districtAt(player), purpose: purposeFrom(player.purpose) ?? 'loot',
       cargo: player.cargo, lootCount: player.lootItems?.length ?? 0, respawnAt: player.respawnAt,
@@ -998,13 +1212,13 @@ export function createLiveService(options: LiveOptions): LiveService {
     if (stock.money < LIVE_FIELD_KITS[kitId].money) throw new LiveError(409, 'insufficient_money');
     if (Math.floor(stock.ammo) < 1) throw new LiveError(409, 'no_ammo');
   };
-  const launch = (player: Participant, kitId: LiveKitId, districtId: LiveDistrictId, purpose: LivePurpose, respawning: boolean): void => {
+  const launch = (player: Participant, kitId: LiveKitId, districtId: LiveDistrictId, purpose: LivePurpose, respawning: boolean, automatic = true): void => {
     if (player.entryPending) return;
     if (!player.economyOwner || !player.gameId) throw new LiveError(401, 'join_required');
     if (pendingRows.all(player.identity).some(row => row.kind === 'supply')) throw new LiveError(409, 'supply_pending');
     validateLaunch({ key: player.economyOwner, gameId: player.gameId, name: player.name }, kitId);
     const point = respawning ? pickPoint(player.mapId, true, districtId) : { x: player.x, y: player.y }, id = randomUUID();
-    player.entryPending = { id, districtId, purpose, ...point, respawn: respawning };
+    player.entryPending = { id, districtId, purpose, ...point, respawn: respawning, automatic };
     player.destination = null; player.targetId = null; player.patrol = false; player.searching = null; Object.assign(player, freshPath());
     prepare(player, 'supply', { id, owner: player.economyOwner, gameId: player.gameId, createdAt: now(), ammo: LIVE_FIELD_KITS[kitId].maxAmmo, medkits: 2, kitId });
     // One durable request precedes the other database's debit. Retries use this exact receipt id.
@@ -1021,14 +1235,32 @@ export function createLiveService(options: LiveOptions): LiveService {
     }
     if (player.entryPending) throw new LiveError(409, 'launch_pending');
     if (player.health <= 0) throw new LiveError(409, "player_downed");
-    if (command.type === "cancelTreatment") { cancelTreatment(player); return; }
+    if (player.automation?.stage === 'complete') throw new LiveError(409, 'sortie_complete');
+    if (command.type === 'automation') {
+      if (!command.enabled) {
+        pauseSortie(player, 'Приказ игрока'); cancelTreatment(player); player.aim = null; player.searching = null; player.targetId = null; player.destination = null; player.patrol = false; Object.assign(player, freshPath());
+      } else {
+        if (!player.automation || !player.sortie || command.routeId) {
+          const route = command.routeId ? maps.get(player.mapId)!.routes!.find(route => route.id === command.routeId)! : undefined;
+          if (route) player.purpose = route.purpose;
+          startSortie(player, command.routeId);
+        } else {
+          Object.assign(player.automation, { enabled: true, stage: player.sortie.recalling ? 'extract' : 'route', goal: player.sortie.recalling ? 'Возвращение к выходу' : 'Продолжение маршрута', reason: player.sortie.recalling ? player.automation.reason : null });
+          if (player.sortie.recalling) { player.sortie.blockedExtractKeys = []; player.sortie.extractTarget = null; player.sortie.blockedAt = 0; }
+        }
+        player.leaveAt = 0; player.patrol = false;
+      }
+      return;
+    }
+    if (command.type === 'recall') { returnSortie(player, 'Приказ на возвращение'); player.aim = null; player.leaveAt = 0; return; }
+    if (command.type === "cancelTreatment") { cancelTreatment(player); pauseSortie(player); return; }
     if (command.type === "move") { cancelTreatment(player); player.aim = null; player.leaveAt = 0; player.destination = { x: command.x, y: command.y }; player.patrol = false; player.targetId = null; player.searching = null; Object.assign(player, freshPath()); }
     if (command.type === "attack") {
       const target = targetFor(player, command.targetId);
       attack(player, target, command.aimed); player.patrol = false; player.targetId = null; player.leaveAt = 0;
     }
     if (command.type === "engage") {
-      if (command.targetId === null) { player.targetId = null; return; }
+      if (command.targetId === null) { player.targetId = null; pauseSortie(player); return; }
       const target = targetFor(player, command.targetId);
       if (distance(player, target) > VISION_RADIUS || !lineOfSight(player.mapId, player, target)) throw new LiveError(409, "target_unavailable");
       if (target.safeUntil > now()) throw new LiveError(409, "spawn_protection");
@@ -1052,14 +1284,7 @@ export function createLiveService(options: LiveOptions): LiveService {
     }
     if (command.type === "treat") { startTreatment(player, command.medicine, command.part); player.patrol = false; }
     if (command.type === "extract") {
-      if (!maps.get(player.mapId)!.extracts.some(exit => distance(player, exit) <= 1.5)) throw new LiveError(409, "extract_out_of_range");
-      if (options.economy && player.lastCombatAt > now() - COMBAT_TRAVEL_MS) throw new LiveError(409, "in_combat");
-      const amount = player.cargo + (options.economy ? player.stash : 0), itemCount = player.lootItems?.length ?? 0;
-      prepareDelivery(player);
-      if (!options.economy) { player.ammo = 60; player.medicine = createMedicalInventory(); player.medkits = Math.ceil(player.medicine.medkit / 40); }
-      player.destination = null; player.patrol = false; player.targetId = null; player.searching = null; Object.assign(player, freshPath());
-      event(player.mapId, "extract", options.economy ? `${player.name} отправил в убежище: ${itemCount} находок и ${amount} ₽.`
-        : amount ? `${player.name} сохранил груз: ${amount}.` : `${player.name} пополнил боекомплект на выходе.`, player.id);
+      extractCargo(player);
     }
     if (command.type === "resupply") {
       if (!options.economy) throw new LiveError(409, "economy_unavailable");
@@ -1073,6 +1298,7 @@ export function createLiveService(options: LiveOptions): LiveService {
       player.economyMessage = "Пополнение из убежища ожидает подтверждения.";
     }
     if (command.type === "patrol") { player.patrol = command.enabled; player.destination = null; player.targetId = null; player.leaveAt = 0; player.searching = null; Object.assign(player, freshPath()); }
+    pauseSortie(player);
   };
   const fetchApi = async (request: Request, clientAddress = "unknown"): Promise<Response | null> => {
     const url = new URL(request.url), path = url.pathname;
@@ -1099,10 +1325,10 @@ export function createLiveService(options: LiveOptions): LiveService {
         let identity = identityFrom(request, true), token: string | undefined;
         let player = identity ? players.get(identity.identity) ?? loadPlayer(identity.identity) : undefined;
         if (body.intent === 'continue' && !player) throw new LiveError(409, 'no_fighter');
-        if (body.intent === 'deploy' && player && player.health > 0 && !player.entryPending) throw new LiveError(409, 'fighter_alive');
+        if (body.intent === 'deploy' && player && player.health > 0 && !player.entryPending && player.automation?.stage !== 'complete') throw new LiveError(409, 'fighter_alive');
         const creating = !player;
         if (creating && options.economy?.entry && identity?.economy) validateLaunch(identity.economy, isLiveKitId(body.kitId) ? body.kitId : 'scav');
-        if (!player?.online && status().online >= LIVE_CAPACITY) throw new LiveError(503, "server_full");
+        if ((!player?.online || player.automation?.stage === 'complete' && body.intent === 'deploy') && status().online >= LIVE_CAPACITY) throw new LiveError(503, "server_full");
         if (!identity) {
           limit(`guest:${ipKey}`, 12, 60 * 60_000);
           token = randomBytes(32).toString("base64url"); identity = { identity: `guest:${randomUUID()}` };
@@ -1114,13 +1340,22 @@ export function createLiveService(options: LiveOptions): LiveService {
             health: 100, body: createHealth(), medicine: options.economy ? createMedicalInventory(LIVE_MEDICAL_CAPACITY) : createMedicalInventory(), treatment: null, leaveAt: 0, healthAt: now(), dangerUntil: 0, graceUntil: 0, aim: null, safeUntil: now() + 5000, action: "idle", ammo: 60, medkits: options.economy ? 2 : 3, cargo: 0, stash: 0, kills: 0, respawnAt: 0, patrol: false,
             targetId: null, travelReadyAt: 0, districtId, purpose, searching: null, searchedDropIds: [], ...freshPath(), lastCombatAt: 0, disconnectAt: 0, online: false, heartbeat: now(), destination: null, nextMove: 0, nextAttack: 0 };
           players.set(player.identity, player);
+          if (body.intent === 'deploy' && !options.economy?.entry) startSortie(player);
         }
         players.set(player.identity, player);
         if (identity.economy) { player.economyOwner = identity.economy.key; player.gameId = identity.economy.gameId; player.lootItems ??= []; }
         if (creating && options.economy?.entry) {
           player.ammo = 0; player.medicine = createMedicalInventory(false); player.medkits = 0;
-          launch(player, isLiveKitId(body.kitId) ? body.kitId : 'scav', player.districtId, player.purpose, false);
+          launch(player, isLiveKitId(body.kitId) ? body.kitId : 'scav', player.districtId, player.purpose, false, body.intent === 'deploy');
         } else if (player.entryPending) { persist(); flushEconomy(); }
+        else if (body.intent === 'deploy' && player.automation?.stage === 'complete') {
+          if (options.economy?.entry) launch(player, isLiveKitId(body.kitId) ? body.kitId : 'scav', districtFrom(body.districtId) ?? player.districtId, purposeFrom(body.purpose) ?? player.purpose, true);
+          else {
+            const districtId = districtFrom(body.districtId) ?? player.districtId;
+            Object.assign(player, pickPoint(player.mapId, true, districtId), { districtId, purpose: purposeFrom(body.purpose) ?? player.purpose, safeUntil: now() + 5000 });
+            startSortie(player);
+          }
+        }
         else if (body.intent === 'deploy' && player.health <= 0 && options.economy?.entry) {
           if (player.respawnAt > now()) throw new LiveError(409, 'respawn_not_ready');
           launch(player, isLiveKitId(body.kitId) ? body.kitId : 'scav', districtFrom(body.districtId) ?? player.districtId, purposeFrom(body.purpose) ?? player.purpose, true);
@@ -1148,7 +1383,7 @@ export function createLiveService(options: LiveOptions): LiveService {
         if (!exactKeys(body, [])) throw new LiveError(400, "invalid_request");
         player.searching = null; Object.assign(player, freshPath());
         cancelTreatment(player); player.aim = null; player.targetId = null;
-        if (player.health > 0 && (player.dangerUntil > now() || !isStable(player.body))) {
+        if (player.automation?.stage !== 'complete' && player.health > 0 && (player.dangerUntil > now() || !isStable(player.body))) {
           const duration = player.lastCombatAt > now() - COMBAT_TRAVEL_MS ? COMBAT_TRAVEL_MS : LEAVE_MS;
           player.leaveAt = now() + duration; player.destination = null; player.patrol = false; player.action = "idle";
           event(player.mapId, "leave", `${player.name} выходит из района: ещё ${duration / 1000} секунд в опасной зоне.`, player.id); persist(); return response({ ok: true, leaveAt: player.leaveAt });

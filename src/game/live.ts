@@ -130,12 +130,29 @@ export interface LiveEntity extends LivePoint {
   bossId?: BossId;
 }
 export interface LiveTreatment { type: TreatmentType; part: BodyPart; startedAt: number; endsAt: number }
+/** Private sortie orders and observed targets, decided by the authoritative server. */
+export interface LiveAutomation {
+  enabled: boolean;
+  stage: 'route' | 'combat' | 'search' | 'loot' | 'treat' | 'extract' | 'paused' | 'complete' | 'downed';
+  goal: string;
+  targetId: string | null;
+  target: LivePoint | null;
+  routeId: string | null;
+  routeName: string | null;
+  stopIndex: number;
+  stopCount: number;
+  reason: string | null;
+  startedAt: number;
+  completedAt: number;
+}
 export interface LivePlayer {
   id: string;
   ammo: number;
   /** Absent on older fighters, whose paid/persistent combat rules remain unchanged. */
   loadout?: LiveLoadout;
   launchPending?: boolean;
+  /** Older manual fighters and snapshots can omit automatic sortie orders. */
+  automation?: LiveAutomation;
   medkits: number;
   cargo: number;
   stash: number;
@@ -217,4 +234,6 @@ export type LiveCommand =
   | { type: "extract" }
   | { type: "respawn"; districtId?: LiveDistrictId; purpose?: LivePurpose; kitId?: LiveKitId }
   | { type: "resupply" }
+  | { type: "automation"; enabled: boolean; routeId?: string }
+  | { type: "recall" }
   | { type: "patrol"; enabled: boolean };

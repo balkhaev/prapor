@@ -18,7 +18,7 @@ const ORIGIN = 'http://field-entry.test', NOW = 1_792_000_000_000;
 interface Client { cookie: string; game: GameSnapshot; live?: LiveSnapshot }
 interface Fixture {
   folder: string; gamePath: string; livePath: string; game: GameService; live: LiveService;
-  interrupt(): void; setTime(value: number): void; client(): Promise<Client>;
+  interrupt(): void; blockDeliveries(): void; setTime(value: number): void; client(): Promise<Client>;
   call(path: string, client: Client, body?: unknown): Promise<Response>; entry(client: Client): Promise<LiveEntry>;
   enter(client: Client, kitId?: LiveKitId, intent?: 'continue' | 'deploy'): Promise<LiveSnapshot>;
   state(client: Client): Promise<GameSnapshot>; seed(client: Client, change: (state: GameState) => void): void;
@@ -28,14 +28,14 @@ const fixtures: Fixture[] = [];
 afterEach(async () => { for (const f of fixtures.splice(0)) { f.live.close(); f.game.close(); await rm(f.folder, { recursive: true, force: true }); } });
 async function fixture(): Promise<Fixture> {
   const folder = await mkdtemp(join(tmpdir(), 'prapor-field-entry-')), gamePath = join(folder, 'game.sqlite'), livePath = join(folder, 'live.sqlite');
-  let time = NOW, interrupted = false;
+  let time = NOW, interrupted = false, deliveriesBlocked = false;
   const gameOptions = { dbPath: gamePath, secureCookies: false, allowedOrigins: [ORIGIN], now: () => time };
   let game: GameService = createGameService(gameOptions);
   const bridge = { resolve: (request: Request) => game.liveEconomy.resolve(request), entry: (identity: Parameters<NonNullable<typeof game.liveEconomy.entry>>[0]) => game.liveEconomy.entry!(identity),
-    deliver: (parcel: Parameters<typeof game.liveEconomy.deliver>[0]) => game.liveEconomy.deliver(parcel),
+    deliver: (parcel: Parameters<typeof game.liveEconomy.deliver>[0]) => deliveriesBlocked ? { ok: false, message: 'Склад переполнен' } : game.liveEconomy.deliver(parcel),
     supply: (request: LiveSupplyRequest) => { const receipt = game.liveEconomy.supply(request); if (interrupted) { interrupted = false; throw new Error('Interrupted after committed launch debit'); } return receipt; } };
   const liveOptions = { dbPath: livePath, secureCookies: false, allowedOrigins: [ORIGIN], now: () => time, random: () => 0, automaticTicks: false, economy: bridge };
-  const f: Fixture = { folder, gamePath, livePath, game, live: createLiveService(liveOptions), interrupt: () => { interrupted = true; }, setTime: (value: number) => { time = value; },
+  const f: Fixture = { folder, gamePath, livePath, game, live: createLiveService(liveOptions), interrupt: () => { interrupted = true; }, blockDeliveries: () => { deliveriesBlocked = true; }, setTime: (value: number) => { time = value; },
     async client(): Promise<Client> {
       const reply = (await game.fetch(request('game/join', undefined, {})))!; expect(reply.status).toBe(200);
       return { cookie: reply.headers.get('set-cookie')!.split(';')[0]!, game: await reply.json() as GameSnapshot };
@@ -110,6 +110,72 @@ describe('authoritative multiplayer preparation and immutable field kits', () =>
     f.seed(player, state => { state.money = 140; }); const receipt = f.game.liveEconomy.supply(request); expect(receipt.money).toBe(140); const after = await f.state(player);
     expect(f.game.liveEconomy.supply({ ...request })).toEqual(receipt); expect(() => f.game.liveEconomy.supply({ ...request, kitId: 'assault', ammo: 60 })).toThrow(LiveEconomyError);
     expect(() => f.game.liveEconomy.supply({ ...request, ammo: 1 })).toThrow('invalid_live_supply'); expect(await f.state(player)).toEqual(after);
+  });
+
+  test('a completed automatic sortie is safe at headquarters and its next prepared deployment buys one fresh kit', async () => {
+    const f = await fixture(), player = await f.client(), first = await f.enter(player, 'scout', 'deploy');
+    expect(first.self.automation?.enabled).toBe(true);
+    f.seed(player, state => { state.supplies.ammo = 60; state.supplies.medicine = 6; });
+    f.restart(db => {
+      const row = db.query<{ identity: string; state: string }, []>('SELECT identity,state FROM live_players').get()!, fighter = JSON.parse(row.state);
+      fighter.body.parts.chest.hp = 70; fighter.body.parts.chest.bleeding = 'heavy';
+      Object.assign(fighter, first.world.extracts[0]!, { healthAt: NOW, medicine: createMedicalInventory(false), cargo: 80, lastCombatAt: 0, safeUntil: 0 });
+      db.query('UPDATE live_players SET state=? WHERE identity=?').run(JSON.stringify(fighter), row.identity);
+    });
+    await f.enter(player, undefined, 'continue');
+    expect((await f.call('action', player, { type: 'recall' })).status).toBe(200);
+    f.setTime(NOW + 1000); f.live.tick();
+    const reply = await f.call('state', player); expect(reply.status).toBe(200);
+    const returned = await reply.json() as LiveSnapshot;
+    expect(returned.self.automation?.stage).toBe('complete'); expect(returned.self.cargo).toBe(0);
+    expect((await f.call('action', player, { type: 'automation', enabled: true })).status).toBe(409);
+    expect((await f.call('action', player, { type: 'recall' })).status).toBe(409);
+    expect((await f.call('leave', player, {})).status).toBe(200);
+    const preparation = await f.entry(player); expect(preparation.mode).toBe('new'); expect(preparation.fighter).toBeNull();
+    f.setTime(NOW + 300_000); f.restart();
+    const continued = await f.enter(player, undefined, 'continue');
+    expect(continued.self.body).toEqual(returned.self.body); expect(continued.self.automation?.stage).toBe('complete');
+    const before = await f.state(player); f.interrupt();
+    const pending = await f.call('join', player, { intent: 'deploy', kitId: 'assault', districtId: 'village', purpose: 'pve' });
+    expect(pending.status).toBe(409); expect(await pending.json()).toEqual({ code: 'launch_pending' });
+    const debited = await f.state(player); expect(debited.state.money).toBe(before.state.money - 180);
+    expect(debited.state.supplies.ammo).toBe(before.state.supplies.ammo - 60); expect(debited.state.supplies.medicine).toBe(before.state.supplies.medicine - 2);
+    f.restart(); const next = await f.enter(player, undefined, 'continue');
+    expect(next.selfId).toBe(first.selfId); expect(next.self.loadout?.kitId).toBe('assault'); expect(next.self.ammo).toBe(60);
+    expect(next.self.districtId).toBe('village'); expect(next.self.purpose).toBe('pve'); expect(next.self.body).toEqual(createHealth());
+    expect(next.self.automation).toMatchObject({ enabled: true, stage: 'route', routeId: 'route-village-pve' });
+    expect(count(f.gamePath, 'authoritative_live_supplies')).toBe(2);
+    expect((await f.enter(player, undefined, 'continue')).selfId).toBe(first.selfId);
+    expect(await f.state(player)).toEqual(debited); expect(count(f.gamePath, 'authoritative_live_supplies')).toBe(2);
+  });
+
+  test('an automatic extraction with a full delivery journal pauses only its owner and preserves cargo while other players keep playing', async () => {
+    const f = await fixture(), player = await f.client(), observer = await f.client(), first = await f.enter(player, 'scout', 'deploy');
+    await f.enter(observer); f.blockDeliveries();
+    f.restart(db => {
+      const row = db.query<{ identity: string; state: string }, []>('SELECT identity,state FROM live_players').all().find(row => JSON.parse(row.state).id === first.selfId)!, fighter = JSON.parse(row.state);
+      Object.assign(fighter, first.world.extracts[0]!, { cargo: 99, lastCombatAt: 0, safeUntil: 0 });
+      db.query('UPDATE live_players SET state=? WHERE identity=?').run(JSON.stringify(fighter), row.identity);
+      for (let index = 0; index < 32; index++) {
+        const id = randomUUID(), payload = { id, owner: fighter.economyOwner, gameId: fighter.gameId, createdAt: NOW, money: 1, items: [] };
+        db.query('INSERT INTO live_economy_outbox(id,identity,kind,payload,message) VALUES(?,?,?,?,?)').run(id, row.identity, 'delivery', JSON.stringify(payload), 'Ожидает место');
+      }
+    });
+    await f.enter(player, undefined, 'continue'); await f.enter(observer, undefined, 'continue');
+    expect((await f.call('action', player, { type: 'recall' })).status).toBe(200);
+    f.setTime(NOW + 1000); f.live.tick(); expect(f.live.healthy()).toBe(true);
+    const reply = await f.call('state', player); expect(reply.status).toBe(200);
+    const paused = await reply.json() as LiveSnapshot;
+    expect(paused.self.automation).toMatchObject({ enabled: false, stage: 'paused', reason: 'Освободи место для ожидающих доставок в убежище' });
+    expect(paused.self.cargo).toBe(99); expect(paused.self.pendingDelivery?.length).toBe(32);
+    expect((await f.call('status', observer)).status).toBe(200);
+    expect((await f.call('action', observer, { type: 'move', x: 0, y: 0 })).status).toBe(200);
+    f.setTime(NOW + 1250); f.live.tick(); expect(f.live.healthy()).toBe(true);
+    const persisted = new Database(f.livePath, { readonly: true });
+    try {
+      const row = persisted.query<{ state: string }, []>('SELECT state FROM live_players').all().find(row => JSON.parse(row.state).id === first.selfId)!;
+      expect(JSON.parse(row.state).cargo).toBe(99);
+    } finally { persisted.close(); }
   });
 
   test('a dead fighter purchases a fresh kit after the cooldown; living and legacy bodies cannot be healed or teleported by entry', async () => {

@@ -52,17 +52,17 @@ function harness(run:(url:string,init:RequestInit)=>Promise<Response>,getGameId:
   const timers=new Map<number,()=>void>();let timer=0;
   Object.defineProperty(globalThis,'document',{configurable:true,value:{createElement:()=>new Element(),querySelector:()=>null,activeElement:null,addEventListener:()=>{},removeEventListener:()=>{}}});
   Object.defineProperty(globalThis,'window',{configurable:true,value:{setTimeout:(callback:()=>void)=>{timers.set(++timer,callback);return timer;},clearTimeout:(id:number)=>timers.delete(id)}});
-  const world=new Element(),dock=new Element(),updates:LiveSnapshot[]=[],routeUpdates:string[][]=[];
+  const world=new Element(),dock=new Element(),updates:LiveSnapshot[]=[],routeUpdates:string[][]=[],focusedPoints:{x:number;y:number}[]=[];
   let economicChanges=0,marketOpens=0;
   const calls:{url:string;init:RequestInit}[]=[];
   const mode=createLiveMode({world:world as unknown as HTMLElement,dock:dock as unknown as HTMLElement,getAccountId,getGameId,getStock:()=>({ammo:100,medicine:3}),
     onExit:()=>{},onAccount:()=>{},onMarket:()=>{marketOpens++;},onEconomyChange:()=>{economicChanges++;},
-    sceneFactory:()=>({show:()=>{},hide:()=>{},clear:()=>routeUpdates.push([]),setSelected:()=>{},setRoute:ids=>routeUpdates.push([...ids]),update:snapshot=>updates.push(snapshot),destroy:()=>{}}),
+    sceneFactory:()=>({show:()=>{},hide:()=>{},clear:()=>routeUpdates.push([]),setSelected:()=>{},setRoute:ids=>routeUpdates.push([...ids]),focusPoint:point=>focusedPoints.push({...point}),update:snapshot=>updates.push(snapshot),destroy:()=>{}}),
     fetch:(async (url:string,init:RequestInit)=>{calls.push({url,init});return run(url,init);}) as unknown as typeof fetch,
   });
   cleanup=()=>{mode.destroy();if(originalDocument)Object.defineProperty(globalThis,'document',originalDocument);else Reflect.deleteProperty(globalThis,'document');if(originalWindow)Object.defineProperty(globalThis,'window',originalWindow);else Reflect.deleteProperty(globalThis,'window');};
   const pump=async()=>{await tick();await tick();};
-  return {mode,world,dock,overlay:world.children[0]!,calls,updates,routeUpdates,pump,get economicChanges(){return economicChanges;},get marketOpens(){return marketOpens;},firePoll(){const next=timers.entries().next().value;if(next){timers.delete(next[0]);next[1]();}}};
+  return {mode,world,dock,overlay:world.children[0]!,calls,updates,routeUpdates,focusedPoints,pump,get economicChanges(){return economicChanges;},get marketOpens(){return marketOpens;},firePoll(){const next=timers.entries().next().value;if(next){timers.delete(next[0]);next[1]();}}};
 }
 
 describe('live loot and headquarters presentation',()=>{
@@ -83,7 +83,7 @@ describe('live loot and headquarters presentation',()=>{
     expect(crossing).toBeDefined();Object.assign(state.entities[0]!,crossing);state.self.districtId='sawmill';
     h.firePoll();await h.pump();
     expect(h.routeUpdates.at(-1)).toEqual([first.poiId]);
-    expect(h.dock.innerHTML).toContain(`data-live-button="poi:${first.poiId}"`);
+    expect(h.dock.innerHTML).toContain(`data-live-button="poi-view:${first.poiId}"`);
     expect(h.dock.innerHTML).not.toContain('class="live-boss-weapon"');
     expect(h.updates.at(-1)?.entities.some(entity=>entity.bossId)).toBe(false);
     expect(h.calls.some(call=>call.url.endsWith('/action'))).toBe(false);
@@ -111,7 +111,7 @@ describe('live loot and headquarters presentation',()=>{
       return response(url.endsWith('/join')?state:{...state,world:undefined,server:{...state.server,maps:state.server.maps.map(({city:_city,...map})=>map)}});
     });
     h.mode.show();await h.pump();
-    expect(h.world.children[0]!.innerHTML).toContain('Город в сердце Периметра');
+    expect(h.world.children[0]!.innerHTML).toContain('class="entry-city"');
     expect(h.world.children[0]!.innerHTML).toContain('Ольховск');
     h.overlay.click('join');await h.pump();
     const original=state.world.routes!.find(route=>route.purpose==='loot'&&route.districtId==='customs')!;
@@ -133,7 +133,7 @@ describe('live loot and headquarters presentation',()=>{
     const h=harness(async url=>url.endsWith('/entry')?response(entryFixture(state)):url.endsWith('/leave')?response({ok:true}):response(state),()=>game);
     h.mode.show();await h.pump();h.overlay.click('join');await h.pump();
     const selected=state.world.routes!.find(route=>route.purpose==='loot'&&route.districtId==='sawmill')!;
-    h.dock.click(`route:${selected.id}`);expect(h.routeUpdates.at(-1)).toEqual(selected.poiIds);
+    h.dock.click(`route:${selected.id}`);await h.pump();expect(h.routeUpdates.at(-1)).toEqual(selected.poiIds);
     state.entities[0]!.health=0;state.entities[0]!.action='downed';state.self.respawnAt=state.now+10_000;
     h.firePoll();await h.pump();expect(h.routeUpdates.at(-1)).toEqual([]);
     expect(h.dock.innerHTML).not.toContain('live-route-districts');
@@ -145,7 +145,7 @@ describe('live loot and headquarters presentation',()=>{
     game=NEXT;h.mode.resetIdentity();await h.pump();expect(h.routeUpdates.at(-1)).toEqual([]);
     expect(h.dock.innerHTML).not.toContain('live-route-districts');
   });
-  test('routes show real stops, choose guidance locally and request movement to a walkable entrance with cached geometry',async()=>{
+  test('routes send server orders while inspecting a real stop only moves the camera with cached geometry',async()=>{
     const state=fixture();
     state.server.routes=state.world.routes!.map(({id,name,description,districtId,purpose,poiIds})=>({id,name,description,districtId,purpose,stops:poiIds.map(id=>state.world.pois.find(poi=>poi.id===id)!.name)}));
     const h=harness(async url=>{
@@ -165,18 +165,17 @@ describe('live loot and headquarters presentation',()=>{
     expect(h.routeUpdates.at(-1)).toEqual(original.poiIds);
     const selected=state.world.routes!.find(route=>route.purpose===state.self.purpose&&route.districtId==='sawmill')!;
     const before=h.calls.length;
-    h.dock.click(`route:${selected.id}`);
-    expect(h.calls).toHaveLength(before);
+    h.dock.click(`route:${selected.id}`);await h.pump();
+    expect(h.calls).toHaveLength(before+1);
     expect(h.routeUpdates.at(-1)).toEqual(selected.poiIds);
     expect(h.dock.innerHTML).toContain(selected.name);
-    const poi=state.world.pois.find(poi=>poi.id===selected.poiIds[0])!;
-    h.dock.click(`poi:${poi.id}`);await h.pump();
-    const request=h.calls.find(call=>call.url.endsWith('/action'))!;
-    const command=JSON.parse(request.init.body as string);
-    expect(command.type).toBe('move');
-    expect(poi.entrances).toContainEqual({x:command.x,y:command.y});
-    expect(isLiveWalkable(state.world,command)).toBe(true);
+    const request=h.calls.at(-1)!;
+    expect(JSON.parse(request.init.body as string)).toEqual({type:'automation',enabled:true,routeId:selected.id});
     expect(request.init.headers).toMatchObject({'x-prapor-game':GAME,'x-prapor-world-version':state.world.version});
+    const poi=state.world.pois.find(poi=>poi.id===selected.poiIds[0])!;
+    h.dock.click(`poi-view:${poi.id}`);await h.pump();
+    expect(h.calls).toHaveLength(before+1);
+    expect(h.focusedPoints.at(-1)).toMatchObject({x:poi.x,y:poi.y});
     expect(h.routeUpdates.at(-1)).toEqual(selected.poiIds);
     expect(h.updates.at(-1)?.world.routes).toEqual(state.world.routes);
     expect(h.updates.at(-1)?.self.gameId).toBe(GAME);
@@ -211,6 +210,24 @@ describe('live loot and headquarters presentation',()=>{
     expect(liveEconomyChanged(before,next)).toBe(true);
     expect(liveEconomyChanged(next,next,'resupply')).toBe(true);
   });
+  test('a polled automatic completion refreshes headquarters once without replaying extraction',async()=>{
+    const state=fixture(),route=state.world.routes!.find(route=>route.purpose==='loot'&&route.districtId==='customs')!;
+    state.self.cargo=42;state.self.lootItems=[loot()];
+    state.self.automation={enabled:true,stage:'extract',goal:'Возвращение к выходу',targetId:null,target:null,
+      routeId:route.id,routeName:route.name,stopIndex:route.poiIds.length,stopCount:route.poiIds.length,reason:null,startedAt:1000,completedAt:0};
+    const h=harness(async url=>url.endsWith('/entry')?response(entryFixture(state)):url.endsWith('/leave')?response({ok:true}):response(state));
+    h.mode.show();await h.pump();h.overlay.click('join');await h.pump();
+    expect(h.economicChanges).toBe(1);
+    const ammo=state.self.ammo,medicine=structuredClone(state.self.medicine);
+    state.self.cargo=0;state.self.lootItems=[];state.now=3000;
+    Object.assign(state.self.automation,{enabled:false,stage:'complete',goal:'Выход завершён · груз в убежище',completedAt:3000});
+    h.firePoll();await h.pump();
+    expect(h.economicChanges).toBe(2);expect(h.dock.innerHTML).toContain('Рейд завершён');
+    expect(h.updates.at(-1)?.self).toMatchObject({cargo:0,lootItems:[],pendingDelivery:[],ammo,medicine});
+    h.firePoll();await h.pump();h.firePoll();await h.pump();
+    expect(h.economicChanges).toBe(2);
+    expect(h.calls.some(call=>call.url.endsWith('/action'))).toBe(false);
+  });
   test('refilling a consumed aid refreshes headquarters even when the medkit HP and ammunition stay full',async()=>{
     const state=fixture();state.self.ammo=60;state.self.medkits=2;state.self.medicine.medkit=80;state.self.medicine.splint=0;
     const h=harness(async url=>url.endsWith('/entry')?response(entryFixture(state)):url.endsWith('/leave')?response({ok:true}):response(state));
@@ -219,7 +236,7 @@ describe('live loot and headquarters presentation',()=>{
     expect(h.dock.innerHTML).not.toContain('Комплект пополнен');
     expect(h.dock.innerHTML).not.toContain('data-live-button="resupply" disabled');
     state.self.medicine.splint=1;h.firePoll();await h.pump();
-    expect(h.economicChanges).toBe(2);expect(h.dock.innerHTML).toContain('Комплект пополнен');
+    expect(h.economicChanges).toBe(2);expect(h.updates.at(-1)?.self.medicine.splint).toBe(1);
   });
   test('connects the live market button, named inventory and refill using the captured shelter identity',async()=>{
     const state=fixture();state.self.lootItems=[loot()];
@@ -272,7 +289,7 @@ describe('live loot and headquarters presentation',()=>{
     h.mode.show();await h.pump();h.overlay.click('join');await h.pump();
     h.dock.click('resupply');await h.pump();expect(h.economicChanges).toBe(2);
     state.self.ammo=60;state.self.medkits=2;state.self.medicine.medkit=80;h.firePoll();await h.pump();
-    expect(h.economicChanges).toBe(3);expect(h.dock.innerHTML).toContain('Комплект пополнен');
+    expect(h.economicChanges).toBe(3);expect(h.updates.at(-1)?.self).toMatchObject({ammo:60,medkits:2,medicine:{medkit:80}});
   });
   test('a late join for another account is cleaned up before joining the current identity',async()=>{
     let game=GAME,account:string|null='account-a',release!: (response:Response)=>void,joins=0;

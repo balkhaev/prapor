@@ -21,6 +21,21 @@ function readLoot(value: unknown): EconomyLoot[] {
   try { return readEconomyLootItems(value, LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT); } catch { return invalid(); }
 }
 
+function readAutomation(value: unknown, world: LiveWorld): NonNullable<LivePlayer['automation']> {
+  if (!record(value) || !keys(value, ['enabled', 'stage', 'goal', 'targetId', 'target', 'routeId', 'routeName', 'stopIndex', 'stopCount', 'reason', 'startedAt', 'completedAt'])
+    || typeof value.enabled !== 'boolean' || !['route', 'combat', 'search', 'loot', 'treat', 'extract', 'paused', 'complete', 'downed'].includes(value.stage as string)
+    || !text(value.goal, 200) || !(value.targetId === null || text(value.targetId))
+    || !(value.target === null || point(value.target, world) && keys(value.target, ['x', 'y']) && integer(value.target.x) && integer(value.target.y))
+    || !(value.routeId === null || text(value.routeId) && world.routes?.some(route => route.id === value.routeId))
+    || !(value.routeName === null || text(value.routeName, 100)) || !integer(value.stopCount, 0, world.pois.length) || !integer(value.stopIndex, 0, value.stopCount)
+    || !(value.reason === null || text(value.reason, 200)) || !integer(value.startedAt) || !integer(value.completedAt)
+    || ['paused', 'complete', 'downed'].includes(value.stage as string) && value.enabled || value.stage === 'complete' && value.completedAt < value.startedAt) return invalid();
+  return { enabled: value.enabled, stage: value.stage as NonNullable<LivePlayer['automation']>['stage'], goal: value.goal,
+    targetId: value.targetId as string | null, target: value.target === null ? null : { x: value.target.x, y: value.target.y },
+    routeId: value.routeId as string | null, routeName: value.routeName as string | null, stopIndex: value.stopIndex, stopCount: value.stopCount,
+    reason: value.reason as string | null, startedAt: value.startedAt, completedAt: value.completedAt };
+}
+
 /** Vetted messages keep private diagnostics and arbitrary response HTML out of the UI. */
 export class LiveApiError extends Error {
   constructor(public readonly status: number, public readonly code: string) {
@@ -33,6 +48,7 @@ function liveErrorMessage(status: number, code: string): string {
   if (code === 'network' || code === 'timeout') return 'Связь с Периметром прервалась. Подключаемся снова; последний приказ автоматически не повторяется.';
   if (code === 'invalid_response') return 'Сервер прислал неполную сводку. Ожидаем новое состояние.';
   if (code === 'join_required') return 'Связь с сервером восстановлена. Подключаемся к Периметру снова.';
+  if (code === 'sortie_complete') return 'Рейд завершён. Вернись в убежище и подготовь новый выход.';
   if (status === 401 || ['account_changed', 'identity_changed', 'live_identity_changed', 'game_identity_changed'].includes(code)) return 'Игровая сессия изменилась. Дождись подключения к текущему убежищу и войди на Периметр снова.';
   if (code === 'game_required' || code === 'economy_required' || code === 'not_ready') return 'Сначала подключись к серверному убежищу. Оно хранит твой лут и припасы.';
   if (code === 'game_stash_full' || code === 'delivery_pending') return 'Добыча уже вынесена и ждёт места на складе убежища. Освободи место: доставка продолжится автоматически.';
@@ -277,7 +293,7 @@ export function readLiveSnapshot(value: unknown, cachedWorld?: LiveWorld): LiveS
   if (!world || world.version !== value.worldVersion) return invalid();
   const bounds = { width: world.width, height: world.height };
   const self = value.self;
-  if (!keys(self, ['id', 'ammo', 'medkits', 'cargo', 'stash', 'kills', 'bossKills', 'respawnAt', 'travelReadyAt', 'patrol', 'targetId', 'districtId', 'purpose', 'searching', 'body', 'medicine', 'treatment', 'leaveAt', 'gameId', 'lootItems', 'pendingDelivery', 'economyMessage', 'loadout', 'launchPending']) || self.id !== value.selfId || !['ammo', 'medkits', 'cargo', 'stash', 'kills', 'respawnAt', 'travelReadyAt', 'leaveAt'].every(key => integer(self[key])) || typeof self.patrol !== 'boolean' || !(self.targetId === null || text(self.targetId)) || !districtId(self.districtId) || !purpose(self.purpose) || !(self.searching === null || record(self.searching) && keys(self.searching, ['id', 'readyAt']) && text(self.searching.id) && integer(self.searching.readyAt)) || !(self.gameId === undefined || uuid(self.gameId)) || !(self.economyMessage === undefined || typeof self.economyMessage === 'string' && self.economyMessage.length <= 2000) || !(self.bossKills === undefined || integer(self.bossKills, 0, self.kills as number))) return invalid();
+  if (!keys(self, ['id', 'ammo', 'medkits', 'cargo', 'stash', 'kills', 'bossKills', 'respawnAt', 'travelReadyAt', 'patrol', 'targetId', 'districtId', 'purpose', 'searching', 'body', 'medicine', 'treatment', 'leaveAt', 'gameId', 'lootItems', 'pendingDelivery', 'economyMessage', 'loadout', 'launchPending', 'automation']) || self.id !== value.selfId || !['ammo', 'medkits', 'cargo', 'stash', 'kills', 'respawnAt', 'travelReadyAt', 'leaveAt'].every(key => integer(self[key])) || typeof self.patrol !== 'boolean' || !(self.targetId === null || text(self.targetId)) || !districtId(self.districtId) || !purpose(self.purpose) || !(self.searching === null || record(self.searching) && keys(self.searching, ['id', 'readyAt']) && text(self.searching.id) && integer(self.searching.readyAt)) || !(self.gameId === undefined || uuid(self.gameId)) || !(self.economyMessage === undefined || typeof self.economyMessage === 'string' && self.economyMessage.length <= 2000) || !(self.bossKills === undefined || integer(self.bossKills, 0, self.kills as number))) return invalid();
   let body: LivePlayer['body'], medicine: LivePlayer['medicine'];
   try { body = parseHealth(self.body); medicine = parseMedicalInventory(self.medicine); } catch { return invalid(); }
   const treatment = self.treatment;
@@ -296,6 +312,7 @@ export function readLiveSnapshot(value: unknown, cachedWorld?: LiveWorld): LiveS
   if (self.economyMessage !== undefined) player.economyMessage = self.economyMessage as string;
   if (self.bossKills !== undefined) player.bossKills = self.bossKills as number;
   if (self.loadout !== undefined) player.loadout = readLiveLoadout(self.loadout);
+  if (self.automation !== undefined) player.automation = readAutomation(self.automation, world);
   if (self.launchPending !== undefined) { if (typeof self.launchPending !== 'boolean') return invalid(); player.launchPending = self.launchPending; }
   if (!Array.isArray(value.entities) || value.entities.length > 256 || !Array.isArray(value.drops) || value.drops.length > 512 || !Array.isArray(value.events) || value.events.length > 256 || !Array.isArray(value.visibleChunks) || value.visibleChunks.length > 256) return invalid();
   const entities: LiveEntity[] = value.entities.map(entity => {
