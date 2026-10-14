@@ -1,108 +1,133 @@
 import type { LiveLandscapePath, LivePoint, LiveTerrain, LiveWorld } from './game/live';
 
-export const TERRAIN_PIGMENTS: Record<LiveTerrain, readonly [number, number, number]> = {
-  road: [110, 113, 102], concrete: [139, 142, 131], forest: [43, 66, 45], water: [36, 74, 82],
-  yard: [112, 112, 92], grass: [77, 104, 60], path: [140, 119, 82], rail: [102, 105, 93], sand: [161, 149, 109],
+type RGB = readonly [number, number, number];
+export const TERRAIN_PIGMENTS: Record<LiveTerrain, RGB> = {
+  road: [113, 117, 106], concrete: [145, 149, 135], forest: [47, 73, 43], water: [35, 75, 90],
+  yard: [118, 113, 90], grass: [81, 114, 61], path: [151, 123, 81], rail: [107, 110, 100], sand: [173, 155, 111],
 };
-const organic = new Set<LiveTerrain>(['grass', 'forest', 'yard', 'path', 'sand', 'road']);
-const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
+/** Opaque colour steps shared by large ground patches and their tiny pixel motifs. */
+export const PIXEL_TERRAIN_PALETTES: Record<LiveTerrain, readonly RGB[]> = {
+  grass: [[54, 82, 41], [66, 96, 49], TERRAIN_PIGMENTS.grass, [93, 125, 67], [113, 141, 78], [134, 156, 88]],
+  forest: [[29, 48, 33], [38, 60, 38], TERRAIN_PIGMENTS.forest, [58, 84, 47], [74, 99, 57], [91, 113, 66]],
+  water: [[23, 49, 65], [28, 62, 77], TERRAIN_PIGMENTS.water, [46, 92, 104], [70, 121, 129], [103, 147, 151]],
+  road: [[91, 97, 88], [102, 107, 97], TERRAIN_PIGMENTS.road, [121, 125, 114], [134, 137, 125], [144, 147, 134]],
+  concrete: [[101, 108, 99], [123, 130, 117], TERRAIN_PIGMENTS.concrete, [155, 161, 144], [170, 176, 157], [184, 189, 168]],
+  yard: [[82, 84, 72], [100, 99, 79], TERRAIN_PIGMENTS.yard, [129, 123, 97], [146, 138, 111], [160, 152, 128]],
+  path: [[112, 89, 59], [133, 107, 70], TERRAIN_PIGMENTS.path, [164, 136, 92], [178, 150, 108], [127, 127, 108]],
+  rail: [[70, 81, 80], [89, 98, 91], TERRAIN_PIGMENTS.rail, [121, 124, 110], [137, 138, 124], [153, 150, 132]],
+  sand: [[139, 124, 90], [156, 139, 100], TERRAIN_PIGMENTS.sand, [187, 169, 124], [201, 182, 137], [214, 198, 157]],
+};
+const organic = new Set<LiveTerrain>(['grass', 'forest', 'yard', 'path', 'sand']);
 const hash = (x: number, y: number): number => {
   let value = Math.imul(x + 721, 374761393) ^ Math.imul(y + 191, 668265263);
   value = Math.imul(value ^ value >>> 13, 1274126177); return (value ^ value >>> 16) >>> 0;
 };
 
-/** Detailed close views stay within a 4096px texture side, including the 448-cell perimeter. */
+/** Detailed pixel ground stays within a 4096px texture side, including G9's 512 cells. */
 export function terrainTextureResolution(width: number, height: number): number {
   const longest = Math.max(width, height);
   return Math.max(1, Math.min(longest <= 256 ? 16 : 12, Math.floor(4096 / longest)));
 }
 
-/** Banded upload avoids holding a second full 60–67MB ground bitmap during a world change. */
+function pixelMotifTone(material: LiveTerrain, px: number, py: number, resolution: number, seed: number, style = 0): number {
+  const cluster = hash(Math.floor((px + hash(py >> 3, seed) % 5) / 12), Math.floor(py / 10) ^ seed);
+  let tone = cluster % 9 === 0 ? 1 : cluster % 11 === 0 ? 3 : 2;
+  if (material === 'grass' || material === 'forest') {
+    const tuft = hash(Math.floor(px / 7), Math.floor(py / 6) ^ seed), tx = px % 7, ty = py % 6;
+    const stemX = 1 + tuft % 4, stemY = 1 + (tuft >>> 3) % 3;
+    if (tuft % 3 !== 0 && tx === stemX && ty === stemY + 1) tone = 0;
+    else if (tuft % 3 !== 0 && (tx === stemX || tx === stemX + 1) && ty === stemY) tone = 4;
+    else if (tuft % 13 === 0 && tx === stemX - 1 && ty === stemY + 2) tone = 5;
+  } else if (material === 'concrete') {
+    const tileW = style === 1 ? Math.max(4, Math.round(resolution * .75)) : style === 2 ? Math.max(6, resolution) : Math.max(8, Math.round(resolution * 2.4));
+    const tileH = style === 1 ? Math.max(3, Math.round(resolution * .5)) : style === 2 ? Math.max(4, Math.round(resolution * .75)) : tileW;
+    const row = Math.floor(py / tileH), shiftedX = px + (style ? row % 2 * Math.floor(tileW / 2) : 0), tx = shiftedX % tileW, ty = py % tileH;
+    const stone = hash(Math.floor(shiftedX / tileW), row ^ seed);
+    tone = tx === 0 || ty === 0 ? 0 : ty === 1 ? 4 : 2 + stone % 2;
+    if (!style && stone % 5 === 0 && tx === 3 + ty % 3 && ty > tileH / 2) tone = 1;
+    else if (stone % 7 === 0 && tx === tileW - 2 && ty === tileH - 2) tone = 1;
+  } else if (material === 'water') {
+    const row = Math.floor(py / 5), ripple = hash(row, seed), waveX = (px + ripple % 17) % 23;
+    tone = cluster % 7 === 0 ? 1 : 2;
+    if (py % 5 === ripple % 3 && waveX >= 3 && waveX <= 7) tone = 4;
+    else if (py % 5 === ripple % 3 + 1 && waveX >= 6 && waveX <= 9) tone = 3;
+    else if (ripple % 7 === 0 && py % 5 === ripple % 3 && waveX === 5) tone = 5;
+  } else {
+    const stone = hash(px >> 2, (py >> 2) ^ seed), tx = px % 4, ty = py % 4;
+    if (material === 'yard' || material === 'rail') {
+      if (stone % 4 === 0 && tx === 1 && ty === 2) tone = 0;
+      else if (stone % 4 === 0 && (tx === 1 || tx === 2) && ty === 1) tone = 4;
+      else if (stone % 17 === 0 && tx === 2 && ty === 2) tone = 5;
+    } else if (material === 'path') {
+      if (stone % 7 === 0 && ty === 2 && tx >= 1 && tx <= 2) tone = 1;
+      else if (stone % 13 === 0 && tx === 1 && ty === 1) tone = 5;
+      else if (stone % 13 === 0 && tx === 2 && ty === 1) tone = 4;
+    } else if (material === 'sand') {
+      if (stone % 11 === 0 && ty === 1 && tx <= 2) tone = 3;
+      else if (stone % 17 === 0 && tx === 1 && ty === 3) tone = 4;
+    } else if (material === 'road' && stone % 19 === 0 && tx === 2 && ty === 1) tone = 3;
+  }
+  return tone;
+}
+
+/** Small motif atlases and one upload strip avoid a second full-world bitmap.
+ * Whole-colour pixels are copied once; costly motif hashes run only in the atlases. */
 export function paintTerrainTexture(c: CanvasRenderingContext2D, world: LiveWorld, terrain: readonly LiveTerrain[], resolution: number): void {
   const width = world.width, height = world.height, textureWidth = width * resolution, textureHeight = height * resolution;
-  const phase = [...world.seed].reduce((value, char) => (Math.imul(value, 31) + char.charCodeAt(0)) | 0, 0) / 65536;
-  const fieldWidth = width + 1, field = new Float32Array(fieldWidth * (height + 1)), paving = new Uint8Array(width * height), soft = Uint8Array.from(terrain, material => Number(organic.has(material)));
-  const sinWaterX = new Float32Array(textureWidth), cosWaterX = new Float32Array(textureWidth), sinSwellX = new Float32Array(textureWidth), cosSwellX = new Float32Array(textureWidth), sinSandX = new Float32Array(textureWidth), cosSandX = new Float32Array(textureWidth);
-  for (let x = 0; x < textureWidth; x++) {
-    const wx = (x + .5) / resolution;
-    sinWaterX[x] = Math.sin(wx * 5.5); cosWaterX[x] = Math.cos(wx * 5.5); sinSwellX[x] = Math.sin(wx * .7); cosSwellX[x] = Math.cos(wx * .7); sinSandX[x] = Math.sin(wx * 7.2); cosSandX[x] = Math.cos(wx * 7.2);
-  }
-  for (let y = 0; y <= height; y++) for (let x = 0; x <= width; x++) {
-    field[y * fieldWidth + x] = Math.sin(x * .11 + y * .047 + phase) * 4.2 + Math.sin(y * .15 - x * .061 + phase * 2) * 2.8 + Math.sin(x * .41 + y * .29 + phase) * 1.5;
-  }
+  const seed = [...world.seed].reduce((value, char) => (Math.imul(value, 31) + char.charCodeAt(0)) | 0, 0);
+  const kinds = Object.keys(PIXEL_TERRAIN_PALETTES) as LiveTerrain[], concrete = kinds.indexOf('concrete');
+  const materialIds = new Map(kinds.map((kind, index) => [kind, index]));
+  const classes = Uint8Array.from(terrain, material => materialIds.get(material)!);
   for (const quarter of world.city?.quarters ?? []) {
     const style = quarter.id === 'old-center' ? 1 : quarter.id === 'station' ? 2 : 0;
-    for (let y = Math.max(0, quarter.y); y < Math.min(height, quarter.y + quarter.height); y++) for (let x = Math.max(0, quarter.x); x < Math.min(width, quarter.x + quarter.width); x++) paving[y * width + x] = style;
+    if (!style) continue;
+    for (let y = Math.max(0, quarter.y); y < Math.min(height, quarter.y + quarter.height); y++) for (let x = Math.max(0, quarter.x); x < Math.min(width, quarter.x + quarter.width); x++) if (classes[y * width + x] === concrete) classes[y * width + x] = kinds.length + style - 1;
   }
-  const bandHeight = Math.min(textureHeight, resolution * 8), pixels = c.createImageData(textureWidth, bandHeight), data = pixels.data;
+  const littleEndian = new Uint8Array(new Uint32Array([255]).buffer)[0] === 255;
+  const packed = (color: RGB): number => littleEndian ? color[0] | color[1] << 8 | color[2] << 16 | 255 << 24 : color[0] << 24 | color[1] << 16 | color[2] << 8 | 255;
+  const atlases = [...kinds, 'concrete', 'concrete'].map((material, id) => {
+    const style = id >= kinds.length ? id - kinds.length + 1 : 0;
+    const tileW = style === 1 ? Math.max(4, Math.round(resolution * .75)) : style === 2 ? Math.max(6, resolution) : Math.max(8, Math.round(resolution * 2.4));
+    const tileH = style === 1 ? Math.max(3, Math.round(resolution * .5)) : style === 2 ? Math.max(4, Math.round(resolution * .75)) : tileW;
+    // Paving repeats on whole masonry blocks, never half of a slab at an atlas edge.
+    const w = material === 'concrete' ? tileW * (style ? 16 : 8) : 128, h = material === 'concrete' ? tileH * (style ? 16 : 8) : 128;
+    const pixels = new Uint32Array(w * h), palette = PIXEL_TERRAIN_PALETTES[material as LiveTerrain].map(packed);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) pixels[y * w + x] = palette[pixelMotifTone(material as LiveTerrain, x, y, resolution, seed, style)]!;
+    return { pixels, width: w, height: h };
+  });
+  const organicIds = new Set(kinds.map((kind, id) => organic.has(kind) ? id : -1));
+  const edges = new Uint16Array(width * height);
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    const cell = y * width + x, material = classes[cell]!;
+    if (!organicIds.has(material)) continue;
+    for (const [side, nx, ny] of [[0, x - 1, y], [1, x + 1, y], [2, x, y - 1], [3, x, y + 1]]) {
+      if (nx! < 0 || ny! < 0 || nx! >= width || ny! >= height) continue;
+      const neighbor = classes[ny! * width + nx!]!;
+      if (neighbor !== material && organicIds.has(neighbor)) edges[cell] = edges[cell]! | (neighbor + 1) << (side! * 4);
+    }
+  }
+  const bandHeight = Math.min(textureHeight, resolution * 8), pixels = c.createImageData(textureWidth, bandHeight);
+  const data = new Uint32Array(pixels.data.buffer, pixels.data.byteOffset, pixels.data.byteLength / 4), atlasRows = new Uint32Array(atlases.length);
   for (let bandY = 0; bandY < textureHeight; bandY += bandHeight) {
     const rows = Math.min(bandHeight, textureHeight - bandY);
     for (let py = 0; py < rows; py++) {
-      const textureY = bandY + py, wy = (textureY + .5) / resolution, cy = Math.floor(wy), fy = wy - cy;
-      const sinWaterY = Math.sin(-wy * 8.1 + phase), cosWaterY = Math.cos(-wy * 8.1 + phase), sinSwellY = Math.sin(wy * .32 + phase), cosSwellY = Math.cos(wy * .32 + phase), sinSandY = Math.sin(wy * 1.25 + phase), cosSandY = Math.cos(wy * 1.25 + phase);
+      const textureY = bandY + py, cy = Math.floor(textureY / resolution), localY = textureY % resolution;
+      for (let atlas = 0; atlas < atlases.length; atlas++) atlasRows[atlas] = textureY % atlases[atlas]!.height * atlases[atlas]!.width;
       for (let px = 0; px < textureWidth; px++) {
-        const wx = (px + .5) / resolution, cx = Math.floor(wx), fx = wx - cx, cell = cy * width + cx;
-        const material = terrain[cell]!, color = TERRAIN_PIGMENTS[material], random = hash(px, textureY), grain = (random % 29 - 14) / 2;
-        const a = field[cy * fieldWidth + cx]!, b = field[cy * fieldWidth + cx + 1]!, d = field[(cy + 1) * fieldWidth + cx]!, e = field[(cy + 1) * fieldWidth + cx + 1]!;
-        const cloud = (a * (1 - fx) + b * fx) * (1 - fy) + (d * (1 - fx) + e * fx) * fy;
-        let shade = cloud, red = color[0], green = color[1], blue = color[2];
-        if (material === 'road') {
-          // The raster reserves physical road/shoulder space. Continuous asphalt is painted later.
-          shade = cloud * .8 + grain * .75;
-          if (random % 67 === 0) shade += 8;
-        } else if (material === 'concrete') {
-          const style = paving[cell];
-          if (style === 1) {
-            const row = Math.floor(wy / .38), column = Math.floor((wx + row % 2 * .28) / .56), u = (wx + row % 2 * .28) % .56, v = wy % .38;
-            const stone = hash(column, row) % 19 - 9;
-            shade = cloud * .5 + stone + grain * .33 + (u < .06 || v < .055 ? -28 : u > .48 || v > .31 ? -5 : 3);
-            red -= 7; green -= 6; blue -= 7;
-          } else if (style === 2) {
-            const row = Math.floor(wy / .65), u = (wx + row % 2 * .45) % .9, v = wy % .65;
-            shade = cloud * .5 + (hash(Math.floor((wx + row % 2 * .45) / .9), row) % 13 - 6) + grain * .28 + (u < .055 || v < .055 ? -22 : 1);
-          } else {
-            const seamX = wx % 2.4, seamY = wy % 2.4;
-            shade = cloud * .7 + grain * .3 + (seamX < .065 || seamY < .065 ? -25 : seamX < .15 || seamY < .15 ? 5 : 0);
-          }
-        } else if (material === 'yard' || material === 'rail') {
-          const pebble = random % 23 === 0 ? 18 : random % 17 === 0 ? -15 : grain * 1.18;
-          shade = cloud + pebble;
-          if ((random >>> 9) % 7 === 0) { red += 4; blue -= 5; }
-        } else if (material === 'path') {
-          shade = cloud * 1.1 + grain * .7;
-          if (random % 41 === 0) shade += 14;
-          blue -= Math.max(0, cloud) * .5;
-        } else if (material === 'grass' || material === 'forest') {
-          shade = cloud * 1.5 + grain * .82;
-          const blade = random % 13 === 0 ? 10 : random % 17 === 0 ? -13 : 0;
-          green += blade; red += blade * .55; blue += blade * .25;
-        } else if (material === 'sand') {
-          shade = cloud * .5 + grain * .44 + (sinSandX[px]! * cosSandY + cosSandX[px]! * sinSandY) * 2.4;
-        } else if (material === 'water') {
-          const ripple = (sinWaterX[px]! * cosWaterY + cosWaterX[px]! * sinWaterY) * (sinSwellX[px]! * cosSwellY + cosSwellX[px]! * sinSwellY);
-          shade = cloud * .3 + grain * .13 + ripple * 4;
-          green += ripple * 2; blue += ripple * 3;
+        const cx = Math.floor(px / resolution), localX = px % resolution, cell = cy * width + cx;
+        let material = classes[cell]!;
+        if (edges[cell]) {
+          const side = localX === 0 ? 0 : localX === resolution - 1 ? 1 : localY === 0 ? 2 : localY === resolution - 1 ? 3 : -1;
+          const neighbor = side >= 0 ? edges[cell]! >> (side * 4) & 15 : 0;
+          if (neighbor && hash(px, textureY ^ seed) % 4 === 0) material = neighbor - 1;
         }
-        // Soil and vegetation feather into each other; asphalt, paving and water keep exact edges.
-        if (soft[cell]) {
-          const nx = cx + (fx < .5 ? -1 : 1), ny = cy + (fy < .5 ? -1 : 1);
-          for (let direction = 0; direction < 2; direction++) {
-            const neighborCell = direction ? ny >= 0 && ny < height ? ny * width + cx : -1 : nx >= 0 && nx < width ? cy * width + nx : -1;
-            if (neighborCell < 0 || !soft[neighborCell]) continue;
-            const neighbor = terrain[neighborCell]!; if (neighbor === material) continue;
-            const fraction = direction ? fy : fx, blend = Math.max(0, (.24 - Math.min(fraction, 1 - fraction)) / .24) * .4, rgb = TERRAIN_PIGMENTS[neighbor];
-            red = red * (1 - blend) + rgb[0] * blend; green = green * (1 - blend) + rgb[1] * blend; blue = blue * (1 - blend) + rgb[2] * blend;
-          }
-        }
-        const at = (py * textureWidth + px) * 4;
-        data[at] = red + shade; data[at + 1] = green + shade; data[at + 2] = blue + shade;
-        const edge = clamp(Math.min(wx, wy, width - wx, height - wy) / .28, 0, 1); data[at + 3] = 255 * edge * edge * (3 - 2 * edge);
+        const atlas = atlases[material]!;
+        data[py * textureWidth + px] = atlas.pixels[atlasRows[material]! + px % atlas.width]!;
       }
     }
     c.putImageData(pixels, 0, bandY, 0, 0, textureWidth, rows);
   }
 }
-
 export type SurfaceRun = { x: number; y: number; width: number };
 export type SurfaceMasks = { road: Uint8Array; indoor: Uint8Array; roadRuns: SurfaceRun[] };
 
@@ -135,16 +160,20 @@ export function cityPedestrianCrossings(plan: RoadSurfacePlan): RoadIntersection
     && Math.abs(crossing.a.dx * crossing.b.dy - crossing.a.dy * crossing.b.dx) / (crossing.a.length * crossing.b.length) > .95);
 }
 
-function asphaltPattern(c: CanvasRenderingContext2D): CanvasPattern | null {
-  const image = document.createElement('canvas'); image.width = 192; image.height = 192;
+export const PIXEL_ASPHALT_PALETTE: readonly RGB[] = [[47, 58, 66], [55, 66, 73], [62, 74, 81], [71, 82, 87], [84, 94, 96]];
+function asphaltPattern(c: CanvasRenderingContext2D, resolution: number): CanvasPattern | null {
+  if (typeof document === 'undefined') return null;
+  const image = document.createElement('canvas'); image.width = 128; image.height = 128;
   const texture = image.getContext('2d'); if (!texture) return null;
   const pixels = texture.createImageData(image.width, image.height);
   for (let y = 0; y < image.height; y++) for (let x = 0; x < image.width; x++) {
-    const random = hash(x, y), shade = (random % 19 - 9) * .38 + Math.sin(x * .042 + y * .029) * 1.5, at = (y * image.width + x) * 4;
-    pixels.data[at] = 62 + shade; pixels.data[at + 1] = 67 + shade; pixels.data[at + 2] = 67 + shade; pixels.data[at + 3] = 255;
+    const patch = hash(x >> 3, y >> 3), pebble = hash(x >> 1, y >> 1), at = (y * image.width + x) * 4;
+    const tone = pebble % 19 === 0 && x % 2 === 0 && y % 2 === 0 ? 4 : pebble % 13 === 0 ? 1 : patch % 11 === 0 ? 3 : 2;
+    const color = PIXEL_ASPHALT_PALETTE[tone]!;
+    pixels.data[at] = color[0]; pixels.data[at + 1] = color[1]; pixels.data[at + 2] = color[2]; pixels.data[at + 3] = 255;
   }
   texture.putImageData(pixels, 0, 0);
-  const pattern = c.createPattern(image, 'repeat'); pattern?.setTransform({ a: 1 / 12, d: 1 / 12 }); return pattern;
+  const pattern = c.createPattern(image, 'repeat'); pattern?.setTransform({ a: 1 / resolution, d: 1 / resolution }); return pattern;
 }
 
 /** Intersections follow the actual path geometry, including translated or larger cities. */
@@ -181,26 +210,31 @@ export function paintRoadSurface(c: CanvasRenderingContext2D, world: LiveWorld, 
   const stroke = (a: LivePoint, b: LivePoint, color: string, width: number) => { c.beginPath(); c.moveTo(a.x, a.y); c.lineTo(b.x, b.y); c.strokeStyle = color; c.lineWidth = width; c.stroke(); };
   const clip = () => { c.beginPath(); for (const run of roadRuns) c.rect(run.x, run.y, run.width, 1); c.clip(); };
   c.save(); clip(); c.lineCap = 'round'; c.lineJoin = 'round';
-  const paths = world.paths?.filter(path => path.kind === 'road') ?? [], grain = asphaltPattern(c);
+  const paths = world.paths?.filter(path => path.kind === 'road') ?? [], grain = asphaltPattern(c, terrainTextureResolution(world.width, world.height));
   const pathStroke = (path: LiveLandscapePath, color: string | CanvasPattern, width: number) => { c.beginPath(); path.points.forEach((point, index) => index ? c.lineTo(point.x + .5, point.y + .5) : c.moveTo(point.x + .5, point.y + .5)); c.strokeStyle = color; c.lineWidth = width; c.stroke(); };
   // Join all shoulders before asphalt. The smooth centerline, rather than raster squares,
   // determines the visible road edge; the physical mask remains an absolute safety clip.
-  for (const path of paths) pathStroke(path, path.id.startsWith('city-') ? '#a4ad9b85' : '#aea48785', path.width + .35);
-  for (const path of paths) if (path.id.startsWith('city-')) pathStroke(path, '#b3b9a08c', path.width + .07);
-  for (const path of paths) pathStroke(path, grain ?? '#3e4343', Math.max(1, path.width - .28));
+  for (const path of paths) pathStroke(path, path.id.startsWith('city-') ? '#a4ad98' : '#a99c7f', path.width + .35);
+  for (const path of paths) if (path.id.startsWith('city-')) pathStroke(path, '#bdc3aa', path.width + .07);
+  for (const path of paths) pathStroke(path, grain ?? '#3e4a51', Math.max(1, path.width - .28));
   c.lineCap = 'butt';
   for (const segment of plan.segments) {
     const ux = segment.dx / segment.length, uy = segment.dy / segment.length;
-    // Subtle wheel wear leaves the asphalt grain visible rather than repainting a flat road stroke.
+    // Short wheel-wear patches use one opaque shade instead of continuous alpha noise.
     for (const side of [-1, 1]) {
-      const offset = segment.path.width * .24 * side, a = { x: segment.a.x - uy * offset, y: segment.a.y + ux * offset }, b = { x: segment.b.x - uy * offset, y: segment.b.y + ux * offset };
-      stroke(a, b, '#26363819', Math.min(.38, segment.path.width * .11));
+      const offset = segment.path.width * .24 * side;
+      for (let along = 2.5; along < segment.length - 1; along += 7) {
+        if (hash(Math.round(segment.a.x + ux * along), Math.round(segment.a.y + uy * along)) % 3) continue;
+        const end = Math.min(along + 1.5, segment.length);
+        stroke({ x: segment.a.x + ux * along - uy * offset, y: segment.a.y + uy * along + ux * offset },
+          { x: segment.a.x + ux * end - uy * offset, y: segment.a.y + uy * end + ux * offset }, '#37434b', .125);
+      }
     }
     if (!roadHasMarkings(segment.path)) continue;
     for (let distance = (4.4 - segment.offset % 4.4) % 4.4; distance < segment.length; distance += 4.4) {
       const end = Math.min(distance + 1.65, segment.length), mid = { x: segment.a.x + ux * (distance + end) / 2, y: segment.a.y + uy * (distance + end) / 2 };
       if (plan.intersections.some(point => Math.hypot(mid.x - point.x, mid.y - point.y) < Math.max(point.a.path.width, point.b.path.width) * .65 + 2.4)) continue;
-      stroke({ x: segment.a.x + ux * distance, y: segment.a.y + uy * distance }, { x: segment.a.x + ux * end, y: segment.a.y + uy * end }, '#d0ceb88c', .085);
+      stroke({ x: segment.a.x + ux * distance, y: segment.a.y + uy * distance }, { x: segment.a.x + ux * end, y: segment.a.y + uy * end }, '#c9c6a3', .125);
     }
   }
   const city = world.city;
@@ -212,10 +246,10 @@ export function paintRoadSurface(c: CanvasRenderingContext2D, world: LiveWorld, 
         const distance = (cross.path.width / 2 + 1.05) * side, center = { x: crossing.x + ux * distance, y: crossing.y + uy * distance };
         for (let across = -half; across < half; across += .72) {
           const a = { x: center.x + nx * across - ux * .33, y: center.y + ny * across - uy * .33 }, b = { x: center.x + nx * across + ux * .33, y: center.y + ny * across + uy * .33 };
-          stroke(a, b, '#d8d4bd9d', .24);
+          stroke(a, b, '#ddd8b8', .24);
         }
         const stop = { x: center.x + ux * side * 1.15, y: center.y + uy * side * 1.15 };
-        stroke({ x: stop.x - nx * side * .12, y: stop.y - ny * side * .12 }, { x: stop.x - nx * side * half, y: stop.y - ny * side * half }, '#d8d2b9a8', .13);
+        stroke({ x: stop.x - nx * side * .12, y: stop.y - ny * side * .12 }, { x: stop.x - nx * side * half, y: stop.y - ny * side * half }, '#ddd8b8', .125);
       }
     }
   }
