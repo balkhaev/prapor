@@ -52,17 +52,17 @@ export class LiveScene {
   private terrainTexture: HTMLCanvasElement | null = null;
   private walkableGround = new Uint8Array();
   private buildingForObstacle = new Map<number, LiveCityBuilding>();
-  private terrainColor: Record<LiveTerrain, readonly [number, number, number]> = { road: [80, 86, 78], concrete: [96, 103, 87], forest: [49, 70, 47], water: [43, 73, 76], yard: [91, 97, 68], grass: [75, 91, 53], path: [128, 121, 84], rail: [89, 91, 81], sand: [139, 136, 98] };
+  private terrainColor: Record<LiveTerrain, readonly [number, number, number]> = { road: [58, 66, 63], concrete: [113, 116, 101], forest: [43, 65, 47], water: [37, 69, 74], yard: [97, 103, 74], grass: [80, 100, 61], path: [136, 124, 89], rail: [83, 86, 74], sand: [144, 138, 104] };
 
-  constructor(private host: HTMLElement, private command: (command: LiveCommand) => void, private select: (id: string) => void) {
+  constructor(private host: HTMLElement, _command: (command: LiveCommand) => void, private select: (id: string) => void) {
     const context = this.canvas.getContext('2d');
     if (!context) throw new Error('Canvas unavailable');
     this.context = context;
     this.canvas.tabIndex = 0;
-    this.canvas.setAttribute('aria-label', 'Общая карта. Нажми на землю для движения или выбери бойца. Потяни карту для обзора. Стрелки и WASD перемещают тебя.');
+    this.canvas.setAttribute('aria-label', 'Карта рейда. Боец действует автоматически. Выбери бойца для наблюдения, потяни карту для обзора. Колесо мыши меняет масштаб.');
     this.canvas.setAttribute('role', 'application');
     this.controls.className = 'live-camera';
-    this.controls.innerHTML = '<button data-live-zoom="out" aria-label="Отдалить карту">−</button><button data-live-zoom="follow" aria-label="Следовать за своим бойцом">За мной</button><button data-live-zoom="overview" aria-label="Показать всю карту">Вся карта</button><button data-live-zoom="city" aria-label="Показать город" hidden>Город</button><button data-live-zoom="in" aria-label="Приблизить карту">+</button>';
+    this.controls.innerHTML = '<button data-live-zoom="out" aria-label="Отдалить карту">−</button><button data-live-zoom="follow" aria-label="Следовать за своим бойцом">Боец</button><button data-live-zoom="overview" aria-label="Показать всю карту">Периметр</button><button data-live-zoom="city" aria-label="Показать город" hidden>Город</button><button data-live-zoom="in" aria-label="Приблизить карту">+</button>';
     host.append(this.canvas, this.controls);
     this.observer = new ResizeObserver(() => this.resize());
     this.observer.observe(host);
@@ -73,6 +73,7 @@ export class LiveScene {
     this.canvas.addEventListener('pointermove', this.pointerMove);
     this.canvas.addEventListener('pointerup', this.pointerUp);
     this.canvas.addEventListener('pointercancel', this.pointerCancel);
+    this.canvas.addEventListener('wheel', this.wheel, { passive: false });
     this.controls.addEventListener('click', this.zoomClick);
     this.resize();
   }
@@ -118,7 +119,7 @@ export class LiveScene {
     this.snapshot = snapshot;
     if (!this.active) this.paint();
   }
-  destroy(): void { this.hide(); this.observer.disconnect(); this.overlayObserver.disconnect(); this.canvas.removeEventListener('click', this.click); this.canvas.removeEventListener('pointerdown', this.pointerDown); this.canvas.removeEventListener('pointermove', this.pointerMove); this.canvas.removeEventListener('pointerup', this.pointerUp); this.canvas.removeEventListener('pointercancel', this.pointerCancel); this.controls.removeEventListener('click', this.zoomClick); this.canvas.remove(); this.controls.remove(); }
+  destroy(): void { this.hide(); this.observer.disconnect(); this.overlayObserver.disconnect(); this.canvas.removeEventListener('click', this.click); this.canvas.removeEventListener('pointerdown', this.pointerDown); this.canvas.removeEventListener('pointermove', this.pointerMove); this.canvas.removeEventListener('pointerup', this.pointerUp); this.canvas.removeEventListener('pointercancel', this.pointerCancel); this.canvas.removeEventListener('wheel', this.wheel); this.controls.removeEventListener('click', this.zoomClick); this.canvas.remove(); this.controls.remove(); }
 
   private resize(): void {
     const box = this.host.getBoundingClientRect();
@@ -159,23 +160,29 @@ export class LiveScene {
     const rect = this.canvas.getBoundingClientRect(), x = event.clientX - rect.left, y = event.clientY - rect.top;
     const mini = this.minimapBounds(this.snapshot);
     if (x >= mini.x - 8 && x <= mini.x + mini.width + 8 && y >= mini.y - 8 && y <= mini.y + mini.height + 21) {
-      if (x >= mini.x && x <= mini.x + mini.width && y >= mini.y && y <= mini.y + mini.height) this.command({ type: 'move', x: clamp(Math.round((x - mini.x) / mini.scale), 0, this.snapshot.world.width - 1), y: clamp(Math.round((y - mini.y) / mini.scale), 0, this.snapshot.world.height - 1) });
+      if (x >= mini.x && x <= mini.x + mini.width && y >= mini.y && y <= mini.y + mini.height) this.focusPoint({ x: clamp((x - mini.x) / mini.scale, 0, this.snapshot.world.width - 1), y: clamp((y - mini.y) / mini.scale, 0, this.snapshot.world.height - 1) });
       return;
     }
     const target = [...this.hitTargets].reverse().find(target => this.tile < 28 ? Math.hypot(target.x - x, target.y - y) < 9 : Math.abs(target.x - x) < Math.max(14, 18 * this.zoom) && y >= target.y - Math.max(38, 62 * this.zoom) && y <= target.y + 10 * this.zoom);
     if (target && target.entity.id !== this.snapshot.selfId) { this.selected = target.entity.id; this.select(target.entity.id); return; }
-    const self = this.snapshot.entities.find(entity => entity.id === this.snapshot?.selfId);
-    const drop = this.snapshot.drops.find(drop => { const p = this.project(drop); return Math.hypot(x - p.x, y - p.y) < 18; });
-    if (drop && self) {
-      if (Math.hypot(drop.x - self.x, drop.y - self.y) <= 1.5) this.command({ type: drop.containerId && !drop.searched ? 'search' : 'loot', id: drop.id });
-      else this.command({ type: 'move', x: drop.x, y: drop.y });
-      return;
-    }
     const waypoint = this.waypointTargets.find(target => Math.hypot(target.x - x, target.y - y) < 12);
-    if (waypoint) { this.command({ type: 'move', ...waypoint.point }); return; }
-    const dx = (x - this.origin.x) / (this.tile / 2), dy = (y - this.origin.y) / (this.tile / 4);
-    const destination = { x: Math.round((dx + dy) / 2 + this.camera.x), y: Math.round((dy - dx) / 2 + this.camera.y) };
-    if (destination.x >= 0 && destination.y >= 0 && destination.x < this.snapshot.world.width && destination.y < this.snapshot.world.height) this.command({ type: 'move', ...destination });
+    if (waypoint) { this.focusPoint(waypoint.point); return; }
+    if (this.overview || this.tile < 16) this.focusPoint(this.unproject(x, y));
+  };
+  private wheel = (event: WheelEvent): void => {
+    if (!this.active || !this.snapshot || !event.deltaY) return;
+    event.preventDefault();
+    const rect = this.canvas.getBoundingClientRect(), x = event.clientX - rect.left, y = event.clientY - rect.top;
+    const before = this.unproject(x, y);
+    const base = this.width < 480 ? 44 : 54;
+    this.zoom = clamp(this.viewTile(this.snapshot.world) / base * Math.exp(-clamp(event.deltaY, -120, 120) * .002), .02, 1.8);
+    this.overview = false; this.cityOverview = false;
+    if (!this.following) {
+      this.tile = base * this.zoom;
+      const after = this.unproject(x, y);
+      this.camera = { x: clamp(this.camera.x + before.x - after.x, 0, this.snapshot.world.width - 1), y: clamp(this.camera.y + before.y - after.y, 0, this.snapshot.world.height - 1) };
+    }
+    this.waypointTargets = []; this.hitTargets = []; this.updateCameraControls();
   };
   private pointerDown = (event: PointerEvent): void => {
     if (!this.active || !this.snapshot || event.button !== 0) return;
@@ -267,13 +274,66 @@ export class LiveScene {
         ground.strokeStyle = terrain === 'forest' ? '#91a26e33' : '#b3bb7d33'; ground.lineWidth = .04;
         ground.beginPath(); ground.moveTo(px - .11, py + .09); ground.lineTo(px - .04, py - .05); ground.moveTo(px + .03, py + .1); ground.lineTo(px + .04, py - .09); ground.moveTo(px + .09, py + .1); ground.lineTo(px + .15, py + .02); ground.stroke();
       }
-      this.paintLandscape(world, ground); this.paintSiteGround(world, ground); ground.restore();
+      this.paintLandscape(world, ground); this.paintSiteGround(world, ground); this.paintGroundDetails(world, ground); ground.restore();
     }
     this.terrainTexture = texture;
     const overview = document.createElement('canvas'); overview.width = (world.width + world.height) * 4; overview.height = (world.width + world.height) * 2;
     const overviewContext = overview.getContext('2d');
     if (overviewContext) { overviewContext.save(); overviewContext.transform(4, 2, -4, 2, world.height * 4, 0); overviewContext.drawImage(texture, 0, 0, world.width, world.height); overviewContext.restore(); }
     this.overviewTerrain = overview;
+  }
+  /** All surface marks are cached once; free ground remains free ground. */
+  private paintGroundDetails(world: LiveWorld, c: CanvasRenderingContext2D): void {
+    c.save(); c.lineCap = 'round';
+    for (let y = 0; y < world.height; y++) for (let x = 0; x < world.width; x++) {
+      const material = this.terrain[y * world.width + x]!, hash = (Math.imul(x + 107, 73856093) ^ Math.imul(y + 29, 19349663)) >>> 0;
+      const px = x + .15 + (hash % 89) / 130, py = y + .15 + ((hash >>> 10) % 89) / 130;
+      if (material === 'concrete') {
+        if (!(x % 3) && !(y % 3)) {
+          c.strokeStyle = '#35483a33'; c.lineWidth = .035; c.strokeRect(x + .08, y + .08, 2.84, 2.84);
+          c.strokeStyle = '#e1dcc622'; c.beginPath(); c.moveTo(x + .09, y + 2.89); c.lineTo(x + .09, y + .09); c.lineTo(x + 2.89, y + .09); c.stroke();
+        }
+        if (hash % 13 === 0) {
+          c.strokeStyle = '#293b3544'; c.lineWidth = .025;
+          c.beginPath(); c.moveTo(px - .28, py + .31); c.lineTo(px - .03, py + .04); c.lineTo(px - .08, py - .17); c.lineTo(px + .16, py - .32); c.stroke();
+        }
+        if (hash % 47 === 0) { c.fillStyle = '#21393030'; c.fillRect(px - .18, py - .13, .38, .25); c.strokeStyle = '#87907c70'; c.lineWidth = .03; c.strokeRect(px - .18, py - .13, .38, .25); }
+      } else if (material === 'road' && hash % 17 === 0) {
+        c.fillStyle = '#1c30222b'; c.beginPath(); c.ellipse(px, py, .35, .15, (hash % 7) / 5, 0, Math.PI * 2); c.fill();
+      } else if (material === 'water' && hash % 3 === 0) {
+        c.strokeStyle = '#b1c6aa38'; c.lineWidth = .025; c.beginPath(); c.moveTo(px - .33, py); c.quadraticCurveTo(px, py - .07, px + .33, py); c.stroke();
+      } else if (material === 'sand' && hash % 5 === 0) {
+        c.fillStyle = '#68683b38'; c.fillRect(px, py, .1, .06); c.fillStyle = '#d3cf9c70'; c.fillRect(px + .15, py - .12, .06, .06);
+      } else if ((material === 'grass' || material === 'forest') && hash % 11 === 0) {
+        c.fillStyle = material === 'forest' ? '#abc18130' : '#d8d09866'; c.fillRect(px, py, .045, .06); c.fillRect(px + .09, py - .08, .035, .05);
+      }
+    }
+    // Short crossing marks are confined to the real road raster.
+    const city = world.city;
+    if (city) for (const horizontal of world.paths?.filter(path => path.id.startsWith('city-street-y-')) ?? []) {
+      const y = horizontal.points[0]?.y;
+      if (y === undefined) continue;
+      for (const vertical of world.paths?.filter(path => path.id.startsWith('city-street-x-')) ?? []) {
+        const x = vertical.points[0]?.x;
+        if (x === undefined) continue;
+        for (const direction of [-1, 1]) for (let offset = -1.7; offset < 1.8; offset += .6) {
+          for (const mark of [{ x: x + offset, y: y + direction * 4 }, { x: x + direction * 4, y: y + offset }]) {
+            const cellX = Math.floor(mark.x), cellY = Math.floor(mark.y);
+            if (this.terrain[cellY * world.width + cellX] !== 'road' || !this.walkableGround[cellY * world.width + cellX]) continue;
+            c.fillStyle = '#d4ccab92'; c.fillRect(mark.x, mark.y, .3, .65);
+          }
+        }
+      }
+    }
+    // Cast shadows share the authoritative cover's footprint and never add scenery.
+    c.fillStyle = '#10271e38';
+    for (const obstacle of world.obstacles) {
+      if (obstacle.kind === 'water') continue;
+      if (obstacle.kind === 'tree') { c.beginPath(); c.ellipse(obstacle.x + .95, obstacle.y + .55, 1.2, .7, -.5, 0, Math.PI * 2); c.fill(); continue; }
+      const length = obstacle.kind === 'building' ? 1.8 : .5;
+      c.beginPath(); c.moveTo(obstacle.x, obstacle.y); c.lineTo(obstacle.x + obstacle.width, obstacle.y); c.lineTo(obstacle.x + obstacle.width + length, obstacle.y + obstacle.height + length * .3); c.lineTo(obstacle.x + length, obstacle.y + obstacle.height + length * .3); c.closePath(); c.fill();
+    }
+    c.restore();
   }
   /** The cutaway floor is clipped to the same free cells as the server geometry. */
   private paintSiteGround(world: LiveWorld, c: CanvasRenderingContext2D): void {
@@ -295,12 +355,19 @@ export class LiveScene {
       for (const path of site.passages) { c.beginPath(); path.forEach((point, index) => index ? c.lineTo(point.x + .5, point.y + .5) : c.moveTo(point.x + .5, point.y + .5)); c.stroke(); }
       for (const building of site.buildings) {
         c.fillStyle = floorColors[building.kind]; c.fillRect(building.x, building.y, building.width, building.height);
+        const inset = .7;
+        c.strokeStyle = '#dfd8b246'; c.lineWidth = .06; c.strokeRect(building.x + inset, building.y + inset, building.width - inset * 2, building.height - inset * 2);
         c.strokeStyle = '#35423d27'; c.lineWidth = .045; c.beginPath();
         for (let x = building.x + 2; x < building.x + building.width; x += 2) { c.moveTo(x, building.y); c.lineTo(x, building.y + building.height); }
         for (let y = building.y + 2; y < building.y + building.height; y += 2) { c.moveTo(building.x, y); c.lineTo(building.x + building.width, y); }
         c.stroke();
         c.fillStyle = '#e0ce9299';
         for (const entry of building.entrances) c.fillRect(entry.x + .2, entry.y + .2, .6, .6);
+        if (building.kind === 'workshop' || building.kind === 'garage') {
+          c.strokeStyle = '#6a746447'; c.lineWidth = .2; c.beginPath(); c.moveTo(building.x + 1.5, building.y + 1); c.lineTo(building.x + 1.5, building.y + building.height - 1); c.moveTo(building.x + building.width - 1.5, building.y + 1); c.lineTo(building.x + building.width - 1.5, building.y + building.height - 1); c.stroke();
+        } else {
+          c.fillStyle = '#d4c09a35'; c.fillRect(building.x + building.width * .3, building.y + building.height * .3, building.width * .4, building.height * .4);
+        }
       }
     }
     c.restore();
@@ -331,10 +398,10 @@ export class LiveScene {
       c.clip();
       for (const path of paths) {
         if (path.kind === 'road') {
-          stroke(path, '#a09b752e', path.width + .6); stroke(path, '#545b52', path.width * .9);
-          if (path.width >= 3) { c.setLineDash([1.8, 2.8]); stroke(path, '#c4bd8877', .11); c.setLineDash([]); }
+          stroke(path, '#cac3a27a', path.width + .45); stroke(path, '#273d3577', path.width + .1); stroke(path, '#424e48', path.width * .91);
+          if (path.width >= 3) { c.setLineDash([1.8, 2.8]); stroke(path, '#d5cba37d', .12); c.setLineDash([]); }
         } else if (path.kind === 'trail') { stroke(path, '#b3a26b55', path.width); stroke(path, '#b7a57555', path.width * .5); }
-        else if (path.kind === 'river') { stroke(path, '#37585a77', path.width * .8); stroke(path, '#90b2a62d', path.width * .33); }
+        else if (path.kind === 'river') { stroke(path, '#294d5a99', path.width * .82); stroke(path, '#82b9b13a', path.width * .4); }
         else {
           stroke(path, '#5f6557', path.width); stroke(path, '#a1a294', .98); stroke(path, '#475346', .66);
           for (let index = 1; index < path.points.length; index++) {
@@ -388,41 +455,76 @@ export class LiveScene {
     }
     if (kind === 'tree') {
       const scale = this.tile / 54;
+      if (this.tile < 12) { c.fillStyle = index % 3 ? '#314c35' : '#526947'; c.beginPath(); c.ellipse(p.x, p.y - 2 * scale, Math.max(.6, 13 * scale), Math.max(.6, 9 * scale), 0, 0, Math.PI * 2); c.fill(); return; }
       c.fillStyle = '#10211966'; c.beginPath(); c.ellipse(p.x, p.y, 16 * scale, 8 * scale, 0, 0, Math.PI * 2); c.fill();
       const height = 42 + (obstacle.x * 7 + obstacle.y * 13) % 19;
       c.fillStyle = '#6e6850'; c.fillRect(p.x - 2 * scale, p.y - height * .65 * scale, 4 * scale, height * .65 * scale);
       if ((obstacle.x + obstacle.y * 3) % 5 === 0) {
         for (const [dx, dy, radius] of [[-9, -31, 13], [8, -36, 14], [0, -46, 13]]) { c.fillStyle = dy! < -40 ? '#65804d' : '#49683f'; c.beginPath(); c.ellipse(p.x + dx! * scale, p.y + dy! * scale, radius! * scale, radius! * .75 * scale, 0, 0, Math.PI * 2); c.fill(); }
       } else for (let tier = 0; tier < 3; tier++) { const y = p.y - (height * .32 + tier * height * .23) * scale, w = (20 - tier * 4) * scale; this.polygon([{ x: p.x - w, y }, { x: p.x, y: y - height * .48 * scale }, { x: p.x + w, y }], ['#314d34', '#476743', '#5c7549'][tier]!, '#263c2d'); }
+      if (this.tile > 28) for (let leaf = 0; leaf < 9; leaf++) {
+        const dy = (leaf % 3) * 11 + 20, dx = ((Math.imul(index + leaf, 397) >>> 0) % 21 - 10) * (1 - dy / 90);
+        c.fillStyle = leaf % 2 ? '#a3af5e38' : '#243e3370'; c.beginPath(); c.ellipse(p.x + dx * scale, p.y - dy * scale, (2 + leaf % 3) * scale, 1.6 * scale, -.3, 0, Math.PI * 2); c.fill();
+      }
       return;
     }
     const city = this.snapshot?.world.city;
     const architecture = this.buildingForObstacle.get(index);
     const urban = !!city && obstacle.x + obstacle.width / 2 >= city.x && obstacle.y + obstacle.height / 2 >= city.y && obstacle.x + obstacle.width / 2 < city.x + city.width && obstacle.y + obstacle.height / 2 < city.y + city.height;
-    const elevation = this.tile * (kind === 'wall' ? architecture ? .48 : .6 : kind === 'barricade' ? .26 : kind === 'container' ? .65 : urban ? 1.05 + (index % 4) * .18 : 1.05);
+    const elevation = this.tile * (kind === 'wall' ? architecture ? .58 : .65 : kind === 'barricade' ? .3 : kind === 'container' ? .7 : urban ? 1.4 + (index % 4) * .19 : 1.15);
     const base = this.quad(obstacle.x - .5, obstacle.y - .5, obstacle.width, obstacle.height), top = this.quad(obstacle.x - .5, obstacle.y - .5, obstacle.width, obstacle.height, elevation);
     const localPoi = this.snapshot?.world.pois.find(poi => obstacle.x >= poi.x && obstacle.y >= poi.y && obstacle.x < poi.x + poi.width && obstacle.y < poi.y + poi.height);
     const rural = !urban && (localPoi?.districtId === 'village' || localPoi?.districtId === 'sawmill');
     const colors = kind === 'container' ? [['#576e6c', '#345354', '#7b9086'], ['#92705b', '#664b3a', '#b59070'], ['#777955', '#4c523c', '#9b9a76']][index % 3]! : kind === 'barricade' ? ['#817452', '#62543d', '#aa9470'] : architecture ? buildingColors[architecture.kind] : kind === 'wall' ? rural ? ['#918066', '#6a5b44', '#b1a078'] : ['#81877a', '#596154', '#a0a28b'] : rural ? ['#988c69', '#6e6247', '#787a59'] : urban ? [['#8b8174', '#60594e', '#ada896'], ['#8c776c', '#665950', '#9d9e95'], ['#a3a08c', '#767967', '#b3b29c']][index % 3]! : ['#707b70', '#4e5e55', '#949684'];
     this.polygon([base[1]!, base[2]!, top[2]!, top[1]!], colors[0]!, '#acaf8644'); this.polygon([base[2]!, base[3]!, top[3]!, top[2]!], colors[1]!, '#84907666'); this.polygon(top, colors[2]!, '#b4b39177');
+    if (this.tile < 12) return;
+    // Masonry, sills and roof trim follow these exact collision faces.
+    c.lineWidth = Math.max(.5, this.tile / 90); c.strokeStyle = '#e1d6ba66';
+    c.beginPath(); c.moveTo(top[1]!.x, top[1]!.y + 2); c.lineTo(top[2]!.x, top[2]!.y + 2); c.lineTo(top[3]!.x, top[3]!.y + 2); c.stroke();
+    c.strokeStyle = '#263b32aa'; c.beginPath(); c.moveTo(base[1]!.x, base[1]!.y - 3); c.lineTo(base[2]!.x, base[2]!.y - 3); c.lineTo(base[3]!.x, base[3]!.y - 3); c.stroke();
     if (kind === 'container') {
       c.strokeStyle = '#273c3a88'; c.lineWidth = 1;
       for (let fraction = .15; fraction < 1; fraction += .15) { const a = { x: top[1]!.x + (top[2]!.x - top[1]!.x) * fraction, y: top[1]!.y + (top[2]!.y - top[1]!.y) * fraction }, b = { x: base[1]!.x + (base[2]!.x - base[1]!.x) * fraction, y: base[1]!.y + (base[2]!.y - base[1]!.y) * fraction }; c.beginPath(); c.moveTo(a.x, a.y); c.lineTo(b.x, b.y); c.stroke(); }
+      for (let fraction = .1; fraction < 1; fraction += .1) {
+        const a = this.project({ x: obstacle.x - .5 + obstacle.width * fraction, y: obstacle.y - .5 }, elevation), b = this.project({ x: obstacle.x - .5 + obstacle.width * fraction, y: obstacle.y + obstacle.height - .5 }, elevation);
+        c.strokeStyle = '#31463c88'; c.beginPath(); c.moveTo(a.x, a.y); c.lineTo(b.x, b.y); c.stroke();
+      }
+      const a = base[3]!, b = base[2]!, mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      c.strokeStyle = '#e0ccb080'; c.beginPath(); c.moveTo(mid.x, mid.y - elevation + 3); c.lineTo(mid.x, mid.y - 3); c.stroke();
+      if (this.tile > 24) this.label(index % 3 ? 'ГРУЗ' : 'ОЖД', mid.x, mid.y - elevation * .4, '#d6d3b299', 7);
+    } else if (kind === 'barricade') {
+      if (obstacle.label?.includes('Верстак')) {
+        c.strokeStyle = '#e3c79099'; c.lineWidth = 1.4; c.beginPath(); c.moveTo(top[0]!.x, top[0]!.y); c.lineTo(top[2]!.x, top[2]!.y); c.moveTo(top[1]!.x, top[1]!.y); c.lineTo(top[3]!.x, top[3]!.y); c.stroke();
+      } else {
+        c.strokeStyle = '#263e3277'; c.lineWidth = Math.max(1, this.tile * .055);
+        for (let stripe = .12; stripe < .95; stripe += .23) {
+          const a = this.project({ x: obstacle.x - .5 + obstacle.width * stripe, y: obstacle.y + obstacle.height - .5 }, elevation * .9), b = this.project({ x: obstacle.x - .5 + obstacle.width * (stripe + .12), y: obstacle.y + obstacle.height - .5 }, elevation * .1);
+          c.beginPath(); c.moveTo(a.x, a.y); c.lineTo(b.x, b.y); c.stroke();
+        }
+      }
     } else if (kind === 'building') {
       if (rural || obstacle.width >= obstacle.height * 1.5) {
         const ridgeA = this.project({ x: obstacle.x - .5, y: obstacle.y + obstacle.height / 2 - .5 }, elevation + this.tile * .2), ridgeB = this.project({ x: obstacle.x + obstacle.width - .5, y: obstacle.y + obstacle.height / 2 - .5 }, elevation + this.tile * .2);
         this.polygon([top[0]!, top[1]!, ridgeB, ridgeA], rural ? '#96906d' : '#8c9480', '#aaa98d66');
         this.polygon([ridgeA, ridgeB, top[2]!, top[3]!], rural ? '#6e7553' : '#687463', '#aaa98d66');
+        c.strokeStyle = '#354c3d99'; c.lineWidth = .8;
+        for (let t = .12; t < 1; t += .13) {
+          const ridge = { x: ridgeA.x + (ridgeB.x - ridgeA.x) * t, y: ridgeA.y + (ridgeB.y - ridgeA.y) * t }, edge = { x: top[3]!.x + (top[2]!.x - top[3]!.x) * t, y: top[3]!.y + (top[2]!.y - top[3]!.y) * t };
+          c.beginPath(); c.moveTo(ridge.x, ridge.y); c.lineTo(edge.x, edge.y); c.stroke();
+        }
       } else {
         c.strokeStyle = '#505a4b88'; c.beginPath(); c.moveTo(top[0]!.x, top[0]!.y); c.lineTo(top[2]!.x, top[2]!.y); c.stroke();
         const vent = this.quad(obstacle.x + obstacle.width * .25, obstacle.y + obstacle.height * .25, .7, .7, elevation + 3); this.polygon(vent, '#697662', '#b1b292');
+        const inset = this.quad(obstacle.x - .32, obstacle.y - .32, Math.max(.2, obstacle.width - .36), Math.max(.2, obstacle.height - .36), elevation + 1);
+        c.strokeStyle = '#44574ba6'; c.lineWidth = Math.max(1, this.tile * .04); c.beginPath(); inset.forEach((point, i) => i ? c.lineTo(point.x, point.y) : c.moveTo(point.x, point.y)); c.closePath(); c.stroke();
       }
       if (this.tile > 20) {
-        const windows = Math.min(5, Math.max(1, Math.floor(obstacle.width / 2)));
-        for (let i = 0; i < windows; i++) {
-          const t = (i + 1) / (windows + 1), x = base[3]!.x + (base[2]!.x - base[3]!.x) * t, y = base[3]!.y + (base[2]!.y - base[3]!.y) * t - elevation * .58;
-          this.polygon([{ x: x - this.tile * .1, y: y - this.tile * .045 }, { x: x + this.tile * .1, y: y + this.tile * .045 }, { x: x + this.tile * .1, y: y + this.tile * .2 }, { x: x - this.tile * .1, y: y + this.tile * .11 }], '#2a4038', '#a7af9666');
-        }
+        this.facade(base[3]!, base[2]!, elevation, obstacle.width, urban ? 2 : 1, index);
+        this.facade(base[2]!, base[1]!, elevation, obstacle.height, urban ? 2 : 1, index + 3);
+        const chimneyX = obstacle.x + obstacle.width * .65, chimneyY = obstacle.y + obstacle.height * .32;
+        const chimney = this.quad(chimneyX, chimneyY, .4, .4, elevation + this.tile * .32);
+        const chimneyBase = this.quad(chimneyX, chimneyY, .4, .4, elevation + this.tile * .12);
+        this.polygon([chimneyBase[1]!, chimneyBase[2]!, chimney[2]!, chimney[1]!], '#71664d'); this.polygon([chimneyBase[2]!, chimneyBase[3]!, chimney[3]!, chimney[2]!], '#524e3d'); this.polygon(chimney, '#b7aa8b', '#d7c7a080');
       }
     }
     if (architecture && kind === 'wall' && this.tile > 20 && obstacle.width >= 3) {
@@ -434,7 +536,33 @@ export class LiveScene {
       }
       if (architecture.kind === 'shop') this.polygon([top[3]!, top[2]!, { x: top[2]!.x, y: top[2]!.y + this.tile * .08 }, { x: top[3]!.x, y: top[3]!.y + this.tile * .08 }], '#73874c', '#c2c49a');
     }
+    if (kind === 'wall' && this.tile > 24) {
+      const a = base[3]!, b = base[2]!;
+      c.strokeStyle = architecture?.kind === 'service' ? '#c8ccac40' : '#b9ac8b44'; c.lineWidth = .55;
+      for (let course = 1; course <= 3; course++) {
+        const lift = elevation * course / 4;
+        c.beginPath(); c.moveTo(a.x, a.y - lift); c.lineTo(b.x, b.y - lift); c.stroke();
+        for (let t = .1 + (course % 2) * .05; t < 1; t += .12) { const px = a.x + (b.x - a.x) * t, py = a.y + (b.y - a.y) * t - lift; c.beginPath(); c.moveTo(px, py); c.lineTo(px, py + elevation / 4); c.stroke(); }
+      }
+      if (index % 4 === 0) {
+        c.strokeStyle = '#315136b3'; c.lineWidth = Math.max(1, this.tile * .035); c.beginPath(); c.moveTo(a.x + 3, a.y); c.quadraticCurveTo(a.x + 8, a.y - elevation * .25, a.x + 6, a.y - elevation * .52); c.stroke();
+      }
+    }
     if (obstacle.label && !architecture && !this.overview && this.tile > 28) this.label(obstacle.label.toUpperCase(), p.x, p.y - elevation + 3, '#efe1b2', 8);
+  }
+
+  private facade(a: LivePoint, b: LivePoint, height: number, length: number, floors: number, seed: number): void {
+    const c = this.context, columns = Math.min(10, Math.max(1, Math.floor(length / 1.7)));
+    for (let floor = 0; floor < floors; floor++) {
+      const y = height * (.2 + .6 * (floor + .5) / floors), windowHeight = Math.min(this.tile * .25, height * .43 / floors);
+      if (floors > 1 && floor) { c.strokeStyle = '#b6ac9277'; c.lineWidth = 1; c.beginPath(); c.moveTo(a.x, a.y - height * .5); c.lineTo(b.x, b.y - height * .5); c.stroke(); }
+      for (let column = 0; column < columns; column++) {
+        const t = (column + .5) / columns, half = Math.min(.22 / columns, .1), left = { x: a.x + (b.x - a.x) * (t - half), y: a.y + (b.y - a.y) * (t - half) - y }, right = { x: a.x + (b.x - a.x) * (t + half), y: a.y + (b.y - a.y) * (t + half) - y };
+        this.polygon([{ x: left.x, y: left.y - windowHeight / 2 }, { x: right.x, y: right.y - windowHeight / 2 }, { x: right.x, y: right.y + windowHeight / 2 }, { x: left.x, y: left.y + windowHeight / 2 }], (seed + floor * 7 + column) % 9 === 0 ? '#ab9c6480' : '#203d36', '#c5c4a377');
+        c.lineWidth = .6; c.strokeStyle = '#aaa98a88'; c.beginPath(); c.moveTo((left.x + right.x) / 2, (left.y + right.y) / 2 - windowHeight / 2); c.lineTo((left.x + right.x) / 2, (left.y + right.y) / 2 + windowHeight / 2); c.stroke();
+        if (column % 3 === seed % 3) { c.strokeStyle = '#17372955'; c.lineWidth = Math.max(1, this.tile * .03); c.beginPath(); c.moveTo(left.x - 2, left.y + windowHeight / 2); c.lineTo(left.x - 3, left.y + windowHeight / 2 + height * .15); c.stroke(); }
+      }
+    }
   }
 
   private paint(): void {
@@ -482,6 +610,7 @@ export class LiveScene {
     this.hitTargets = [];
     for (const entity of snapshot.entities) objects.push({ depth: entity.x + entity.y + .1, paint: () => this.paintEntity(entity, now) });
     objects.sort((a, b) => a.depth - b.depth).forEach(object => object.paint());
+    this.paintIntent(snapshot, now);
     this.paintLandmarks(world);
     this.paintWaypoints(world);
     this.paintCombat(now);
@@ -493,7 +622,7 @@ export class LiveScene {
     // then reuse these bounds until the overlay changes or the viewport is resized.
     if (this.overlayBoundsDirty) {
       const canvas = this.canvas.getBoundingClientRect();
-      this.overlayBounds = [...this.host.querySelectorAll<HTMLElement>('.live-field-hud, .live-field-legend, .live-camera')].flatMap(element => {
+      this.overlayBounds = [...this.host.querySelectorAll<HTMLElement>('.live-field-hud, .live-field-legend, .live-auto-world-status, .live-camera')].flatMap(element => {
         const rect = element.getBoundingClientRect();
         if (rect.width < 1 || rect.height < 1) return [];
         return [{ x: rect.left - canvas.left - 5, y: rect.top - canvas.top - 5, width: rect.width + 10, height: rect.height + 10 }];
@@ -573,10 +702,29 @@ export class LiveScene {
       if (!point) continue;
       const p = this.project(point);
       if (p.x < -20 || p.x > this.width + 20 || p.y < -20 || p.y > this.height + 20) continue;
-      c.beginPath(); c.arc(p.x, p.y, this.overview ? 9 : 11, 0, Math.PI * 2); c.fillStyle = '#e8ce90'; c.fill(); c.strokeStyle = '#2a3a24'; c.lineWidth = 2; c.stroke();
-      c.font = '800 10px Manrope, sans-serif'; c.textAlign = 'center'; c.fillStyle = '#23331f'; c.fillText(String(index + 1), p.x, p.y + 3.5);
+      const done = !!this.snapshot?.self.automation?.enabled && index < this.snapshot.self.automation.stopIndex;
+      c.beginPath(); c.arc(p.x, p.y, this.overview ? 9 : 11, 0, Math.PI * 2); c.fillStyle = done ? '#658477' : '#e8ce90'; c.fill(); c.strokeStyle = '#193b2f'; c.lineWidth = 2; c.stroke();
+      c.font = '800 10px Manrope, sans-serif'; c.textAlign = 'center'; c.fillStyle = done ? '#d9e1c7' : '#23331f'; c.fillText(done ? '✓' : String(index + 1), p.x, p.y + 3.5);
       this.waypointTargets.push({ point, x: p.x, y: p.y });
     }
+  }
+  private paintIntent(snapshot: LiveSnapshot, now: number): void {
+    const c = this.context, self = snapshot.entities.find(entity => entity.id === snapshot.selfId);
+    if (self) {
+      const motion = this.motions.get(self.id), point = this.project(motion ? this.interpolated(motion, now) : self), radius = Math.max(9, this.tile * .3);
+      if (point.x > 0 && point.x < this.width && point.y > 0 && point.y < this.height) {
+        c.save(); c.strokeStyle = '#f0d9a8'; c.lineWidth = 1.3; c.setLineDash([3, 4]); c.beginPath(); c.ellipse(point.x, point.y + 2, radius, radius * .48, 0, 0, Math.PI * 2); c.stroke(); c.restore();
+      }
+    }
+    const auto = snapshot.self.automation;
+    if (!auto?.enabled || !auto.target || auto.stage === 'complete' || auto.stage === 'downed') return;
+    const p = this.project(auto.target), radius = Math.max(this.overview ? 7 : 11, this.tile * .25), color = auto.stage === 'extract' ? '#a9d9a7' : auto.stage === 'combat' ? '#ed997c' : '#e3c989';
+    if (p.x < -30 || p.x > this.width + 30 || p.y < -30 || p.y > this.height + 30) return;
+    c.save(); c.strokeStyle = color; c.lineWidth = 1.7; c.globalAlpha = .7 + Math.sin(now / 450) * .17;
+    c.beginPath();
+    for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { c.moveTo(p.x + sx! * radius, p.y + sy! * radius * .65 - sy! * 5); c.lineTo(p.x + sx! * radius, p.y + sy! * radius * .65); c.lineTo(p.x + sx! * (radius - 5), p.y + sy! * radius * .65); }
+    c.stroke(); c.restore();
+    if (!this.overview && this.tile >= 20) this.label(auto.stage === 'extract' ? 'ЭВАКУАЦИЯ' : auto.stage === 'combat' ? 'КОНТАКТ' : 'ТЕКУЩАЯ ЦЕЛЬ', p.x, p.y - radius - 8, color, 8);
   }
   private paintCombat(now: number): void {
     this.effects = this.effects.filter(effect => now - effect.at < 850);
@@ -647,8 +795,15 @@ export class LiveScene {
       const px = x + point.x * scale, py = y + point.y * scale;
       c.fillStyle = '#e8ce90'; c.beginPath(); c.arc(px, py, 3.5, 0, Math.PI * 2); c.fill(); c.fillStyle = '#24321f'; c.textAlign = 'center'; c.font = '700 6px Manrope, sans-serif'; c.fillText(String(index + 1), px, py + 2);
     }
+    c.save(); c.beginPath(); c.rect(x, y, width, height); c.clip();
+    const corners = [this.unproject(0, 0), this.unproject(this.width, 0), this.unproject(this.width, this.height), this.unproject(0, this.height)];
+    c.beginPath(); corners.forEach((point, index) => index ? c.lineTo(x + point.x * scale, y + point.y * scale) : c.moveTo(x + point.x * scale, y + point.y * scale)); c.closePath(); c.fillStyle = '#dbe8c20f'; c.fill(); c.strokeStyle = '#e6dcb8aa'; c.lineWidth = .8; c.stroke();
+    const target = snapshot.self.automation?.target;
+    if (target) { c.strokeStyle = snapshot.self.automation?.stage === 'extract' ? '#b2dca1' : '#f2d18b'; c.lineWidth = 1; c.strokeRect(x + target.x * scale - 3, y + target.y * scale - 3, 6, 6); }
+    c.restore();
     for (const entity of snapshot.entities) { c.fillStyle = entity.id === snapshot.selfId ? '#ffe0a4' : entity.bossId?'#f0b267':entity.kind === 'player' ? '#81d0e3' : entity.faction === 'raiders' ? '#e48971' : '#ce9778'; c.beginPath(); const px=x+entity.x*scale,py=y+entity.y*scale;if(entity.bossId){c.moveTo(px,py-3);c.lineTo(px+3,py);c.lineTo(px,py+3);c.lineTo(px-3,py);c.closePath();}else c.arc(px,py,entity.id===snapshot.selfId?2.8:1.6,0,Math.PI*2);c.fill(); }
     this.label(snapshot.world.name.toUpperCase(), x + width / 2, y + height + 14, '#a9b596', 8);
+    c.font = '600 8px "IBM Plex Mono", monospace'; c.textAlign = 'right'; c.fillStyle = '#c9d4b6'; c.fillText('С ↑', x + width - 3, y + 10);
   }
   private loadBossWeapon(id:string):void {
     if(this.bossWeapons.has(id))return;

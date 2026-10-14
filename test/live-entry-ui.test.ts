@@ -41,10 +41,37 @@ function harness(run:(path:string,init:RequestInit)=>Promise<Response>,getGameId
     fetch:(async(url:string,init:RequestInit)=>{const path=url.split('/').at(-1)!;calls.push({path,init});return run(path,init);}) as typeof fetch});
   dispose=()=>{mode.destroy();if(doc)Object.defineProperty(globalThis,'document',doc);else Reflect.deleteProperty(globalThis,'document');if(win)Object.defineProperty(globalThis,'window',win);else Reflect.deleteProperty(globalThis,'window');};
   const settle=async()=>{for(let count=0;count<30;count++)await Promise.resolve();};
-  return {mode,world,dock,calls,settle,overlay:world.children[0]!};
+  return {mode,world,dock,calls,settle,overlay:world.children[0]!,firePoll(){const next=timers.entries().next().value;if(next){timers.delete(next[0]);next[1]();}}};
 }
 
 describe('authoritative multiplayer sortie preparation',()=>{
+  test('automatic sortie reads server intent and sends pause, resume, route and recall once without replay during polling',async()=>{
+    const {entry,state}=fixture();const route=state.world.routes!.find(route=>route.purpose==='loot'&&route.districtId==='customs')!;
+    state.self.automation={enabled:true,stage:'route',goal:'Идёт к первому ориентиру',targetId:null,target:null,routeId:route.id,routeName:route.name,stopIndex:0,stopCount:route.poiIds.length,reason:null,startedAt:state.now,completedAt:0};
+    const commands:unknown[]=[];
+    const h=harness(async(path,init)=>{
+      if(path==='entry')return Response.json(entry);
+      if(path==='leave')return Response.json({ok:true});
+      if(path==='action'){
+        const command=JSON.parse(init.body as string);commands.push(command);
+        if(command.type==='automation'){state.self.automation!.enabled=command.enabled;state.self.automation!.stage=command.enabled?'route':'paused';}
+        if(command.type==='recall'){state.self.automation!.stage='extract';state.self.automation!.goal='Возвращается к выходу';}
+      }
+      return Response.json(state);
+    });
+    h.mode.show();await h.settle();h.overlay.click('join');await h.settle();
+    expect(h.dock.innerHTML).toContain('АВТОБОЙ АКТИВЕН');expect(h.dock.innerHTML).toContain('Идёт к первому ориентиру');
+    expect(h.dock.innerHTML).not.toContain('WASD');expect(h.dock.innerHTML).not.toContain('data-live-button="move:');expect(commands).toEqual([]);
+    h.dock.click('auto-toggle');await h.settle();expect(h.dock.innerHTML).toContain('АВТОБОЙ НА ПАУЗЕ');
+    h.firePoll();await h.settle();expect(commands).toEqual([{type:'automation',enabled:false}]);
+    h.dock.click('auto-toggle');await h.settle();h.dock.click(`route:${route.id}`);await h.settle();h.dock.click('recall');await h.settle();
+    expect(commands).toEqual([{type:'automation',enabled:false},{type:'automation',enabled:true},{type:'automation',enabled:true,routeId:route.id},{type:'recall'}]);
+    expect(h.dock.innerHTML).toContain('Возвращается к выходу');
+    h.firePoll();await h.settle();expect(commands).toHaveLength(4);
+    state.self.automation!.enabled=false;state.self.automation!.stage='complete';state.self.automation!.completedAt=state.now+1000;state.self.automation!.goal='Груз доставлен';
+    h.firePoll();await h.settle();expect(h.dock.innerHTML).toContain('Рейд завершён');expect(h.dock.innerHTML).toContain('Вернуться в убежище');
+    expect(h.dock.innerHTML).not.toContain('data-live-button="auto-toggle"');expect(h.dock.innerHTML).not.toContain('data-live-button="recall"');expect(commands).toHaveLength(4);
+  });
   test('entry parser detaches the private body and rejects hidden actor fields, forged costs and inconsistent continuation',()=>{
     const {entry,state}=fixture();const self=state.entities[0]!;
     entry.mode='continue';entry.fighter={id:self.id,name:self.name,x:self.x,y:self.y,health:self.health,body:state.self.body,medicine:state.self.medicine,ammo:24,districtId:'customs',purpose:'loot',cargo:0,lootCount:0,respawnAt:0,online:false,loadout:getLiveLoadout('scav')};

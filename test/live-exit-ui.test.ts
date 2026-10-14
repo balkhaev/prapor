@@ -115,9 +115,9 @@ describe('visible server-confirmed live exit', () => {
     server.self.purpose='boss';server.server.bosses=BOSSES.map(boss=>{const arena=getLiveBossArena(server.world,boss.id);return {bossId:boss.id,name:boss.name,districtId:boss.districtId,poiId:arena.poiId,area:arena.area,state:'alive',respawnAt:0};});
     mode!.show();await settle();await click('boss-route:bugor');await click('join');
     const village=getLiveBossArena(server.world,'bugor'),depot=getLiveBossArena(server.world,'komendant');
-    expect(sceneRoute).toEqual([village.poiId]);expect(dock.innerHTML).toContain(`data-live-button="poi:${village.poiId}"`);expect(dock.innerHTML).not.toContain('class="live-boss-weapon"');
+    expect(sceneRoute).toEqual([village.poiId]);expect(dock.innerHTML).toContain(`data-live-button="poi-view:${village.poiId}"`);expect(dock.innerHTML).not.toContain('class="live-boss-weapon"');
     const point={x:server.entities[0]!.x,y:server.entities[0]!.y};await click('boss-area:komendant');
-    expect(sceneRoute).toEqual([depot.poiId]);expect(dock.innerHTML).toContain(`data-live-button="poi:${depot.poiId}"`);expect(commands).toHaveLength(0);expect(joins).toBe(1);expect(server.self.districtId).toBe('customs');expect({x:server.entities[0]!.x,y:server.entities[0]!.y}).toEqual(point);
+    expect(sceneRoute).toEqual([depot.poiId]);expect(dock.innerHTML).toContain(`data-live-button="poi-view:${depot.poiId}"`);expect(commands).toHaveLength(0);expect(joins).toBe(1);expect(server.self.districtId).toBe('customs');expect({x:server.entities[0]!.x,y:server.entities[0]!.y}).toEqual(point);
     await click(`poi:${depot.poiId}`);expect(commands).toHaveLength(1);expect((commands[0] as {type:string}).type).toBe('move');
   });
   test('choosing a boss hunt changes only lobby district and purpose until explicit entry',async()=>{
