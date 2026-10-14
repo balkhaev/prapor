@@ -137,6 +137,7 @@ describe('live wire parser', () => {
   });
   test('city quarters and outer labels survive full and cached geometry while rejecting malformed public regions', () => {
     const full=fixture(), side=Math.floor(full.world.width/4), x=side,y=side;
+    delete full.world.citySites; // This fixture authors another region, without V5 site geometry.
     full.world.city={name:'Ольховск',x,y,width:side*2,height:side*2,quarters:[
       {id:'old-center',name:'Старый центр',x,y,width:side,height:side},
       {id:'industrial',name:'Промышленный квартал',x:x+side,y,width:side,height:side},
@@ -150,7 +151,7 @@ describe('live wire parser', () => {
     const {world:_world,...withoutWorld}=full,delta={...withoutWorld,server:structuredClone(full.server)};delete delta.server.maps[0]!.city;
     expect(readLiveSnapshot(delta,parsed.world).world.city).toEqual(full.world.city);
     expect(readLiveSnapshot(delta,parsed.world).world.districts[0]!.labelPoint).toEqual({x:12,y:12});
-    const legacy=fixture();delete legacy.world.city;delete legacy.server.maps[0]!.city;
+    const legacy=fixture();delete legacy.world.city;delete legacy.world.citySites;delete legacy.server.maps[0]!.city;
     for(const district of [...legacy.world.districts,...legacy.server.districts])delete district.labelPoint;
     expect(readLiveSnapshot(legacy)).toEqual(legacy);
     const edits:Array<(value:LiveSnapshot)=>void>=[

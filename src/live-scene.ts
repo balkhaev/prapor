@@ -1,4 +1,4 @@
-import { LIVE_TERRAIN_CODES, type LiveCommand, type LiveDrop, type LiveEntity, type LiveEvent, type LiveLandscapePath, type LiveObstacle, type LivePoint, type LiveSnapshot, type LiveTerrain, type LiveWorld } from './game/live';
+import { LIVE_TERRAIN_CODES, type LiveCityBuilding, type LiveCommand, type LiveDrop, type LiveEntity, type LiveEvent, type LiveLandscapePath, type LiveObstacle, type LivePoint, type LiveSnapshot, type LiveTerrain, type LiveWorld } from './game/live';
 import { scavDirection, type ScavDirection } from './scav-isometric';
 import { liveDropLabel, liveLootTotals } from './live-loot-ui';
 import { getBoss } from './game/bosses';
@@ -11,6 +11,8 @@ type Atlas = { image: HTMLImageElement; frames: Record<string, AtlasFrame> };
 type Motion = { from: LivePoint; to: LivePoint; at: number; direction: ScavDirection };
 type LabelBox = { x: number; y: number; width: number; height: number };
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+const buildingColors: Record<LiveCityBuilding['kind'], readonly string[]> = { apartment: ['#ad9983', '#766b59', '#c7b89c'], shop: ['#8e987a', '#60745c', '#b3bd9c'], workshop: ['#809494', '#546e6d', '#a7b7a8'], garage: ['#808982', '#56655b', '#9ba58f'], service: ['#bac2b1', '#839480', '#d0d3b9'] };
+const siteKinds = { courtyard: 'ДВОР', arcade: 'СКВОЗНОЙ ПРОХОД', workyard: 'МАСТЕРСКИЕ', 'service-yard': 'СЛУЖЕБНЫЙ ДВОР' } as const;
 
 /** A presentation only: interpolation ends at the last confirmed server position. */
 export class LiveScene {
@@ -48,6 +50,8 @@ export class LiveScene {
   private terrain: LiveTerrain[] = [];
   private overviewTerrain: HTMLCanvasElement | null = null;
   private terrainTexture: HTMLCanvasElement | null = null;
+  private walkableGround = new Uint8Array();
+  private buildingForObstacle = new Map<number, LiveCityBuilding>();
   private terrainColor: Record<LiveTerrain, readonly [number, number, number]> = { road: [80, 86, 78], concrete: [96, 103, 87], forest: [49, 70, 47], water: [43, 73, 76], yard: [91, 97, 68], grass: [75, 91, 53], path: [128, 121, 84], rail: [89, 91, 81], sand: [139, 136, 98] };
 
   constructor(private host: HTMLElement, private command: (command: LiveCommand) => void, private select: (id: string) => void) {
@@ -77,6 +81,14 @@ export class LiveScene {
   hide(): void { this.active = false; cancelAnimationFrame(this.frame); this.frame = 0; }
   clear(): void { this.snapshot = null; this.motions.clear(); this.selected = null; this.routePoiIds = []; this.waypointTargets = []; this.hitTargets = []; this.effects = []; this.seenEvents.clear(); this.paint(); }
   setSelected(id: string | null): void { this.selected = id; }
+  /** Inspect public architecture without issuing a movement command. */
+  focusPoint(point: LivePoint): void {
+    const world = this.snapshot?.world;
+    if (!world || !Number.isFinite(point.x) || !Number.isFinite(point.y) || point.x < 0 || point.y < 0 || point.x >= world.width || point.y >= world.height) return;
+    this.camera = { ...point }; this.following = false; this.overview = false; this.cityOverview = false;
+    this.zoom = this.width < 480 ? .75 : .85; this.waypointTargets = []; this.hitTargets = [];
+    this.updateCameraControls(); this.canvas.focus({ preventScroll: true });
+  }
   setRoute(poiIds: readonly string[]): void {
     if (poiIds.length === this.routePoiIds.length && poiIds.every((id, index) => id === this.routePoiIds[index])) return;
     this.routePoiIds = [...poiIds]; this.waypointTargets = [];
@@ -123,10 +135,24 @@ export class LiveScene {
     if (!action) return;
     if (action === 'follow') { this.following = true; this.overview = false; this.cityOverview = false; this.zoom = 1; }
     else if (action === 'overview' || action === 'city' && this.snapshot?.world.city) { this.following = false; this.overview = true; this.cityOverview = action === 'city'; }
-    else { this.overview = false; this.cityOverview = false; this.zoom = clamp(this.zoom * (action === 'in' ? 1.25 : .8), .06, 1.8); }
-    this.controls.querySelectorAll<HTMLButtonElement>('button').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.liveZoom === (this.overview ? this.cityOverview ? 'city' : 'overview' : this.following ? 'follow' : ''))));
+    else {
+      const scale = this.overview && this.snapshot ? this.viewTile(this.snapshot.world) / (this.width < 480 ? 44 : 54) : this.zoom;
+      if (this.overview && this.snapshot) { const frame = this.viewFrame(this.snapshot.world); this.camera = { x: frame.x + frame.width / 2, y: frame.y + frame.height / 2 }; }
+      this.overview = false; this.cityOverview = false; this.zoom = clamp(scale * (action === 'in' ? 1.25 : .8), .02, 1.8);
+    }
+    this.waypointTargets = []; this.hitTargets = []; this.updateCameraControls();
     this.canvas.focus({ preventScroll: true });
   };
+  private updateCameraControls(): void {
+    this.controls.querySelectorAll<HTMLButtonElement>('button').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.liveZoom === (this.overview ? this.cityOverview ? 'city' : 'overview' : this.following ? 'follow' : ''))));
+  }
+  private viewFrame(world: LiveWorld): LivePoint & { width: number; height: number } {
+    return this.cityOverview && world.city ? world.city : { x: 0, y: 0, width: world.width, height: world.height };
+  }
+  private viewTile(world: LiveWorld): number {
+    const frame = this.viewFrame(world);
+    return this.overview ? Math.min(this.width * 1.8 / (frame.width + frame.height), Math.max(120, this.height - 95) * 3.6 / (frame.width + frame.height)) : (this.width < 480 ? 44 : 54) * this.zoom;
+  }
   private click = (event: MouseEvent): void => {
     if (!this.snapshot || !this.active || performance.now() < this.ignoreClickUntil) return;
     this.canvas.focus({ preventScroll: true });
@@ -194,6 +220,15 @@ export class LiveScene {
       const district = world.districts.find(district => x >= district.x && x < district.x + district.width && y >= district.y && y < district.y + district.height);
       this.terrain.push(zone?.terrain ?? (district?.theme === 'forest' ? 'forest' : district?.theme === 'industrial' ? 'yard' : 'concrete'));
     }
+    this.walkableGround = Uint8Array.from(this.terrain, terrain => Number(terrain !== 'water'));
+    this.buildingForObstacle.clear();
+    const buildings = world.citySites?.flatMap(site => site.buildings) ?? [];
+    for (const [index, obstacle] of world.obstacles.entries()) {
+      for (let y = obstacle.y; y < obstacle.y + obstacle.height; y++) for (let x = obstacle.x; x < obstacle.x + obstacle.width; x++) this.walkableGround[y * world.width + x] = 0;
+      const cx = obstacle.x + obstacle.width / 2, cy = obstacle.y + obstacle.height / 2;
+      const building = buildings.find(building => cx >= building.x && cy >= building.y && cx < building.x + building.width && cy < building.y + building.height);
+      if (building) this.buildingForObstacle.set(index, building);
+    }
     const texture = document.createElement('canvas'), resolution = 8;
     texture.width = world.width * resolution; texture.height = world.height * resolution;
     const ground = texture.getContext('2d');
@@ -232,13 +267,52 @@ export class LiveScene {
         ground.strokeStyle = terrain === 'forest' ? '#91a26e33' : '#b3bb7d33'; ground.lineWidth = .04;
         ground.beginPath(); ground.moveTo(px - .11, py + .09); ground.lineTo(px - .04, py - .05); ground.moveTo(px + .03, py + .1); ground.lineTo(px + .04, py - .09); ground.moveTo(px + .09, py + .1); ground.lineTo(px + .15, py + .02); ground.stroke();
       }
-      this.paintLandscape(world, ground); ground.restore();
+      this.paintLandscape(world, ground); this.paintSiteGround(world, ground); ground.restore();
     }
     this.terrainTexture = texture;
     const overview = document.createElement('canvas'); overview.width = (world.width + world.height) * 4; overview.height = (world.width + world.height) * 2;
     const overviewContext = overview.getContext('2d');
     if (overviewContext) { overviewContext.save(); overviewContext.transform(4, 2, -4, 2, world.height * 4, 0); overviewContext.drawImage(texture, 0, 0, world.width, world.height); overviewContext.restore(); }
     this.overviewTerrain = overview;
+  }
+  /** The cutaway floor is clipped to the same free cells as the server geometry. */
+  private paintSiteGround(world: LiveWorld, c: CanvasRenderingContext2D): void {
+    const sites = world.citySites ?? [];
+    if (!sites.length) return;
+    c.save(); c.beginPath();
+    const included = new Set<number>();
+    for (const site of sites) for (let y = site.y; y < site.y + site.height; y++) for (let x = site.x; x < site.x + site.width; x++) {
+      const index = y * world.width + x;
+      if (this.walkableGround[index] && !included.has(index)) { c.rect(x, y, 1, 1); included.add(index); }
+    }
+    c.clip();
+    const floorColors: Record<LiveCityBuilding['kind'], string> = { apartment: '#b8a68eaa', shop: '#a6ae94aa', workshop: '#879ca0b8', garage: '#87908aba', service: '#babda9b8' };
+    for (const site of sites) {
+      const courtyard = site.courtyard;
+      c.fillStyle = site.kind === 'workyard' ? '#91877860' : site.kind === 'service-yard' ? '#a5ad8b50' : '#b6ab8750';
+      c.fillRect(courtyard.x, courtyard.y, courtyard.width, courtyard.height);
+      c.lineJoin = 'round'; c.lineCap = 'round'; c.strokeStyle = '#d3c79855'; c.lineWidth = .65;
+      for (const path of site.passages) { c.beginPath(); path.forEach((point, index) => index ? c.lineTo(point.x + .5, point.y + .5) : c.moveTo(point.x + .5, point.y + .5)); c.stroke(); }
+      for (const building of site.buildings) {
+        c.fillStyle = floorColors[building.kind]; c.fillRect(building.x, building.y, building.width, building.height);
+        c.strokeStyle = '#35423d27'; c.lineWidth = .045; c.beginPath();
+        for (let x = building.x + 2; x < building.x + building.width; x += 2) { c.moveTo(x, building.y); c.lineTo(x, building.y + building.height); }
+        for (let y = building.y + 2; y < building.y + building.height; y += 2) { c.moveTo(building.x, y); c.lineTo(building.x + building.width, y); }
+        c.stroke();
+        c.fillStyle = '#e0ce9299';
+        for (const entry of building.entrances) c.fillRect(entry.x + .2, entry.y + .2, .6, .6);
+      }
+    }
+    c.restore();
+  }
+  private paintDoorways(world: LiveWorld): void {
+    if (this.overview || this.tile < 24) return;
+    for (const site of world.citySites ?? []) for (const building of site.buildings) for (const entry of building.entrances) {
+      if (!this.walkableGround[entry.y * world.width + entry.x]) continue;
+      const point = this.project(entry);
+      if (point.x < -10 || point.x > this.width + 10 || point.y < -10 || point.y > this.height + 10) continue;
+      this.polygon(this.quad(entry.x - .24, entry.y - .24, .48, .48), '#e5d79b66', '#e9d9a6');
+    }
   }
   /** Presentation follows the server raster; no scenery changes collision or rewards. */
   private paintLandscape(world: LiveWorld, c: CanvasRenderingContext2D): void {
@@ -323,12 +397,13 @@ export class LiveScene {
       return;
     }
     const city = this.snapshot?.world.city;
+    const architecture = this.buildingForObstacle.get(index);
     const urban = !!city && obstacle.x + obstacle.width / 2 >= city.x && obstacle.y + obstacle.height / 2 >= city.y && obstacle.x + obstacle.width / 2 < city.x + city.width && obstacle.y + obstacle.height / 2 < city.y + city.height;
-    const elevation = this.tile * (kind === 'wall' ? .6 : kind === 'barricade' ? .26 : kind === 'container' ? .65 : urban ? 1.05 + (index % 4) * .18 : 1.05);
+    const elevation = this.tile * (kind === 'wall' ? architecture ? .48 : .6 : kind === 'barricade' ? .26 : kind === 'container' ? .65 : urban ? 1.05 + (index % 4) * .18 : 1.05);
     const base = this.quad(obstacle.x - .5, obstacle.y - .5, obstacle.width, obstacle.height), top = this.quad(obstacle.x - .5, obstacle.y - .5, obstacle.width, obstacle.height, elevation);
     const localPoi = this.snapshot?.world.pois.find(poi => obstacle.x >= poi.x && obstacle.y >= poi.y && obstacle.x < poi.x + poi.width && obstacle.y < poi.y + poi.height);
     const rural = !urban && (localPoi?.districtId === 'village' || localPoi?.districtId === 'sawmill');
-    const colors = kind === 'container' ? [['#576e6c', '#345354', '#7b9086'], ['#92705b', '#664b3a', '#b59070'], ['#777955', '#4c523c', '#9b9a76']][index % 3]! : kind === 'barricade' ? ['#817452', '#62543d', '#aa9470'] : kind === 'wall' ? rural ? ['#918066', '#6a5b44', '#b1a078'] : ['#81877a', '#596154', '#a0a28b'] : rural ? ['#988c69', '#6e6247', '#787a59'] : urban ? [['#8b8174', '#60594e', '#ada896'], ['#8c776c', '#665950', '#9d9e95'], ['#a3a08c', '#767967', '#b3b29c']][index % 3]! : ['#707b70', '#4e5e55', '#949684'];
+    const colors = kind === 'container' ? [['#576e6c', '#345354', '#7b9086'], ['#92705b', '#664b3a', '#b59070'], ['#777955', '#4c523c', '#9b9a76']][index % 3]! : kind === 'barricade' ? ['#817452', '#62543d', '#aa9470'] : architecture ? buildingColors[architecture.kind] : kind === 'wall' ? rural ? ['#918066', '#6a5b44', '#b1a078'] : ['#81877a', '#596154', '#a0a28b'] : rural ? ['#988c69', '#6e6247', '#787a59'] : urban ? [['#8b8174', '#60594e', '#ada896'], ['#8c776c', '#665950', '#9d9e95'], ['#a3a08c', '#767967', '#b3b29c']][index % 3]! : ['#707b70', '#4e5e55', '#949684'];
     this.polygon([base[1]!, base[2]!, top[2]!, top[1]!], colors[0]!, '#acaf8644'); this.polygon([base[2]!, base[3]!, top[3]!, top[2]!], colors[1]!, '#84907666'); this.polygon(top, colors[2]!, '#b4b39177');
     if (kind === 'container') {
       c.strokeStyle = '#273c3a88'; c.lineWidth = 1;
@@ -350,7 +425,16 @@ export class LiveScene {
         }
       }
     }
-    if (obstacle.label && !this.overview && this.tile > 28) this.label(obstacle.label.toUpperCase(), p.x, p.y - elevation + 3, '#efe1b2', 8);
+    if (architecture && kind === 'wall' && this.tile > 20 && obstacle.width >= 3) {
+      const count = Math.min(6, Math.max(1, Math.floor(obstacle.width / 2)));
+      for (let i = 0; i < count; i++) {
+        const t = (i + 1) / (count + 1), x = base[3]!.x + (base[2]!.x - base[3]!.x) * t, y = base[3]!.y + (base[2]!.y - base[3]!.y) * t - elevation * .62;
+        const width = this.tile * (architecture.kind === 'workshop' || architecture.kind === 'garage' ? .13 : .08);
+        this.polygon([{ x: x - width, y: y - this.tile * .035 }, { x: x + width, y: y + this.tile * .035 }, { x: x + width, y: y + this.tile * .12 }, { x: x - width, y: y + this.tile * .05 }], '#324b438f', '#cbd1b18a');
+      }
+      if (architecture.kind === 'shop') this.polygon([top[3]!, top[2]!, { x: top[2]!.x, y: top[2]!.y + this.tile * .08 }, { x: top[3]!.x, y: top[3]!.y + this.tile * .08 }], '#73874c', '#c2c49a');
+    }
+    if (obstacle.label && !architecture && !this.overview && this.tile > 28) this.label(obstacle.label.toUpperCase(), p.x, p.y - elevation + 3, '#efe1b2', 8);
   }
 
   private paint(): void {
@@ -360,8 +444,8 @@ export class LiveScene {
     gradient.addColorStop(0, '#39443b'); gradient.addColorStop(1, '#101d18'); c.fillStyle = gradient; c.fillRect(0, 0, this.width, this.height);
     if (!this.snapshot) return;
     const snapshot = this.snapshot, self = snapshot.entities.find(entity => entity.id === snapshot.selfId);
-    const frame = this.cityOverview && snapshot.world.city ? snapshot.world.city : { x: 0, y: 0, width: snapshot.world.width, height: snapshot.world.height };
-    this.tile = this.overview ? Math.min(this.width * 1.8 / (frame.width + frame.height), Math.max(120, this.height - 95) * 3.6 / (frame.width + frame.height)) : (this.width < 480 ? 44 : 54) * this.zoom;
+    const frame = this.viewFrame(snapshot.world);
+    this.tile = this.viewTile(snapshot.world);
     this.origin = { x: this.width * .5, y: this.height * (this.overview ? .54 : .58) };
     if (this.overview) this.camera = { x: frame.x + frame.width / 2, y: frame.y + frame.height / 2 };
     else if (self && this.following) this.camera = this.interpolated(this.motions.get(self.id)!, now);
@@ -382,6 +466,7 @@ export class LiveScene {
       }
       c.restore();
     }
+    this.paintDoorways(world);
     for (const [index, extract] of world.extracts.entries()) {
       const p = this.project(extract); this.polygon(this.quad(extract.x - .7, extract.y - .7, 1.4, 1.4), '#5b8d5655', '#a4cf76');
       const flagHeight = this.overview ? 12 : 40;
@@ -426,6 +511,15 @@ export class LiveScene {
       const p = this.project(entrance), radius = (this.overview ? 9 : 11) + 4;
       boxes.push({ x: p.x - radius, y: p.y - radius, width: radius * 2, height: radius * 2 });
     }
+    for (const target of this.hitTargets) {
+      if (this.tile >= 28) {
+        const scale = this.tile / (this.width < 480 ? 44 : 54);
+        boxes.push({ x: target.x - 65, y: target.y - 82 * scale, width: 130, height: 82 * scale + 20 });
+      } else {
+        boxes.push({ x: target.x - 8, y: target.y - 8, width: 16, height: 16 });
+        if (target.entity.id === this.snapshot?.selfId || target.entity.id === this.selected || target.entity.bossId) boxes.push({ x: target.x - 65, y: target.y - 25, width: 130, height: 19 });
+      }
+    }
     const placeLabel = (name: string, point: LivePoint, size: number, color: string, district = false): boolean => {
       c.font = `600 ${size}px Manrope, sans-serif`;
       const width = c.measureText(name).width + 10, height = size + 8;
@@ -449,6 +543,18 @@ export class LiveScene {
       const p = this.project({ x: quarter.x + quarter.width / 2, y: quarter.y + quarter.height / 2 });
       placeLabel(quarter.name, { x: p.x, y: p.y - 16 }, this.width < 480 ? 9 : 11, '#e3d3b5', true);
     }
+    const sitePoiIds = new Set<string>();
+    if (!this.overview && this.tile >= 12) for (const site of world.citySites ?? []) {
+      const p = this.project({ x: site.courtyard.x + site.courtyard.width / 2, y: site.courtyard.y + site.courtyard.height / 2 });
+      if (p.x < -50 || p.x > this.width + 50 || p.y < -30 || p.y > this.height + 30) continue;
+      sitePoiIds.add(site.poiId);
+      if (this.tile < 24) { placeLabel(site.name, p, 9, '#e2d6b5'); continue; }
+      placeLabel(`${siteKinds[site.kind]} · ${site.name}`, p, 10, '#eadcb6');
+      for (const building of site.buildings) {
+        const center = this.project({ x: building.x + building.width / 2, y: building.y + building.height / 2 });
+        if (center.x >= 0 && center.x <= this.width && center.y >= 45 && center.y <= this.height - 35) placeLabel(building.name, center, 8, '#d6d7bd');
+      }
+    }
     const pois = [...world.pois].sort((a, b) => Number(this.routePoiIds.includes(b.id)) - Number(this.routePoiIds.includes(a.id)) || b.danger - a.danger || b.width * b.height - a.width * a.height);
     let labelCount = 0;
     for (const poi of pois) {
@@ -457,7 +563,7 @@ export class LiveScene {
       if (small) {
         c.fillStyle = chosen ? '#f2d596' : poi.danger === 3 ? '#d6a17c' : '#c2ca95'; c.fillRect(p.x - 2, p.y - 2, 4, 4);
         if ((chosen || this.width >= 480 && labelCount < 12) && placeLabel(poi.name, { x: p.x, y: p.y + 13 }, chosen ? 10 : 8, chosen ? '#f2dfb1' : '#c5d3b0')) labelCount++;
-      } else if (this.tile > 30) placeLabel(poi.name, p, chosen ? 11 : 9, chosen ? '#f2dfb1' : '#d6d3ac');
+      } else if (this.tile > 30 && !sitePoiIds.has(poi.id)) placeLabel(poi.name, p, chosen ? 11 : 9, chosen ? '#f2dfb1' : '#d6d3ac');
     }
   }
   private paintWaypoints(world: LiveWorld): void {

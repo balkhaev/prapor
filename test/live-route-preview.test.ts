@@ -18,11 +18,13 @@ test('the lobby previews published routes while cached state updates omit static
     const full = readLiveSnapshot(await join!.json()), cookie = join!.headers.get('set-cookie')!.split(';')[0]!;
     expect(full.server.routes).toBeUndefined(); expect(full.world.routes).toEqual(world.routes);
     expect(full.server.maps[0]!.city).toBeUndefined(); expect(full.world.city).toEqual(world.city);
+    expect(full.world.citySites).toEqual(world.citySites);
     const update = await service.fetch(new Request(`${origin}/api/live/state`, { headers: { cookie, 'x-prapor-live': full.selfId, 'x-prapor-world-version': full.worldVersion } }));
     const wire = await update!.json() as Record<string, unknown>;
     expect(wire.world).toBeUndefined();
     const decoded = readLiveSnapshot(wire, full.world);
     expect(decoded.server.routes).toBeUndefined(); expect(decoded.world).toBe(full.world);
     expect(decoded.world.city).toBe(full.world.city);
+    expect(decoded.world.citySites).toBe(full.world.citySites);
   } finally { service.close(); }
 });

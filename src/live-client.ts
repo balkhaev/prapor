@@ -1,4 +1,4 @@
-import { LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT, LIVE_TERRAIN_CODES, type EconomyLoot, type LiveCommand, type LiveDrop, type LiveEntity, type LiveEvent, type LiveContainerKind, type LiveDistrict, type LiveDistrictId, type LiveMapSummary, type LivePlayer, type LivePurpose, type LiveSnapshot, type LiveStatus, type LiveWorld } from './game/live';
+import { LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT, LIVE_TERRAIN_CODES, type EconomyLoot, type LiveCitySite, type LiveCommand, type LiveDrop, type LiveEntity, type LiveEvent, type LiveContainerKind, type LiveDistrict, type LiveDistrictId, type LiveMapSummary, type LivePlayer, type LivePurpose, type LiveSnapshot, type LiveStatus, type LiveWorld } from './game/live';
 import { readEconomyLootItems } from './game/live-loot';
 import { BODY_PARTS, parseHealth, parseMedicalInventory, type BodyPart, type TreatmentType } from './game/health';
 import { getBoss, type BossId } from './game/bosses';
@@ -87,6 +87,42 @@ function readCity(value: unknown, bounds: Pick<LiveWorld, 'width' | 'height'>) {
   return { name: value.name, x: value.x, y: value.y, width: value.width, height: value.height, quarters };
 }
 
+function readCitySites(value: unknown, city: LiveWorld['city'], pois: LiveWorld['pois'], bounds: Pick<LiveWorld, 'width' | 'height'>): LiveCitySite[] | undefined {
+  if (value === undefined) return undefined;
+  if (!city || !Array.isArray(value) || value.length > 64) return invalid();
+  type Rect = { x: number; y: number; width: number; height: number };
+  const within = (child: Rect, parent: Rect) => child.x >= parent.x && child.y >= parent.y && child.x + child.width <= parent.x + parent.width && child.y + child.height <= parent.y + parent.height;
+  const inside = (location: { x: number; y: number }, area: Rect) => location.x >= area.x && location.y >= area.y && location.x < area.x + area.width && location.y < area.y + area.height;
+  const rect = (area: Rect): Rect => ({ x: area.x, y: area.y, width: area.width, height: area.height });
+  const locations = (points: unknown[], area: Rect) => points.map(location => point(location, bounds) && keys(location, ['x', 'y']) && integer(location.x) && integer(location.y) && inside(location, area) ? { x: location.x, y: location.y } : invalid());
+  const parsed = value.map((site): LiveCitySite => {
+    if (!rectangle(site, bounds) || !keys(site, ['id', 'poiId', 'quarterId', 'name', 'kind', 'x', 'y', 'width', 'height', 'courtyard', 'buildings', 'passages'])
+      || !text(site.id, 64) || !text(site.poiId, 100) || !text(site.quarterId, 64) || !text(site.name, 80) || !['courtyard', 'arcade', 'workyard', 'service-yard'].includes(site.kind as string)
+      || !rectangle(site.courtyard, bounds) || !keys(site.courtyard, ['x', 'y', 'width', 'height']) || !within(site.courtyard, site)
+      || !Array.isArray(site.buildings) || site.buildings.length < 1 || site.buildings.length > 6 || !Array.isArray(site.passages) || site.passages.length < 2 || site.passages.length > 4) return invalid();
+    const quarter = city.quarters.find(quarter => quarter.id === site.quarterId), poi = pois.find(poi => poi.id === site.poiId);
+    if (!quarter || !within(site, quarter) || !poi || !poi.tags.includes('city') || poi.x !== site.x || poi.y !== site.y || poi.width !== site.width || poi.height !== site.height) return invalid();
+    const buildings = site.buildings.map(building => {
+      if (!rectangle(building, bounds) || !keys(building, ['id', 'name', 'kind', 'x', 'y', 'width', 'height', 'entrances']) || !within(building, site)
+        || !text(building.id, 100) || !text(building.name, 80) || !['apartment', 'shop', 'workshop', 'garage', 'service'].includes(building.kind as string)
+        || !Array.isArray(building.entrances) || building.entrances.length < 2 || building.entrances.length > 8) return invalid();
+      const entrances = locations(building.entrances, building);
+      if (new Set(entrances.map(port => `${port.x}:${port.y}`)).size !== entrances.length) return invalid();
+      return { ...rect(building), id: building.id, name: building.name, kind: building.kind as LiveCitySite['buildings'][number]['kind'], entrances };
+    });
+    const passages = site.passages.map(passage => {
+      if (!Array.isArray(passage) || passage.length < 2 || passage.length > 64) return invalid();
+      const points = locations(passage, site);
+      if (points.slice(1).some((point, index) => point.x !== points[index]!.x && point.y !== points[index]!.y)) return invalid();
+      return points;
+    });
+    return { ...rect(site), id: site.id, poiId: site.poiId, quarterId: site.quarterId, name: site.name, kind: site.kind as LiveCitySite['kind'], courtyard: rect(site.courtyard), buildings, passages };
+  });
+  const buildingIds = parsed.flatMap(site => site.buildings.map(building => building.id));
+  if (new Set(parsed.map(site => site.id)).size !== parsed.length || new Set(parsed.map(site => site.poiId)).size !== parsed.length || new Set(buildingIds).size !== buildingIds.length) return invalid();
+  return parsed;
+}
+
 function readDistrict(value: unknown, bounds: Pick<LiveWorld, 'width' | 'height'>): LiveDistrict {
   if (!rectangle(value, bounds) || !districtId(value.id) || !text(value.name, 80) || !text(value.description, 500) || !['industrial', 'forest', 'urban'].includes(value.theme as string) || !Array.isArray(value.spawns) || !value.spawns.length || value.spawns.length > 16) return invalid();
   const spawns = value.spawns.map(spawn => {
@@ -170,6 +206,7 @@ export function readLiveWorld(source: unknown): LiveWorld {
     return { x: poi.x, y: poi.y, width: poi.width, height: poi.height, id: poi.id, templateId: poi.templateId, name: poi.name, districtId: poi.districtId, danger: poi.danger as 1 | 2 | 3, tags: [...poi.tags] as string[], entrances };
   });
   if (new Set(pois.map(poi => poi.id)).size !== pois.length) return invalid();
+  const citySites = readCitySites(source.citySites, city, pois, bounds);
   const routes: LiveWorld['routes'] = source.routes === undefined ? undefined : (() => {
     if (!Array.isArray(source.routes) || source.routes.length > 16) return invalid();
     const parsed = source.routes.map(route => {
@@ -184,7 +221,7 @@ export function readLiveWorld(source: unknown): LiveWorld {
     return { x: container.x, y: container.y, id: container.id, poiId: container.poiId, kind: container.kind, lootTable: container.lootTable as LiveWorld['containers'][number]['lootTable'], searchMs: container.searchMs };
   });
   if (new Set(containers.map(container => container.id)).size !== containers.length) return invalid();
-  return { ...bounds, id: source.id, name: source.name, description: source.description, theme: source.theme as LiveWorld['theme'], version: source.version, seed: source.seed, generatorVersion: source.generatorVersion, chunkSize: source.chunkSize, districts, pois, containers, ...(city ? { city } : {}), ...(terrainRows ? { terrainRows } : {}), ...(paths ? { paths } : {}), ...(routes ? { routes } : {}), obstacles: source.obstacles.map(obstacle => {
+  return { ...bounds, id: source.id, name: source.name, description: source.description, theme: source.theme as LiveWorld['theme'], version: source.version, seed: source.seed, generatorVersion: source.generatorVersion, chunkSize: source.chunkSize, districts, pois, containers, ...(city ? { city } : {}), ...(citySites ? { citySites } : {}), ...(terrainRows ? { terrainRows } : {}), ...(paths ? { paths } : {}), ...(routes ? { routes } : {}), obstacles: source.obstacles.map(obstacle => {
     if (!rectangle(obstacle, bounds) || !(obstacle.kind === undefined || ['building', 'wall', 'container', 'barricade', 'tree', 'water'].includes(obstacle.kind as string)) || !(obstacle.label === undefined || text(obstacle.label, 80))) return invalid();
     return { x: obstacle.x, y: obstacle.y, width: obstacle.width, height: obstacle.height, ...(obstacle.kind ? { kind: obstacle.kind as LiveWorld['obstacles'][number]['kind'] } : {}), ...(obstacle.label ? { label: obstacle.label as string } : {}) };
   }), extracts: source.extracts.map(extract => point(extract, bounds) && integer(extract.x) && integer(extract.y) ? { x: extract.x, y: extract.y } : invalid()), zones: source.zones.map(zone => {

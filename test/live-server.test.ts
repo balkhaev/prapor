@@ -450,7 +450,9 @@ describe("shared endless live server", () => {
       db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify(saved));
     });
     const restored = (await enter(guest.session)).state;
-    expect(restored.world).toMatchObject({ width: 256, height: 256, generatorVersion: 4 });
+    expect({ width: restored.world.width, height: restored.world.height, generatorVersion: restored.world.generatorVersion })
+      .toEqual({ width: 256, height: 256, generatorVersion: 5 });
+    expect(restored.world.version).toBe(map.version); expect(restored.worldVersion).toBe(map.version);
     expect(restored.self).toMatchObject({ ammo: 17, medkits: 1, cargo: 65, stash: 120 });
     expect(restored.entities.find(entity => entity.id === guest.session.id)).toMatchObject(point);
     expect(restored.entities.find(entity => entity.id === guest.session.id)!.health).toBeCloseTo(71);

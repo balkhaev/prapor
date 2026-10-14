@@ -135,6 +135,12 @@
 .live-field-legend span{display:flex;align-items:center;gap:4px;font-size:8px;color:#c8d2b9}
 .live-field-legend i{width:5px;height:5px;border-radius:50%}
 .live-field-legend .own{background:#f2d49a}.live-field-legend .player{background:#8dd5e4}.live-field-legend .scav{background:#d2a082}.live-field-legend .raider{background:#e48971}.live-field-legend .extract{background:#a9d380}
+.live-field-legend .entrance{border-radius:0;background:#d9ce92;border:1px solid #f0deb0}
+.live-city-sites{margin:15px 0 12px;padding-top:12px;border-top:1px solid #8b9a7255}
+.live-city-sites>h4{margin:0 0 6px;color:#e7ddbc;font-size:12px}.live-city-sites>p{font-size:9px;line-height:1.7;margin:0 0 10px;color:#b6c5a6}
+.live-city-site{margin:7px 0;padding:9px;background:#263b2b;border:1px solid #6c80604d;border-radius:4px}.live-city-site.current{border-color:#c5bf8a;background:#3b4c3280}
+.live-city-site strong{display:block;color:#dce0c5;font-size:11px;line-height:1.5}.live-city-site small{display:block;margin-top:4px;color:#c6bc97;font-size:9px;line-height:1.6}.live-city-site span{display:block;color:#9fb196;font-size:8px;line-height:1.7;margin-top:4px}
+.live-city-site .live-site-actions{display:flex;gap:6px;margin-top:9px}.live-site-actions button{flex:1;min-height:30px;padding:6px;border:1px solid #7b91674d;background:#37513a;color:#e1dbb6;border-radius:3px;font:700 9px Manrope,sans-serif;cursor:pointer}.live-site-actions button:first-child{background:#243c32;color:#becdc0}.live-site-actions button:disabled{opacity:.45;cursor:default}
 .live-lobby-scene{position:absolute;inset:0;padding:82px 6% 28px;background:radial-gradient(ellipse at 76% 58%,#66704c88,transparent 45%),linear-gradient(125deg,#14281ce8,#35483388);overflow:hidden}
 .live-lobby-scene:before{content:"";position:absolute;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 60px,#97a47511 61px,transparent 62px),repeating-linear-gradient(90deg,transparent,transparent 80px,#97a47511 81px,transparent 82px);opacity:.5}
 .live-lobby-scene>.live-eyebrow,.live-lobby-scene>h2,.live-lobby-scene>p,.live-lobby-tag{position:relative;z-index:2}

@@ -49,3 +49,19 @@ test('city planning reports real building coverage without counting overlapping 
   expect(city.quarters.map(quarter => quarter.buildingTiles)).toEqual([0, 1, 0, 2]);
   expect(city.quarters.reduce((sum, quarter) => sum + quarter.buildingTiles, 0)).toBe(city.buildingTiles);
 });
+
+test('courtyard planning counts shared open ground once and excludes actual cover', () => {
+  const world = planningFixture();
+  world.city = { name: 'Город', x: 0, y: 0, width: 7, height: 5, quarters: [{ id: 'quarter', name: 'Квартал', x: 0, y: 0, width: 7, height: 5 }] };
+  world.obstacles.push({ x: 5, y: 1, width: 1, height: 1, kind: 'barricade' });
+  world.citySites = [0, 1].map(index => ({ id: `court-${index}`, poiId: index ? 'core' : 'near', quarterId: 'quarter', name: 'Двор', kind: 'courtyard',
+    x: 4, y: 0, width: 3, height: 4, courtyard: { x: 4, y: 0, width: 3, height: 3 },
+    buildings: [{ id: `building-${index}`, name: 'Павильон', kind: 'shop', x: 4, y: 3, width: 3, height: 1, entrances: [{ x: 4, y: 3 }, { x: 6, y: 3 }] }],
+    passages: [[{ x: 4, y: 0 }, { x: 4, y: 2 }], [{ x: 6, y: 0 }, { x: 6, y: 2 }]],
+  }));
+  const report = analyseWorldPlan(world).city!;
+  expect(report.urban).toMatchObject({ sites: 2, openBuildings: 2, buildingFootprintTiles: 3, indoorWalkableTiles: 3, passages: 4, containers: 1, courtyardWalkableTiles: 8 });
+  expect(report.quarters[0]).toMatchObject({ sites: 2, openBuildings: 2 });
+  expect(report.urban!.kinds.find(kind => kind.kind === 'courtyard')!.sites).toBe(2);
+  expect(world.obstacles).toHaveLength(2);
+});

@@ -4,7 +4,9 @@ export interface WorldPlanReport {
   districts: Array<{ id: LiveDistrictId; places: number; containers: number; nearestLootSteps: number | null; nearestContestedSteps: number | null }>;
   routes: Array<{ id: string; name: string; districtId: LiveDistrictId; purpose: LivePurpose; stops: string[]; firstStopSteps: number; walkSteps: number; returnSteps: number }>;
   city?: { name: string; places: number; containers: number; buildings: number; buildingTiles: number; areaTiles: number;
-    quarters: Array<{ id: string; name: string; buildings: number; buildingTiles: number; areaTiles: number }>;
+    quarters: Array<{ id: string; name: string; buildings: number; buildingTiles: number; areaTiles: number; sites?: number; openBuildings?: number }>;
+    urban?: { sites: number; openBuildings: number; buildingFootprintTiles: number; indoorWalkableTiles: number; passages: number; containers: number; courtyardWalkableTiles: number;
+      kinds: Array<{ kind: NonNullable<LiveWorld['citySites']>[number]['kind']; sites: number }> };
     approaches: Array<{ districtId: LiveDistrictId; firstCityStopSteps: number | null }> };
 }
 
@@ -77,7 +79,23 @@ export function analyseWorldPlan(world: LiveWorld): WorldPlanReport {
     return { buildings: buildings.filter(building => building.x < area.x + area.width && building.y < area.y + area.height && building.x + building.width > area.x && building.y + building.height > area.y).length, buildingTiles, areaTiles: area.width * area.height };
   };
   const places = world.pois.filter(poi => inArea(poi, city) && inArea({ x: poi.x + poi.width - 1, y: poi.y + poi.height - 1 }, city)), ids = new Set(places.map(poi => poi.id));
+  const sites = world.citySites;
+  const courtyardCells = new Set<number>();
+  for (const site of sites ?? []) for (let y = site.courtyard.y; y < site.courtyard.y + site.courtyard.height; y++) for (let x = site.courtyard.x; x < site.courtyard.x + site.courtyard.width; x++) {
+    const point = { x, y }; if (inside(point) && !blocked[key(point)]) courtyardCells.add(key(point));
+  }
+  const buildingCells = new Set<number>();
+  for (const building of sites?.flatMap(site => site.buildings) ?? []) for (let y = building.y; y < building.y + building.height; y++) for (let x = building.x; x < building.x + building.width; x++) {
+    const point = { x, y }; if (inside(point)) buildingCells.add(key(point));
+  }
+  const siteIds = new Set(sites?.map(site => site.poiId));
+  const urban = sites ? { sites: sites.length, openBuildings: sites.reduce((sum, site) => sum + site.buildings.length, 0), passages: sites.reduce((sum, site) => sum + site.passages.length, 0),
+    buildingFootprintTiles: buildingCells.size, indoorWalkableTiles: [...buildingCells].filter(cell => !blocked[cell]).length,
+    containers: world.containers.filter(anchor => siteIds.has(anchor.poiId)).length, courtyardWalkableTiles: courtyardCells.size,
+    kinds: (['courtyard', 'arcade', 'workyard', 'service-yard'] as const).map(kind => ({ kind, sites: sites.filter(site => site.kind === kind).length })) } : undefined;
   return { districts, routes, city: { name: city.name, places: places.length, containers: world.containers.filter(anchor => ids.has(anchor.poiId)).length, ...measure(city),
-    quarters: city.quarters.map(quarter => ({ id: quarter.id, name: quarter.name, ...measure(quarter) })),
+    ...(urban ? { urban } : {}),
+    quarters: city.quarters.map(quarter => { const local = sites?.filter(site => site.quarterId === quarter.id); return { id: quarter.id, name: quarter.name, ...measure(quarter),
+      ...(local ? { sites: local.length, openBuildings: local.reduce((sum, site) => sum + site.buildings.length, 0) } : {}) }; }),
     approaches: world.districts.map(district => ({ districtId: district.id, firstCityStopSteps: closest(districtFields.get(district.id)!, places.flatMap(poi => poi.entrances))?.steps ?? null })) } };
 }
