@@ -60,6 +60,70 @@ export class PropArtCache {
   }
 }
 
+/** Material wear is cached separately from roofs/cutaways, so camera motion adds no texture work. */
+export class BuildingMaterialArt {
+  private images = new Map<string, HTMLCanvasElement>();
+  clear(): void { this.images.clear(); }
+  facade(building: LiveCityBuilding, length: number): HTMLCanvasElement {
+    const floors = building.floors ?? (building.kind === 'apartment' ? 2 : 1);
+    return this.get(building, 'facade', Math.ceil(length * 24), Math.ceil((.62 + floors * .54) * 54));
+  }
+  roof(building: LiveCityBuilding, width: number, height: number): HTMLCanvasElement {
+    return this.get(building, 'roof', Math.ceil(width * 24), Math.ceil(height * 24));
+  }
+  private get(building: LiveCityBuilding, surface: 'facade' | 'roof', width: number, height: number): HTMLCanvasElement {
+    const key = `${building.id}:${building.facade}:${building.roof}:${surface}:${width}:${height}`, existing = this.images.get(key);
+    if (existing) return existing;
+    const image = document.createElement('canvas'); image.width = Math.max(1, width); image.height = Math.max(1, height);
+    const c = image.getContext('2d');
+    if (c) {
+      let seed = [...building.id].reduce((value, char) => Math.imul(value, 31) + char.charCodeAt(0), 17) >>> 0;
+      const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 0x100000000; };
+      const line = (ax: number, ay: number, bx: number, by: number, color: string, thickness = .7) => { c.strokeStyle = color; c.lineWidth = thickness; c.beginPath(); c.moveTo(ax, ay); c.lineTo(bx, by); c.stroke(); };
+      if (surface === 'facade') {
+        const material = building.facade ?? (building.kind === 'workshop' ? 'metal' : 'plaster');
+        if (material === 'brick') {
+          for (let y = 0, row = 0; y < height; y += 5.8, row++) {
+            line(0, y, width, y, '#e0c6a629');
+            for (let x = row % 2 * 7; x < width; x += 14) {
+              line(x, y, x, y + 5.8, '#362e282e', .6);
+              if (random() < .22) { c.fillStyle = random() < .5 ? '#d7b38915' : '#493e351a'; c.fillRect(x + 1, y + .8, 12, 4.5); }
+            }
+          }
+        } else if (material === 'metal') {
+          for (let x = 0; x < width; x += 8) { line(x, 0, x, height, '#dce2ca25'); line(x + 2, 0, x + 2, height, '#233d382e'); }
+          for (let i = 0; i < 7; i++) { const x = random() * width, y = height * (.25 + random() * .7); c.fillStyle = '#8e69462b'; c.fillRect(x, y, 1.3 + random() * 2, height - y); }
+        } else if (material === 'panel') {
+          for (let x = 0; x < width; x += 48) { line(x, 0, x, height, '#283f3545', 1.2); line(x + 1.6, 0, x + 1.6, height, '#dae0c229'); }
+          for (let y = height - 5; y > 0; y -= 29) line(0, y, width, y, '#334a3940', 1.1);
+        } else {
+          for (let i = 0; i < 7; i++) {
+            const x = random() * width, y = random() * height;
+            c.fillStyle = '#d2c7a814'; c.beginPath(); c.ellipse(x, y, 4 + random() * 9, 3 + random() * 6, .3, 0, Math.PI * 2); c.fill();
+          }
+          const x = width * (.15 + random() * .6), y = height * .4;
+          line(x, y, x + 3, y + 9, '#4153492b'); line(x + 3, y + 9, x - 1, y + 17, '#4153492b');
+        }
+        const wash = c.createLinearGradient(0, height * .7, 0, height); wash.addColorStop(0, '#243b2e00'); wash.addColorStop(1, '#34473250'); c.fillStyle = wash; c.fillRect(0, height * .7, width, height * .3);
+        for (let i = 0; i < 5; i++) { const x = random() * width, length = 8 + random() * height * .25; c.fillStyle = '#2e403622'; c.fillRect(x, 2, 1.5 + random() * 2.5, length); }
+      } else {
+        const pitched = building.roof === 'gable' || building.roof === 'sawtooth';
+        for (let x = 0; x < width; x += pitched ? 11 : 57.6) {
+          line(x, 0, x, height, pitched ? '#152f2b3b' : '#263c3344', pitched ? .8 : 1.2);
+          line(x + 1.5, 0, x + 1.5, height, '#d6dec224');
+        }
+        if (!pitched) for (let y = 0; y < height; y += 57.6) line(0, y, width, y, '#354b3b4a', 1.1);
+        for (let i = 0; i < 7; i++) {
+          const x = random() * width, y = random() * height;
+          c.fillStyle = pitched ? '#9b785323' : '#273f3736'; c.beginPath(); c.ellipse(x, y, 3 + random() * 8, 4 + random() * 12, .2, 0, Math.PI * 2); c.fill();
+        }
+        for (let x = 4; x < width; x += 37) for (let y = 7; y < height; y += 42) { c.fillStyle = '#223d2b77'; c.fillRect(x, y, 1.3, 1.3); }
+      }
+    }
+    this.images.set(key, image); return image;
+  }
+}
+
 /** All silhouettes use the published footprint; this does not invent cover or loot. */
 export function paintPropModel(c: CanvasRenderingContext2D, prop: LiveWorldProp, anchor: LivePoint): void {
   const w = prop.width, h = prop.height, variant = prop.variant;
@@ -74,6 +138,16 @@ export function paintPropModel(c: CanvasRenderingContext2D, prop: LiveWorldProp,
     polygon([p(x + width, y, bottom), p(x + width, y + height, bottom), e, b], colors[0]!);
     polygon([p(x, y + height, bottom), p(x + width, y + height, bottom), e, d], colors[1]!);
     polygon([a, b, e, d], colors[2]!);
+    if (width > .3 && height > .3 && z > 9) {
+      // Small cached patches give large painted/wooden surfaces dust and wear without new silhouettes.
+      c.save(); c.beginPath(); c.moveTo(a.x, a.y); c.lineTo(b.x, b.y); c.lineTo(e.x, e.y); c.lineTo(d.x, d.y); c.closePath(); c.clip();
+      for (let mark = 0; mark < 6; mark++) {
+        const u = ((mark * 37 + variant * 13) % 89 + 5) / 100, v = ((mark * 23 + variant * 19) % 87 + 6) / 100, at = p(x + width * u, y + height * v, z);
+        c.fillStyle = mark % 2 ? '#d7d5b525' : '#233b3427'; c.beginPath(); c.ellipse(at.x, at.y, 1.6 + mark % 3, .7 + mark % 2 * .35, -.3, 0, Math.PI * 2); c.fill();
+      }
+      c.restore();
+      polygon([p(x, y + height, bottom), p(x + width, y + height, bottom), p(x + width, y + height, bottom + (z - bottom) * .16), p(x, y + height, bottom + (z - bottom) * .16)], '#283b3028', '#283b3000');
+    }
   };
   const ellipse = (point: LivePoint, rx: number, ry: number, color: string) => { c.beginPath(); c.ellipse(point.x, point.y, rx, ry, 0, 0, Math.PI * 2); c.fillStyle = color; c.fill(); };
   const uv = (u: number, v: number): LivePoint => prop.orientation === 'x' ? { x: w * u, y: h * v } : { x: w * v, y: h * u };

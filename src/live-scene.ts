@@ -5,7 +5,8 @@ import { getBoss } from './game/bosses';
 import { WEAPON_BY_ID } from './game/data';
 import { bossWeapon } from './boss-ui';
 import { weaponActorArt } from './armory-art';
-import { buildingNeedsCutaway, buildingPalette, PropArtCache, SceneryIndex } from './live-map-art';
+import { BuildingMaterialArt, buildingNeedsCutaway, buildingPalette, PropArtCache, SceneryIndex } from './live-map-art';
+import { buildSurfaceMasks, paintRoadSurface, paintTerrainTexture, terrainTextureResolution, type SurfaceMasks } from './live-ground-art';
 
 type AtlasFrame = { frame: { x: number; y: number; w: number; h: number }; spriteSourceSize: { x: number; y: number; w: number; h: number }; sourceSize: { w: number; h: number } };
 type Atlas = { image: HTMLImageElement; frames: Record<string, AtlasFrame> };
@@ -56,8 +57,9 @@ export class LiveScene {
   private buildingForObstacle = new Map<number, LiveCityBuilding>();
   private scenery = new SceneryIndex<StaticScenery>([]);
   private propArt = new PropArtCache();
+  private buildingArt = new BuildingMaterialArt();
   private cutawayBuildings = new Set<string>();
-  private terrainColor: Record<LiveTerrain, readonly [number, number, number]> = { road: [58, 66, 63], concrete: [113, 116, 101], forest: [43, 65, 47], water: [37, 69, 74], yard: [97, 103, 74], grass: [80, 100, 61], path: [136, 124, 89], rail: [83, 86, 74], sand: [144, 138, 104] };
+  private surfaceMasks: SurfaceMasks = { road: new Uint8Array(), indoor: new Uint8Array(), roadRuns: [] };
 
   constructor(private host: HTMLElement, _command: (command: LiveCommand) => void, private select: (id: string) => void) {
     const context = this.canvas.getContext('2d');
@@ -248,34 +250,13 @@ export class LiveScene {
     }
     for (const prop of world.props ?? []) scenery.push({ ...prop, type: 'prop', prop, depth: prop.x + prop.y + (prop.width + prop.height) / 2 });
     for (const building of buildings) scenery.push({ ...building, type: 'architecture', building, depth: building.x + building.y + building.width + building.height - 1.1 });
-    this.scenery = new SceneryIndex(scenery, world.chunkSize); this.propArt.clear(); this.cutawayBuildings.clear();
-    const texture = document.createElement('canvas'), resolution = 8;
+    this.scenery = new SceneryIndex(scenery, world.chunkSize); this.propArt.clear(); this.buildingArt.clear(); this.cutawayBuildings.clear();
+    this.surfaceMasks = buildSurfaceMasks(world, this.terrain, this.walkableGround);
+    const texture = document.createElement('canvas'), resolution = terrainTextureResolution(world.width, world.height);
     texture.width = world.width * resolution; texture.height = world.height * resolution;
     const ground = texture.getContext('2d');
     if (ground) {
-      const pixels = ground.createImageData(texture.width, texture.height);
-      const phase = [...world.seed].reduce((hash, char) => (Math.imul(hash, 31) + char.charCodeAt(0)) | 0, 0) / 65536;
-      const borderBlend = (fraction: number) => {
-        const t = clamp((.4 - Math.min(fraction, 1 - fraction)) / .4, 0, 1);
-        return t * t * (3 - 2 * t) * .5;
-      };
-      const colorAt = (x: number, y: number) => this.terrainColor[this.terrain[clamp(y, 0, world.height - 1) * world.width + clamp(x, 0, world.width - 1)]!];
-      for (let y = 0; y < texture.height; y++) for (let x = 0; x < texture.width; x++) {
-        const wx = (x + .5) / resolution, wy = (y + .5) / resolution, cellX = Math.floor(wx), cellY = Math.floor(wy);
-        const terrain = this.terrain[cellY * world.width + cellX]!, rgb = this.terrainColor[terrain];
-        const fx = wx - cellX, fy = wy - cellY, blendX = borderBlend(fx), blendY = borderBlend(fy);
-        const neighborX = cellX + (fx < .5 ? -1 : 1), neighborY = cellY + (fy < .5 ? -1 : 1);
-        const edgeX = colorAt(neighborX, cellY), edgeY = colorAt(cellX, neighborY), corner = colorAt(neighborX, neighborY);
-        const field = Math.sin(wx * .13 + wy * .04 + phase) * 4 + Math.sin(wy * .16 - wx * .06 + phase * 2) * 3;
-        const grain = ((Math.imul(x + 31, 19349663) ^ Math.imul(y + 77, 73856093)) >>> 0) % 11 - 5;
-        const shade = terrain === 'water' ? Math.sin(wx * .48 - wy * .25 + phase) * 3 + grain * .2 : field + grain * (terrain === 'concrete' || terrain === 'road' ? .4 : .65);
-        const index = (y * texture.width + x) * 4;
-        for (let channel = 0; channel < 3; channel++) pixels.data[index + channel] = (rgb[channel]! * (1 - blendX) + edgeX[channel]! * blendX) * (1 - blendY)
-          + (edgeY[channel]! * (1 - blendX) + corner[channel]! * blendX) * blendY + shade;
-        const edge = clamp(Math.min(wx, wy, world.width - wx, world.height - wy) / .4, 0, 1);
-        pixels.data[index + 3] = 255 * edge * edge * (3 - 2 * edge);
-      }
-      ground.putImageData(pixels, 0, 0);
+      paintTerrainTexture(ground, world, this.terrain, resolution);
       ground.save(); ground.scale(resolution, resolution);
       // Flat flecks and short blades add undergrowth texture without collision scenery.
       for (let y = 0; y < world.height; y++) for (let x = 0; x < world.width; x++) {
@@ -287,7 +268,7 @@ export class LiveScene {
         ground.strokeStyle = terrain === 'forest' ? '#91a26e33' : '#b3bb7d33'; ground.lineWidth = .04;
         ground.beginPath(); ground.moveTo(px - .11, py + .09); ground.lineTo(px - .04, py - .05); ground.moveTo(px + .03, py + .1); ground.lineTo(px + .04, py - .09); ground.moveTo(px + .09, py + .1); ground.lineTo(px + .15, py + .02); ground.stroke();
       }
-      this.paintLandscape(world, ground); this.paintSiteGround(world, ground); this.paintGroundDetails(world, ground); ground.restore();
+      this.paintSiteGround(world, ground); this.paintLandscape(world, ground); this.paintGroundDetails(world, ground); ground.restore();
     }
     this.terrainTexture = texture;
     const minimap = document.createElement('canvas'); minimap.width = world.width * 4; minimap.height = world.height * 4;
@@ -318,42 +299,28 @@ export class LiveScene {
     for (let y = 0; y < world.height; y++) for (let x = 0; x < world.width; x++) {
       const material = this.terrain[y * world.width + x]!, hash = (Math.imul(x + 107, 73856093) ^ Math.imul(y + 29, 19349663)) >>> 0;
       const px = x + .15 + (hash % 89) / 130, py = y + .15 + ((hash >>> 10) % 89) / 130;
+      if (!this.walkableGround[y * world.width + x] && material !== 'water' || hash % 3) continue;
+      c.save(); c.beginPath(); c.rect(x, y, 1, 1); c.clip();
       if (material === 'concrete') {
-        if (!(x % 3) && !(y % 3)) {
-          c.strokeStyle = '#35483a33'; c.lineWidth = .035; c.strokeRect(x + .08, y + .08, 2.84, 2.84);
-          c.strokeStyle = '#e1dcc622'; c.beginPath(); c.moveTo(x + .09, y + 2.89); c.lineTo(x + .09, y + .09); c.lineTo(x + 2.89, y + .09); c.stroke();
-        }
         if (hash % 13 === 0) {
-          c.strokeStyle = '#293b3544'; c.lineWidth = .025;
+          c.strokeStyle = '#3c493d55'; c.lineWidth = .055;
           c.beginPath(); c.moveTo(px - .28, py + .31); c.lineTo(px - .03, py + .04); c.lineTo(px - .08, py - .17); c.lineTo(px + .16, py - .32); c.stroke();
         }
-        if (hash % 47 === 0) { c.fillStyle = '#21393030'; c.fillRect(px - .18, py - .13, .38, .25); c.strokeStyle = '#87907c70'; c.lineWidth = .03; c.strokeRect(px - .18, py - .13, .38, .25); }
+        if (hash % 47 === 0) { c.fillStyle = '#35433999'; c.fillRect(px - .19, py - .14, .38, .28); c.strokeStyle = '#c1bba07a'; c.lineWidth = .065; c.strokeRect(px - .19, py - .14, .38, .28); c.strokeStyle = '#71806a'; for (let stripe = -.12; stripe < .15; stripe += .09) { c.beginPath(); c.moveTo(px - .15, py + stripe); c.lineTo(px + .15, py + stripe); c.stroke(); } }
       } else if (material === 'road' && hash % 17 === 0) {
-        c.fillStyle = '#1c30222b'; c.beginPath(); c.ellipse(px, py, .35, .15, (hash % 7) / 5, 0, Math.PI * 2); c.fill();
+        c.fillStyle = '#20303645'; c.beginPath(); c.ellipse(px, py, .29, .18, (hash % 7) / 5, 0, Math.PI * 2); c.fill(); c.strokeStyle = '#a5a69340'; c.lineWidth = .045; c.stroke();
+      } else if (material === 'road' && hash % 31 === 0) {
+        c.strokeStyle = '#24343a77'; c.lineWidth = .055; c.beginPath(); c.moveTo(px - .3, py - .3); c.lineTo(px - .05, py - .06); c.lineTo(px + .04, py + .07); c.lineTo(px + .31, py + .19); c.moveTo(px - .05, py - .06); c.lineTo(px + .15, py - .19); c.stroke();
+      } else if ((material === 'yard' || material === 'path') && hash % 11 === 0) {
+        c.strokeStyle = '#665b3959'; c.lineWidth = .09; c.beginPath(); c.moveTo(px - .3, py - .36); c.quadraticCurveTo(px - .11, py, px + .16, py + .35); c.moveTo(px - .07, py - .36); c.quadraticCurveTo(px + .12, py, px + .39, py + .35); c.stroke();
       } else if (material === 'water' && hash % 3 === 0) {
-        c.strokeStyle = '#b1c6aa38'; c.lineWidth = .025; c.beginPath(); c.moveTo(px - .33, py); c.quadraticCurveTo(px, py - .07, px + .33, py); c.stroke();
+        c.strokeStyle = '#b5d8cf33'; c.lineWidth = .055; c.beginPath(); c.moveTo(px - .33, py); c.quadraticCurveTo(px, py - .09, px + .33, py); c.stroke();
       } else if (material === 'sand' && hash % 5 === 0) {
         c.fillStyle = '#68683b38'; c.fillRect(px, py, .1, .06); c.fillStyle = '#d3cf9c70'; c.fillRect(px + .15, py - .12, .06, .06);
       } else if ((material === 'grass' || material === 'forest') && hash % 11 === 0) {
         c.fillStyle = material === 'forest' ? '#abc18130' : '#d8d09866'; c.fillRect(px, py, .045, .06); c.fillRect(px + .09, py - .08, .035, .05);
       }
-    }
-    // Short crossing marks are confined to the real road raster.
-    const city = world.city;
-    if (city) for (const horizontal of world.paths?.filter(path => path.id.startsWith('city-street-y-')) ?? []) {
-      const y = horizontal.points[0]?.y;
-      if (y === undefined) continue;
-      for (const vertical of world.paths?.filter(path => path.id.startsWith('city-street-x-')) ?? []) {
-        const x = vertical.points[0]?.x;
-        if (x === undefined) continue;
-        for (const direction of [-1, 1]) for (let offset = -1.7; offset < 1.8; offset += .6) {
-          for (const mark of [{ x: x + offset, y: y + direction * 4 }, { x: x + direction * 4, y: y + offset }]) {
-            const cellX = Math.floor(mark.x), cellY = Math.floor(mark.y);
-            if (this.terrain[cellY * world.width + cellX] !== 'road' || !this.walkableGround[cellY * world.width + cellX]) continue;
-            c.fillStyle = '#d4ccab92'; c.fillRect(mark.x, mark.y, .3, .65);
-          }
-        }
-      }
+      c.restore();
     }
     // Cast shadows share the authoritative cover's footprint and never add scenery.
     c.fillStyle = '#10271e38';
@@ -417,6 +384,11 @@ export class LiveScene {
     const sprite = this.propArt.get(prop);
     this.context.drawImage(sprite.image, anchor.x - sprite.anchor.x * scale, anchor.y - sprite.anchor.y * scale, sprite.image.width * scale, sprite.image.height * scale);
   }
+  private paintMaterialFace(image: HTMLCanvasElement, a: LivePoint, b: LivePoint, d: LivePoint): void {
+    const c = this.context;
+    c.save(); c.transform((b.x - a.x) / image.width, (b.y - a.y) / image.width, (d.x - a.x) / image.height, (d.y - a.y) / image.height, a.x, a.y);
+    c.drawImage(image, 0, 0); c.restore();
+  }
   /** Exterior silhouettes have real height; confirmed activity opens the roof and front walls. */
   private paintBuilding(building: LiveCityBuilding): void {
     const c = this.context, x = building.x - .5, y = building.y - .5, w = building.width, h = building.height;
@@ -434,23 +406,7 @@ export class LiveScene {
     if (this.tile < 14) return;
     const seed = [...building.id].reduce((sum, char) => Math.imul(sum, 31) + char.charCodeAt(0), 0) >>> 0;
     for (const [a, b, length] of [[base[3]!, base[2]!, w], [base[2]!, base[1]!, h]] as const) {
-      if (building.facade === 'metal') {
-        c.strokeStyle = '#c2d0b638'; c.lineWidth = .65;
-        for (let t = .5 / length; t < 1; t += .55 / length) {
-          const xx = a.x + (b.x - a.x) * t, yy = a.y + (b.y - a.y) * t;
-          c.beginPath(); c.moveTo(xx, yy - 3); c.lineTo(xx, yy - height + 3); c.stroke();
-        }
-      } else if (building.facade === 'brick' && this.tile > 28) {
-        c.strokeStyle = '#d3b69825'; c.lineWidth = .5;
-        const course = this.tile * .105;
-        for (let lift = course; lift < height - 2; lift += course) {
-          c.beginPath(); c.moveTo(a.x, a.y - lift); c.lineTo(b.x, b.y - lift); c.stroke();
-          for (let t = (Math.round(lift / course) % 2 ? .04 : .08); t < 1; t += .8 / length) { const xx = a.x + (b.x - a.x) * t, yy = a.y + (b.y - a.y) * t; c.beginPath(); c.moveTo(xx, yy - lift); c.lineTo(xx, yy - lift + course); c.stroke(); }
-        }
-      } else if (building.facade === 'panel') {
-        c.strokeStyle = '#263e384a'; c.lineWidth = 1;
-        for (let t = 2 / length; t < 1; t += 2 / length) { const xx = a.x + (b.x - a.x) * t, yy = a.y + (b.y - a.y) * t; c.beginPath(); c.moveTo(xx, yy - 2); c.lineTo(xx, yy - height + 2); c.stroke(); }
-      }
+      if (this.tile >= 24) this.paintMaterialFace(this.buildingArt.facade(building, length), { x: a.x, y: a.y - height }, { x: b.x, y: b.y - height }, a);
       this.facade(a, b, height, length, floors, seed);
       c.strokeStyle = '#d2cbb158'; c.lineWidth = Math.max(1, this.tile * .03); c.beginPath(); c.moveTo(a.x, a.y - height + 3); c.lineTo(b.x, b.y - height + 3); c.stroke();
       c.strokeStyle = '#33473db3'; c.lineWidth = Math.max(1, this.tile * .065); c.beginPath(); c.moveTo(a.x, a.y - this.tile * .08); c.lineTo(b.x, b.y - this.tile * .08); c.stroke();
@@ -460,6 +416,7 @@ export class LiveScene {
       const ridgeA = this.project({ x, y: y + h / 2 }, height + this.tile * .42), ridgeB = this.project({ x: x + w, y: y + h / 2 }, height + this.tile * .42);
       this.polygon([top[0]!, top[1]!, ridgeB, ridgeA], building.facade === 'brick' ? '#8c8276' : '#909888', '#b7b79b66');
       this.polygon([ridgeA, ridgeB, top[2]!, top[3]!], building.facade === 'brick' ? '#5d6861' : '#5e7468', '#b7b79b66');
+      if (this.tile >= 24) { const material = this.buildingArt.roof({ ...building, roof: 'gable' }, w, h / 2); this.paintMaterialFace(material, top[0]!, top[1]!, ridgeA); this.paintMaterialFace(material, ridgeA, ridgeB, top[3]!); }
       this.polygon([top[1]!, top[2]!, ridgeB], colors[0], '#273e3888');
       c.strokeStyle = '#253f367a'; c.lineWidth = .7;
       for (let t = .6 / w; t < 1; t += .65 / w) { const a = { x: ridgeA.x + (ridgeB.x - ridgeA.x) * t, y: ridgeA.y + (ridgeB.y - ridgeA.y) * t }, b = { x: top[3]!.x + (top[2]!.x - top[3]!.x) * t, y: top[3]!.y + (top[2]!.y - top[3]!.y) * t }; c.beginPath(); c.moveTo(a.x, a.y); c.lineTo(b.x, b.y); c.stroke(); }
@@ -468,9 +425,11 @@ export class LiveScene {
       for (let row = 0; row < count; row++) {
         const yy = y + row * band, upper = height + this.tile * .28;
         this.polygon([this.project({ x, y: yy }, upper), this.project({ x: x + w, y: yy }, upper), this.project({ x: x + w, y: yy + band }, height), this.project({ x, y: yy + band }, height)], row % 2 ? '#86998f' : '#a0aaa0', '#284d4155');
+        if (this.tile >= 24) this.paintMaterialFace(this.buildingArt.roof({ ...building, roof: 'sawtooth' }, w, band), this.project({ x, y: yy }, upper), this.project({ x: x + w, y: yy }, upper), this.project({ x, y: yy + band }, height));
         this.polygon([this.project({ x, y: yy }, height), this.project({ x: x + w, y: yy }, height), this.project({ x: x + w, y: yy }, upper), this.project({ x, y: yy }, upper)], '#3a605b', '#c0c7ae55');
       }
     } else {
+      if (this.tile >= 24) this.paintMaterialFace(this.buildingArt.roof({ ...building, roof: 'flat' }, w, h), top[0]!, top[1]!, top[3]!);
       const trim = this.quad(x + .14, y + .14, w - .28, h - .28, height + 2);
       c.strokeStyle = '#41574bc9'; c.lineWidth = Math.max(1, this.tile * .055); c.beginPath(); trim.forEach((point, index) => index ? c.lineTo(point.x, point.y) : c.moveTo(point.x, point.y)); c.closePath(); c.stroke();
       for (let xx = x + 1; xx < x + w; xx += 2.4) { const a = this.project({ x: xx, y: y + .2 }, height + 1), b = this.project({ x: xx, y: y + h - .2 }, height + 1); c.strokeStyle = '#cbd0b026'; c.lineWidth = .7; c.beginPath(); c.moveTo(a.x, a.y); c.lineTo(b.x, b.y); c.stroke(); }
@@ -504,20 +463,25 @@ export class LiveScene {
       c.beginPath(); path.points.forEach((point, index) => index ? c.lineTo(point.x + .5, point.y + .5) : c.moveTo(point.x + .5, point.y + .5)); c.strokeStyle = color; c.lineWidth = width; c.stroke();
     };
     c.save(); c.lineJoin = 'round'; c.lineCap = 'round';
+    paintRoadSurface(c, world, this.terrain, this.surfaceMasks);
     // Roads may cross a river only on cells the authoritative raster marks as road.
-    for (const kind of ['road', 'trail', 'rail', 'river'] as const) {
+    for (const kind of ['trail', 'rail', 'river'] as const) {
       const paths = world.paths?.filter(path => path.kind === kind) ?? [];
       if (!paths.length) continue;
       c.save();
-      const accepted = kind === 'road' ? ['road', 'concrete'] : kind === 'trail' ? ['path', 'sand', 'yard'] : kind === 'rail' ? ['rail'] : ['water'];
+      const accepted = kind === 'trail' ? ['path', 'sand', 'yard'] : kind === 'rail' ? ['rail'] : ['water'];
       c.beginPath();
-      for (let y = 0; y < world.height; y++) for (let x = 0; x < world.width; x++) if (accepted.includes(this.terrain[y * world.width + x]!)) c.rect(x, y, 1, 1);
+      for (let y = 0; y < world.height; y++) {
+        let start = -1;
+        for (let x = 0; x <= world.width; x++) {
+          const cell = y * world.width + x, include = x < world.width && accepted.includes(this.terrain[cell]!) && (kind === 'river' || !!this.walkableGround[cell] && !this.surfaceMasks.indoor[cell]);
+          if (include && start < 0) start = x;
+          else if (!include && start >= 0) { c.rect(start, y, x - start, 1); start = -1; }
+        }
+      }
       c.clip();
       for (const path of paths) {
-        if (path.kind === 'road') {
-          stroke(path, '#cac3a27a', path.width + .45); stroke(path, '#273d3577', path.width + .1); stroke(path, '#424e48', path.width * .91);
-          if (path.width >= 3) { c.setLineDash([1.8, 2.8]); stroke(path, '#d5cba37d', .12); c.setLineDash([]); }
-        } else if (path.kind === 'trail') { stroke(path, '#b3a26b55', path.width); stroke(path, '#b7a57555', path.width * .5); }
+        if (path.kind === 'trail') { stroke(path, '#655b3730', path.width * .9); stroke(path, '#d7bc7e33', path.width * .42); }
         else if (path.kind === 'river') { stroke(path, '#294d5a99', path.width * .82); stroke(path, '#82b9b13a', path.width * .4); }
         else {
           stroke(path, '#5f6557', path.width); stroke(path, '#a1a294', .98); stroke(path, '#475346', .66);

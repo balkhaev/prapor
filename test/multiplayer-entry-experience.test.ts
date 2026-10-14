@@ -168,7 +168,6 @@ describe('one multiplayer entry and persistent shared raid experience', () => {
     expect(firstJoin.worldVersion).toBe(secondJoin.worldVersion);
     const connected = await state(h, first);
     expect(connected.server.online).toBe(2);
-    expect(connected.entities.filter(entity => entity.kind === 'player').map(entity => entity.id).sort()).toEqual([first.id!, second.id!].sort());
     const stocked = await headquarters(h, first);
     expect(stocked.state.money).toBe(initialMoney);
     expect(stocked.state.supplies.ammo + firstJoin.self.ammo).toBe(initialStock.ammo);
@@ -180,6 +179,10 @@ describe('one multiplayer entry and persistent shared raid experience', () => {
     expect(hasLiveLineOfSight(map, a, b)).toBe(true);
     place(h, [{ guest: first, point: a }, { guest: second, point: b }]);
     await enter(h, first); await enter(h, second);
+    // A district now has two entry areas. Mutual visibility is asserted only
+    // after placing both guests on the same real, unobstructed nearby ground.
+    const together = await state(h, first);
+    expect(together.entities.filter(entity => entity.kind === 'player').map(entity => entity.id).sort()).toEqual([first.id!, second.id!].sort());
     const commanded = await act(h, first, { type: 'move', ...goal });
     expect(self(commanded)).toMatchObject(a);
     await h.advance(250, [first, second]);

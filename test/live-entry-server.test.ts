@@ -13,6 +13,7 @@ import { createLiveNavigation } from '../server/live-navigation';
 import { getLiveLoadout, LIVE_FIELD_KITS, type LiveEntry, type LiveKitId } from '../src/game/live-entry';
 import type { GameSnapshot } from '../src/game/commands';
 import type { LiveSnapshot } from '../src/game/live';
+import { LIVE_WORLD_OFFSET } from '../src/game/world-generation';
 
 const ORIGIN = 'http://field-entry.test', NOW = 1_792_000_000_000;
 interface Client { cookie: string; game: GameSnapshot; live?: LiveSnapshot }
@@ -91,14 +92,25 @@ describe('authoritative multiplayer preparation and immutable field kits', () =>
     await f.enter(player); expect((await f.state(player)).state.supplies.ammo).toBe(0);
   });
 
-  test('a lost response after committed cash and supplies replays the same launch journal across two restarts', async () => {
+  test('a lost response before world expansion replays the paid launch journal at translated coordinates across two restarts', async () => {
     const f = await fixture(), player = await f.client(); f.interrupt();
     const failed = await f.call('join', player, { kitId: 'scout', intent: 'deploy', districtId: 'village', purpose: 'quests' });
     expect(failed.status).toBe(409); expect(await failed.json()).toEqual({ code: 'launch_pending' }); expect(f.live.healthy()).toBe(true);
     const pending = await f.entry(player), paid = await f.state(player); expect(pending.fighter?.launchPending).toBe(true); expect(paid.state.money).toBe(500); expect(paid.state.supplies.ammo).toBe(0); expect(paid.state.supplies.medicine).toBe(4);
     expect((await f.call('join', player, { kitId: 'admin' })).status).toBe(400);
-    f.restart(); const resumed = await f.enter(player, 'assault', 'continue'); expect(resumed.selfId).toBe(pending.fighter!.id); expect(resumed.self.loadout?.kitId).toBe('scout'); expect(resumed.self.districtId).toBe('village'); expect(resumed.self.ammo).toBe(24); expect(resumed.self.launchPending).toBeUndefined();
+    f.restart(db => {
+      const row = db.query<{ identity: string; state: string }, []>('SELECT identity,state FROM live_players').get()!, fighter = JSON.parse(row.state);
+      expect(fighter.entryPending).toBeDefined(); Object.assign(fighter, { x: 249, y: 249 }); Object.assign(fighter.entryPending, { x: 249, y: 249 });
+      db.query('UPDATE live_players SET state=? WHERE identity=?').run(JSON.stringify(fighter), row.identity);
+      const saved = JSON.parse(db.query<{ state: string }, []>('SELECT state FROM live_world').get()!.state); saved.geometryVersion = 'perimeter-g6-paid-entry';
+      db.query('UPDATE live_world SET state=?').run(JSON.stringify(saved));
+      for (const boss of db.query<{ boss_id: string; state: string }, []>('SELECT boss_id,state FROM live_bosses').all()) { const state = JSON.parse(boss.state); state.x -= LIVE_WORLD_OFFSET; state.y -= LIVE_WORLD_OFFSET; db.query('UPDATE live_bosses SET state=? WHERE boss_id=?').run(JSON.stringify(state), boss.boss_id); }
+    });
+    const resumed = await f.enter(player, 'assault', 'continue'); expect(resumed.selfId).toBe(pending.fighter!.id); expect(resumed.self.loadout?.kitId).toBe('scout'); expect(resumed.self.districtId).toBe('village'); expect(resumed.self.ammo).toBe(24); expect(resumed.self.launchPending).toBeUndefined();
+    const translated = { x: 249 + LIVE_WORLD_OFFSET, y: 249 + LIVE_WORLD_OFFSET };
+    expect(resumed.entities.find(entity => entity.id === resumed.selfId)).toMatchObject(translated);
     expect(await f.state(player)).toEqual(paid); f.restart(); expect((await f.enter(player, undefined, 'continue')).self).toMatchObject({ ammo: 24, loadout: getLiveLoadout('scout') });
+    expect(player.live!.entities.find(entity => entity.id === resumed.selfId)).toMatchObject(translated);
     expect(await f.state(player)).toEqual(paid); expect(count(f.gamePath, 'authoritative_live_supplies')).toBe(1);
   });
 

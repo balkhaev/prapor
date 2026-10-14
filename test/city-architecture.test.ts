@@ -37,6 +37,6 @@ test('one hundred seeds keep denser architecture separate from landmarks and eve
     }
     // The production validator floods every free cell, including both doors of
     // every new room, and rejects sealed interiors or unreachable loot anchors.
-    expect(validateGeneratedWorld(world).containers).toBe(264);
+    expect(validateGeneratedWorld(world).containers).toBe(344);
   }
 }, 60_000);

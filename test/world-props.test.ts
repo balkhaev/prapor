@@ -21,11 +21,11 @@ describe('inhabited public scenery and authoritative cover', () => {
         expect(obstacle).toMatchObject({ x: prop.x, y: prop.y, width: prop.width, height: prop.height });
         expect(isLiveWalkable(world, prop)).toBe(false);
       }
-      expect(validateGeneratedWorld(world).containers).toBe(264);
+      expect(validateGeneratedWorld(world).containers).toBe(344);
       expect(world.containers.every(anchor => isLiveWalkable(world, anchor))).toBe(true);
       expect(world.citySites!.flatMap(site => site.buildings.flatMap(building => building.entrances)).every(door => isLiveWalkable(world, door))).toBe(true);
     }
-  });
+  }, 20_000);
 
   test('props are detached static wire data with bounded identities and exact physical footprints', () => {
     const world = generateLiveWorld(), decoded = readLiveWorld(world);

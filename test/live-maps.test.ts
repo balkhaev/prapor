@@ -4,16 +4,16 @@ import type { LiveWorld } from '../src/game/live';
 import { createLiveNavigation } from '../server/live-navigation';
 
 describe('shared generated perimeter', () => {
-  test('one persistent world contains a central city, four connected districts and sixty-four streaming chunks', () => {
+  test('one persistent world contains a central city, four connected districts and one hundred streaming chunks', () => {
     expect(LIVE_MAPS).toHaveLength(1);
     const world = getLiveMap('perimeter');
     expect(world).toBe(LIVE_MAPS[0]!); expect(isLiveMapId('perimeter')).toBe(true); expect(isLiveMapId('customs')).toBe(false);
-    expect(world).toMatchObject({ width: 256, height: 256, chunkSize: 32, theme: 'mixed', city: { name: 'Ольховск', x: 56, y: 56, width: 144, height: 144 } });
-    expect(world.width / world.chunkSize * world.height / world.chunkSize).toBe(64);
+    expect(world).toMatchObject({ width: 320, height: 320, chunkSize: 32, theme: 'mixed', city: { name: 'Ольховск', x: 88, y: 88, width: 144, height: 144 } });
+    expect(world.width / world.chunkSize * world.height / world.chunkSize).toBe(100);
     expect(world.districts.map(district => district.id).sort()).toEqual(['customs', 'depot', 'sawmill', 'village']);
-    expect(world.pois).toHaveLength(72);
-    expect(world.containers).toHaveLength(264);
-    expect(world.npcSpawns).toHaveLength(152);
+    expect(world.pois).toHaveLength(92);
+    expect(world.containers).toHaveLength(344);
+    expect(world.npcSpawns).toHaveLength(192);
     expect(world.citySites).toHaveLength(24);
     expect(new Set(world.containers.map(container => container.kind))).toEqual(new Set(['duffel', 'jacket', 'toolbox', 'medbag', 'cabinet', 'crate']));
     expect(world.containers.every(container => container.searchMs >= 2000 && container.searchMs <= 5000)).toBe(true);

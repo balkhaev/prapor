@@ -13,6 +13,7 @@ import { createHealth, createMedicalInventory, type MedicalInventory } from "../
 import { readLiveSnapshot } from "../src/live-client";
 import { getBoss } from "../src/game/bosses";
 import { getLiveBossArena } from "../src/game/live-boss-arenas";
+import { LIVE_WORLD_OFFSET } from '../src/game/world-generation';
 
 const ORIGIN = "https://game.delopusk.ru";
 interface Session { cookie: string; gameId: string; owner: string; id?: string }
@@ -192,12 +193,12 @@ describe("multiplayer loot and durable headquarters economy", () => {
         { id: "old-searched-container", mapId: "perimeter", x: 0, y: 0, source: "supply", amount: 13, items: [inExact], containerId: exact!.id, containerKind: exact!.kind, expiresAt: time + 123_456 },
         { id: "old-unsearched-container", mapId: "perimeter", x: 1, y: 0, source: "supply", amount: 0, items: [inFallback], containerId: fallbackId, containerKind: "crate", expiresAt: Number.MAX_SAFE_INTEGER },
         { id: "retired-supply", mapId: "perimeter", x: 0, y: 0, source: "supply", amount: 17, items: [retiredItem], containerId: "retired-poi-crate-0", containerKind: "crate", expiresAt: time + 98_765 },
-        { id: "old-body", mapId: "perimeter", x: map.obstacles[0]!.x, y: map.obstacles[0]!.y, source: "body", amount: 23, items: [bodyItem], expiresAt: time + 120_000 },
+        { id: "old-body", mapId: "perimeter", x: map.obstacles[0]!.x - LIVE_WORLD_OFFSET, y: map.obstacles[0]!.y - LIVE_WORLD_OFFSET, source: "body", amount: 23, items: [bodyItem], expiresAt: time + 120_000 },
       );
       db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify(saved));
       for (const row of db.query<{ identity: string; state: string }, []>("SELECT identity,state FROM live_players").all()) {
         const player = JSON.parse(row.state);
-        Object.assign(player, { x: exact!.x, y: exact!.y, safeUntil: time + 120_000, healthAt: time, searchedDropIds: player.id === first.session.id ? ["old-searched-container"] : [] });
+        Object.assign(player, { x: exact!.x - LIVE_WORLD_OFFSET, y: exact!.y - LIVE_WORLD_OFFSET, safeUntil: time + 120_000, healthAt: time, searchedDropIds: player.id === first.session.id ? ["old-searched-container"] : [] });
         if (player.id === first.session.id) Object.assign(player, { ammo: 17, cargo: 25, stash: 7, kills: 4, lootItems: [inBag], body, medicine, treatment: { type: "splint", part: "leftLeg", startedAt: time - 1000, endsAt: time + 3000 } });
         db.query("UPDATE live_players SET state=? WHERE identity=?").run(JSON.stringify(player), row.identity);
       }
@@ -262,7 +263,7 @@ describe("multiplayer loot and durable headquarters economy", () => {
       saved.lootCooldowns = [[`container:${anchor.id}`, time + 1000], [`container:${legacyId}`, deadline], ["perimeter:0:0", deadline]];
       db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify(saved));
       for (const row of db.query<{ identity: string; state: string }, []>("SELECT identity,state FROM live_players").all()) {
-        const player = JSON.parse(row.state); Object.assign(player, { x: anchor.x, y: anchor.y, safeUntil: time + 120_000 });
+        const player = JSON.parse(row.state); Object.assign(player, { x: anchor.x - LIVE_WORLD_OFFSET, y: anchor.y - LIVE_WORLD_OFFSET, safeUntil: time + 120_000 });
         db.query("UPDATE live_players SET state=? WHERE identity=?").run(JSON.stringify(player), row.identity);
       }
     });
@@ -273,7 +274,7 @@ describe("multiplayer loot and durable headquarters economy", () => {
     for (let retry = 0; retry < 2; retry++) {
       expect(readWorld().drops.some(drop => drop.containerId === anchor.id)).toBe(false);
       expect(readWorld().lootCooldowns).toContainEqual([`container:${anchor.id}`, deadline]);
-      expect(readWorld().lootCooldowns).toContainEqual(["perimeter:0:0", deadline]); restart();
+      expect(readWorld().lootCooldowns).toContainEqual([`perimeter:${LIVE_WORLD_OFFSET}:${LIVE_WORLD_OFFSET}`, deadline]); restart();
     }
     time = deadline - 1; await enter(first.session); service.tick(); expect(readWorld().drops.some(drop => drop.containerId === anchor.id)).toBe(false);
     time = deadline + 249; await enter(first.session); service.tick();
@@ -363,7 +364,7 @@ describe("multiplayer loot and durable headquarters economy", () => {
       expect(wounded.x >= arena.area.x && wounded.y >= arena.area.y && wounded.x < arena.area.x + arena.area.width && wounded.y < arena.area.y + arena.area.height).toBe(true);
       expect(isLiveWalkable(map, wounded)).toBe(true); expect(wounded.health).toBeGreaterThan(0); expect(wounded.health).toBeLessThan(100);
       expect(defeated).toMatchObject({ body: deadBody, health: 0, bossCycle: 9, bossDeathSettled: true, respawnAt: deadline });
-      expect(saved.world.drops.filter((drop: { bossId?: string }) => drop.bossId === "komendant")).toEqual([{ id: "g3-boss-corpse", bossId: "komendant", source: "body", mapId: "perimeter", x: 0, y: 0, amount: 350, items: [trophyItem], expiresAt: corpseExpiry }]);
+      expect(saved.world.drops.filter((drop: { bossId?: string }) => drop.bossId === "komendant")).toEqual([{ id: "g3-boss-corpse", bossId: "komendant", source: "body", mapId: "perimeter", x: LIVE_WORLD_OFFSET, y: LIVE_WORLD_OFFSET, amount: 350, items: [trophyItem], expiresAt: corpseExpiry }]);
       expect(saved.credits).toBe(1); expect(restored.self).toMatchObject({ ammo: 17, medicine, kills: 4, bossKills: 1 });
       expect(pending()).toBe(1); expect(delivered).toEqual([]);
     }
@@ -381,7 +382,7 @@ describe("multiplayer loot and durable headquarters economy", () => {
 
   test("one shared named drop has one winner, weight and item count are hard limits, and trophy price is not a cash capacity", async () => {
     const first = await enter(), second = await enter(), expensive = trophy("secure-drive");
-    editPlayers([{ session: first.session, cargo: 499 }, { session: second.session, x: 7 }], [[expensive]]);
+    editPlayers([{ session: first.session, cargo: 499 }, { session: second.session, x: getLiveMap('perimeter').extracts[0]!.x + 1 }], [[expensive]]);
     await enter(first.session); await enter(second.session);
     const drop = (await state(first.session)).drops.find(drop => drop.items?.some(item => item.id === expensive.id))!;
     const replies = await Promise.all([call("action", { type: "loot", id: drop.id }, first.session), call("action", { type: "loot", id: drop.id }, second.session)]);
@@ -402,7 +403,8 @@ describe("multiplayer loot and durable headquarters economy", () => {
 
   test("PvP death transfers exact named cargo once and respawn produces neither duplicate trophies nor free supplies", async () => {
     const first = await enter(), second = await enter(), carried = [trophy("gold-ring"), trophy("bandage-roll")];
-    editPlayers([{ session: first.session, x: 5, y: 6 }, { session: second.session, x: 6, y: 6, ammo: 17, medkits: 1, cargo: 40, lootItems: carried }], []);
+    const exit = getLiveMap('perimeter').extracts[0]!;
+    editPlayers([{ session: first.session, x: exit.x - 1, y: exit.y }, { session: second.session, ...exit, ammo: 17, medkits: 1, cargo: 40, lootItems: carried }], []);
     await enter(first.session); await enter(second.session);
     for (let hit = 0; hit < 3; hit++) { time += 1000; await act(first.session, { type: "attack", targetId: second.session.id! }); }
     const dead = await state(second.session), body = dead.drops.find(drop => drop.items?.some(item => item.id === carried[0]!.id))!;
@@ -417,7 +419,8 @@ describe("multiplayer loot and durable headquarters economy", () => {
 
   test("extract and resupply cannot erase a body during combat, and obsolete travel cannot teleport into a district", async () => {
     const first = await enter(), second = await enter(), item = trophy();
-    editPlayers([{ session: first.session, x: 5, y: 6, ammo: 40, lootItems: [item] }, { session: second.session, x: 6, y: 6 }], []);
+    const exit = getLiveMap('perimeter').extracts[0]!;
+    editPlayers([{ session: first.session, x: exit.x - 1, y: exit.y, ammo: 40, lootItems: [item] }, { session: second.session, ...exit }], []);
     await enter(first.session); await enter(second.session); await act(first.session, { type: "attack", targetId: second.session.id! });
     for (const command of [{ type: "extract" }, { type: "resupply" }]) {
       const reply = await call("action", command, first.session); expect(reply.status).toBe(409); expect(await reply.json()).toEqual({ code: "in_combat" });
