@@ -45,8 +45,44 @@ test('an invalid offline row rolls back the whole migration without touching pai
   try {
     db.query('INSERT INTO live_players VALUES(?,?)').run('broken', 'not-json');
     const before = { players: db.query('SELECT * FROM live_players').all(), world: db.query('SELECT * FROM live_world').all(), bosses: db.query('SELECT * FROM live_bosses').all(), outbox: db.query('SELECT * FROM live_economy_outbox').all() };
-    expect(() => migrateExpandedLiveCoordinates(db, current)).toThrow();
+    const expanded = { generatorVersion: 9 } as LiveWorld;
+    expect(() => migrateExpandedLiveCoordinates(db, expanded)).toThrow();
     expect({ players: db.query('SELECT * FROM live_players').all(), world: db.query('SELECT * FROM live_world').all(), bosses: db.query('SELECT * FROM live_bosses').all(), outbox: db.query('SELECT * FROM live_economy_outbox').all() }).toEqual(before);
+    db.query('DELETE FROM live_players WHERE identity=?').run('broken');
+    expect(migrateExpandedLiveCoordinates(db, expanded)).toBe(true);
+    expect(player(db, 'offline')).toMatchObject({ x: 128, y: 128 });
+    expect(world(db).coordinateExpansionVersion).toBe(9);
+    expect(migrateExpandedLiveCoordinates(db, expanded)).toBe(false);
+    expect(db.query('SELECT * FROM live_economy_outbox').all()).toEqual(before.outbox);
+  } finally { db.close(); }
+});
+
+test.each(['direct G6', 'saved G7', 'saved G8', 'interrupted G7 startup', 'interrupted G8 startup'])('G9 cumulative coordinates handle %s and a failed-startup retry without shifting offline bodies twice', scenario => {
+  const db = fixture(), expanded = { generatorVersion: 9 } as LiveWorld;
+  try {
+    const outbox = db.query('SELECT * FROM live_economy_outbox').all();
+    if (scenario !== 'direct G6') {
+      const sourceVersion = scenario.includes('G8') ? 8 : 7;
+      expect(migrateExpandedLiveCoordinates(db, { generatorVersion: sourceVersion } as LiveWorld)).toBe(true);
+      if (scenario.startsWith('saved')) {
+        const saved = world(db); saved.geometryVersion = `perimeter-g${sourceVersion}-shipped`; delete saved.coordinateExpansionVersion;
+        db.query('UPDATE live_world SET state=?').run(JSON.stringify(saved));
+      }
+    }
+    expect(migrateExpandedLiveCoordinates(db, expanded)).toBe(true);
+    expect(player(db, 'offline')).toMatchObject({ x: 128, y: 128, identity: 'offline', id: 'fighter', body: { wounded: true }, medicine: { splint: 1 }, lootItems: [{ id: 'inventory' }], searchedDropIds: ['cycle'] });
+    expect(player(db, 'paid')).toMatchObject({ x: 377, y: 134, entryPending: { id: 'receipt', x: 377, y: 134, automatic: true, respawn: true }, automation: { enabled: true, target: null, targetId: null },
+      sortie: { poiIds: ['poi-2-0'], visitedContainerIds: ['existing-cycle'], extractTarget: null, blockedExtractKeys: [] }, destination: null, path: [] });
+    expect(JSON.parse(db.query<{ state: string }, []>('SELECT state FROM live_bosses').get()!.state)).toMatchObject({ x: 348, y: 168, home: { x: 347, y: 169 }, route: [{ x: 346, y: 170 }], bossCycle: 9, bossDeathSettled: true, respawnAt: 120000, body: { dead: true } });
+    expect(world(db).drops).toEqual([{ id: 'corpse', source: 'body', mapId: 'perimeter', x: 128, y: 383, amount: 17, items: [{ id: 'private', modelId: 'old-watch' }] },
+      { id: 'district-corpse', source: 'body', mapId: 'perimeter', x: 132, y: 261 }, { id: 'cycle', source: 'supply', mapId: 'perimeter', x: 209, y: 195, containerId: 'city-old-center-0-slot-0', expiresAt: 50000 }]);
+    expect(world(db).lootCooldowns).toEqual([['container:city-old-center-0-slot-1', 60000], ['perimeter:131:132', 70000]]);
+    expect(world(db).coordinateExpansionVersion).toBe(9);
+    const once = { players: db.query('SELECT * FROM live_players').all(), world: world(db), bosses: db.query('SELECT * FROM live_bosses').all() };
+    expect(migrateExpandedLiveCoordinates(db, expanded)).toBe(false);
+    expect(migrateExpandedLiveCoordinates(db, expanded)).toBe(false);
+    expect({ players: db.query('SELECT * FROM live_players').all(), world: world(db), bosses: db.query('SELECT * FROM live_bosses').all() }).toEqual(once);
+    expect(db.query('SELECT * FROM live_economy_outbox').all()).toEqual(outbox);
   } finally { db.close(); }
 });
 

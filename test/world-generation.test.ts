@@ -63,6 +63,7 @@ function inspect(world: LiveMapDefinition): void {
           if (!blocked[next] && distances[next] === -1) { distances[next] = distance + 1; frontier.push(next); }
         }
       }
+      if (nearest > 45) throw new Error(`Entry ${district.id} at ${spawn.x}:${spawn.y} has no reachable supply within 45 walking steps`);
       expect(nearest).toBeLessThanOrEqual(45);
     }
   }
@@ -88,7 +89,7 @@ function inspect(world: LiveMapDefinition): void {
   // The city is a continuous place with connected streets and usable architecture,
   // while every previously shipped landmark has moved out to the surrounding ring.
   const city = world.city!;
-  expect(city).toMatchObject({ name: 'Ольховск', x: 116, y: 116, width: 216, height: 216 });
+  expect(city).toMatchObject({ name: 'Ольховск', x: 112, y: 112, width: 288, height: 288 });
   expect(city.quarters).toHaveLength(4);
   expect(new Set(city.quarters.map(quarter => quarter.id)).size).toBe(4);
   const cityPois = world.pois.filter(poi => /^poi-(?:8|9|10|11)-[0-3]$/.test(poi.id));
@@ -100,7 +101,8 @@ function inspect(world: LiveMapDefinition): void {
   const sites = world.citySites!;
   expect(sites).toHaveLength(24);
   const usableBuildings = sites.flatMap(site => site.buildings);
-  expect(usableBuildings.length).toBeGreaterThanOrEqual(48);
+  expect(usableBuildings.length).toBeGreaterThanOrEqual(150);
+  expect(usableBuildings.length).toBeLessThanOrEqual(220);
   for (let index = 0; index < usableBuildings.length; index++) {
     const building = usableBuildings[index]!;
     expect(usableBuildings.slice(index + 1).some(other => intersects(building, other))).toBe(false);
@@ -108,6 +110,8 @@ function inspect(world: LiveMapDefinition): void {
     expect(world.obstacles.some(obstacle => obstacle.kind === 'building' && intersects(building, obstacle))).toBe(false);
   }
   for (const site of sites) {
+    expect(site.buildings.length).toBeGreaterThanOrEqual(6);
+    expect(site.buildings.length).toBeLessThanOrEqual(12);
     const poi = world.pois.find(poi => poi.id === site.poiId)!;
     expect(poi).toMatchObject({ x: site.x, y: site.y, width: site.width, height: site.height });
     expect(poi.entrances).toHaveLength(2);
@@ -152,12 +156,12 @@ function inspect(world: LiveMapDefinition): void {
   const architecture = [...usableBuildings, ...closedBuildings];
   expect(architecture.length).toBeGreaterThanOrEqual(80);
   for (const quarter of city.quarters) {
-    expect(quarter.width).toBe(108); expect(quarter.height).toBe(108);
+    expect(quarter.width).toBe(144); expect(quarter.height).toBe(144);
     expect(inside(quarter) && inside({ x: quarter.x + quarter.width - 1, y: quarter.y + quarter.height - 1 })).toBe(true);
     expect(cityPois.filter(poi => inside(poi, quarter) && inside({ x: poi.x + poi.width - 1, y: poi.y + poi.height - 1 }, quarter))).toHaveLength(4);
     expect(sites.filter(site => site.quarterId === quarter.id)).toHaveLength(6);
     const buildings = architecture.filter(obstacle => intersects(obstacle, quarter));
-    expect(buildings.length).toBeGreaterThanOrEqual(16);
+    expect(buildings.length).toBeGreaterThanOrEqual(36);
     const footprintArea = buildings.reduce((sum, obstacle) => sum + Math.max(0, Math.min(obstacle.x + obstacle.width, quarter.x + quarter.width) - Math.max(obstacle.x, quarter.x)) * Math.max(0, Math.min(obstacle.y + obstacle.height, quarter.y + quarter.height) - Math.max(obstacle.y, quarter.y)), 0);
     expect(footprintArea).toBeGreaterThanOrEqual(quarter.width * quarter.height * .12);
     let solidArea = 0;
@@ -228,7 +232,7 @@ function inspect(world: LiveMapDefinition): void {
   }
   expect(loops).toBeGreaterThan(0);
   // Streaming partitions index intersecting content; they do not dictate its placement.
-  const chunks = worldChunks(world); expect(chunks).toHaveLength(196);
+  const chunks = worldChunks(world); expect(chunks).toHaveLength(256);
   for (const chunk of chunks) {
     const bounds = { x: chunk.x * world.chunkSize, y: chunk.y * world.chunkSize, width: chunk.width, height: chunk.height };
     expect(chunk.poiIds.slice().sort()).toEqual(world.pois.filter(poi => intersects(poi, bounds)).map(poi => poi.id).sort());
@@ -262,13 +266,13 @@ describe('deterministic world generation', () => {
     expect(second).toEqual(first); expect(second).not.toBe(first);
     const other = generateLiveWorld('another-seed');
     expect(other.version).not.toBe(first.version); expect(other.obstacles).not.toEqual(first.obstacles);
-    expect(first).toMatchObject({ id: 'perimeter', width: 448, height: 448, chunkSize: 32 });
+    expect(first).toMatchObject({ id: 'perimeter', width: 512, height: 512, chunkSize: 32 });
     expect(first.generatorVersion).toBeGreaterThan(0);
   });
   test('POI footprints and placement are independent of streaming chunk origins', () => {
     for (const seed of ['organic-layout', 'another-layout', 'district-roads']) {
       const world = generateLiveWorld(seed);
-      expect(world.generatorVersion).toBe(8);
+      expect(world.generatorVersion).toBe(9);
       expect(world.pois).toHaveLength(100); expect(world.containers).toHaveLength(376); expect(world.npcSpawns).toHaveLength(208);
       expect(new Set(world.pois.map(poi => `${poi.width}x${poi.height}`)).size).toBeGreaterThanOrEqual(4);
       expect(new Set(world.pois.map(poi => poi.x % world.chunkSize)).size).toBeGreaterThanOrEqual(5);
@@ -284,7 +288,7 @@ describe('deterministic world generation', () => {
   }, 180_000);
   test('default and seed-nine city guidance retains connected stops and an accessible first supply', () => {
     for (const seed of [LIVE_WORLD_SEED, 'seed-9']) inspect(generateLiveWorld(seed));
-    const world = generateLiveWorld('seed-9'), firstForestSupply = world.pois.find(poi => poi.id === 'poi-2-0')!;
+    const world = generateLiveWorld('seed-9'), firstForestSupplyId = world.routes!.find(route => route.id === 'route-sawmill-loot')!.poiIds[0]!, firstForestSupply = world.pois.find(poi => poi.id === firstForestSupplyId)!;
     expect(firstForestSupply.danger).toBe(1);
     expect(getLiveBossArena(world, 'lesnik').poiId).not.toBe(firstForestSupply.id);
   });

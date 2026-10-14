@@ -92,7 +92,7 @@ describe('authoritative multiplayer preparation and immutable field kits', () =>
     await f.enter(player); expect((await f.state(player)).state.supplies.ammo).toBe(0);
   });
 
-  test.each([6, 7])('a lost response on G%s replays the paid launch journal after expansion across two restarts', async previousVersion => {
+  test.each([6, 7, 8])('a lost response on G%s replays the paid launch journal after expansion across two restarts', async previousVersion => {
     const f = await fixture(), player = await f.client(); f.interrupt();
     const failed = await f.call('join', player, { kitId: 'scout', intent: 'deploy', districtId: 'village', purpose: 'quests' });
     expect(failed.status).toBe(409); expect(await failed.json()).toEqual({ code: 'launch_pending' }); expect(f.live.healthy()).toBe(true);
@@ -100,7 +100,7 @@ describe('authoritative multiplayer preparation and immutable field kits', () =>
     expect((await f.call('join', player, { kitId: 'admin' })).status).toBe(400);
     f.restart(db => {
       const row = db.query<{ identity: string; state: string }, []>('SELECT identity,state FROM live_players').get()!, fighter = JSON.parse(row.state);
-      const previousOffset = previousVersion === 7 ? 32 : 0;
+      const previousOffset = previousVersion === 8 ? 96 : previousVersion === 7 ? 32 : 0;
       expect(fighter.entryPending).toBeDefined(); Object.assign(fighter, { x: 249 + previousOffset, y: 249 + previousOffset }); Object.assign(fighter.entryPending, { x: 249 + previousOffset, y: 249 + previousOffset });
       db.query('UPDATE live_players SET state=? WHERE identity=?').run(JSON.stringify(fighter), row.identity);
       const saved = JSON.parse(db.query<{ state: string }, []>('SELECT state FROM live_world').get()!.state); saved.geometryVersion = `perimeter-g${previousVersion}-paid-entry`;

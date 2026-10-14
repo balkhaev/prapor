@@ -13,34 +13,41 @@ const onPath = (point: LivePoint, path: LiveLandscapePath): boolean => path.poin
 describe('authored district road hierarchy', () => {
   for (const seed of ['perimeter-alpha-01', 'outer-road-check', 'river-bank-check']) test(`parcels, banks and transport share a coherent plan for ${seed}`, () => {
     const world = generateLiveWorld(seed), city = world.city!;
-    expect(world.width).toBe(448); expect(world.height).toBe(448);
-    expect(validateGeneratedWorld(world).chunks).toBe(196);
+    expect(world.width).toBe(512); expect(world.height).toBe(512);
+    expect(validateGeneratedWorld(world).chunks).toBe(256);
     expect(world.paths!.length).toBeLessThanOrEqual(384);
     expect(world.paths!.every(path => path.points.length <= 256)).toBe(true);
     expect(world.paths!.some(path => /^road-\d|^highway-/.test(path.id))).toBe(false);
     const streets = [...cityStreetPlan(city), ...regionalStreetPlan(world.width, world.height, city)];
-    expect(streets).toHaveLength(19);
+    expect(streets.filter(street => street.width >= 5)).toHaveLength(19);
+    const neighbourhoods = streets.filter(street => street.id.startsWith('neighbourhood-'));
+    expect(neighbourhoods).toHaveLength(6);
+    for (const district of ['customs', 'sawmill', 'depot', 'village']) {
+      const loop = neighbourhoods.find(street => street.id === `neighbourhood-${district}`)!;
+      expect(loop.width).toBe(3.5); expect(loop.points).toHaveLength(5);
+      expect(loop.points[0]).toEqual(loop.points.at(-1)!);
+    }
     const plannedRails = regionalRailPlan(world.width, world.height, city);
     for (const plan of [...streets, ...plannedRails]) expect(world.paths!.find(path => path.id === plan.id)).toEqual(plan);
     const blocked = new Uint8Array(world.width * world.height);
     for (const obstacle of world.obstacles) for (let y = obstacle.y; y < obstacle.y + obstacle.height; y++) for (let x = obstacle.x; x < obstacle.x + obstacle.width; x++) blocked[y * world.width + x] = 1;
     const material = (point: LivePoint) => world.terrainRows![point.y]![point.x]!;
-    const area = (x: number, y: number) => world.terrainRows!.slice(y, y + 112).map(row => row.slice(x, x + 224)).join('');
+    const area = (x: number, y: number) => world.terrainRows!.slice(y, y + 112).map(row => row.slice(x, x + world.width / 2)).join('');
     const count = (ground: string, code: string) => ground.split(code).length - 1;
     expect(count(area(0, 0), 'y')).toBeGreaterThan(4500);
-    expect(count(area(224, 0), 'f')).toBeGreaterThan(10000);
-    expect(count(area(0, 336), 'y')).toBeGreaterThan(5000);
-    expect(count(area(0, 336), 't')).toBeGreaterThan(700);
-    expect(count(area(224, 336), 'g')).toBeGreaterThan(9000);
+    expect(count(area(256, 0), 'f')).toBeGreaterThan(10000);
+    expect(count(area(0, 400), 'y')).toBeGreaterThan(5000);
+    expect(count(area(0, 400), 't')).toBeGreaterThan(700);
+    expect(count(area(256, 400), 'g')).toBeGreaterThan(9000);
     for (const district of world.districts) expect(world.pois.filter(poi => poi.id.startsWith(`fringe-${district.id}-`))).toHaveLength(7);
-    for (const exit of [{ x: 10, y: 10 }, { x: 437, y: 10 }, { x: 10, y: 437 }, { x: 437, y: 437 }]) {
+    for (const exit of [{ x: 10, y: 10 }, { x: 501, y: 10 }, { x: 10, y: 501 }, { x: 501, y: 501 }]) {
       expect(world.extracts).toContainEqual(exit); expect(blocked[exit.y * world.width + exit.x]).toBe(0);
     }
     expect(world.paths!.filter(path => path.id.startsWith('bridge-') && path.kind === 'road')).toHaveLength(4);
     const wideRoads = world.paths!.filter(path => path.kind === 'road' && path.width >= 5);
     expect(wideRoads).toHaveLength(23);
-    for (const road of wideRoads) {
-      expect(road.points.length).toBeLessThanOrEqual(5);
+    for (const road of world.paths!.filter(path => path.kind === 'road')) {
+      if (road.width >= 5) expect(road.points.length).toBeLessThanOrEqual(5);
       for (let index = 1; index < road.points.length; index++) {
         const a = road.points[index - 1]!, b = road.points[index]!;
         expect(a.x === b.x || a.y === b.y).toBe(true);

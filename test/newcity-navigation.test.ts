@@ -176,15 +176,25 @@ describe('city passages use the actual server collision grid', () => {
       db.query('UPDATE live_world SET state=? WHERE id=1').run(JSON.stringify(saved));
     });
     const site = sites.find(site => inside(map.npcSpawns[index]!.point, site))!;
+    const authoredRoute = map.npcSpawns[index]!.route;
+    const indoors = (point: LivePoint) => site.buildings.some(building => point.x > building.x && point.y > building.y && point.x < building.x + building.width - 1 && point.y < building.y + building.height - 1);
+    const firstInterior = authoredRoute.findIndex(indoors); expect(firstInterior).toBeGreaterThanOrEqual(0);
+    let approachSteps = 0, waypoint = map.npcSpawns[index]!.point;
+    for (const goal of authoredRoute.slice(0, firstInterior + 1)) {
+      const length = walkingDistance(waypoint, goal); expect(length).not.toBeNull(); approachSteps += length!; waypoint = goal;
+    }
+    // Expanded blocks have longer first legs; allow the real authored approach
+    // at the patrol's 750ms pace rather than assuming every room is 20s away.
+    const tickBudget = (approachSteps + firstInterior + 8) * 3;
     let last = map.npcSpawns[index]!.point, steps = 0, visitedInterior = false;
     await enter(observer.session);
-    for (let tick = 0; tick < 80; tick++) {
+    for (let tick = 0; tick < tickBudget && (!visitedInterior || steps < 8); tick++) {
       time += 250; service.tick();
       // A command persists this exact frame; the periodic save alone samples only once a second.
       expect((await call('action', { type: 'cancelTreatment' }, observer.session)).status).toBe(200);
       const actor = storedWorld().scavs.find(scav => scav.id === id)!; const point = { x: actor.x as number, y: actor.y as number };
       expect(clear(point)).toBe(true);
-      visitedInterior ||= site.buildings.some(building => point.x > building.x && point.y > building.y && point.x < building.x + building.width - 1 && point.y < building.y + building.height - 1);
+      visitedInterior ||= indoors(point);
       const step = Math.abs(point.x - last.x) + Math.abs(point.y - last.y); expect(step).toBeLessThanOrEqual(1); steps += step; last = point;
     }
     expect(steps).toBeGreaterThanOrEqual(8); expect(visitedInterior).toBe(true); expect(service.healthy()).toBe(true);

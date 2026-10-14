@@ -14,7 +14,7 @@ const blocks = (origin: number, quarterSize: number): Array<[number, number]> =>
 /** A shipped landmark keeps its identity, but leaves shared frontage for the surrounding neighbourhood. */
 export function cityLandmarkOrigin(column: number, row: number, width: number, height: number, worldWidth: number, streetMask: Uint8Array, city: LiveCityRegion): LivePoint {
   const [left, right] = blocks(city.x, city.width / 2)[column]!, [top, bottom] = blocks(city.y, city.height / 2)[row]!;
-  const target = point(column % 2 ? right - width + 1 : left, row % 2 ? bottom - height + 1 : top);
+  const target = point(column % 2 ? right - width + 1 : left, row % 2 ? bottom - height - 7 : top + 8);
   let best: LivePoint | undefined, distance = Infinity;
   for (let y = top; y + height - 1 <= bottom; y++) for (let x = left; x + width - 1 <= right; x++) {
     let blocked = false;
@@ -62,21 +62,35 @@ function openBuilding(rect: Rect, id: string, name: string, kind: LiveCityBuildi
   return { building: { ...rect, id, name, kind, entrances }, walls, floor: sideDoors ? point(rect.x + Math.floor(rect.width / 2), door) : point(door, rect.y + Math.floor(rect.height / 2)) };
 }
 
-/** A frontage has a main address, a proper setback and at most one detached service annex. */
-function authoredBuildings(lot: Rect, quarter: number, kind: LiveCityBuilding['kind'], facingVertical: boolean): Array<{ rect: Rect; annex: boolean }> {
-  const inset = 3, usableWidth = lot.width - inset * 2, usableHeight = lot.height - inset * 2;
-  if (usableWidth < 8 || usableHeight < 6) return [];
-  let preferred: [number, number] = kind === 'shop' ? [18, 9] : kind === 'garage' ? [18, 10] : kind === 'service' ? [16, 11]
-    : kind === 'workshop' ? quarter === 1 ? [26, 14] : [18, 11] : quarter === 0 ? [14, 11] : [14, 9];
-  if (kind === 'apartment' && usableWidth >= 22 && usableHeight >= 12) preferred = [26, 12];
-  if (usableHeight > usableWidth * 1.25) preferred = [preferred[1], preferred[0]];
-  const width = Math.min(preferred[0], usableWidth), height = Math.min(preferred[1], usableHeight);
-  const rect = { x: lot.x + inset, y: lot.y + inset, width, height }, result = [{ rect, annex: false }];
-  // Utility yards and gardens have a small, one-storey garage rather than an
-  // equal grid of narrow towers. A four-cell service alley separates the doors.
-  if (quarter !== 0 && lot.width * lot.height >= 460) {
-    if (!facingVertical && usableWidth - width >= 12) result.push({ rect: { x: rect.x + width + 4, y: rect.y, width: Math.min(12, usableWidth - width - 4), height: Math.min(8, usableHeight) }, annex: true });
-    else if (usableHeight - height >= 10) result.push({ rect: { x: rect.x, y: rect.y + height + 4, width: Math.min(12, usableWidth), height: Math.min(8, usableHeight - height - 4) }, annex: true });
+const LOT_INSET = 3, HOUSE_ALLEY = 4, MIN_HOUSE_WIDTH = 8, MIN_HOUSE_HEIGHT = 8;
+const lotCapacity = (lot: Rect): number => Math.max(0, Math.floor((lot.width - LOT_INSET * 2 + HOUSE_ALLEY) / (MIN_HOUSE_WIDTH + HOUSE_ALLEY)))
+  * Math.max(0, Math.floor((lot.height - LOT_INSET * 2 + HOUSE_ALLEY) / (MIN_HOUSE_HEIGHT + HOUSE_ALLEY)));
+
+/** Plot rows form a neighbourhood: every address has its own real room and a
+ * four-cell alley, while larger plots hold a longer house or a working hall. */
+function authoredBuildings(lot: Rect, quarter: number, kind: LiveCityBuilding['kind'], target: number, addressOffset: number): Rect[] {
+  if (!target) return [];
+  const usableWidth = lot.width - LOT_INSET * 2, usableHeight = lot.height - LOT_INSET * 2;
+  const preferred = kind === 'workshop' && quarter === 1 ? [24, 14] : kind === 'apartment' && quarter === 3 ? [24, 11]
+    : kind === 'shop' ? [16, 10] : kind === 'garage' ? [14, 9] : kind === 'service' ? [15, 11] : [14, 10];
+  let grid: { columns: number; rows: number; width: number; height: number; score: number } | undefined;
+  for (let columns = 1; columns <= target; columns++) for (let rows = 1; rows <= target; rows++) {
+    if (columns * rows < target) continue;
+    const width = Math.floor((usableWidth - HOUSE_ALLEY * (columns - 1)) / columns), height = Math.floor((usableHeight - HOUSE_ALLEY * (rows - 1)) / rows);
+    if (width < MIN_HOUSE_WIDTH || height < MIN_HOUSE_HEIGHT) continue;
+    const score = Math.abs(Math.log(width / preferred[0]!)) + Math.abs(Math.log(height / preferred[1]!)) + (columns * rows - target) * .17;
+    if (!grid || score < grid.score) grid = { columns, rows, width, height, score };
+  }
+  if (!grid) throw new Error('Neighbourhood plot cannot hold its real addresses');
+  const result: Rect[] = [];
+  for (let index = 0; index < target; index++) {
+    const column = index % grid.columns, row = Math.floor(index / grid.columns), variation = (addressOffset + index + quarter) % 4;
+    // The plot boundaries stay aligned; building sizes alternate within them so
+    // gardens, service aprons and house rows do not become identical cubes.
+    const width = Math.max(MIN_HOUSE_WIDTH, Math.min(grid.width, preferred[0]! + (variation === 1 ? 2 : variation === 3 ? -2 : 0)));
+    const height = Math.max(MIN_HOUSE_HEIGHT, Math.min(grid.height, preferred[1]! + (variation === 2 ? 1 : variation === 3 ? -1 : 0)));
+    result.push({ x: lot.x + LOT_INSET + column * (grid.width + HOUSE_ALLEY) + Math.floor((grid.width - width) / 2),
+      y: lot.y + LOT_INSET + row * (grid.height + HOUSE_ALLEY) + Math.floor((grid.height - height) / 2), width, height });
   }
   return result;
 }
@@ -137,13 +151,16 @@ export function generateCitySites(city: LiveCityRegion, worldWidth: number, stre
     if ([west, east, north, south].some(items => items.length !== 2)) throw new Error(`City quarter landmark ownership invalid: ${quarter.id}`);
     const bandLeft = Math.max(...west.map(poi => poi.x + poi.width)), bandRight = Math.min(...east.map(poi => poi.x));
     const bandTop = Math.max(...north.map(poi => poi.y + poi.height)), bandBottom = Math.min(...south.map(poi => poi.y));
+    // The side streets need full housing plots, rather than strips whose width
+    // accidentally equals the neighbouring landmark's small footprint.
+    const innerLeft = Math.max(bandLeft, left + 38), innerRight = Math.min(bandRight, right - 37);
     const rectangles: Rect[] = [
       { x: bandLeft, y: top, width: bandRight - bandLeft, height: bandTop - top },
       { x: bandLeft, y: bandBottom, width: bandRight - bandLeft, height: bottom - bandBottom + 1 },
-      { x: left, y: bandTop, width: bandLeft - left, height: axisY - bandTop + 1 },
-      { x: left, y: axisY + 2, width: bandLeft - left, height: bandBottom - axisY - 2 },
-      { x: bandRight, y: bandTop, width: right - bandRight + 1, height: bandBottom - bandTop },
-      { x: bandLeft, y: bandTop, width: bandRight - bandLeft, height: bandBottom - bandTop },
+      { x: left, y: bandTop, width: innerLeft - left, height: axisY - bandTop + 1 },
+      { x: left, y: axisY + 2, width: innerLeft - left, height: bandBottom - axisY - 2 },
+      { x: innerRight, y: bandTop, width: right - innerRight + 1, height: bandBottom - bandTop },
+      { x: innerLeft, y: bandTop, width: innerRight - innerLeft, height: bandBottom - bandTop },
     ];
     for (const [slot, rect] of rectangles.entries()) {
       if (rect.width < 7 || rect.height < 7 || established.some(poi => intersects(rect, poi))) throw new Error(`No usable city frontage ${quarter.id}:${slot}`);
@@ -158,18 +175,30 @@ export function generateCitySites(city: LiveCityRegion, worldWidth: number, stre
       const cuts = (start: number, end: number, axis: number): number[] => [...new Set([start, Math.max(start, Math.min(end, axis - 3)), Math.max(start, Math.min(end, axis + 4)), end])].sort((a, b) => a - b);
       const xs = cuts(rect.x, rect.x + rect.width, axisX), ys = cuts(rect.y, rect.y + rect.height, axisY);
       const buildings: LiveCityBuilding[] = [], siteWalls: LiveObstacle[] = [], indoor: LivePoint[] = [];
+      const lots: Rect[] = [];
       for (let yi = 1; yi < ys.length; yi++) for (let xi = 1; xi < xs.length; xi++) {
         const lot: Rect = { x: xs[xi - 1]!, y: ys[yi - 1]!, width: xs[xi]! - xs[xi - 1]!, height: ys[yi]! - ys[yi - 1]! };
-        if (lot.width < 8 || lot.height < 6) continue;
-        // Historic shops face the shared courtyard; factory and station yards use
-        // deeper halls, while southern houses have compact plots and outbuildings.
-        for (const candidate of authoredBuildings(lot, quarterIndex, buildingKind, vertical)) {
-          const buildingRect = candidate.rect;
+        if (lotCapacity(lot)) lots.push(lot);
+      }
+      const allocations = lots.map(() => 0), capacities = lots.map(lotCapacity);
+      const desired = quarterIndex === 1 ? [6, 6, 6, 6, 8, 8][slot]! : [6, 6, 6, 6, 10, 8][slot]!;
+      if (capacities.reduce((sum, capacity) => sum + capacity, 0) < desired) throw new Error(`City frontage is too shallow for an inhabited neighbourhood: ${id} (${lots.map((lot, index) => `${lot.width}×${lot.height}:${capacities[index]}`).join(', ')})`);
+      for (let remaining = desired; remaining > 0; remaining--) {
+        let best = -1, score = -1;
+        for (const [index, lot] of lots.entries()) {
+          if (allocations[index]! >= capacities[index]!) continue;
+          const candidate = (lot.width - LOT_INSET * 2) * (lot.height - LOT_INSET * 2) / (allocations[index]! + 1);
+          if (candidate > score) { best = index; score = candidate; }
+        }
+        allocations[best] = allocations[best]! + 1;
+      }
+      for (const [lotIndex, lot] of lots.entries()) {
+        for (const buildingRect of authoredBuildings(lot, quarterIndex, buildingKind, allocations[lotIndex]!, buildings.length)) {
           let street = false;
           for (let ny = buildingRect.y; !street && ny < buildingRect.y + buildingRect.height; ny++) for (let nx = buildingRect.x; nx < buildingRect.x + buildingRect.width; nx++) if (streetMask[ny * worldWidth + nx]) { street = true; break; }
           if (street) continue;
           const address = buildings.length;
-          const localKind: LiveCityBuilding['kind'] = candidate.annex ? 'garage' : address === 0 ? buildingKind
+          const localKind: LiveCityBuilding['kind'] = address === 0 ? buildingKind
             : quarterIndex === 0 ? (kind === 'arcade' && address % 3 ? 'shop' : address % 2 ? 'apartment' : 'workshop')
               : quarterIndex === 1 ? (address % 3 === 2 ? 'service' : slot === 1 || address % 3 === 1 ? 'garage' : 'workshop')
                 : quarterIndex === 2 ? (kind === 'arcade' ? 'shop' : address % 3 === 1 ? 'service' : address % 3 === 2 ? 'garage' : buildingKind)
@@ -185,25 +214,7 @@ export function generateCitySites(city: LiveCityRegion, worldWidth: number, stre
             width: 1, height: 1, kind: 'barricade', label: localKind === 'apartment' ? 'Кухонный шкаф' : localKind === 'shop' ? 'Товарный стеллаж' : 'Хозяйственный стеллаж' });
         }
       }
-      if (!buildings.length) throw new Error(`City frontage lacks a usable room: ${id}`);
-      // Closed residential/service wings are real solid cover, paired with the open
-      // frontage rather than scattered at random. They never obstruct a doorway apron.
-      let wings = 0;
-      for (const [width, height] of [[10, 7], [8, 6]] as const) {
-        for (let y = rect.y + 1; y + height < rect.y + rect.height && wings < 1; y++) for (let x = rect.x + 1; x + width < rect.x + rect.width && wings < 1; x++) {
-          const wing = { x, y, width, height };
-          if (intersects(wing, court) || buildings.some(building => intersects(wing, building))
-            || buildings.some(building => building.entrances.some(door => door.x >= x - 2 && door.y >= y - 2 && door.x < x + width + 2 && door.y < y + height + 2))
-            || siteWalls.some(obstacle => intersects(wing, obstacle, 2))) continue;
-          let street = false;
-          for (let ny = y; !street && ny < y + height; ny++) for (let nx = x; nx < x + width; nx++) if (streetMask[ny * worldWidth + nx]) { street = true; break; }
-          if (street) continue;
-          const address = buildings.length, annexKind = kind === 'workyard' ? 'service' : 'garage';
-          const built = openBuilding(wing, `${id}-building-${address}`, `${name}: ${annexKind === 'service' ? 'хозяйственный корпус' : 'дворовый гараж'}`, annexKind, vertical);
-          Object.assign(built.building, architecture(quarterIndex, annexKind, address, wing));
-          buildings.push(built.building); siteWalls.push(...built.walls); indoor.push(built.floor); wings++;
-        }
-      }
+      if (buildings.length < 6) throw new Error(`City frontage lacks a full neighbourhood: ${id}`);
       const courtyardPoint = point(vertical ? axisX : Math.floor(court.x + court.width / 2), vertical ? Math.floor(court.y + court.height / 2) : laneY);
       const passages = [localRoute(rect, ports[0]!, indoor[0]!, siteWalls), localRoute(rect, indoor[0]!, ports[1]!, siteWalls)];
       if (buildings.length > 1) passages.push(localRoute(rect, ports[0]!, indoor.at(-1)!, siteWalls), localRoute(rect, indoor.at(-1)!, ports[1]!, siteWalls));

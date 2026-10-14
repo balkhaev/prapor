@@ -64,7 +64,11 @@ export function sceneBuildings(world: LiveWorld): LiveCityBuilding[] {
   for (const [index, obstacle] of world.obstacles.entries()) {
     if (obstacle.kind !== 'building' || obstacle.propId) continue;
     const poi = world.pois.find(poi => obstacle.x >= poi.x && obstacle.y >= poi.y && obstacle.x + obstacle.width <= poi.x + poi.width && obstacle.y + obstacle.height <= poi.y + poi.height);
-    result.push({ ...obstacle, id: `solid-${index}`, name: obstacle.label ?? poi?.name ?? 'Корпус', ...styles(poi?.templateId ?? ''), roofAxis: obstacle.width >= obstacle.height ? 'x' : 'y', entrances: [] });
+    const frontage = /^(Жилой дом|Дом лесных рабочих|Угловая лавка|Служебная мастерская|Ремонтный бокс) · /.exec(obstacle.label ?? '');
+    const inferred = frontage ? frontage[1] === 'Угловая лавка' ? { kind: 'shop' as const, floors: 1 as const, facade: 'plaster' as const, roof: 'gable' as const }
+      : frontage[1] === 'Служебная мастерская' || frontage[1] === 'Ремонтный бокс' ? { kind: 'workshop' as const, floors: 1 as const, facade: 'metal' as const, roof: 'gable' as const }
+        : { kind: 'apartment' as const, floors: 1 as const, facade: 'plaster' as const, roof: 'gable' as const } : styles(poi?.templateId ?? '');
+    result.push({ ...obstacle, id: `solid-${index}`, name: obstacle.label ?? poi?.name ?? 'Корпус', ...inferred, roofAxis: obstacle.width >= obstacle.height ? 'x' : 'y', entrances: [] });
   }
   result.push(...legacyHallEnvelopes(world).map(hall => ({ ...hall, ...styles(hall.templateId) })));
   return result;

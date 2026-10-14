@@ -90,15 +90,20 @@ beforeEach(async () => {
 });
 afterEach(async () => { service.close(); await rm(directory, { recursive: true, force: true }); });
 
-describe('verified G5 courtyard progress in expanded city architecture', () => {
-  test('all 72 courtyard slots retain cycles, depleted timers and private discoveries while a wounded fighter moves out of a new wall', async () => {
-    // Public search positions recorded from the shipped perimeter-g5-5dfb7f6f.
-    // IDs are the durable contract; these old coordinates really move in G6.
-    const oldPositions = [
+describe('verified courtyard progress in expanded city architecture', () => {
+  test.each([5, 8])('all 72 G%s courtyard slots retain cycles, depleted timers and private discoveries while a wounded fighter moves out of a new wall', async previousVersion => {
+    // Public search positions recorded from shipped G5 and G8 geometry.
+    // IDs are the durable contract; these coordinates really move in G9.
+    const oldPositions = previousVersion === 5 ? [
       [81, 67], [98, 67], [90, 67], [81, 111], [98, 110], [90, 112], [67, 81], [68, 81], [68, 90], [67, 98], [68, 98], [68, 92], [112, 81], [112, 98], [113, 90], [81, 81], [98, 81], [90, 89],
       [152, 67], [171, 67], [162, 67], [152, 111], [171, 110], [162, 112], [138, 81], [139, 81], [139, 90], [138, 98], [139, 98], [139, 92], [186, 81], [186, 98], [187, 90], [152, 81], [171, 81], [162, 89],
       [81, 138], [96, 138], [90, 138], [81, 188], [96, 188], [90, 188], [67, 152], [68, 152], [68, 162], [67, 173], [68, 173], [68, 164], [108, 152], [108, 173], [111, 162], [81, 152], [96, 152], [90, 163],
       [171, 138], [172, 138], [162, 138], [171, 188], [172, 188], [162, 188], [138, 152], [139, 152], [142, 162], [138, 173], [139, 173], [142, 164], [186, 152], [186, 173], [187, 162], [171, 152], [171, 173], [162, 163],
+    ] as const : [
+      [156, 131], [184, 131], [170, 134], [156, 204], [184, 204], [170, 207], [134, 152], [129, 162], [135, 170], [134, 182], [128, 193], [135, 172], [204, 152], [199, 162], [205, 170], [156, 151], [152, 161], [170, 171],
+      [268, 133], [292, 133], [278, 134], [268, 205], [292, 203], [278, 206], [245, 155], [246, 155], [246, 170], [245, 184], [246, 184], [246, 172], [313, 153], [313, 182], [314, 170], [268, 155], [292, 183], [278, 170],
+      [158, 238], [179, 235], [170, 241], [158, 313], [179, 309], [170, 315], [135, 258], [129, 268], [137, 278], [134, 290], [129, 301], [137, 280], [195, 259], [189, 269], [200, 278], [157, 262], [179, 254], [170, 278],
+      [292, 238], [287, 248], [278, 242], [292, 313], [293, 313], [278, 315], [247, 262], [248, 262], [249, 278], [243, 290], [259, 286], [249, 280], [313, 261], [308, 301], [314, 278], [292, 259], [288, 269], [278, 279],
     ] as const;
     const ids = ['old-center', 'industrial', 'station', 'residential'].flatMap(quarter => Array.from({ length: 6 }, (_, site) => Array.from({ length: 3 }, (_, slot) => `city-${quarter}-${site}-slot-${slot}`)).flat());
     const anchors = ids.map(id => map.containers.find(anchor => anchor.id === id)!);
@@ -107,30 +112,33 @@ describe('verified G5 courtyard progress in expanded city architecture', () => {
     expect(anchors.filter((anchor, index) => anchor.x !== oldPositions[index]![0] || anchor.y !== oldPositions[index]![1]).length).toBeGreaterThanOrEqual(40);
     const firstBuilding = map.citySites![0]!.buildings[0]!;
     const translatedPoint = { x: firstBuilding.x, y: firstBuilding.entrances[0]!.y + 2 };
-    const oldPoint = previousPoint(translatedPoint); // A prior-frame body now lies in a rebuilt facade.
+    const previousFrame = (point: LivePoint): LivePoint => ({ x: point.x - LIVE_WORLD_OFFSET + (previousVersion === 8 ? 96 : 0), y: point.y - LIVE_WORLD_OFFSET + (previousVersion === 8 ? 96 : 0) });
+    const oldPoint = previousFrame(translatedPoint); // A prior-frame body now lies in a rebuilt facade.
     expect(map.obstacles.some(obstacle => obstacle.kind === 'wall' && translatedPoint.x >= obstacle.x && translatedPoint.y >= obstacle.y && translatedPoint.x < obstacle.x + obstacle.width && translatedPoint.y < obstacle.y + obstacle.height)).toBe(true);
     expect(isLiveWalkable(map, translatedPoint)).toBe(false);
     const first = await enter(), observer = await enter(), body = stableBody(), inBag = item('old-watch');
     const medicine = createMedicalInventory({ medkit: 19, bandage: 1, tourniquet: 0, splint: 1, painkiller: 0, surgery: 0 });
     const depleted = [anchors[1]!, anchors[22]!, anchors[71]!], deadlines = depleted.map((anchor, index) => [`container:${anchor.id}`, time + 30_000 + index * 6000] as [string, number]);
-    let cycles: StoredDrop[] = [], landmarkCycles: StoredDrop[] = [], searched: string[] = [];
+    let cycles: StoredDrop[] = [], landmarkCycles: StoredDrop[] = [], fringeCycles: StoredDrop[] = [], searched: string[] = [];
     restart(db => {
-      const saved = world(); saved.geometryVersion = 'perimeter-g5-5dfb7f6f'; saved.scavs = []; saved.events = [];
+      const saved = world(); saved.geometryVersion = previousVersion === 5 ? 'perimeter-g5-5dfb7f6f' : 'perimeter-g8-c421a7cb'; saved.scavs = []; saved.events = [];
       for (const [index, anchor] of anchors.entries()) {
         const drop = saved.drops.find(drop => drop.containerId === anchor.id)!;
         Object.assign(drop, { x: oldPositions[index]![0], y: oldPositions[index]![1], amount: 4 + index % 19, items: [item(index % 2 ? 'gold-ring' : 'coffee')], expiresAt: time + 100_000 + index * 123 });
       }
-      saved.drops = saved.drops.filter(drop => !drop.containerId?.startsWith('fringe-') && !depleted.some(anchor => drop.containerId === anchor.id));
+      saved.drops = saved.drops.filter(drop => !(previousVersion === 5 && drop.containerId?.startsWith('fringe-')) && !depleted.some(anchor => drop.containerId === anchor.id));
       cycles = structuredClone(saved.drops.filter(drop => ids.includes(drop.containerId ?? '')));
       landmarkCycles = structuredClone(saved.drops.filter(drop => G4_ANCHOR.test(drop.containerId ?? '')));
+      fringeCycles = structuredClone(saved.drops.filter(drop => drop.containerId?.startsWith('fringe-')));
       searched = cycles.filter(drop => drop.containerId!.endsWith('-slot-0')).map(drop => drop.id);
       saved.lootCooldowns = deadlines;
       db.query('UPDATE live_world SET state=? WHERE id=1').run(JSON.stringify(saved));
       updatePlayer(db, first.session, { ...oldPoint, body, medicine, healthAt: time, ammo: 11, cargo: 17, stash: 3, kills: 2, lootItems: [inBag], safeUntil: time + 120_000, searchedDropIds: searched,
         treatment: { type: 'splint', part: 'leftLeg', startedAt: time - 1000, endsAt: time + 3000 } });
-      updatePlayer(db, observer.session, { ...previousPoint(anchors[0]!), safeUntil: time + 120_000, searchedDropIds: [] });
+      updatePlayer(db, observer.session, { ...previousFrame(anchors[0]!), safeUntil: time + 120_000, searchedDropIds: [] });
     });
     expect(cycles).toHaveLength(69); expect(landmarkCycles).toHaveLength(192); expect(searched).toHaveLength(24);
+    expect(fringeCycles).toHaveLength(previousVersion === 8 ? 112 : 0);
     const known = cycles.find(drop => drop.containerId === anchors[0]!.id)!;
     const unknown = cycles.find(drop => drop.containerId === anchors[2]!.id)!;
     let migratedPosition: LivePoint | undefined;
@@ -141,6 +149,7 @@ describe('verified G5 courtyard progress in expanded city architecture', () => {
         expect(saved.drops.filter(drop => drop.containerId === anchor.id)).toEqual([{ ...cycle, x: anchor.x, y: anchor.y, containerKind: anchor.kind }]);
       }
       for (const cycle of landmarkCycles) expect(saved.drops.find(drop => drop.id === cycle.id)).toEqual(cycle);
+      for (const cycle of fringeCycles) expect(saved.drops.find(drop => drop.id === cycle.id)).toEqual(cycle);
       for (const [index, anchor] of depleted.entries()) {
         expect(saved.drops.some(drop => drop.containerId === anchor.id)).toBe(false); expect(saved.lootCooldowns).toContainEqual(deadlines[index]!);
       }
@@ -159,7 +168,7 @@ describe('verified G5 courtyard progress in expanded city architecture', () => {
       expect(deliveries.size).toBe(0);
       if (attempt < 2) restart();
     }
-    // The persisted G5 timer still refills only its own slot once, with a fresh
+    // The persisted timer still refills only its own slot once, with a fresh
     // private discovery state; the later timers stay depleted.
     restart(db => { const saved = world(); quietActors(saved); db.query('UPDATE live_world SET state=? WHERE id=1').run(JSON.stringify(saved)); });
     time = deadlines[0]![1] - 1; await enter(first.session); service.tick();
