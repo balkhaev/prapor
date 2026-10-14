@@ -26,6 +26,10 @@ export class PixelRaidRenderer {
   }
   get deviceRatio(): number { return this.ratio; }
   detail(tile: number): PixelDetail { return pixelDetail(tile, this.ratio); }
+  spritePoint(sprite: PixelSprite, point: LivePoint, scale: number, local: LivePoint): LivePoint {
+    const rect = pixelSpriteRect(sprite, point, scale, this.ratio);
+    return { x: Math.round((rect.x + local.x * rect.width / sprite.image.width) * this.ratio) / this.ratio, y: Math.round((rect.y + local.y * rect.height / sprite.image.height) * this.ratio) / this.ratio };
+  }
   sprite(sprite: PixelSprite, point: LivePoint, scale: number, width: number, height: number): void {
     const rect = pixelSpriteRect(sprite, point, scale, this.ratio);
     if (rect.x + rect.width < 0 || rect.y + rect.height < 0 || rect.x > width || rect.y > height) return;

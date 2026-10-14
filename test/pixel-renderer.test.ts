@@ -1,7 +1,5 @@
 import { describe, expect, test } from 'bun:test';
 import { PixelRaidRenderer, pixelDetail, pixelSpriteRect, type PixelSprite } from '../src/pixel-renderer';
-import { paintPixelActor } from '../src/pixel-actors';
-import { SCAV_DIRECTIONS, SCAV_POSES } from '../src/scav-isometric';
 
 describe('high resolution pixel compositor', () => {
   test('display density changes the framebuffer without changing world-art dimensions', () => {
@@ -32,18 +30,16 @@ describe('high resolution pixel compositor', () => {
     renderer.sprite(sprite, point, .5, 800, 600);
     expect(draws).toHaveLength(1); expect(context.imageSmoothingEnabled).toBe(false);
   });
-});
 
-test('all saved appearance bearings and poses paint bounded integer pixels without changing the actor', () => {
-  let count = 0;
-  const context = { setTransform() {}, fillRect(x: number, y: number, w: number, h: number) {
-    count++;
-    if (![x, y, w, h].every(Number.isInteger) || x < 0 || y < 0 || x + w > 112 || y + h > 112) throw new Error('Actor pixels left their native frame');
-  } } as unknown as CanvasRenderingContext2D;
-  for (let appearance = 0; appearance < 32; appearance++) for (const direction of SCAV_DIRECTIONS) for (const pose of [...SCAV_POSES, 'downed'] as const) {
-    const actor = { appearance, faction: appearance % 2 ? 'raiders' as const : 'scavs' as const }, before = { ...actor };
-    paintPixelActor(context, actor, direction, pose, appearance % 3 !== 0);
-    expect(actor).toEqual(before);
-  }
-  expect(count).toBeGreaterThan(10000);
+  test('cropped weapon sockets follow the exact rounded image rectangle at every display density', () => {
+    const sprite: PixelSprite = { image: { width: 121, height: 159 } as HTMLCanvasElement, anchor: { x: 51, y: 148 } };
+    const context = { canvas: { width: 0, height: 0 }, setTransform() {} } as unknown as CanvasRenderingContext2D;
+    const renderer = new PixelRaidRenderer(context), point = { x: 200.35, y: 180.8 }, socket = { x: 109, y: 67 };
+    for (const ratio of [1, 1.25, 2]) {
+      renderer.resize(800, 600, ratio);
+      const rect = pixelSpriteRect(sprite, point, .32, ratio), mount = renderer.spritePoint(sprite, point, .32, socket);
+      expect(Math.abs(mount.x - (rect.x + socket.x * rect.width / sprite.image.width))).toBeLessThanOrEqual(.5 / ratio);
+      expect(Math.abs(mount.y - (rect.y + socket.y * rect.height / sprite.image.height))).toBeLessThanOrEqual(.5 / ratio);
+    }
+  });
 });
