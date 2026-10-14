@@ -52,20 +52,20 @@ function receiver(gun: ReferenceProfile, p: ReferencePaint, t: ReferenceTools): 
 		return geometry(shell, `${marker("aug-integrated-stock-grip-window")}${t.rail(366, 108, 190)}${t.port(334, 139, 72, 15)}${t.seam("M260 123h100l25-9h113l54 18M259 171h77l24 25h53l32-25", true)}${path("M477 182h24l-9 47h-24z", p.rubber)}${t.checkering(480, 188, 17, 28)}<path data-mechanism="trigger-guard" d="M510 172h55l8 13v19l-23 12h-38" fill="none" stroke="#606958" stroke-width="1.1"/><path data-mechanism="trigger" d="M514 176q-5 11 0 18l5-2q-5-7 0-16z" fill="${p.dark}"/>${path("M534 136l19-10h15v8l-24 16z", p.dark)}${t.selector(464, 155, 19)}${t.fastener(267, 151, 3)}${t.fastener(441, 155, 3)}${t.fastener(529, 157, 3)}${t.seam("M316 153h13v18M373 178h37")}`, "polymer", [242, 103, 355, 152], true);
 	}
 	if (gun.id === "ash12") {
-		const shell = "M250 120h352l18 8 25 17v30h-110l-27 60h-37l14-60h-40l-25 8h-74l-27 26h-59l-10-12zM380 117V88h151v29zM394 97h122v16H394z";
+		const shell = "M250 120h352l18 8 25 17v30h-138l1 60h-37l14-60h-40l-25 8h-74l-27 26h-59l-10-12zM380 117V88h151v29zM394 97h122v16H394z";
 		return geometry(shell, `${marker("ash12-rear-feed-long-sheet-action")}${t.rail(346, 113, 296)}${t.rail(383, 87, 149)}${t.seam("M257 125h341l18 8 20 16M256 166h76l28 10h56l25-9h195", true)}${t.port(335, 139, 78, 22)}${path("M474 181h29l-11 44h-24z", p.rubber)}${t.checkering(480, 189, 17, 27)}${t.triggerGuard(510, 174, 41, 32)}${t.selector(450, 156, 20)}${t.vents(562, 139, 4, 9, 7, 17)}${t.fastener(269, 145, 3.5)}${t.fastener(453, 148, 3)}${t.fastener(629, 158, 3)}${t.seam("M387 91v24M525 91v24", true)}`, "dark", [243, 81, 407, 160], true);
 	}
 	if (boltRifles.has(gun.id)) {
 		const aw = gun.id === "awm";
 		const shell = aw ? "M323 142h27v-20q0-9 11-9h119l22 14v28H323z" : "M327 146h21v-21q0-13 14-13h113q15 0 26 15v27H327z";
-		return geometry(shell, `${marker(aw ? "awm-round-bolt-action" : "trg-cylindrical-bolt-action")}${t.rail(335, 108, 171)}${t.port(380, 124, 84, 16)}${t.seam(aw ? "M356 118h120l19 13M331 150h164" : "M359 117h114q10 0 21 13M331 150h163", true)}${path("M368 141h26l-10 28 13 13-8 6-18-18 10-25h-13z", p.dark)}<circle cx="394" cy="183" r="7.5" fill="${p.rubber}"/>${t.fastener(353, 142, 2.8)}${t.fastener(481, 143, 2.6)}${t.triggerGuard(369, 170, 51, 29)}${path("M320 153h182v18H320z", p.polymer)}${t.seam("M326 155h165", true)}`, "dark", [316, 103, 194, 105]);
+		return geometry(shell, `${marker(aw ? "awm-round-bolt-action" : "trg-cylindrical-bolt-action")}${t.rail(335, 108, 171)}${t.port(380, 124, 84, 16)}${t.seam(aw ? "M356 118h120l19 13M331 150h164" : "M359 117h114q10 0 21 13M331 150h163", true)}${t.fastener(353, 142, 2.8)}${t.fastener(481, 143, 2.6)}${t.triggerGuard(369, 170, 51, 29)}${path("M320 153h182v18H320z", p.polymer)}${path("M368 136h14l-11 14-2 10h-7l2-13z", p.dark)}<circle data-mechanism="bolt-handle-knob" cx="365" cy="160" r="7.5" fill="${p.rubber}"/>${t.seam("M326 155h165", true)}`, "dark", [316, 103, 194, 105]);
 	}
 	if (gun.id === "scarh") {
-		const shell = `M263 113h241l15 17v34h-32v18h-59v-13h-93l-12 67h-36l13-67h-37z`;
-		return geometry(shell, `${marker("scar-monolithic-upper-polymer-lower")}${t.rail(268, 108, 245)}${t.port(400, 124, 76, 18)}${path("M267 150h153v20h-82l-13 65h-34l12-65h-36z", p.polymer)}${t.seam("M269 119h231l11 13M269 145h236", true)}${path("M349 130h42v7h-42z", p.dark)}${path("M365 131h19v13h-19z", p.steel)}${t.triggerGuard(335, 172, 58, 31)}${gripDetail(301, p, t)}${t.selector(307, 155, 22)}${t.fastener(271, 149, 3)}${t.fastener(413, 156, 3)}${t.fastener(498, 149, 3)}${t.seam("M431 168h50v9h-50")}`, "dark", [257, 103, 267, 140]);
+		const shell = `M263 113h241l15 17v34h-60v18h-63v-13h-61l-12 67h-36l13-67h-37z`;
+		return geometry(shell, `${marker("scar-monolithic-upper-polymer-lower")}${t.rail(268, 108, 245)}${t.port(400, 124, 76, 18)}${path("M267 150h153v20h-82l-13 65h-34l12-65h-36z", p.polymer)}${t.seam("M269 119h231l11 13M269 145h236", true)}${path("M349 130h42v7h-42z", p.dark)}${path("M365 131h19v13h-19z", p.steel)}${t.triggerGuard(335, 172, 58, 31)}${gripDetail(301, p, t)}${t.selector(307, 155, 22)}${t.fastener(271, 149, 3)}${t.fastener(413, 156, 3)}${t.fastener(498, 149, 3)}${t.seam("M399 168h55v9h-55")}`, "dark", [257, 103, 267, 140]);
 	}
 	if (gun.id === "g36") {
-		const shell = `M317 129h179l19 15v31h-119l-28 59h-40l16-59h-27zM337 130V93l19-13h151v50zM350 118V99l12-9h129v28z`;
+		const shell = `M317 129h179l19 15v31h-137l-10 59h-40l16-59h-27zM337 130V93l19-13h151v50zM350 118V99l12-9h129v28z`;
 		return geometry(shell, `${marker("g36-open-carry-handle-polymer-action")}${t.rail(355, 87, 151)}${t.port(400, 141, 76, 21)}${t.seam("M325 135h166l17 12M324 169h65M339 127V96l20-13h137", true)}${path("M369 123h67v8h-67z", p.dark)}${path("M414 122h22v12h-22z", p.steel)}${t.triggerGuard(378, 176, 52, 29)}${gripDetail(341, p, t)}${t.selector(349, 158, 24)}${t.fastener(324, 151, 3.5)}${t.fastener(493, 160, 3)}${t.fastener(342, 117, 2.5)}${t.fastener(498, 117, 2.5)}`, "polymer", [310, 75, 213, 166], true);
 	}
 	if (gun.id === "fal") {
@@ -127,7 +127,22 @@ function stock(gun: ReferenceProfile, a: string, p: ReferencePaint, t: Reference
 	}
 	// Bolt-action furniture owns its grip, including open chassis upgrades.
 	const boltGrip = bolt && !factory ? `M331 162h29l-14 73h-33l13-58z` : "";
-	return geometry(`${body}${cut}${boltGrip}`, `${stemDetail}${marker(`${gun.id}-physical-${a}-stock`)}${bolt ? path("M299 149h62v17h-62z", p.dark) : ""}${t.seam(scar ? "M117 130h81q13-8 35-4l20 7" : "M120 143h74l35-10h59", true)}${path(`M${mcx ? 122 : 105} ${factory && fal ? 154 : 139}h11v${scar ? 87 : 90}h-11z`, p.rubber)}${t.fastener(scar ? 227 : 279, 154, 2.4)}${bolt ? `${path("M331 181h19l-9 45h-18z", p.rubber)}${t.checkering(334, 188, 14, 26)}` : ""}${a === "padded" || a === "precision" ? `${path(scar ? "M126 118h79q18-9 32-6v16H126z" : "M144 121h123v17H144z", p.rubber)}${t.ribs(108, 151, 2, 65, 4)}` : factory && gun.id === "hk416" ? t.ribs(117, 142, 8, 13, 15) : factory && gun.id === "m4a1" ? t.vents(132, 136, 4, 22, 5, 30) : ""}${a === "precision" ? `${t.fastener(218, 224, 3)}${t.seam("M143 219h55", true)}` : ""}`, material, [94, a === "padded" || a === "precision" ? 108 : 115, bolt ? 280 : right - 83, 132], !!cut);
+	// Follow the real heel instead of placing one free-floating vertical pad
+	// beside every stock. Folding/skeleton frames share a straight rear shoe.
+	const heel: readonly [number, number, number, number] = factory
+		? scar ? [110, 125, 110, 231] : g36 ? [108, 139, 100, 229] : mcx ? [126, 123, 119, 217]
+			: aw ? [106, 137, 106, 231] : gun.id === "trg42" ? [111, 137, 111, 230]
+				: fal ? [105, 145, 105, 233] : gun.id === "hk416" ? [111, 122, 111, 227]
+					: gun.id === "sr25" ? [111, 128, 111, 231] : [114, 127, 114, 233]
+		: a === "folding" ? [113, 137, 113, 225] : a === "skeleton" ? [119, 134, 119, 227]
+			: a === "precision" ? [109, 142, 109, 234] : a === "light" ? [128, 139, 167, 213] : [112, 137, 134, 229];
+	const [heelX, heelY, toeX, toeY] = heel;
+	const buttpad = `<path data-hardware="stock-buttpad" d="M${heelX - 7} ${heelY + 4}h10L${toeX + 3} ${toeY - 2}h-10z" fill="${p.rubber}"/>`;
+	const boundsLeft = Math.min(94, heelX - 12, toeX - 12);
+	const seamClip = `${p.prefix}-stock-top-seam`;
+	const stockSeamDefs = `<defs><clipPath id="${seamClip}"><path d="${body}${cut}${boltGrip}" fill-rule="${cut ? "evenodd" : "nonzero"}"/></clipPath></defs>`;
+	const clippedStockSeam = `<g data-hardware="stock-surface-seam" clip-path="url(#${seamClip})">${t.seam(scar ? "M117 130h81q13-8 35-4l20 7" : "M120 143h74l35-10h59", true)}</g>`;
+	return geometry(`${body}${cut}${boltGrip}`, `${stemDetail}${marker(`${gun.id}-physical-${a}-stock`)}${bolt ? path("M299 149h62v17h-62z", p.dark) : ""}${clippedStockSeam}${buttpad}${t.fastener(scar ? 227 : 279, 154, 2.4)}${bolt ? `${path("M331 181h19l-9 45h-18z", p.rubber)}${t.checkering(334, 188, 14, 26)}` : ""}${a === "padded" || a === "precision" ? `${path(scar ? "M126 118h79q18-9 32-6v16H126z" : "M144 121h123v17H144z", p.rubber)}${t.ribs(108, 151, 2, 65, 4)}` : factory && gun.id === "hk416" ? t.ribs(117, 142, 8, 13, 15) : factory && gun.id === "m4a1" ? t.vents(132, 136, 4, 22, 5, 30) : ""}${a === "precision" ? `${t.fastener(218, 224, 3)}${t.seam("M143 219h55", true)}` : ""}${stockSeamDefs}`, material, [boundsLeft, a === "padded" || a === "precision" ? 108 : 115, (bolt ? 374 : right + 11) - boundsLeft, 132], !!cut);
 }
 
 function magazine(gun: ReferenceProfile, a: string, p: ReferencePaint, t: ReferenceTools): ReferenceGeometry {
@@ -140,11 +155,11 @@ function magazine(gun: ReferenceProfile, a: string, p: ReferencePaint, t: Refere
 		const shell = `M${x} ${y}h${width}l4 32h-${width}zM${x - 4} ${y + 29}h${width + 8}q10 0 10 12v64q0 10-10 10h-${width + 8}q-10 0-10-10v-64q0-12 10-12z`;
 		return geometry(shell, `${marker(`${gun.id}-drum-feed-neck`)}${path(`M${x + 5} ${y + 39}h${width - 2}v66h-${width - 2}z`, p.polymer)}${t.ribs(x + 12, y + 43, Math.floor(width / 8), 55, 8)}${t.fastener(x + width + 6, y + 42, 2.7)}`, "dark", [x - 18, y - 5, width + 35, 126]);
 	}
-	const shell = curve ? `M${x} ${y}h${width}q-3 ${depth * .53} ${drift} ${depth - 7}l-${width} 12q-${drift + 10}-${depth * .38}-${drift + 10}-${depth + 5}z` : `M${x} ${y}h${width}l${drift} ${depth}l-${width} 3z`;
+	const shell = curve ? `M${x} ${y}h${width}q-3 ${depth * .53} ${drift} ${depth - 7}l-${width} 12q-${drift}-${depth * .38}-${drift}-${depth + 5}z` : `M${x} ${y}h${width}l${drift} ${depth}l-${width} 3z`;
 	const transparent = a === "factory" && ["g36", "aug"].includes(gun.id), window = a === "window" || transparent;
-	const ribs = Array.from({ length: Math.max(2, Math.floor((depth - 20) / 15)) }, (_, i) => t.seam(`M${x + 7 + drift * i / 8} ${y + 18 + i * 15}h${width - 16}`, true)).join("");
+	const ribs = Array.from({ length: Math.min(Math.max(2, Math.floor((depth - 20) / 15)), Math.floor((depth - 21) / 15) + 1) }, (_, i) => t.seam(`M${x + 7 + drift * i / 8} ${y + 18 + i * 15}h${width - 16}`, true)).join("");
 	const flute = Array.from({ length: 3 }, (_, i) => `<path d="M${x + 11 + i * 10} ${y + 12}q-2 ${depth * .45} ${drift} ${depth - 26}" fill="none" stroke="#777f7a" stroke-width="2" opacity=".52"/>`).join("");
-	return geometry(shell, `${marker(`${gun.id}-${rear ? "rear" : "front"}-magazine-well`)}${transparent ? path(shell, "#a0956f", ' opacity=".38"') : ""}${t.seam(`M${x + 4} ${y + 8}h${width - 8}`, true)}${window ? `${path(`M${x + width / 2 - 6} ${y + 17}h13l${drift * .72} ${depth - 31}-13 3z`, "#172b29", ' stroke="#86968f" stroke-width=".6"')}${Array.from({ length: Math.max(2, Math.floor((depth - 30) / 10)) }, (_, i) => path(`M${x + width / 2 - 4 + drift * i / 11} ${y + 24 + i * 10}h9v2h-9z`, "#b39f69")).join("")}` : curve && !transparent ? flute : ribs}${path(`M${x + drift - 2} ${y + depth - 3}l${width + 5}-3v7l-${width + 5} 3z`, p.rubber)}${a === "quick" ? `<path d="M${x + drift + width / 2 - 10} ${y + depth + 4}v10h20v-12" fill="none" stroke="#8b9490" stroke-width="4"/>` : ""}`, curve || transparent ? "polymer" : "dark", [x - 12, y - 5, width + drift + 28, depth + (a === "quick" ? 29 : 15)]);
+	return geometry(shell, `${marker(`${gun.id}-${rear ? "rear" : "front"}-magazine-well`)}${transparent ? path(shell, "#a0956f", ' opacity=".38"') : ""}${t.seam(`M${x + 4} ${y + 8}h${width - 8}`, true)}${window ? `${path(`M${x + width / 2 - 6} ${y + 17}h13l${drift * .72} ${depth - 31}-13 3z`, "#172b29", ' stroke="#86968f" stroke-width=".6"')}${Array.from({ length: Math.min(Math.max(2, Math.floor((depth - 30) / 10)), Math.max(0, Math.floor((depth - 40) / 10) + 1)) }, (_, i) => path(`M${x + width / 2 - 4 + drift * i / 11} ${y + 24 + i * 10}h9v2h-9z`, "#b39f69")).join("")}` : curve && !transparent ? flute : ribs}${path(`M${x + drift - 2} ${y + depth - 3}l${width + 5}-3v7l-${width + 5} 3z`, p.rubber)}${a === "quick" ? `<path d="M${x + drift + width / 2 - 10} ${y + depth + 1}v13h20v-13" fill="none" stroke="#8b9490" stroke-width="4"/>` : ""}`, curve || transparent ? "polymer" : "dark", [x - 12, y - 5, width + drift + 28, depth + (a === "quick" ? 29 : 15)]);
 }
 
 function handguard(gun: ReferenceProfile, a: string, p: ReferencePaint, t: ReferenceTools): ReferenceGeometry {
@@ -176,7 +191,8 @@ function handguard(gun: ReferenceProfile, a: string, p: ReferencePaint, t: Refer
 		: factory && ["m4a1", "hk416"].includes(gun.id) ? t.ribs(x + 11, top + 15, Math.max(1, Math.floor((w - 23) / 9)), bottom - top - 23, 9)
 		: factory && gun.id === "fal" ? t.vents(x + 20, top + 12, 3, 13, 7, (w - 45) / 3) : "";
 	const upperBound = factoryTop ? 103 : railed ? Math.min(s.railTop - 5, top - 13) : top - 5;
-	return geometry(shell, `${marker(`${gun.id}-${a}-fore-end`)}${bridge}${factoryTop}${bottomRail}${sideRail}${factory && gun.id === "scarh" ? path("M513 132h68v29h-68z", p.polymer) : ""}${factorySlots}${t.seam(`M${x + 4} ${top + 4}h${w - 17}`, true)}${t.fastener(x + 8, bottom - 7, 2.6)}${t.fastener(end - 8, bottom - 7, 2.6)}${wood ? t.grain(x + 10, top + 12, w - 23, 14) : ""}${factory && bolt ? `${t.seam(`M${x + 8} ${bottom - 4}h${w - 18}`, true)}${t.vents(end - 60, bottom - 11, 2, 12, 4, 22)}` : ""}${factory && aug ? `${path("M563 166h17l8 14h-35z", p.dark)}${t.fastener(571, 168, 3.7)}` : ""}`, wood ? "wood" : a === "carbon" ? "carbon" : a === "vented" || factory && gun.id === "scarh" ? "dark" : "polymer", [railed ? receiverLeft - 5 : hasBottom ? railLeft - 5 : x - 6, upperBound, railRight - (railed ? receiverLeft - 5 : hasBottom ? railLeft - 5 : x - 6) + 8, bottom + 21 - upperBound], railed || a === "vented" || factory && ["awm", "sr25"].includes(gun.id));
+	const rearFerrule = light && ["m4a1", "hk416", "fal", "sr25"].includes(gun.id) ? `<path data-hardware="fore-end-rear-ferrule" d="M${x - 13} ${top + 1}h19v${bottom - top - 1}h-19z" fill="${p.dark}"/>${t.seam(`M${x - 3} ${top + 3}v${bottom - top - 5}`, true)}` : "";
+	return geometry(shell, `${marker(`${gun.id}-${a}-fore-end`)}${bridge}${factoryTop}${bottomRail}${sideRail}${factory && gun.id === "scarh" ? path("M513 132h68v29h-68z", p.polymer) : ""}${factorySlots}${rearFerrule}${t.seam(`M${x + 4} ${top + 4}h${w - 17}`, true)}${t.fastener(x + 8, bottom - 7, 2.6)}${t.fastener(end - 8, bottom - 7, 2.6)}${wood ? t.grain(x + 10, top + 12, w - 23, 14) : ""}${factory && bolt ? `${t.seam(`M${x + 8} ${bottom - 4}h${w - 18}`, true)}${t.vents(end - 60, bottom - 11, 2, 12, 4, 22)}` : ""}${factory && aug ? `${path("M563 166h17l8 14h-35z", p.dark)}${t.fastener(571, 168, 3.7)}` : ""}`, wood ? "wood" : a === "carbon" ? "carbon" : a === "vented" || factory && gun.id === "scarh" ? "dark" : "polymer", [railed ? receiverLeft - 5 : hasBottom ? railLeft - 5 : rearFerrule ? x - 18 : x - 6, upperBound, railRight - (railed ? receiverLeft - 5 : hasBottom ? railLeft - 5 : rearFerrule ? x - 18 : x - 6) + 8, bottom + 21 - upperBound], railed || a === "vented" || factory && ["awm", "sr25"].includes(gun.id));
 }
 
 function barrel(gun: ReferenceProfile, a: string, p: ReferencePaint, t: ReferenceTools): ReferenceGeometry {
@@ -192,6 +208,31 @@ function barrel(gun: ReferenceProfile, a: string, p: ReferencePaint, t: Referenc
 	return { ...geometry(shell, detail, "dark", [start - 5, gas && gun.id === "m4a1" && a === "factory" ? 88 : 115, end - start + 10, gas && gun.id === "m4a1" && a === "factory" ? 72 : 43]), muzzle: { x: end, y } };
 }
 
+/** The support hand sits ahead of a bullpup's enclosed trigger window. */
+function forwardGrip(gun: ReferenceProfile, a: string, p: ReferencePaint, t: ReferenceTools): ReferenceGeometry {
+	const x = gun.id === "aug" ? 553 : 548, width = gun.id === "aug" ? 51 : 72, front = x + width;
+	const shoe = `M${x} 176h${width}v10h-${width}z`;
+	let handle: string, detail = "", holes = false;
+	if (a === "angled") {
+		handle = `M${front - 15} 185h13l-5 39h-10l-3-12 5-27zM${front - 12} 196h7l-2 16h-6z`;
+		detail = t.seam(`M${front - 16} 213l3 7h7l4-29`, true); holes = true;
+	} else if (a === "bipod") {
+		handle = `M${front - 16} 185h13v20l19 72h-12l-21-71z`;
+		detail = `${t.fastener(front - 8, 200, 5.5)}${path(`M${front - 1} 274h25v7h-25z`, p.rubber)}${t.seam(`M${front - 7} 211l17 59`, true)}`;
+	} else if (a === "folding") {
+		handle = `M${front - 18} 185h15v15l-3 34h-15l-2-30 5-4z`;
+		detail = `${t.fastener(front - 11, 196, 4.5)}${t.ribs(front - 16, 208, 3, 18, 4)}`;
+	} else if (a === "light") {
+		handle = `M${front - 16} 185h13l-2 30h-11l-4-10z`;
+		detail = t.seam(`M${front - 12} 192l-2 14 3 6`, true);
+	} else {
+		const depth = a === "stubby" ? 28 : 55;
+		handle = `M${front - 19} 185h17v${depth}h-19z`;
+		detail = `${path(`M${front - 18} ${182 + depth}h19v6h-19z`, p.rubber)}${t.ribs(front - 17, 192, 3, Math.max(12, depth - 13), 5)}`;
+	}
+	return geometry(`${shoe}${handle}`, `${marker(`${gun.id}-forward-support-grip`)}${t.fastener(x + 7, 181, 2.3)}${t.fastener(front - 6, 181, 2.3)}${detail}`, a === "bipod" ? "steel" : "polymer", [x - 5, 171, width + (a === "bipod" ? 34 : 10), a === "bipod" ? 115 : a === "stubby" || a === "light" ? 49 : 77], holes);
+}
+
 export const modernReferenceGeometry: ReferenceRenderer = (slot, appearance, gun, paint, tools) => {
 	if (!families.has(gun.id)) return undefined;
 	switch (slot) {
@@ -200,6 +241,7 @@ export const modernReferenceGeometry: ReferenceRenderer = (slot, appearance, gun
 		case "magazine": return magazine(gun, appearance, paint, tools);
 		case "handguard": return handguard(gun, appearance, paint, tools);
 		case "barrel": return barrel(gun, appearance, paint, tools);
+		case "foregrip": return bullpups.has(gun.id) ? forwardGrip(gun, appearance, paint, tools) : undefined;
 		default: return undefined;
 	}
 };

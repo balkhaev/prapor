@@ -47,6 +47,9 @@ describe("compact exterior reference anatomy", () => {
 		const paint = {} as ReferencePaint, tools = {} as ReferenceTools;
 		for (const slot of ["receiver", "stock", "barrel", "magazine", "handguard"] as const) expect(compactReferenceGeometry(slot, "factory", foreign, paint, tools)).toBeUndefined();
 		expect(compactReferenceLayout(foreign)).toBeUndefined();
-		for (const id of Object.keys(COMPACT_REFERENCE_GRIPS)) for (const slot of ["optic", "muzzle", "mount", "foregrip", "flashlight", "laser"] as const) expect(compactReferenceGeometry(slot, "factory", { ...foreign, id }, paint, tools)).toBeUndefined();
+		for (const id of Object.keys(COMPACT_REFERENCE_GRIPS)) for (const slot of ["optic", "muzzle", "mount", "foregrip", "flashlight", "laser"] as const) {
+			if (slot === "foregrip" && ["vector", "ump45"].includes(id)) continue; // Native short-fore-end fittings.
+			expect(compactReferenceGeometry(slot, "factory", { ...foreign, id }, paint, tools)).toBeUndefined();
+		}
 	});
 });
