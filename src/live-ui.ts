@@ -274,15 +274,16 @@ export function createLiveMode(options: LiveModeOptions) {
     const contactsOpen=dock.querySelector<HTMLDetailsElement>('.live-contact-fold')?.open??false;
     const focusedSummary = document.activeElement ? ['.live-medical-fold', '.live-goal-fold', '.live-contact-fold'].find(selector => document.activeElement === dock.querySelector(`${selector} > summary`)) : undefined;
     const eventsFocused = document.activeElement === dock.querySelector('.live-events summary');
-    const server = snapshot?.server ?? status, map = server?.maps[0], city = snapshot?.world.city ?? map?.city;
+    const preparingDowned = !!snapshot && snapshot.entities.find(entity => entity.id === snapshot!.selfId)!.health <= 0;
+    const server = !snapshot || preparingDowned ? entry?.server ?? snapshot?.server ?? status : snapshot.server;
+    const map = server?.maps[0], city = snapshot?.world.city ?? map?.city;
     const gameReady = !!options.getGameId() && options.isGameReady?.() !== false;
-    const header = `<header class="live-dock-head"><div><span class="live-eyebrow">ПЕРИМЕТР · АВТОБАТТЛЕР</span><h2>${snapshot ? 'В рейде' : 'Периметр 01'}</h2></div><span class="live-online ${offline ? 'lost' : ''}" title="Игроков на общем сервере"><i></i>${server ? `${server.online}/${server.capacity}` : `—/${LIVE_CAPACITY}`}</span></header>`;
+    const header = `<header class="live-dock-head"><div><span class="live-eyebrow">ПЕРИМЕТР · АВТОБАТТЛЕР</span><h2>${snapshot && !preparingDowned ? 'В рейде' : 'Периметр 01'}</h2></div><span class="live-online ${offline ? 'lost' : ''}" title="Игроков на общем сервере"><i></i>${server ? `${server.online}/${server.capacity}` : `—/${LIVE_CAPACITY}`}</span></header>`;
     const notice = message ? `<p class="live-notice ${offline ? 'lost' : ''}" role="status">${escape(message)}</p>` : '';
     const lobbyRoute = server?.routes?.find(route => route.districtId === selectedDistrict && route.purpose === selectedPurpose);
     const lobbyRecommendation = lobbyRoute ? `<section class="live-lobby-route"><span class="live-eyebrow">РЕКОМЕНДУЕМЫЙ МАРШРУТ</span><strong>${escape(lobbyRoute.name)}</strong><p>${escape(lobbyRoute.description)}</p><ol>${lobbyRoute.stops.map(stop => `<li>${escape(stop)}</li>`).join('')}</ol></section>` : '';
     const districtCards = () => (server?.districts ?? []).map(district => `<button class="live-map-card theme-${district.theme} ${district.id === selectedDistrict ? 'selected' : ''}" data-live-button="district:${district.id}" aria-pressed="${district.id === selectedDistrict}" ${actionBusy || entry?.mode === 'continue' ? 'disabled' : ''}><span class="live-map-icon" aria-hidden="true">${district.id === 'village' ? '⌂' : district.theme === 'forest' ? '♠' : district.theme === 'urban' ? '▤' : '▦'}</span><span><strong>${escape(district.name)}</strong><small>${district.online} игроков · ${district.npcs} NPC</small><p>${escape(district.description)}</p></span></button>`).join('');
     const purposeCards = () => Object.entries(purposes).filter(([id])=>id !== 'quests' || selectedPurpose === 'quests').map(([id, goal]) => `<button class="live-purpose-card ${id === selectedPurpose ? 'selected' : ''}" data-live-button="purpose:${id}" aria-pressed="${id === selectedPurpose}" ${actionBusy || entry?.mode === 'continue' ? 'disabled' : ''}><strong>${raidEntryPurposeName(id as LivePurpose)}</strong><small>${goal.description}</small></button>`).join('');
-    const preparingDowned = !!snapshot && snapshot.entities.find(entity => entity.id === snapshot!.selfId)!.health <= 0;
     if (!snapshot || preparingDowned) {
       if (preparingDowned) scene.setRoute?.([]);
       world.classList.add('live-preparing'); dock.classList.add('live-entry-dock');

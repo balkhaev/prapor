@@ -45,6 +45,22 @@ function harness(run:(path:string,init:RequestInit)=>Promise<Response>,getGameId
 }
 
 describe('authoritative multiplayer sortie preparation',()=>{
+  test('preparing after a downed snapshot restores the full entry city and route preview',async()=>{
+    const {entry,state}=fixture();const route=state.world.routes!.find(route=>route.districtId==='customs'&&route.purpose==='loot')!;
+    entry.server.routes=[{id:route.id,name:route.name,description:route.description,districtId:route.districtId,purpose:route.purpose,stops:route.poiIds.map(id=>state.world.pois.find(poi=>poi.id===id)!.name)}];
+    let joined=false;
+    const h=harness(async path=>{
+      if(path==='leave')return Response.json({ok:true});
+      if(path==='entry')return Response.json(joined?{...entry,mode:'downed',fighter:{id:state.selfId,name:'Боец',x:state.entities[0]!.x,y:state.entities[0]!.y,health:0,body:state.self.body,medicine:state.self.medicine,ammo:state.self.ammo,districtId:'customs',purpose:'loot',cargo:0,lootCount:0,respawnAt:state.self.respawnAt,online:true,loadout:state.self.loadout}}:entry);
+      if(path==='join'){joined=true;return Response.json(state);}
+      return Response.json({...state,server:{...state.server,maps:state.server.maps.map(({city:_city,...map})=>map)}});
+    });
+    h.mode.show();await h.settle();h.overlay.click('join');await h.settle();
+    state.entities[0]!.health=0;state.self.body=createHealth(0);state.self.respawnAt=state.now+1000;
+    h.firePoll();await h.settle();
+    expect(h.overlay.innerHTML).toContain('class="entry-city"');expect(h.overlay.innerHTML).toContain(route.name);
+    expect(h.dock.innerHTML).toContain('<h2>Периметр 01</h2>');expect(h.calls.some(call=>call.path==='action')).toBe(false);
+  });
   test('automatic sortie reads server intent and sends pause, resume, route and recall once without replay during polling',async()=>{
     const {entry,state}=fixture();const route=state.world.routes!.find(route=>route.purpose==='loot'&&route.districtId==='customs')!;
     state.self.automation={enabled:true,stage:'route',goal:'Идёт к первому ориентиру',targetId:null,target:null,routeId:route.id,routeName:route.name,stopIndex:0,stopCount:route.poiIds.length,reason:null,startedAt:state.now,completedAt:0};
