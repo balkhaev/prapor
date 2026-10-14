@@ -12,7 +12,7 @@ export interface WorldPlanReport {
 
 /** Authoring measurements use the same four-direction movement as the server, without actors. */
 export function analyseWorldPlan(world: LiveWorld): WorldPlanReport {
-  if (!Number.isInteger(world.width) || !Number.isInteger(world.height) || world.width < 1 || world.height < 1 || world.width > 256 || world.height > 256) throw new Error('Invalid planning dimensions');
+  if (!Number.isInteger(world.width) || !Number.isInteger(world.height) || world.width < 1 || world.height < 1 || world.width > 512 || world.height > 512) throw new Error('Invalid planning dimensions');
   const cells = world.width * world.height, blocked = new Uint8Array(cells);
   const key = (point: LivePoint): number => point.y * world.width + point.x;
   const inside = (point: LivePoint): boolean => Number.isInteger(point.x) && Number.isInteger(point.y) && point.x >= 0 && point.y >= 0 && point.x < world.width && point.y < world.height;

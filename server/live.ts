@@ -7,6 +7,7 @@ import { LIVE_MAPS } from "../src/game/live-maps";
 import { createLiveNavigation } from "./live-navigation";
 import { createLiveSortie, type LiveSortiePlan } from './live-autobattle';
 import { migratedContainerAnchor, migratedLootCooldownKey } from "./live-world-migration";
+import { migrateExpandedLiveCoordinates } from './live-coordinate-migration';
 import { BODY_PARTS, BODY_PART_LABELS, TREATMENT_DURATION_MS, TREATMENT_LABELS, advanceBleeding, applyHit, canTreat, completeTreatment, createHealth, createMedicalInventory, healthPercent, injuryEffects, isAlive, isStable, parseHealth, parseMedicalInventory, selectTreatment, type BodyPart, type HealthState, type TreatmentType } from "../src/game/health";
 import { type LootModel } from "../src/game/loot";
 import { getLiveLootSource, getLiveNamedLootPool } from '../src/game/live-loot-pool';
@@ -208,6 +209,7 @@ export function createLiveService(options: LiveOptions): LiveService {
     CREATE INDEX IF NOT EXISTS live_outbox_pending ON live_economy_outbox(acknowledged,identity);`);
   if (!db.query<{ name: string }, []>("PRAGMA table_info(live_economy_outbox)").all().some(column => column.name === "attempts"))
     db.exec("ALTER TABLE live_economy_outbox ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0");
+  migrateExpandedLiveCoordinates(db, maps.get(DEFAULT_MAP)!);
   const players = new Map<string, Participant>(), scavs = new Map<string, Scav>(), drops = new Map<string, Drop>();
   const bossArenas = new Map(getLiveBossArenas(maps.get(DEFAULT_MAP)!).map(arena => [arena.bossId, arena]));
   let preparedBossCredits: BossKillCredit[] = [];

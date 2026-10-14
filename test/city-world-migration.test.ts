@@ -9,6 +9,7 @@ import { LiveEconomyError, type EconomyLoot, type LiveDelivery, type LiveEconomy
 import { getLiveMap, isLiveWalkable } from '../src/game/live-maps';
 import { createHealth, createMedicalInventory, type HealthState } from '../src/game/health';
 import type { LivePoint, LiveSnapshot } from '../src/game/live';
+import { LIVE_WORLD_OFFSET, LIVE_GENERATOR_VERSION } from '../src/game/world-generation';
 
 const ORIGIN = 'https://game.delopusk.ru';
 const G4_ANCHOR = /^poi-(?:[0-9]|10|11)-[0-3]-[a-z]+-\d+$/;
@@ -22,6 +23,7 @@ interface StoredWorld { version: number; geometryVersion: string; drops: StoredD
 let directory: string, dbPath: string, service: LiveService, time: number, blocked: boolean, interrupted: boolean;
 let profiles: Map<string, Session>, deliveries: Map<string, LiveDelivery>;
 const map = getLiveMap('perimeter');
+const previousPoint = (point: LivePoint): LivePoint => ({ x: point.x - LIVE_WORLD_OFFSET, y: point.y - LIVE_WORLD_OFFSET });
 const economy: LiveEconomy = {
   resolve(request) {
     const session = profiles.get(request.headers.get('x-prapor-game') ?? '');
@@ -88,7 +90,7 @@ beforeEach(async () => {
 });
 afterEach(async () => { service.close(); await rm(directory, { recursive: true, force: true }); });
 
-describe('verified G5 courtyard progress in G6 city architecture', () => {
+describe('verified G5 courtyard progress in expanded city architecture', () => {
   test('all 72 courtyard slots retain cycles, depleted timers and private discoveries while a wounded fighter moves out of a new wall', async () => {
     // Public search positions recorded from the shipped perimeter-g5-5dfb7f6f.
     // IDs are the durable contract; these old coordinates really move in G6.
@@ -100,12 +102,13 @@ describe('verified G5 courtyard progress in G6 city architecture', () => {
     ] as const;
     const ids = ['old-center', 'industrial', 'station', 'residential'].flatMap(quarter => Array.from({ length: 6 }, (_, site) => Array.from({ length: 3 }, (_, slot) => `city-${quarter}-${site}-slot-${slot}`)).flat());
     const anchors = ids.map(id => map.containers.find(anchor => anchor.id === id)!);
-    expect(map.generatorVersion).toBe(6); expect(anchors).toHaveLength(72); expect(anchors.every(Boolean)).toBe(true);
+    expect(map.generatorVersion).toBe(LIVE_GENERATOR_VERSION); expect(anchors).toHaveLength(72); expect(anchors.every(Boolean)).toBe(true);
     expect(map.containers.filter(anchor => anchor.id.startsWith('city-')).map(anchor => anchor.id).sort()).toEqual(ids.slice().sort());
     expect(anchors.filter((anchor, index) => anchor.x !== oldPositions[index]![0] || anchor.y !== oldPositions[index]![1]).length).toBeGreaterThanOrEqual(40);
     const oldPoint = { x: 81, y: 65 }; // Walkable inside the first G5 workshop, now a G6 exterior wall.
-    expect(map.obstacles.some(obstacle => obstacle.kind === 'wall' && oldPoint.x >= obstacle.x && oldPoint.y >= obstacle.y && oldPoint.x < obstacle.x + obstacle.width && oldPoint.y < obstacle.y + obstacle.height)).toBe(true);
-    expect(isLiveWalkable(map, oldPoint)).toBe(false);
+    const translatedPoint = { x: oldPoint.x + LIVE_WORLD_OFFSET, y: oldPoint.y + LIVE_WORLD_OFFSET };
+    expect(map.obstacles.some(obstacle => obstacle.kind === 'wall' && translatedPoint.x >= obstacle.x && translatedPoint.y >= obstacle.y && translatedPoint.x < obstacle.x + obstacle.width && translatedPoint.y < obstacle.y + obstacle.height)).toBe(true);
+    expect(isLiveWalkable(map, translatedPoint)).toBe(false);
     const first = await enter(), observer = await enter(), body = stableBody(), inBag = item('old-watch');
     const medicine = createMedicalInventory({ medkit: 19, bandage: 1, tourniquet: 0, splint: 1, painkiller: 0, surgery: 0 });
     const depleted = [anchors[1]!, anchors[22]!, anchors[71]!], deadlines = depleted.map((anchor, index) => [`container:${anchor.id}`, time + 30_000 + index * 6000] as [string, number]);
@@ -116,7 +119,7 @@ describe('verified G5 courtyard progress in G6 city architecture', () => {
         const drop = saved.drops.find(drop => drop.containerId === anchor.id)!;
         Object.assign(drop, { x: oldPositions[index]![0], y: oldPositions[index]![1], amount: 4 + index % 19, items: [item(index % 2 ? 'gold-ring' : 'coffee')], expiresAt: time + 100_000 + index * 123 });
       }
-      saved.drops = saved.drops.filter(drop => !depleted.some(anchor => drop.containerId === anchor.id));
+      saved.drops = saved.drops.filter(drop => !drop.containerId?.startsWith('fringe-') && !depleted.some(anchor => drop.containerId === anchor.id));
       cycles = structuredClone(saved.drops.filter(drop => ids.includes(drop.containerId ?? '')));
       landmarkCycles = structuredClone(saved.drops.filter(drop => G4_ANCHOR.test(drop.containerId ?? '')));
       searched = cycles.filter(drop => drop.containerId!.endsWith('-slot-0')).map(drop => drop.id);
@@ -124,7 +127,7 @@ describe('verified G5 courtyard progress in G6 city architecture', () => {
       db.query('UPDATE live_world SET state=? WHERE id=1').run(JSON.stringify(saved));
       updatePlayer(db, first.session, { ...oldPoint, body, medicine, healthAt: time, ammo: 11, cargo: 17, stash: 3, kills: 2, lootItems: [inBag], safeUntil: time + 120_000, searchedDropIds: searched,
         treatment: { type: 'splint', part: 'leftLeg', startedAt: time - 1000, endsAt: time + 3000 } });
-      updatePlayer(db, observer.session, { x: anchors[0]!.x, y: anchors[0]!.y, safeUntil: time + 120_000, searchedDropIds: [] });
+      updatePlayer(db, observer.session, { ...previousPoint(anchors[0]!), safeUntil: time + 120_000, searchedDropIds: [] });
     });
     expect(cycles).toHaveLength(69); expect(landmarkCycles).toHaveLength(192); expect(searched).toHaveLength(24);
     const known = cycles.find(drop => drop.containerId === anchors[0]!.id)!;
@@ -146,7 +149,7 @@ describe('verified G5 courtyard progress in G6 city architecture', () => {
       expect(player(first.session).searchedDropIds).toEqual(searched);
       const position = restored.entities.find(entity => entity.id === first.session.id)!;
       expect(isLiveWalkable(map, position)).toBe(true);
-      expect(Math.max(Math.abs(position.x - oldPoint.x), Math.abs(position.y - oldPoint.y))).toBeLessThanOrEqual(16);
+      expect(Math.max(Math.abs(position.x - translatedPoint.x), Math.abs(position.y - translatedPoint.y))).toBeLessThanOrEqual(16);
       if (migratedPosition) expect({ x: position.x, y: position.y }).toEqual(migratedPosition); else migratedPosition = { x: position.x, y: position.y };
       expect(restored.drops.find(drop => drop.id === known.id)).toMatchObject({ searched: true, amount: known.amount, items: known.items });
       expect(foreign.drops.find(drop => drop.id === known.id)).toMatchObject({ searched: false, amount: 0 });
@@ -196,9 +199,9 @@ describe('verified V4 progress in a denser city revision', () => {
       cycles = structuredClone(saved.drops);
       saved.lootCooldowns = spent.flatMap(anchor => [[`container:${anchor.id}`, time + 1000], [`container:${anchor.id.replace(/-[a-z]+-(\d+)$/, '-retired-$1')}`, deadline]] as Array<[string, number]>);
       db.query('UPDATE live_world SET state=? WHERE id=1').run(JSON.stringify(saved));
-      updatePlayer(db, first.session, { x: searched.x, y: searched.y, ammo: 17, cargo: 19, stash: 7, kills: 4,
+      updatePlayer(db, first.session, { ...previousPoint(searched), ammo: 17, cargo: 19, stash: 7, kills: 4,
         body, medicine, healthAt: time, safeUntil: time + 120_000, lootItems: [inBag], searchedDropIds: [knownId] });
-      updatePlayer(db, observer.session, { x: searched.x, y: searched.y, safeUntil: time + 120_000, searchedDropIds: [] });
+      updatePlayer(db, observer.session, { ...previousPoint(searched), safeUntil: time + 120_000, searchedDropIds: [] });
       db.query("INSERT INTO live_economy_outbox(id,identity,kind,payload,message) VALUES(?,?,'delivery',?,'Ожидает места')").run(parcel.id, first.session.owner, JSON.stringify(parcel));
     });
     expect(cycles).toHaveLength(190);
@@ -245,7 +248,7 @@ describe('verified V4 progress in a denser city revision', () => {
       saved.drops = saved.drops.filter(drop => drop.containerId && G4_ANCHOR.test(drop.containerId) && drop.containerId !== anchor.id);
       saved.lootCooldowns = [[`container:${anchor.id}`, time + 1000], [`container:${anchor.id.replace(/-[a-z]+-(\d+)$/, '-retired-$1')}`, deadline]];
       db.query('UPDATE live_world SET state=? WHERE id=1').run(JSON.stringify(saved));
-      updatePlayer(db, first.session, { x: anchor.x, y: anchor.y, safeUntil: time + 120_000, searchedDropIds: [] });
+      updatePlayer(db, first.session, { ...previousPoint(anchor), safeUntil: time + 120_000, searchedDropIds: [] });
     });
     // After regeneration, isolate this timer from unrelated NPC fights while preserving its real contents.
     restart(db => { const saved = world(); quietActors(saved); db.query('UPDATE live_world SET state=? WHERE id=1').run(JSON.stringify(saved)); });
@@ -275,13 +278,13 @@ describe('verified V4 progress in a denser city revision', () => {
       const saved: StoredWorld = JSON.parse(db.query<{ state: string }, []>('SELECT state FROM live_world WHERE id=1').get()!.state);
       saved.geometryVersion = 'perimeter-g4-a5e081b6'; saved.scavs = []; saved.events = [];
       saved.drops.push(
-        { id: 'g4-city-corpse', source: 'body', mapId: 'perimeter', ...blockedPoint, amount: 23, items: [corpseItem], expiresAt: time + 123_456 },
-        { id: 'g4-retired-supply', source: 'supply', mapId: 'perimeter', ...blockedPoint, amount: 17, items: [retiredItem], containerId: 'retired-city-crate-0', containerKind: 'crate', expiresAt: time + 98_765 },
+        { id: 'g4-city-corpse', source: 'body', mapId: 'perimeter', ...previousPoint(blockedPoint), amount: 23, items: [corpseItem], expiresAt: time + 123_456 },
+        { id: 'g4-retired-supply', source: 'supply', mapId: 'perimeter', ...previousPoint(blockedPoint), amount: 17, items: [retiredItem], containerId: 'retired-city-crate-0', containerKind: 'crate', expiresAt: time + 98_765 },
       );
       db.query('UPDATE live_world SET state=? WHERE id=1').run(JSON.stringify(saved));
-      updatePlayer(db, first.session, { ...blockedPoint, body, medicine, healthAt: time, ammo: 17, cargo: 25, stash: 7, kills: 4, lootItems: [inBag], safeUntil: time + 120_000,
+      updatePlayer(db, first.session, { ...previousPoint(blockedPoint), body, medicine, healthAt: time, ammo: 17, cargo: 25, stash: 7, kills: 4, lootItems: [inBag], safeUntil: time + 120_000,
         treatment: { type: 'splint', part: 'leftLeg', startedAt: time - 1000, endsAt: time + 3000 } });
-      updatePlayer(db, second.session, { ...blockedPoint, safeUntil: time + 120_000 });
+      updatePlayer(db, second.session, { ...previousPoint(blockedPoint), safeUntil: time + 120_000 });
       for (const row of db.query<{ boss_id: string; state: string }, []>('SELECT boss_id,state FROM live_bosses').all()) {
         const boss = JSON.parse(row.state);
         if (row.boss_id === 'lesnik') Object.assign(boss, { body: stableBody(), healthAt: time, bossCycle: 7, bossDeathSettled: false, respawnAt: 0 });
@@ -326,7 +329,7 @@ describe('verified V4 progress in a denser city revision', () => {
       original = structuredClone(drop);
       saved.drops = saved.drops.filter(drop => drop.containerId !== depleted.id); saved.lootCooldowns = [[`container:${depleted.id}`, deadline]];
       db.query('UPDATE live_world SET state=? WHERE id=1').run(JSON.stringify(saved));
-      updatePlayer(db, first.session, { x: known.x, y: known.y, healthAt: time, safeUntil: time + 120_000, searchedDropIds: [drop.id] });
+      updatePlayer(db, first.session, { ...previousPoint(known), healthAt: time, safeUntil: time + 120_000, searchedDropIds: [drop.id] });
     });
     for (let attempt = 0; attempt < 2; attempt++) {
       expect(world().drops.filter(drop => drop.containerId === known.id)).toEqual([{ ...original!, x: known.x, y: known.y, containerKind: known.kind }]);

@@ -9,7 +9,7 @@ import { createAccountService, type AccountService } from "../server/accounts";
 import { createHandler } from "../server/handler";
 import type { LiveCommand, LiveDistrictId, LivePurpose, LiveSnapshot, LiveStatus } from "../src/game/live";
 import { getLiveMap, hasLiveLineOfSight, isLiveWalkable } from "../src/game/live-maps";
-import { LIVE_GENERATOR_VERSION } from "../src/game/world-generation";
+import { LIVE_GENERATOR_VERSION, LIVE_WORLD_OFFSET } from "../src/game/world-generation";
 
 const ORIGIN = "https://game.delopusk.ru";
 let directory: string, dbPath: string, service: LiveService, accounts: AccountService | undefined;
@@ -170,7 +170,7 @@ describe("shared endless live server", () => {
     expect((await state(second.session)).drops.some(drop => drop.id === "drop-0")).toBe(false);
     expect((await call("action", "POST", { type: "extract" }, first.session)).status).toBe(409);
     const exit = first.state.world.extracts[0]!;
-    await act(first.session, { type: "move", ...exit }); await advance(7000, [first.session, second.session]);
+    await act(first.session, { type: "move", ...exit }); await advance(12_000, [first.session, second.session]);
     const banked = await act(first.session, { type: "extract" });
     expect(banked.self.stash).toBe(35); expect(banked.self.cargo).toBe(0);
     expect((await call("leave", "POST", {}, first.session)).status).toBe(200);
@@ -436,12 +436,12 @@ describe("shared endless live server", () => {
     const restored = (await enter(guest.session)).state;
     expect(restored.selfId).toBe(guest.session.id); expect(restored.self).toMatchObject({ ammo: 17, medkits: 1, cargo: 65, stash: 120, districtId: "depot" });
     const district = getLiveMap("perimeter").districts.find(district => district.id === "depot")!;
-    expect(restored.entities.find(entity => entity.id === guest.session.id)).toMatchObject({ x: district.x, y: district.y });
-    expect(restored.drops.find(drop => drop.id === "legacy-body")).toMatchObject({ x: district.x + 1, y: district.y, amount: 73 });
+    expect(restored.entities.find(entity => entity.id === guest.session.id)).toMatchObject({ x: LIVE_WORLD_OFFSET, y: district.y });
+    expect(restored.drops.find(drop => drop.id === "legacy-body")).toMatchObject({ x: LIVE_WORLD_OFFSET + 1, y: district.y, amount: 73 });
     expect(restored.server.bosses).toHaveLength(4);
     expect(restored.server.maps[0]!.npcs).toBe(getLiveMap("perimeter").npcSpawns.length + restored.server.bosses!.filter(boss => boss.state === 'alive').length); expect(service.healthy()).toBe(true);
   });
-  test.each(["perimeter-g2-a827381f", "perimeter-g3-b38b4b0d"])("expanding saved geometry %s preserves global body positions, private kit and durable loose cargo across two restarts", async geometryVersion => {
+  test.each(["perimeter-g2-a827381f", "perimeter-g3-b38b4b0d", "perimeter-g6-shipped"])("expanding saved geometry %s preserves translated body positions, private kit and durable loose cargo across two restarts", async geometryVersion => {
     const guest = await enter(), map = getLiveMap("perimeter"), point = { x: 0, y: 0 };
     expect(isLiveWalkable(map, point)).toBe(true);
     placePlayers([{ session: guest.session, ...point, health: 71, ammo: 17, medkits: 1, cargo: 65, stash: 120 }]);
@@ -452,16 +452,17 @@ describe("shared endless live server", () => {
     });
     const restored = (await enter(guest.session)).state;
     expect({ width: restored.world.width, height: restored.world.height, generatorVersion: restored.world.generatorVersion })
-      .toEqual({ width: 256, height: 256, generatorVersion: LIVE_GENERATOR_VERSION });
+      .toEqual({ width: 320, height: 320, generatorVersion: LIVE_GENERATOR_VERSION });
     expect(restored.world.version).toBe(map.version); expect(restored.worldVersion).toBe(map.version);
     expect(restored.self).toMatchObject({ ammo: 17, medkits: 1, cargo: 65, stash: 120 });
-    expect(restored.entities.find(entity => entity.id === guest.session.id)).toMatchObject(point);
+    const translated = { x: point.x + LIVE_WORLD_OFFSET, y: point.y + LIVE_WORLD_OFFSET };
+    expect(restored.entities.find(entity => entity.id === guest.session.id)).toMatchObject(translated);
     expect(restored.entities.find(entity => entity.id === guest.session.id)!.health).toBeCloseTo(71);
-    expect(restored.drops.find(drop => drop.id === "legacy-loose-cargo")).toMatchObject({ x: 1, y: 0, amount: 73 });
+    expect(restored.drops.find(drop => drop.id === "legacy-loose-cargo")).toMatchObject({ x: LIVE_WORLD_OFFSET + 1, y: LIVE_WORLD_OFFSET, amount: 73 });
     editStorage(() => {});
     const again = (await enter(guest.session)).state;
     expect(again.self.body).toEqual(restored.self.body); expect(again.self.medicine).toEqual(restored.self.medicine);
-    expect(again.self).toMatchObject({ ammo: 17, cargo: 65, stash: 120 }); expect(again.entities.find(entity => entity.id === guest.session.id)).toMatchObject(point);
+    expect(again.self).toMatchObject({ ammo: 17, cargo: 65, stash: 120 }); expect(again.entities.find(entity => entity.id === guest.session.id)).toMatchObject(translated);
     expect(again.drops.filter(drop => drop.id === "legacy-loose-cargo")).toHaveLength(1);
   });
 
@@ -478,9 +479,10 @@ describe("shared endless live server", () => {
       db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify(saved));
     });
     const first = (await enter(guest.session)).state, relocated = first.entities.find(entity => entity.id === guest.session.id)!;
+    const translated = { x: savedPoint.x + LIVE_WORLD_OFFSET, y: savedPoint.y + LIVE_WORLD_OFFSET };
     expect(isLiveWalkable(world, relocated)).toBe(true);
-    expect(Math.max(Math.abs(relocated.x - savedPoint.x), Math.abs(relocated.y - savedPoint.y))).toBeLessThanOrEqual(16);
-    if (isLiveWalkable(world, savedPoint) && !world.npcSpawns.some(spawn => spawn.point.x === savedPoint.x && spawn.point.y === savedPoint.y)) expect(relocated).toMatchObject(savedPoint);
+    expect(Math.max(Math.abs(relocated.x - translated.x), Math.abs(relocated.y - translated.y))).toBeLessThanOrEqual(16);
+    if (isLiveWalkable(world, translated) && !world.npcSpawns.some(spawn => spawn.point.x === translated.x && spawn.point.y === translated.y)) expect(relocated).toMatchObject(translated);
     expect(first.self).toMatchObject({ body, medicine, ammo: 17, cargo: 65, stash: 120 });
     const cargo = first.drops.find(drop => drop.id === "city-migration-cargo")!; expect(cargo).toBeDefined(); expect(cargo.amount).toBe(73); expect(isLiveWalkable(world, cargo)).toBe(true);
     for (let retry = 0; retry < 2; retry++) {
@@ -489,6 +491,31 @@ describe("shared endless live server", () => {
       expect(again.self).toMatchObject({ body, medicine, ammo: 17, cargo: 65, stash: 120 });
       expect(again.drops.filter(drop => drop.id === cargo.id)).toEqual([cargo]);
     }
+  });
+
+  test('offline fighters migrate before the new world is saved and can join later without a second coordinate shift', async () => {
+    const active = await enter(), offline = await enter(), body = createHealth(71); body.parts.leftLeg.fracture = true;
+    editStorage(db => {
+      for (const row of db.query<{ identity: string; state: string }, []>('SELECT identity,state FROM live_players').all()) {
+        const fighter = JSON.parse(row.state); Object.assign(fighter, { x: fighter.id === active.session.id ? 0 : 1, y: 0, ammo: 17, cargo: 65, stash: 120, body, healthAt: time, safeUntil: time + 120_000 });
+        db.query('UPDATE live_players SET state=? WHERE identity=?').run(JSON.stringify(fighter), row.identity);
+      }
+      const saved = JSON.parse(db.query<{ state: string }, []>('SELECT state FROM live_world').get()!.state); saved.geometryVersion = 'perimeter-g6-offline-fighter';
+      db.query('UPDATE live_world SET state=?').run(JSON.stringify(saved));
+    });
+    const first = (await enter(active.session)).state;
+    expect(first.entities.find(entity => entity.id === active.session.id)).toMatchObject({ x: LIVE_WORLD_OFFSET, y: LIVE_WORLD_OFFSET });
+    const db = new Database(dbPath, { readonly: true });
+    try {
+      const savedWorld = JSON.parse(db.query<{ state: string }, []>('SELECT state FROM live_world').get()!.state); expect(savedWorld.geometryVersion).toBe(first.worldVersion);
+      const savedOffline = db.query<{ state: string }, []>('SELECT state FROM live_players').all().map(row => JSON.parse(row.state)).find(fighter => fighter.id === offline.session.id)!;
+      expect(savedOffline).toMatchObject({ x: LIVE_WORLD_OFFSET + 1, y: LIVE_WORLD_OFFSET, ammo: 17, cargo: 65, stash: 120, body });
+    } finally { db.close(); }
+    // This fighter was not loaded by the application during either G7 startup.
+    editStorage(() => {}); editStorage(() => {});
+    const late = (await enter(offline.session)).state;
+    expect(late.entities.find(entity => entity.id === offline.session.id)).toMatchObject({ x: LIVE_WORLD_OFFSET + 1, y: LIVE_WORLD_OFFSET });
+    expect(late.self).toMatchObject({ body, ammo: 17, cargo: 65, stash: 120 });
   });
 
   test("container search uses a server deadline, survives confirmed discovery across restart and permits only one shared pickup", async () => {

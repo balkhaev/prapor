@@ -45,9 +45,9 @@ function inspect(world: LiveMapDefinition): void {
   }
   for (const district of world.districts) {
     const pois = world.pois.filter(poi => poi.districtId === district.id);
-    expect(pois).toHaveLength(18);
+    expect(pois).toHaveLength(23);
     expect(pois.some(poi => poi.danger === 3)).toBe(true);
-    expect(world.containers.filter(container => pois.some(poi => poi.id === container.poiId))).toHaveLength(66);
+    expect(world.containers.filter(container => pois.some(poi => poi.id === container.poiId))).toHaveLength(86);
     // Count actual walking steps to the first find, including doors and detours.
     for (const spawn of district.spawns) {
       const distances = new Int32Array(blocked.length).fill(-1), frontier = [spawn.y * world.width + spawn.x]; distances[frontier[0]!] = 0;
@@ -88,7 +88,7 @@ function inspect(world: LiveMapDefinition): void {
   // The city is a continuous place with connected streets and usable architecture,
   // while every previously shipped landmark has moved out to the surrounding ring.
   const city = world.city!;
-  expect(city).toMatchObject({ name: 'Ольховск', x: 56, y: 56, width: 144, height: 144 });
+  expect(city).toMatchObject({ name: 'Ольховск', x: 88, y: 88, width: 144, height: 144 });
   expect(city.quarters).toHaveLength(4);
   expect(new Set(city.quarters.map(quarter => quarter.id)).size).toBe(4);
   const cityPois = world.pois.filter(poi => /^poi-(?:8|9|10|11)-[0-3]$/.test(poi.id));
@@ -222,7 +222,7 @@ function inspect(world: LiveMapDefinition): void {
   }
   expect(loops).toBeGreaterThan(0);
   // Streaming partitions index intersecting content; they do not dictate its placement.
-  const chunks = worldChunks(world); expect(chunks).toHaveLength(64);
+  const chunks = worldChunks(world); expect(chunks).toHaveLength(100);
   for (const chunk of chunks) {
     const bounds = { x: chunk.x * world.chunkSize, y: chunk.y * world.chunkSize, width: chunk.width, height: chunk.height };
     expect(chunk.poiIds.slice().sort()).toEqual(world.pois.filter(poi => intersects(poi, bounds)).map(poi => poi.id).sort());
@@ -256,14 +256,14 @@ describe('deterministic world generation', () => {
     expect(second).toEqual(first); expect(second).not.toBe(first);
     const other = generateLiveWorld('another-seed');
     expect(other.version).not.toBe(first.version); expect(other.obstacles).not.toEqual(first.obstacles);
-    expect(first).toMatchObject({ id: 'perimeter', width: 256, height: 256, chunkSize: 32 });
+    expect(first).toMatchObject({ id: 'perimeter', width: 320, height: 320, chunkSize: 32 });
     expect(first.generatorVersion).toBeGreaterThan(0);
   });
   test('POI footprints and placement are independent of streaming chunk origins', () => {
     for (const seed of ['organic-layout', 'another-layout', 'district-roads']) {
       const world = generateLiveWorld(seed);
-      expect(world.generatorVersion).toBe(6);
-      expect(world.pois).toHaveLength(72); expect(world.containers).toHaveLength(264); expect(world.npcSpawns).toHaveLength(152);
+      expect(world.generatorVersion).toBe(7);
+      expect(world.pois).toHaveLength(92); expect(world.containers).toHaveLength(344); expect(world.npcSpawns).toHaveLength(192);
       expect(new Set(world.pois.map(poi => `${poi.width}x${poi.height}`)).size).toBeGreaterThanOrEqual(4);
       expect(new Set(world.pois.map(poi => poi.x % world.chunkSize)).size).toBeGreaterThanOrEqual(5);
       expect(new Set(world.pois.map(poi => poi.y % world.chunkSize)).size).toBeGreaterThanOrEqual(5);
@@ -284,7 +284,7 @@ describe('deterministic world generation', () => {
   });
   test('architecture validation rejects a blocked doorway and a passage that jumps through its wall', () => {
     const world = generateLiveWorld();
-    expect(validateGeneratedWorld(world).containers).toBe(264);
+    expect(validateGeneratedWorld(world).containers).toBe(344);
     const firstBuilding = world.citySites![0]!.buildings[0]!, door = firstBuilding.entrances[0]!;
     const sideDoors = firstBuilding.entrances[0]!.y === firstBuilding.entrances[1]!.y;
     const sealed = structuredClone(world);
