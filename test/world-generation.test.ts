@@ -113,7 +113,8 @@ function inspect(world: LiveMapDefinition): void {
     for (const building of site.buildings) {
       expect(building.width).toBeGreaterThanOrEqual(5); expect(building.height).toBeGreaterThanOrEqual(5);
       expect(building.entrances).toHaveLength(2);
-      for (const door of building.entrances) for (const at of [door, { x: door.x + 1, y: door.y }]) expect(blocked[at.y * world.width + at.x]).toBe(0);
+      const sideDoors = building.entrances[0]!.y === building.entrances[1]!.y;
+      for (const door of building.entrances) for (const at of [door, { x: door.x + (sideDoors ? 0 : 1), y: door.y + (sideDoors ? 1 : 0) }]) expect(blocked[at.y * world.width + at.x]).toBe(0);
       // An advertised interior must contain reachable floor, not a solid roof rectangle.
       const entrance = building.entrances[0]!, floor = new Set<number>([entrance.y * world.width + entrance.x]), queue = [entrance];
       for (let at = 0; at < queue.length; at++) {
@@ -123,7 +124,11 @@ function inspect(world: LiveMapDefinition): void {
           if (inside(next, building) && !blocked[key] && !floor.has(key)) { floor.add(key); queue.push(next); }
         }
       }
-      expect(floor.size).toBeGreaterThanOrEqual((building.width - 2) * (building.height - 2) - 1);
+      let freeCells = 0;
+      for (let y = building.y; y < building.y + building.height; y++) for (let x = building.x; x < building.x + building.width; x++) if (!blocked[y * world.width + x]) freeCells++;
+      // Authored dressers, counters and shelving occupy real cells. Every remaining
+      // floor cell, including both halves of the two doors, must be reachable.
+      expect(floor.size).toBe(freeCells);
       expect(floor.has(building.entrances[1]!.y * world.width + building.entrances[1]!.x)).toBe(true);
       for (const anchor of anchors.filter(anchor => inside(anchor, building))) expect(floor.has(anchor.y * world.width + anchor.x)).toBe(true);
     }
@@ -257,7 +262,7 @@ describe('deterministic world generation', () => {
   test('POI footprints and placement are independent of streaming chunk origins', () => {
     for (const seed of ['organic-layout', 'another-layout', 'district-roads']) {
       const world = generateLiveWorld(seed);
-      expect(world.generatorVersion).toBe(5);
+      expect(world.generatorVersion).toBe(6);
       expect(world.pois).toHaveLength(72); expect(world.containers).toHaveLength(264); expect(world.npcSpawns).toHaveLength(152);
       expect(new Set(world.pois.map(poi => `${poi.width}x${poi.height}`)).size).toBeGreaterThanOrEqual(4);
       expect(new Set(world.pois.map(poi => poi.x % world.chunkSize)).size).toBeGreaterThanOrEqual(5);
@@ -280,13 +285,19 @@ describe('deterministic world generation', () => {
   test('architecture validation rejects a blocked doorway and a passage that jumps through its wall', () => {
     const world = generateLiveWorld();
     expect(validateGeneratedWorld(world).containers).toBe(264);
-    const door = world.citySites![0]!.buildings[0]!.entrances[0]!;
+    const firstBuilding = world.citySites![0]!.buildings[0]!, door = firstBuilding.entrances[0]!;
+    const sideDoors = firstBuilding.entrances[0]!.y === firstBuilding.entrances[1]!.y;
     const sealed = structuredClone(world);
-    sealed.obstacles.push({ ...door, width: 2, height: 1, kind: 'wall' });
+    sealed.obstacles.push({ ...door, width: sideDoors ? 1 : 2, height: sideDoors ? 2 : 1, kind: 'wall' });
     expect(() => validateGeneratedWorld(sealed)).toThrow('Invalid usable city architecture');
     const shortcut = structuredClone(world), building = shortcut.citySites![0]!.buildings[0]!;
     // The two endpoints are clear, while the segment crosses the closed side wall.
-    shortcut.citySites![0]!.passages[0] = [{ x: building.x - 1, y: building.y + 2 }, { x: building.x + 1, y: building.y + 2 }];
+    const wallCrossings: Array<{ wall: LivePoint; path: LivePoint[] }> = [];
+    for (let y = building.y + 1; y < building.y + building.height - 1; y++) for (const x of [building.x, building.x + building.width - 1]) wallCrossings.push({ wall: { x, y }, path: [{ x: x - 1, y }, { x: x + 1, y }] });
+    for (let x = building.x + 1; x < building.x + building.width - 1; x++) for (const y of [building.y, building.y + building.height - 1]) wallCrossings.push({ wall: { x, y }, path: [{ x, y: y - 1 }, { x, y: y + 1 }] });
+    const crossing = wallCrossings.find(candidate => !isLiveWalkable(world, candidate.wall) && candidate.path.every(point => isLiveWalkable(world, point)))!;
+    expect(crossing).toBeDefined();
+    shortcut.citySites![0]!.passages[0] = crossing.path;
     expect(() => validateGeneratedWorld(shortcut)).toThrow('City passage crosses a wall');
   });
   test('all 192 shipped default containers keep their logical identities, kinds and loot categories', () => {

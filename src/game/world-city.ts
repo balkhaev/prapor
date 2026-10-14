@@ -46,15 +46,45 @@ const LOOT_PROFILES: Record<LootProfile, { kinds: readonly LiveContainerAnchor['
   baggage: { kinds: ['duffel', 'jacket', 'crate'], tables: ['mixed', 'valuables', 'provisions'] },
 };
 
-function openBuilding(rect: Rect, id: string, name: string, kind: LiveCityBuilding['kind']): { building: LiveCityBuilding; walls: LiveObstacle[]; floor: LivePoint } {
-  // Both doorways are two cells wide. The straight indoor lane is at least three cells wide.
-  const doorX = rect.x + Math.floor((rect.width - 2) / 2);
-  const left = doorX - rect.x, right = rect.width - left - 2;
-  const walls = [wall(rect.x, rect.y, left, 1, name), wall(doorX + 2, rect.y, right, 1),
-    wall(rect.x, rect.y + rect.height - 1, left, 1), wall(doorX + 2, rect.y + rect.height - 1, right, 1),
-    wall(rect.x, rect.y + 1, 1, rect.height - 2), wall(rect.x + rect.width - 1, rect.y + 1, 1, rect.height - 2)];
-  return { building: { ...rect, id, name, kind, entrances: [point(doorX, rect.y), point(doorX, rect.y + rect.height - 1)] }, walls, floor: point(doorX, rect.y + Math.floor(rect.height / 2)) };
+function openBuilding(rect: Rect, id: string, name: string, kind: LiveCityBuilding['kind'], sideDoors: boolean): { building: LiveCityBuilding; walls: LiveObstacle[]; floor: LivePoint } {
+  // Opposing two-cell doors connect a real, at least three-cell-wide indoor lane.
+  const door = sideDoors ? rect.y + Math.floor((rect.height - 2) / 2) : rect.x + Math.floor((rect.width - 2) / 2);
+  const before = door - (sideDoors ? rect.y : rect.x), after = (sideDoors ? rect.height : rect.width) - before - 2;
+  const walls = sideDoors
+    ? [wall(rect.x, rect.y, 1, before, name), wall(rect.x, door + 2, 1, after), wall(rect.x + rect.width - 1, rect.y, 1, before), wall(rect.x + rect.width - 1, door + 2, 1, after),
+      wall(rect.x + 1, rect.y, rect.width - 2, 1), wall(rect.x + 1, rect.y + rect.height - 1, rect.width - 2, 1)]
+    : [wall(rect.x, rect.y, before, 1, name), wall(door + 2, rect.y, after, 1), wall(rect.x, rect.y + rect.height - 1, before, 1), wall(door + 2, rect.y + rect.height - 1, after, 1),
+      wall(rect.x, rect.y + 1, 1, rect.height - 2), wall(rect.x + rect.width - 1, rect.y + 1, 1, rect.height - 2)];
+  const entrances = sideDoors ? [point(rect.x, door), point(rect.x + rect.width - 1, door)] : [point(door, rect.y), point(door, rect.y + rect.height - 1)];
+  return { building: { ...rect, id, name, kind, entrances }, walls, floor: sideDoors ? point(rect.x + Math.floor(rect.width / 2), door) : point(door, rect.y + Math.floor(rect.height / 2)) };
 }
+
+/** Small street lots are divided into addresses, with three-cell delivery/service alleys. */
+function frontageSegments(start: number, length: number, maximum: number): Array<{ start: number; length: number }> {
+  const inset = length >= 7 ? 1 : 0, usable = length - inset * 2;
+  if (usable < 5) return [];
+  const count = Math.min(Math.floor((usable + 3) / 8), Math.ceil((usable + 3) / (maximum + 3)));
+  const body = usable - (count - 1) * 3, base = Math.floor(body / count), extra = body % count;
+  let cursor = start + inset;
+  return Array.from({ length: count }, (_, index) => { const size = base + (index < extra ? 1 : 0), result = { start: cursor, length: size }; cursor += size + 3; return result; });
+}
+
+function architecture(quarter: number, kind: LiveCityBuilding['kind'], address: number, rect: Rect): Pick<LiveCityBuilding, 'floors' | 'roof' | 'facade'> {
+  if (quarter === 0) return { floors: kind === 'apartment' ? 3 : 2, roof: 'gable', facade: address % 3 ? 'plaster' : 'brick' };
+  if (quarter === 1) return { floors: kind === 'service' ? 2 : 1, roof: kind === 'workshop' && address % 2 === 0 ? 'sawtooth' : 'flat', facade: kind === 'garage' ? 'metal' : 'brick' };
+  if (quarter === 2) return { floors: kind === 'apartment' ? 3 : 1, roof: kind === 'shop' || kind === 'apartment' ? 'gable' : 'flat', facade: kind === 'garage' ? 'metal' : 'brick' };
+  const apartmentBlock = kind === 'apartment' && rect.width * rect.height >= 50 && address % 2 === 1;
+  return { floors: kind === 'apartment' ? apartmentBlock ? 4 : 2 : 1, roof: apartmentBlock ? 'flat' : 'gable', facade: apartmentBlock ? 'panel' : 'plaster' };
+}
+
+const ADDRESS_NAMES: Record<LiveCityBuilding['kind'], readonly string[]> = {
+  apartment: ['Жилой дом', 'Доходный дом', 'Дом со двором', 'Служебный дом'],
+  shop: ['Угловая лавка', 'Продуктовая лавка', 'Магазин тканей', 'Мелочная лавка'],
+  workshop: ['Ремонтная мастерская', 'Столярная мастерская', 'Слесарный цех', 'Мастерская при дворе'],
+  garage: ['Гаражный бокс', 'Автомастерская', 'Служебный гараж', 'Гараж снабжения'],
+  service: ['Контора', 'Служебный корпус', 'Диспетчерская', 'Хозяйственный корпус'],
+};
+const FURNISHINGS: Record<LiveCityBuilding['kind'], string> = { apartment: 'Комод', shop: 'Торговый прилавок', workshop: 'Верстак', garage: 'Стеллаж с инструментами', service: 'Письменный стол' };
 
 function localRoute(site: Rect, from: LivePoint, to: LivePoint, obstacles: LiveObstacle[]): LivePoint[] {
   const total = site.width * site.height, blocked = new Uint8Array(total), parents = new Int32Array(total).fill(-1), queue = new Int32Array(total);
@@ -116,18 +146,32 @@ export function generateCitySites(city: LiveCityRegion, worldWidth: number, stre
       const buildings: LiveCityBuilding[] = [], siteWalls: LiveObstacle[] = [], indoor: LivePoint[] = [];
       for (let yi = 1; yi < ys.length; yi++) for (let xi = 1; xi < xs.length; xi++) {
         const lot: Rect = { x: xs[xi - 1]!, y: ys[yi - 1]!, width: xs[xi]! - xs[xi - 1]!, height: ys[yi]! - ys[yi - 1]! };
-        if (lot.width < 7 || lot.height < 7 || streetMask[lot.y * worldWidth + lot.x]) continue;
-        const insetX = lot.width >= 9 ? 2 : 1, insetY = lot.height >= 9 ? 2 : 1;
-        const width = Math.min(13, lot.width - insetX * 2), height = Math.min(11, lot.height - insetY * 2);
-        if (width < 5 || height < 5) continue;
-        const buildingRect = { x: lot.x + insetX, y: lot.y + insetY + ((slot + buildings.length) % 2 && lot.height - insetY * 2 > height ? 1 : 0), width, height };
-        let street = false;
-        for (let y = buildingRect.y; !street && y < buildingRect.y + height; y++) for (let x = buildingRect.x; x < buildingRect.x + width; x++) if (streetMask[y * worldWidth + x]) { street = true; break; }
-        if (street) continue;
-        const built = openBuilding(buildingRect, `${id}-building-${buildings.length}`, `${name}: ${buildingKind === 'shop' ? 'лавка' : buildingKind === 'garage' ? 'гараж' : buildingKind === 'workshop' ? 'мастерская' : buildingKind === 'service' ? 'служебный корпус' : 'дом'}`, buildingKind);
-        buildings.push(built.building); siteWalls.push(...built.walls); indoor.push(built.floor);
-        // Cover beside the indoor lane cannot seal either of the opposing doors.
-        if (width >= 7 && height >= 7) siteWalls.push({ x: buildingRect.x + 1, y: buildingRect.y + Math.floor(height / 2), width: 1, height: 1, kind: 'barricade', label: 'Верстак' });
+        if (lot.width < 5 || lot.height < 5 || streetMask[lot.y * worldWidth + lot.x]) continue;
+        // Historic shops face the shared courtyard; factory and station yards use
+        // deeper halls, while southern houses have compact plots and outbuildings.
+        const [maxWidth, maxHeight] = quarterIndex === 0 ? [8, 9] : quarterIndex === 1 ? [12, 11] : quarterIndex === 2 ? [9, 9] : [8, 8];
+        const columns = frontageSegments(lot.x, lot.width, maxWidth!), rows = frontageSegments(lot.y, lot.height, maxHeight!);
+        for (const y of rows) for (const x of columns) {
+          const buildingRect: Rect = { x: x.start, y: y.start, width: x.length, height: y.length };
+          let street = false;
+          for (let ny = buildingRect.y; !street && ny < buildingRect.y + buildingRect.height; ny++) for (let nx = buildingRect.x; nx < buildingRect.x + buildingRect.width; nx++) if (streetMask[ny * worldWidth + nx]) { street = true; break; }
+          if (street) continue;
+          const address = buildings.length;
+          const localKind: LiveCityBuilding['kind'] = address === 0 ? buildingKind
+            : quarterIndex === 0 ? (kind === 'arcade' && address % 3 ? 'shop' : address % 2 ? 'apartment' : 'workshop')
+              : quarterIndex === 1 ? (address % 3 === 2 ? 'service' : slot === 1 || address % 3 === 1 ? 'garage' : 'workshop')
+                : quarterIndex === 2 ? (kind === 'arcade' ? 'shop' : address % 3 === 1 ? 'service' : address % 3 === 2 ? 'garage' : buildingKind)
+                  : (address % 3 === 2 ? 'garage' : kind === 'courtyard' ? 'apartment' : address % 3 === 1 ? 'service' : buildingKind);
+          const localName = `${name}: ${ADDRESS_NAMES[localKind][address % ADDRESS_NAMES[localKind].length]} ${address + 1}`;
+          const built = openBuilding(buildingRect, `${id}-building-${address}`, localName, localKind, vertical);
+          Object.assign(built.building, architecture(quarterIndex, localKind, address, buildingRect));
+          buildings.push(built.building); siteWalls.push(...built.walls); indoor.push(built.floor);
+          // A counter, dresser or workbench stays against the side wall, outside
+          // the straight door lane. Even the smallest room has a walkable interior.
+          if (vertical ? buildingRect.height >= 7 : buildingRect.width >= 7) siteWalls.push({ x: buildingRect.x + 1, y: buildingRect.y + 1, width: 1, height: 1, kind: 'barricade', label: FURNISHINGS[localKind] });
+          if (buildingRect.width >= 7 && buildingRect.height >= 7) siteWalls.push({ x: buildingRect.x + buildingRect.width - 2, y: buildingRect.y + buildingRect.height - 2,
+            width: 1, height: 1, kind: 'barricade', label: localKind === 'apartment' ? 'Кухонный шкаф' : localKind === 'shop' ? 'Товарный стеллаж' : 'Хозяйственный стеллаж' });
+        }
       }
       if (!buildings.length) throw new Error(`City frontage lacks a usable room: ${id}`);
       // Closed residential/service wings are real solid cover, paired with the open
@@ -154,7 +198,9 @@ export function generateCitySites(city: LiveCityRegion, worldWidth: number, stre
       sites.push({ ...rect, id, poiId: id, quarterId: quarter.id, name, kind, courtyard: court, buildings, passages });
       zones.push({ ...rect, name, terrain: 'concrete', danger });
       obstacles.push(...siteWalls);
-      const first = indoor[0]!, second = indoor.length > 1 ? indoor[1]! : point(first.x + 1, first.y);
+      // Existing three slot identities stay fixed; the two indoor searches use
+      // separate addresses across the yard instead of crowding one frontage.
+      const first = indoor[0]!, second = indoor.length > 1 ? indoor.at(-1)! : point(first.x + 1, first.y);
       const { kinds: anchorKinds, tables } = LOOT_PROFILES[lootProfile];
       [first, second, courtyardPoint].forEach((at, index) => containers.push({ ...at, id: `${id}-slot-${index}`, poiId: id, kind: anchorKinds[index]!, lootTable: tables[index]!, searchMs: index === 1 ? 4000 : 3000 }));
       const home = vertical ? point(axisX + 1, courtyardPoint.y) : point(courtyardPoint.x, laneY + (laneY + 1 < rect.y + rect.height ? 1 : -1));

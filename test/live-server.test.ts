@@ -9,6 +9,7 @@ import { createAccountService, type AccountService } from "../server/accounts";
 import { createHandler } from "../server/handler";
 import type { LiveCommand, LiveDistrictId, LivePurpose, LiveSnapshot, LiveStatus } from "../src/game/live";
 import { getLiveMap, hasLiveLineOfSight, isLiveWalkable } from "../src/game/live-maps";
+import { LIVE_GENERATOR_VERSION } from "../src/game/world-generation";
 
 const ORIGIN = "https://game.delopusk.ru";
 let directory: string, dbPath: string, service: LiveService, accounts: AccountService | undefined;
@@ -451,7 +452,7 @@ describe("shared endless live server", () => {
     });
     const restored = (await enter(guest.session)).state;
     expect({ width: restored.world.width, height: restored.world.height, generatorVersion: restored.world.generatorVersion })
-      .toEqual({ width: 256, height: 256, generatorVersion: 5 });
+      .toEqual({ width: 256, height: 256, generatorVersion: LIVE_GENERATOR_VERSION });
     expect(restored.world.version).toBe(map.version); expect(restored.worldVersion).toBe(map.version);
     expect(restored.self).toMatchObject({ ammo: 17, medkits: 1, cargo: 65, stash: 120 });
     expect(restored.entities.find(entity => entity.id === guest.session.id)).toMatchObject(point);

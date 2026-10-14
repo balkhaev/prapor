@@ -38,6 +38,15 @@ export interface LiveCityBuilding extends LivePoint {
   kind: 'apartment' | 'shop' | 'workshop' | 'garage' | 'service';
   /** Authored gaps in collision walls, not a client movement permission. */
   entrances: LivePoint[];
+  floors?: 1 | 2 | 3 | 4;
+  roof?: 'gable' | 'flat' | 'sawtooth';
+  facade?: 'brick' | 'plaster' | 'panel' | 'metal';
+}
+export const LIVE_PROP_KINDS = ['car', 'van', 'truck', 'bus', 'lamp', 'dumpster', 'pallet', 'crate', 'barrel', 'bench', 'planter', 'shed', 'sign', 'fence', 'shrub', 'tree', 'logs', 'railcar', 'transformer', 'playground', 'garden', 'kiosk', 'market-stall', 'workbench', 'hydrant', 'power-pole', 'bollard'] as const;
+/** Public set dressing; blocking footprints have a matching authoritative obstacle. */
+export interface LiveWorldProp extends LivePoint {
+  id: string; kind: typeof LIVE_PROP_KINDS[number]; width: number; height: number;
+  orientation: 'x' | 'y'; variant: number; blocking: boolean;
 }
 /** Public architecture only. Loot contents and nearby actors remain server-owned. */
 export interface LiveCitySite extends LivePoint {
@@ -60,6 +69,7 @@ export interface LiveObstacle extends LivePoint {
   width: number; height: number;
   kind?: "building" | "wall" | "container" | "barricade" | "tree" | "water";
   label?: string;
+  propId?: string;
 }
 export interface LiveZone extends LivePoint {
   width: number; height: number; name: string; terrain: LiveTerrain; danger: 1 | 2 | 3;
@@ -94,6 +104,7 @@ export interface LiveWorld {
   city?: LiveCityRegion;
   /** Available from V5; reused with the immutable world, never repeated in status. */
   citySites?: LiveCitySite[];
+  props?: LiveWorldProp[];
 }
 export interface LiveDistrict extends LivePoint {
   id: LiveDistrictId; name: string; description: string;

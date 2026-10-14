@@ -1,11 +1,12 @@
-import { LIVE_TERRAIN_CODES, type LiveCityRegion, type LiveContainerAnchor, type LiveContainerKind, type LiveDistrict, type LiveDistrictId, type LiveObstacle, type LivePoi, type LivePoint, type LivePurpose, type LiveWorld, type LiveWorldRoute, type LiveZone } from './live';
+import { LIVE_TERRAIN_CODES, LIVE_PROP_KINDS, type LiveCityRegion, type LiveContainerAnchor, type LiveContainerKind, type LiveDistrict, type LiveDistrictId, type LiveObstacle, type LivePoi, type LivePoint, type LivePurpose, type LiveWorld, type LiveWorldRoute, type LiveZone } from './live';
 import type { LiveMapDefinition, LiveNpcSpawn } from './live-maps';
 import { cityStreetPlan, generateLandscape } from './world-landscape';
 import { prefabObstacles } from './world-prefabs';
 import { BOSSES } from './bosses';
 import { cityLandmarkOrigin, generateCitySites } from './world-city';
+import { generateWorldProps } from './world-props';
 
-export const LIVE_GENERATOR_VERSION = 5;
+export const LIVE_GENERATOR_VERSION = 6;
 export const LIVE_WORLD_SEED = 'perimeter-alpha-01';
 export const LIVE_CHUNK_SIZE = 32;
 export const LIVE_WORLD_SIZE = 256;
@@ -57,10 +58,10 @@ export const WORLD_TEMPLATES: readonly WorldTemplate[] = [
 ];
 
 export const LIVE_DISTRICTS: readonly LiveDistrict[] = [
-  { id: 'customs', name: 'Таможня', description: 'Северо-западные терминалы у въезда в Ольховск.', x: 0, y: 0, width: 128, height: 128, theme: 'industrial', spawns: [p(6, 6)], labelPoint: p(32, 32) },
-  { id: 'sawmill', name: 'Лесопилка', description: 'Лесные кордоны и цеха на северо-восточной окраине.', x: 128, y: 0, width: 128, height: 128, theme: 'forest', spawns: [p(249, 6)], labelPoint: p(224, 32) },
-  { id: 'depot', name: 'Депо', description: 'Юго-западная железнодорожная окраина и грузовые дворы.', x: 0, y: 128, width: 128, height: 128, theme: 'urban', spawns: [p(6, 249)], labelPoint: p(32, 224) },
-  { id: 'village', name: 'Посёлок', description: 'Юго-восточные дома, поля и речные переправы.', x: 128, y: 128, width: 128, height: 128, theme: 'urban', spawns: [p(249, 249)], labelPoint: p(224, 224) },
+  { id: 'customs', name: 'Таможня', description: 'Терминалы, грузовые дворы и подъездной тракт к старому центру.', x: 0, y: 0, width: 128, height: 128, theme: 'industrial', spawns: [p(6, 6)], labelPoint: p(32, 32) },
+  { id: 'sawmill', name: 'Лесопилка', description: 'Цеха лесопилки, лесные кордоны, штабеля и просеки у реки.', x: 128, y: 0, width: 128, height: 128, theme: 'forest', spawns: [p(249, 6)], labelPoint: p(224, 32) },
+  { id: 'depot', name: 'Депо', description: 'Железнодорожные платформы, отстойники вагонов и служебные дворы.', x: 0, y: 128, width: 128, height: 128, theme: 'urban', spawns: [p(6, 249)], labelPoint: p(32, 224) },
+  { id: 'village', name: 'Посёлок', description: 'Жилые дворы с садами, местный рынок, школа и речные переправы.', x: 128, y: 128, width: 128, height: 128, theme: 'urban', spawns: [p(249, 249)], labelPoint: p(224, 224) },
 ];
 export const LIVE_CITY: LiveCityRegion = { name: 'Ольховск', x: 56, y: 56, width: 144, height: 144, quarters: [
   { id: 'old-center', name: 'Старый центр', x: 56, y: 56, width: 72, height: 72 },
@@ -273,8 +274,10 @@ export function generateLiveWorld(seed = LIVE_WORLD_SEED): LiveMapDefinition {
     if (point.x < 2 || point.y < 10 || point.x > LIVE_WORLD_SIZE - 3 || point.y > LIVE_WORLD_SIZE - 3 || intersects({ ...point, width: 1, height: 1 }, city, 2) || point.x >= 203 && point.x <= 223 && point.y >= 42 || pois.some(poi => intersects({ ...point, width: 1, height: 1 }, poi, 2)) || extracts.some(exit => Math.hypot(exit.x - point.x, exit.y - point.y) < 8) || obstacles.some(wall => intersects({ ...point, width: 1, height: 1 }, wall, 1))) continue;
     obstacles.push(cover(point.x, point.y, 1, 1, 'tree'));
   }
-  const landscape = generateLandscape({ width: LIVE_WORLD_SIZE, height: LIVE_WORLD_SIZE, obstacles, pois, extracts, city }, seed);
+  const landscape = generateLandscape({ width: LIVE_WORLD_SIZE, height: LIVE_WORLD_SIZE, obstacles, pois, extracts, city, citySites: neighbourhoods.sites }, seed);
   obstacles.push(...landscape.water);
+  const scenery = generateWorldProps({ width: LIVE_WORLD_SIZE, height: LIVE_WORLD_SIZE, obstacles, pois, extracts, city, districts, citySites: neighbourhoods.sites, containers, npcSpawns, terrainRows: landscape.terrainRows, paths: landscape.paths }, seed);
+  obstacles.push(...scenery.obstacles);
   const routes = recommendedRoutes(districts, pois);
   // Boss arenas stay at the outer authored settlements. Tagging happens after the
   // regular population and route composition, so it does not move any saved loot slot.
@@ -291,7 +294,7 @@ export function generateLiveWorld(seed = LIVE_WORLD_SEED): LiveMapDefinition {
     arena.tags = [...new Set([...arena.tags.filter(tag => tag !== 'peripheral'), 'contested', `boss-arena:${boss.id}`])];
     for (const zone of zones) if (zone.x === arena.x && zone.y === arena.y && zone.width === arena.width && zone.height === arena.height) zone.danger = 3;
   }
-  const layout = { seed, generatorVersion: LIVE_GENERATOR_VERSION, chunkSize: LIVE_CHUNK_SIZE, width: LIVE_WORLD_SIZE, height: LIVE_WORLD_SIZE, districts, obstacles, zones, pois, containers, terrainRows: landscape.terrainRows, paths: landscape.paths, routes, city, citySites: neighbourhoods.sites };
+  const layout = { seed, generatorVersion: LIVE_GENERATOR_VERSION, chunkSize: LIVE_CHUNK_SIZE, width: LIVE_WORLD_SIZE, height: LIVE_WORLD_SIZE, districts, obstacles, zones, pois, containers, terrainRows: landscape.terrainRows, paths: landscape.paths, routes, city, citySites: neighbourhoods.sites, props: scenery.props };
   const version = `perimeter-g${LIVE_GENERATOR_VERSION}-${hash32(JSON.stringify({ ...layout, npcSpawns })).toString(16).padStart(8, '0')}`;
   return { id: 'perimeter', name: 'Большой Периметр', description: 'Общий мир дорог, промышленных дворов, лесных троп и речных переправ. Выбери точку входа и свободно исследуй весь Периметр.', theme: 'mixed', version, ...layout, extracts, npcSpawns, lootSpawns: containers.map(({ x, y }) => ({ x, y })) };
 }
@@ -321,6 +324,12 @@ export function validateGeneratedWorld(world: LiveMapDefinition): { walkableTile
   if (!world.routes || world.routes.length !== 16 || new Set(world.routes.map(route => route.id)).size !== world.routes.length || new Set(world.routes.map(route => `${route.districtId}:${route.purpose}`)).size !== 16
     || world.routes.some(route => !route.id || route.id.length > 64 || !route.name || route.name.length > 80 || !route.description || route.description.length > 240 || !world.districts.some(district => district.id === route.districtId)
       || !['pvp', 'pve', 'loot', 'quests'].includes(route.purpose) || route.poiIds.length < 2 || route.poiIds.length > 5 || new Set(route.poiIds).size !== route.poiIds.length || route.poiIds.some(id => !world.pois.some(poi => poi.id === id)))) throw new Error('Invalid exploration routes');
+  const props = world.props ?? [];
+  const propCover = new Map(world.obstacles.filter(obstacle => obstacle.propId).map(obstacle => [obstacle.propId!, obstacle]));
+  if (props.length > 6000 || new Set(props.map(prop => prop.id)).size !== props.length || propCover.size !== world.obstacles.filter(obstacle => obstacle.propId).length
+    || props.some(prop => !prop.id || !LIVE_PROP_KINDS.includes(prop.kind) || ![prop.x, prop.y, prop.width, prop.height].every(Number.isFinite) || prop.x < 0 || prop.y < 0 || prop.width < .15 || prop.height < .15 || prop.width > 10 || prop.height > 10 || prop.x + prop.width > world.width || prop.y + prop.height > world.height || !['x', 'y'].includes(prop.orientation) || !Number.isInteger(prop.variant) || prop.variant < 0 || prop.variant > 3
+      || prop.blocking && (![prop.x, prop.y, prop.width, prop.height].every(Number.isInteger) || !propCover.has(prop.id) || ['x', 'y', 'width', 'height'].some(key => prop[key as 'x' | 'y' | 'width' | 'height'] !== propCover.get(prop.id)![key as 'x' | 'y' | 'width' | 'height'])))
+    || [...propCover.keys()].some(id => !props.some(prop => prop.id === id && prop.blocking))) throw new Error('Invalid public scenery and physical cover');
   if (world.obstacles.length > 4096) throw new Error('World has too much cover');
   const total = world.width * world.height, blocked = new Uint8Array(total), water = new Uint8Array(total);
   const inside = ({ x, y }: LivePoint) => Number.isInteger(x) && Number.isInteger(y) && x >= 0 && y >= 0 && x < world.width && y < world.height;
@@ -338,9 +347,10 @@ export function validateGeneratedWorld(world: LiveMapDefinition): { walkableTile
   for (const site of sites) {
     const quarter = city.quarters.find(quarter => quarter.id === site.quarterId), poi = world.pois.find(poi => poi.id === site.poiId);
     if (!quarter || !poi || !contained(site, quarter) || [site.x, site.y, site.width, site.height].some((value, index) => value !== [poi.x, poi.y, poi.width, poi.height][index])
-      || !contained(site.courtyard, site) || !['courtyard', 'arcade', 'workyard', 'service-yard'].includes(site.kind) || site.buildings.length < 1 || site.buildings.length > 6
+      || !contained(site.courtyard, site) || !['courtyard', 'arcade', 'workyard', 'service-yard'].includes(site.kind) || site.buildings.length < 1 || site.buildings.length > 12
       || site.buildings.some(building => !contained(building, site) || building.width < 5 || building.height < 5 || !['apartment', 'shop', 'workshop', 'garage', 'service'].includes(building.kind)
-        || building.entrances.length !== 2 || building.entrances.some(door => !inRect(door, building) || !clear(door) || !clear({ x: door.x + 1, y: door.y })))
+        || building.entrances.length !== 2 || building.entrances.some(door => !inRect(door, building) || !clear(door) || !clear(building.entrances[0]!.y === building.entrances[1]!.y ? { x: door.x, y: door.y + 1 } : { x: door.x + 1, y: door.y }))
+        || building.floors !== undefined && ![1, 2, 3, 4].includes(building.floors) || building.roof !== undefined && !['gable', 'flat', 'sawtooth'].includes(building.roof) || building.facade !== undefined && !['brick', 'plaster', 'panel', 'metal'].includes(building.facade))
       || poi.entrances.length !== 2 || Math.hypot(poi.entrances[0]!.x - poi.entrances[1]!.x, poi.entrances[0]!.y - poi.entrances[1]!.y) < 6
       || site.passages.length < 2 || site.passages.length > 4) throw new Error(`Invalid usable city architecture ${site.id}`);
     for (const path of site.passages) {
