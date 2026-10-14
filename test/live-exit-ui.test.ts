@@ -5,6 +5,7 @@ import type { LivePoint, LiveSnapshot } from '../src/game/live';
 import { getLiveMap } from '../src/game/live-maps';
 import { BOSSES } from '../src/game/bosses';
 import { getLiveBossArena } from '../src/game/live-boss-arenas';
+import { quoteLiveKits, type LiveEntry } from '../src/game/live-entry';
 
 class ElementStub {
   hidden = false; innerHTML = ''; className = ''; tabIndex = 0; disabled = false;
@@ -36,8 +37,9 @@ function replace(key: string, value: unknown) {
 }
 const settle = async () => { for (let count = 0; count < 25; count++) await Promise.resolve(); };
 async function click(button: string) {
-  const target = new ElementStub('button'); target.dataset.liveButton = button; dock.append(target);
-  dock.handlers.get('click')!({ target }); await settle();
+  const host = button === 'join' || button.startsWith('boss-route:') ? world.children[0]! : dock;
+  const target = new ElementStub('button'); target.dataset.liveButton = button; host.append(target);
+  host.handlers.get('click')!({ target }); await settle();
 }
 async function poll() {
   const pending = [...timers.entries()].find(([, item]) => item.delay === 500);
@@ -64,6 +66,11 @@ beforeEach(() => {
     if (url.startsWith('/art/')) return Response.json({ frames: {} });
     const path = url.split('/').at(-1);
     if (path === 'status') return Response.json(server.server);
+    if (path === 'entry') {
+      const stock = { money: 640, ammo: 100, medicine: 3 };
+      const entry: LiveEntry = { server: server.server, now: time, mode: 'new', fighter: null, stock, kits: quoteLiveKits(stock) };
+      return Response.json(entry);
+    }
     if (path === 'join') { joins++; return Response.json({ ...server, now: time }); }
     if (path === 'leave') { leaves++; server.self.leaveAt = time + 5000; return Response.json({ ok: true, leaveAt: server.self.leaveAt }); }
     if (path === 'action') {
@@ -115,8 +122,8 @@ describe('visible server-confirmed live exit', () => {
   });
   test('choosing a boss hunt changes only lobby district and purpose until explicit entry',async()=>{
     mode!.show();await settle();await click('boss-route:bugor');
-    expect(joins).toBe(0);expect(server.self.districtId).toBe('customs');expect(dock.innerHTML).toContain('Войти · Посёлок');expect(dock.innerHTML).toContain('data-live-button="purpose:boss" aria-pressed="true"');
-    await click('boss-route:constructor');expect(joins).toBe(0);expect(dock.innerHTML).toContain('Войти · Посёлок');
+    expect(joins).toBe(0);expect(server.self.districtId).toBe('customs');expect(world.children[0]!.innerHTML).toContain('Посёлок · Охота на главаря');expect(world.children[0]!.innerHTML).toContain('data-live-button="purpose:boss" aria-pressed="true"');
+    await click('boss-route:constructor');expect(joins).toBe(0);expect(world.children[0]!.innerHTML).toContain('Посёлок · Охота на главаря');
     await click('join');expect(joins).toBe(1);expect(server.self.districtId).toBe('customs');
     await click('boss-route:komendant');expect(server.self.districtId).toBe('customs');expect(joins).toBe(1);
   });

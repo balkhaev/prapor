@@ -2,6 +2,7 @@ import { LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT, LIVE_TERRAIN_CODES, type EconomyL
 import { readEconomyLootItems } from './game/live-loot';
 import { BODY_PARTS, parseHealth, parseMedicalInventory, type BodyPart, type TreatmentType } from './game/health';
 import { getBoss, type BossId } from './game/bosses';
+import { isLiveKitId, type LiveEntry, type LiveKitId, type LiveLoadout } from './game/live-entry';
 
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const number = (value: unknown, min = 0, max = Number.MAX_SAFE_INTEGER): value is number => typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max;
@@ -38,6 +39,10 @@ function liveErrorMessage(status: number, code: string): string {
   if (code === 'delivery_pending_full') return 'Несколько грузов уже ждут места в убежище. Освободи склад перед следующей доставкой.';
   if (code === 'supply_pending') return 'Пополнение уже отправлено в убежище. Дождись подтверждения; второй расход не нужен.';
   if (code === 'already_supplied') return 'Патроны и аптечки уже пополнены.';
+  if (code === 'launch_pending') return 'Комплект уже оплачен. Подтверждаем выдачу; второй расход не нужен.';
+  if (code === 'insufficient_money') return 'Не хватает денег на выбранный комплект. Выбери лёгкий комплект или пополни запас в убежище.';
+  if (code === 'fighter_alive') return 'Боец уже в мире. Продолжи рейд с сохранённой позиции.';
+  if (code === 'no_fighter') return 'Сохранённого бойца нет. Подготовь новый выход.';
   if (code === 'resupply_out_of_range') return 'Для пополнения припасов доберись до зелёного выхода.';
   if (code === 'no_supplies' || code === 'supply_empty') return 'На складе убежища не хватает припасов. Купи их или изготовь, затем пополни комплект у выхода.';
   if (code === 'server_full' || code === 'full') return 'Периметр заполнен. Подожди свободного места и попробуй войти ещё раз.';
@@ -180,6 +185,42 @@ export function readLiveStatus(value: unknown): LiveStatus {
   return { id: value.id, name: value.name, online: value.online, capacity: value.capacity, startedAt: value.startedAt, maps, districts, ...(routes ? { routes } : {}), ...(bosses ? { bosses } : {}) };
 }
 
+const loadoutKeys = ['kitId', 'label', 'weaponId', 'weaponName', 'damage', 'range', 'attackMs', 'armorProtection', 'helmetProtection', 'maxAmmo'] as const;
+function readLiveLoadout(value: unknown, extraKeys: readonly string[] = []): LiveLoadout {
+  if (!record(value) || !keys(value, [...loadoutKeys, ...extraKeys]) || !isLiveKitId(value.kitId) || !text(value.label, 80) || !text(value.weaponId, 64) || !text(value.weaponName, 80)
+    || !number(value.damage, 1, 100) || !integer(value.range, 1, 32) || !integer(value.attackMs, 100, 30_000) || !number(value.armorProtection, 0, 1) || !number(value.helmetProtection, 0, 1) || !integer(value.maxAmmo, 1, 256)) return invalid();
+  return { kitId: value.kitId, label: value.label, weaponId: value.weaponId, weaponName: value.weaponName, damage: value.damage, range: value.range, attackMs: value.attackMs, armorProtection: value.armorProtection, helmetProtection: value.helmetProtection, maxAmmo: value.maxAmmo };
+}
+
+/** Only the authenticated player's saved body and priced field-kit quotes enter preparation. */
+export function readLiveEntry(value: unknown): LiveEntry {
+  if (!record(value) || !keys(value, ['server', 'now', 'mode', 'fighter', 'stock', 'kits']) || !integer(value.now) || !['new', 'continue', 'downed'].includes(value.mode as string) || !Array.isArray(value.kits) || value.kits.length > 3) return invalid();
+  const server = readLiveStatus(value.server), bounds = server.maps[0]!;
+  const stock = value.stock === null ? null : (() => {
+    const raw = value.stock;
+    if (!record(raw) || !keys(raw, ['money', 'ammo', 'medicine']) || !['money', 'ammo', 'medicine'].every(key => integer(raw[key]))) return invalid();
+    return { money: raw.money as number, ammo: raw.ammo as number, medicine: raw.medicine as number };
+  })();
+  const kits = value.kits.map(raw => {
+    const kit = readLiveLoadout(raw, ['ammo', 'medkits', 'cost', 'reason']);
+    if (!record(raw) || !integer(raw.ammo, 0, kit.maxAmmo) || !integer(raw.medkits, 0, 2) || !record(raw.cost) || !keys(raw.cost, ['money', 'ammo', 'medicine']) || !integer(raw.cost.money) || !integer(raw.cost.ammo) || !integer(raw.cost.medicine)
+      || raw.cost.ammo !== raw.ammo || raw.cost.medicine !== raw.medkits || !(raw.reason === null || text(raw.reason, 300))) return invalid();
+    return { ...kit, ammo: raw.ammo, medkits: raw.medkits, cost: { money: raw.cost.money as number, ammo: raw.cost.ammo as number, medicine: raw.cost.medicine as number }, reason: raw.reason as string | null };
+  });
+  if (new Set(kits.map(kit => kit.kitId)).size !== kits.length) return invalid();
+  const fighter = value.fighter === null ? null : (() => {
+    const raw = value.fighter;
+    if (!point(raw, bounds) || !keys(raw, ['id', 'name', 'x', 'y', 'health', 'body', 'medicine', 'ammo', 'districtId', 'purpose', 'cargo', 'lootCount', 'respawnAt', 'online', 'launchPending', 'loadout']) || !text(raw.id) || !text(raw.name, 80)
+      || !integer(raw.x) || !integer(raw.y) || !number(raw.health, 0, 100) || !integer(raw.ammo) || !integer(raw.cargo) || !integer(raw.lootCount, 0, LIVE_LOOT_CAPACITY) || !integer(raw.respawnAt) || !districtId(raw.districtId) || !purpose(raw.purpose) || typeof raw.online !== 'boolean' || !(raw.launchPending === undefined || typeof raw.launchPending === 'boolean')) return invalid();
+    let body: LivePlayer['body'], medicine: LivePlayer['medicine'];
+    try { body = parseHealth(raw.body); medicine = parseMedicalInventory(raw.medicine); } catch { return invalid(); }
+    return { id: raw.id, name: raw.name, x: raw.x, y: raw.y, health: raw.health, body, medicine, ammo: raw.ammo, districtId: raw.districtId, purpose: raw.purpose, cargo: raw.cargo, lootCount: raw.lootCount, respawnAt: raw.respawnAt, online: raw.online,
+      ...(raw.loadout === undefined ? {} : { loadout: readLiveLoadout(raw.loadout) }), ...(raw.launchPending === undefined ? {} : { launchPending: raw.launchPending }) };
+  })();
+  if (value.mode === 'new' ? fighter !== null : fighter === null || (value.mode === 'continue' ? fighter.health <= 0 : fighter.health > 0)) return invalid();
+  return { server, now: value.now, mode: value.mode as LiveEntry['mode'], fighter, stock, kits };
+}
+
 /** Only immutable, versioned geometry may be reused between server responses. */
 export function readLiveWorld(source: unknown): LiveWorld {
   if (!record(source) || source.id !== 'perimeter' || !text(source.name, 80) || !text(source.description, 500) || !['industrial', 'forest', 'urban', 'mixed'].includes(source.theme as string) || !integer(source.width, 2, 256) || !integer(source.height, 2, 256) || !text(source.version, 128) || !text(source.seed, 128) || !integer(source.generatorVersion, 1, 1_000_000) || !integer(source.chunkSize, 1, 128) || !Array.isArray(source.obstacles) || source.obstacles.length > 4096 || !Array.isArray(source.extracts) || !source.extracts.length || source.extracts.length > 64 || !Array.isArray(source.zones) || source.zones.length > 1000 || !Array.isArray(source.districts) || source.districts.length !== 4 || !Array.isArray(source.pois) || source.pois.length > 256 || !Array.isArray(source.containers) || source.containers.length > 512) return invalid();
@@ -236,7 +277,7 @@ export function readLiveSnapshot(value: unknown, cachedWorld?: LiveWorld): LiveS
   if (!world || world.version !== value.worldVersion) return invalid();
   const bounds = { width: world.width, height: world.height };
   const self = value.self;
-  if (!keys(self, ['id', 'ammo', 'medkits', 'cargo', 'stash', 'kills', 'bossKills', 'respawnAt', 'travelReadyAt', 'patrol', 'targetId', 'districtId', 'purpose', 'searching', 'body', 'medicine', 'treatment', 'leaveAt', 'gameId', 'lootItems', 'pendingDelivery', 'economyMessage']) || self.id !== value.selfId || !['ammo', 'medkits', 'cargo', 'stash', 'kills', 'respawnAt', 'travelReadyAt', 'leaveAt'].every(key => integer(self[key])) || typeof self.patrol !== 'boolean' || !(self.targetId === null || text(self.targetId)) || !districtId(self.districtId) || !purpose(self.purpose) || !(self.searching === null || record(self.searching) && keys(self.searching, ['id', 'readyAt']) && text(self.searching.id) && integer(self.searching.readyAt)) || !(self.gameId === undefined || uuid(self.gameId)) || !(self.economyMessage === undefined || typeof self.economyMessage === 'string' && self.economyMessage.length <= 2000) || !(self.bossKills === undefined || integer(self.bossKills, 0, self.kills as number))) return invalid();
+  if (!keys(self, ['id', 'ammo', 'medkits', 'cargo', 'stash', 'kills', 'bossKills', 'respawnAt', 'travelReadyAt', 'patrol', 'targetId', 'districtId', 'purpose', 'searching', 'body', 'medicine', 'treatment', 'leaveAt', 'gameId', 'lootItems', 'pendingDelivery', 'economyMessage', 'loadout', 'launchPending']) || self.id !== value.selfId || !['ammo', 'medkits', 'cargo', 'stash', 'kills', 'respawnAt', 'travelReadyAt', 'leaveAt'].every(key => integer(self[key])) || typeof self.patrol !== 'boolean' || !(self.targetId === null || text(self.targetId)) || !districtId(self.districtId) || !purpose(self.purpose) || !(self.searching === null || record(self.searching) && keys(self.searching, ['id', 'readyAt']) && text(self.searching.id) && integer(self.searching.readyAt)) || !(self.gameId === undefined || uuid(self.gameId)) || !(self.economyMessage === undefined || typeof self.economyMessage === 'string' && self.economyMessage.length <= 2000) || !(self.bossKills === undefined || integer(self.bossKills, 0, self.kills as number))) return invalid();
   let body: LivePlayer['body'], medicine: LivePlayer['medicine'];
   try { body = parseHealth(self.body); medicine = parseMedicalInventory(self.medicine); } catch { return invalid(); }
   const treatment = self.treatment;
@@ -254,6 +295,8 @@ export function readLiveSnapshot(value: unknown, cachedWorld?: LiveWorld): LiveS
   if (pendingDelivery !== undefined) player.pendingDelivery = pendingDelivery;
   if (self.economyMessage !== undefined) player.economyMessage = self.economyMessage as string;
   if (self.bossKills !== undefined) player.bossKills = self.bossKills as number;
+  if (self.loadout !== undefined) player.loadout = readLiveLoadout(self.loadout);
+  if (self.launchPending !== undefined) { if (typeof self.launchPending !== 'boolean') return invalid(); player.launchPending = self.launchPending; }
   if (!Array.isArray(value.entities) || value.entities.length > 256 || !Array.isArray(value.drops) || value.drops.length > 512 || !Array.isArray(value.events) || value.events.length > 256 || !Array.isArray(value.visibleChunks) || value.visibleChunks.length > 256) return invalid();
   const entities: LiveEntity[] = value.entities.map(entity => {
     if (!point(entity, bounds) || !record(entity) || !integer(entity.x) || !integer(entity.y) || !text(entity.id) || !text(entity.name, 80) || !['player', 'scav'].includes(entity.kind as string) || !integer(entity.appearance, 0, 31) || !number(entity.health, 0, 100) || !['idle', 'moving', 'combat', 'downed'].includes(entity.action as string) || !number(entity.safeUntil) || !(entity.faction === undefined || ['scavs', 'raiders'].includes(entity.faction as string)) || !(entity.role === undefined || ['patrol', 'guard', 'marksman'].includes(entity.role as string))) return invalid();
@@ -294,8 +337,8 @@ export function readLiveSnapshot(value: unknown, cachedWorld?: LiveWorld): LiveS
   return { server, now: value.now, selfId: value.selfId, self: player, world, entities, drops, events, worldVersion: value.worldVersion, visibleChunks };
 }
 export interface LiveIdentity { accountId: string | null; playerId?: string; worldVersion?: string; gameId?: string | null }
-export interface LiveJoinOptions { districtId: LiveDistrictId; purpose: LivePurpose }
-export async function liveRequest<T>(path: 'status' | 'join' | 'state' | 'action' | 'leave', identity: LiveIdentity, read: (value: unknown) => T, command?: LiveCommand, signal?: AbortSignal, joinOptions?: LiveJoinOptions, transport: typeof fetch = globalThis.fetch): Promise<T> {
+export interface LiveJoinOptions { districtId?: LiveDistrictId; purpose?: LivePurpose; kitId?: LiveKitId; intent?: 'deploy' | 'continue' }
+export async function liveRequest<T>(path: 'status' | 'entry' | 'join' | 'state' | 'action' | 'leave', identity: LiveIdentity, read: (value: unknown) => T, command?: LiveCommand, signal?: AbortSignal, joinOptions?: LiveJoinOptions, transport: typeof fetch = globalThis.fetch): Promise<T> {
   const controller = new AbortController();
   const abort = () => controller.abort();
   signal?.addEventListener('abort', abort, { once: true });

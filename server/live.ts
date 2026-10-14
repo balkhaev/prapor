@@ -15,6 +15,7 @@ import { BOSSES, getBoss, type BossId } from '../src/game/bosses';
 import { getLiveBossArenas } from '../src/game/live-boss-arenas';
 import type { AccountService } from "./accounts";
 import { LiveEconomyError, type EconomyLoot, type LiveDelivery, type LiveEconomy, type LiveEconomyIdentity, type LiveSupplyRequest } from "./live-economy";
+import { LIVE_FIELD_KITS, getLiveLoadout, isLiveKitId, quoteLiveKits, type LiveEntry, type LiveKitId } from '../src/game/live-entry';
 
 export interface LiveOptions {
   dbPath: string;
@@ -50,6 +51,8 @@ interface Participant extends LiveEntity, LivePlayer, PathCache {
   disconnectAt: number;
   searchedDropIds: string[];
   economyOwner?: string;
+  /** Saved before the headquarters debit, consumed in the same transaction as its acknowledgement. */
+  entryPending?: { id: string; districtId: LiveDistrictId; purpose: LivePurpose; x: number; y: number; respawn: boolean };
 }
 interface Scav extends LiveEntity, PathCache {
   body: HealthState; healthAt: number; aim: { targetId: string; endsAt: number; part: BodyPart } | null;
@@ -158,9 +161,9 @@ function commandFrom(body: Record<string, unknown>, mapId: LiveMapId): LiveComma
   if (["loot", "search"].includes(body.type) && exactKeys(body, ["type", "id"]) && typeof body.id === "string" && /^[a-zA-Z0-9_-]{1,80}$/.test(body.id)) return { type: body.type as "loot" | "search", id: body.id };
   if (body.type === "patrol" && exactKeys(body, ["type", "enabled"]) && typeof body.enabled === "boolean") return { type: "patrol", enabled: body.enabled };
   if (["heal", "extract", "resupply", "cancelTreatment"].includes(body.type) && exactKeys(body, ["type"])) return { type: body.type as "heal" | "extract" | "resupply" | "cancelTreatment" };
-  if (body.type === "respawn" && Object.keys(body).every(key => ["type", "districtId", "purpose"].includes(key))
-    && (body.districtId === undefined || districtFrom(body.districtId)) && (body.purpose === undefined || purposeFrom(body.purpose)))
-    return { type: "respawn", ...(body.districtId ? { districtId: body.districtId as LiveDistrictId } : {}), ...(body.purpose ? { purpose: body.purpose as LivePurpose } : {}) };
+  if (body.type === "respawn" && Object.keys(body).every(key => ["type", "districtId", "purpose", "kitId"].includes(key))
+    && (body.districtId === undefined || districtFrom(body.districtId)) && (body.purpose === undefined || purposeFrom(body.purpose)) && (body.kitId === undefined || isLiveKitId(body.kitId)))
+    return { type: "respawn", ...(body.districtId ? { districtId: body.districtId as LiveDistrictId } : {}), ...(body.purpose ? { purpose: body.purpose as LivePurpose } : {}), ...(isLiveKitId(body.kitId) ? { kitId: body.kitId } : {}) };
   throw new LiveError(400, "invalid_command");
 }
 
@@ -344,7 +347,7 @@ export function createLiveService(options: LiveOptions): LiveService {
       db.query("UPDATE live_economy_outbox SET attempts=attempts+1 WHERE id=? AND acknowledged=0").run(row.id);
       const payload = JSON.parse(row.payload) as LiveDelivery | LiveSupplyRequest;
       if (row.kind === 'delivery') (payload as LiveDelivery).items = readEconomyLootItems((payload as LiveDelivery).items, LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT);
-      let receipt: { ammo: number; medkits: number; message: string } | undefined, message: string;
+      let receipt: ReturnType<LiveEconomy['supply']> | undefined, message: string;
       try {
         if (row.kind === "delivery") {
           const delivery = options.economy.deliver(payload as LiveDelivery);
@@ -355,6 +358,8 @@ export function createLiveService(options: LiveOptions): LiveService {
           const requested = payload as LiveSupplyRequest;
           if (!Number.isInteger(receipt.ammo) || !Number.isInteger(receipt.medkits) || receipt.ammo < 0 || receipt.medkits < 0 || receipt.ammo > requested.ammo || receipt.medkits > requested.medkits)
             throw new Error("Invalid headquarters supply receipt");
+          if (requested.kitId && (JSON.stringify(receipt.loadout) !== JSON.stringify(getLiveLoadout(requested.kitId)) || receipt.money !== LIVE_FIELD_KITS[requested.kitId].money || receipt.ammo < 1))
+            throw new Error('Invalid headquarters field kit receipt');
         }
       } catch (error) {
         // Transport/game availability failures leave the durable parcel for the next tick.
@@ -367,7 +372,25 @@ export function createLiveService(options: LiveOptions): LiveService {
       if (!original) throw new Error("Pending economy owner has no persistent live player");
       const updated = structuredClone(original);
       if (receipt) {
-        if (updated.ammo + receipt.ammo > 60) throw new Error("Supply would exceed live capacity");
+        const launching = (payload as LiveSupplyRequest).kitId !== undefined;
+        if (launching) {
+          const pending = updated.entryPending;
+          if (!pending || pending.id !== row.id || !receipt.loadout) throw new Error('Field kit receipt has no matching saved entry');
+          // A corpse's remaining medicines and ammunition cannot be carried into a newly paid life.
+          updated.ammo = 0; updated.medicine = createMedicalInventory({ medkit: 0, bandage: 0, tourniquet: 0, splint: 0, painkiller: 0, surgery: 0 });
+          updated.loadout = { ...receipt.loadout };
+          updated.safeUntil = now() + 5000;
+          if (pending.respawn) {
+            updated.body = createHealth(); updated.health = 100; updated.healthAt = now(); updated.treatment = null; updated.aim = null; updated.leaveAt = 0;
+            const point = clear(updated.mapId, pending, updated.id) ? pending : nearestFree(pending, pending.districtId);
+            updated.x = point.x; updated.y = point.y; updated.districtId = pending.districtId; updated.purpose = pending.purpose;
+            updated.cargo = 0; updated.lootItems = []; updated.respawnAt = 0; updated.safeUntil = now() + 5000;
+            updated.dangerUntil = 0; updated.graceUntil = 0; updated.disconnectAt = 0; updated.destination = null; updated.action = 'idle';
+            updated.nextAttack = 0; updated.targetId = null; updated.patrol = false; updated.searching = null; Object.assign(updated, freshPath());
+          }
+          delete updated.entryPending;
+        }
+        if (updated.ammo + receipt.ammo > (updated.loadout?.maxAmmo ?? 60)) throw new Error("Supply would exceed live capacity");
         updated.ammo += receipt.ammo;
         // The same acknowledgement commits all physical field medicines. An
         // accepted receipt can never replay or produce free stock on respawn.
@@ -387,7 +410,7 @@ export function createLiveService(options: LiveOptions): LiveService {
         if (drops.size !== dropCount) saveWorld.run(JSON.stringify({ version: WORLD_VERSION, geometryVersion: maps.get(DEFAULT_MAP)!.version, startedAt,
           scavs: [...scavs.values()].map(durable), drops: [...drops.values()], events, lootCooldowns: [...lootCooldowns] }));
       })();
-      if (loaded) Object.assign(loaded, updated);
+      if (loaded) { Object.assign(loaded, updated); if (!updated.entryPending) delete loaded.entryPending; }
     }
     lastEconomy = now();
   };
@@ -539,6 +562,7 @@ export function createLiveService(options: LiveOptions): LiveService {
     return {
       server: status(false), now: now(), ...(request?.headers.get("x-prapor-world-version") === world.version ? {} : { world }), worldVersion: world.version, visibleChunks, selfId: player.id,
       self: { id: player.id, ammo: player.ammo, medkits: Math.ceil(player.medicine.medkit / 40), cargo: player.cargo, stash: player.stash, kills: player.kills, bossKills: player.bossKills ?? 0, respawnAt: player.respawnAt, patrol: player.patrol, targetId: player.targetId, travelReadyAt: player.travelReadyAt,
+        ...(player.loadout ? { loadout: { ...player.loadout } } : {}), ...(player.entryPending ? { launchPending: true } : {}),
         body: player.body, medicine: player.medicine, treatment: player.treatment, leaveAt: player.leaveAt, districtId: player.districtId, purpose: player.purpose, searching: player.searching ? { ...player.searching } : null,
         ...(options.economy ? { gameId: player.gameId, lootItems: structuredClone(player.lootItems ?? []),
           pendingDelivery: pendingRows.all(player.identity).filter(row => row.kind === "delivery").map(row => {
@@ -622,7 +646,7 @@ export function createLiveService(options: LiveOptions): LiveService {
     if (boss.health <= 0) down(boss, undefined, Math.max(0, defeatedAt));
   };
   const findTarget = (id: string): Participant | Scav | undefined => [...players.values(), ...scavs.values()].find(target => target.id === id);
-  const rangeOf = (entity: Participant | Scav): number => entity.bossId ? getBoss(entity.bossId)!.live.range : entity.kind === "player" || "role" in entity && entity.role === "marksman" ? 7 : 5;
+  const rangeOf = (entity: Participant | Scav): number => isParticipant(entity) && entity.loadout ? entity.loadout.range : entity.bossId ? getBoss(entity.bossId)!.live.range : entity.kind === "player" || "role" in entity && entity.role === "marksman" ? 7 : 5;
   const attackTarget = (attacker: Participant | Scav, target: Participant | Scav): void => {
     if (!isParticipant(attacker) && (target.bossId || attacker.bossId && !isParticipant(target))) throw new LiveError(409, 'target_unavailable');
     if (target.mapId !== attacker.mapId || target.health <= 0 || attacker.health <= 0 || target.id === attacker.id || "online" in target && !exposed(target)) throw new LiveError(409, "target_unavailable");
@@ -641,8 +665,9 @@ export function createLiveService(options: LiveOptions): LiveService {
     if (isParticipant(target)) target.lastCombatAt = now();
     attacker.safeUntil = 0; attacker.action = "combat"; attacker.aim = null;
     const outgoing = attacker.bossId ? getBoss(attacker.bossId)!.live.outgoingDamage : 1, incoming = target.bossId ? getBoss(target.bossId)!.live.incomingDamage : 1;
-    const damage = (aimed ? 45 : attacker.kind === "player" ? 40 : "faction" in attacker && attacker.faction === "raiders" ? 33 : 25) * outgoing * incoming;
-    const roll = random(), result = applyHit(target.body, part, damage, { protection: LIVE_PROTECTION[part] ?? 0, penetration: .1,
+    const damage = (isParticipant(attacker) && attacker.loadout ? attacker.loadout.damage + (aimed ? 5 : 0) : aimed ? 45 : attacker.kind === "player" ? 40 : "faction" in attacker && attacker.faction === "raiders" ? 33 : 25) * outgoing * incoming;
+    const protection = isParticipant(target) && target.loadout ? part === 'head' ? target.loadout.helmetProtection : ['chest', 'stomach'].includes(part) ? target.loadout.armorProtection : 0 : LIVE_PROTECTION[part] ?? 0;
+    const roll = random(), result = applyHit(target.body, part, damage, { protection, penetration: .1,
       ...(roll < .16 ? { bleeding: "heavy" as const } : roll < .4 ? { bleeding: "light" as const } : {}),
       ...(!["head", "chest", "stomach"].includes(part) && roll < .2 ? { fracture: true } : {}) });
     if (result.damage > 0 && isParticipant(target)) { cancelTreatment(target); target.searching = null; Object.assign(target, freshPath()); }
@@ -664,14 +689,14 @@ export function createLiveService(options: LiveOptions): LiveService {
     attacker.safeUntil = 0;
     if (aimed || attacker.kind === "scav") {
       attacker.aim = { targetId: target.id, endsAt: now() + Math.ceil((aimed ? 1800 : 1000) / slowdown), part: aimed ? "head" : randomPart() };
-      attacker.action = "combat"; attacker.nextAttack = attacker.bossId ? now() + Math.ceil(getBoss(attacker.bossId)!.live.attackMs / slowdown) : attacker.aim.endsAt + Math.ceil((aimed ? 2000 : 1500) / slowdown);
+      attacker.action = "combat"; attacker.nextAttack = attacker.bossId ? now() + Math.ceil(getBoss(attacker.bossId)!.live.attackMs / slowdown) : attacker.aim.endsAt + Math.ceil((isParticipant(attacker) && attacker.loadout ? attacker.loadout.attackMs : aimed ? 2000 : 1500) / slowdown);
       if ("dangerUntil" in attacker) attacker.dangerUntil = now() + DISCONNECT_GRACE_MS;
       if ("dangerUntil" in target) target.dangerUntil = now() + DISCONNECT_GRACE_MS;
       if (isParticipant(attacker)) attacker.lastCombatAt = now();
       if (isParticipant(target)) target.lastCombatAt = now();
       event(attacker.mapId, "combat", `${attacker.name} ${aimed ? "готовит прицельный выстрел в голову" : "прицеливается"} в ${target.name}: найди укрытие.`, attacker.id, target.id);
     } else {
-      attacker.nextAttack = now() + Math.ceil(900 / slowdown); shot(attacker, target, randomPart());
+      attacker.nextAttack = now() + Math.ceil((isParticipant(attacker) && attacker.loadout ? attacker.loadout.attackMs : 900) / slowdown); shot(attacker, target, randomPart());
     }
   };
   const finishSearch = (player: Participant): void => {
@@ -879,7 +904,7 @@ export function createLiveService(options: LiveOptions): LiveService {
       }
       if (player.patrol) {
         const target = nearestTarget(player);
-        if (target && target.safeUntil <= now() && distance(player, target) <= 7 && lineOfSight(player.mapId, player, target) && player.ammo > 0) {
+        if (target && target.safeUntil <= now() && distance(player, target) <= rangeOf(player) && lineOfSight(player.mapId, player, target) && player.ammo > 0) {
           if (player.nextAttack <= now()) attack(player, target);
           continue;
         }
@@ -926,7 +951,7 @@ export function createLiveService(options: LiveOptions): LiveService {
     const token = tokenFrom(request), guest = token ? readGuest.get(hashToken(token), now()) : null;
     return guest ? { identity: guest.identity } : null;
   };
-  const identityFrom = (request: Request, joining = false): { identity: string; name?: string; economy?: LiveEconomyIdentity } | null => {
+  const identityFrom = (request: Request, joining = false, prepareBinding = true): { identity: string; name?: string; economy?: LiveEconomyIdentity } | null => {
     if (!options.economy) return legacyIdentityFrom(request);
     let economy: LiveEconomyIdentity;
     try { economy = options.economy.resolve(request); }
@@ -943,7 +968,7 @@ export function createLiveService(options: LiveOptions): LiveService {
       if (!joining) throw new LiveError(401, "join_required");
       const bound = byLive.get(identity);
       if (bound && (bound.owner_key !== economy.key || bound.game_id !== economy.gameId)) throw new LiveError(401, "game_identity_changed");
-      preparedBindings.push({ owner_key: economy.key, game_id: economy.gameId, live_identity: identity });
+      if (prepareBinding) preparedBindings.push({ owner_key: economy.key, game_id: economy.gameId, live_identity: identity });
     }
     return { identity, name: economy.name, economy };
   };
@@ -954,8 +979,47 @@ export function createLiveService(options: LiveOptions): LiveService {
     if (identity?.economy && (player.gameId !== identity.economy.gameId || player.economyOwner !== identity.economy.key)) throw new LiveError(401, "game_identity_changed");
     return player;
   };
+  const entry = (request: Request): LiveEntry => {
+    const identity = identityFrom(request, true, false);
+    if (!identity) throw new LiveError(401, 'join_required');
+    const row = readPlayer.get(identity.identity), player = players.get(identity.identity) ?? (row ? JSON.parse(row.state) as Participant : undefined);
+    const stock = identity.economy && options.economy?.entry ? options.economy.entry(identity.economy) : null;
+    const fighter = player ? { id: player.id, name: player.name, x: player.x, y: player.y, health: player.health,
+      body: storedBody(player.body, player.health), medicine: player.medicine ? parseMedicalInventory(player.medicine) : createMedicalInventory({ medkit: player.medkits * 40 }),
+      ammo: player.ammo, districtId: districtFrom(player.districtId) ?? districtAt(player), purpose: purposeFrom(player.purpose) ?? 'loot',
+      cargo: player.cargo, lootCount: player.lootItems?.length ?? 0, respawnAt: player.respawnAt,
+      online: Boolean(players.get(identity.identity)?.online), ...(player.loadout ? { loadout: { ...player.loadout } } : {}), ...(player.entryPending ? { launchPending: true } : {}) } : null;
+    return { server: status(), now: now(), mode: !fighter ? 'new' : fighter.health > 0 ? 'continue' : 'downed', fighter, stock,
+      kits: stock ? quoteLiveKits(stock) : [] };
+  };
+  const validateLaunch = (identity: LiveEconomyIdentity, kitId: LiveKitId): void => {
+    const stock = options.economy?.entry?.(identity);
+    if (!stock) throw new LiveError(409, 'economy_unavailable');
+    if (stock.money < LIVE_FIELD_KITS[kitId].money) throw new LiveError(409, 'insufficient_money');
+    if (Math.floor(stock.ammo) < 1) throw new LiveError(409, 'no_ammo');
+  };
+  const launch = (player: Participant, kitId: LiveKitId, districtId: LiveDistrictId, purpose: LivePurpose, respawning: boolean): void => {
+    if (player.entryPending) return;
+    if (!player.economyOwner || !player.gameId) throw new LiveError(401, 'join_required');
+    if (pendingRows.all(player.identity).some(row => row.kind === 'supply')) throw new LiveError(409, 'supply_pending');
+    validateLaunch({ key: player.economyOwner, gameId: player.gameId, name: player.name }, kitId);
+    const point = respawning ? pickPoint(player.mapId, true, districtId) : { x: player.x, y: player.y }, id = randomUUID();
+    player.entryPending = { id, districtId, purpose, ...point, respawn: respawning };
+    player.destination = null; player.targetId = null; player.patrol = false; player.searching = null; Object.assign(player, freshPath());
+    prepare(player, 'supply', { id, owner: player.economyOwner, gameId: player.gameId, createdAt: now(), ammo: LIVE_FIELD_KITS[kitId].maxAmmo, medkits: 2, kitId });
+    // One durable request precedes the other database's debit. Retries use this exact receipt id.
+    persist(); flushEconomy();
+  };
   const doCommand = (player: Participant, command: LiveCommand): void => {
-    if (command.type === "respawn") { respawn(player, command.districtId ?? player.districtId, command.purpose ?? player.purpose); return; }
+    if (command.type === "respawn") {
+      if (options.economy?.entry) {
+        if (!player.entryPending && player.health > 0) throw new LiveError(409, 'already_alive');
+        if (!player.entryPending && player.respawnAt > now()) throw new LiveError(409, 'respawn_not_ready');
+        launch(player, command.kitId ?? player.loadout?.kitId ?? 'scav', command.districtId ?? player.districtId, command.purpose ?? player.purpose, true);
+      } else respawn(player, command.districtId ?? player.districtId, command.purpose ?? player.purpose);
+      return;
+    }
+    if (player.entryPending) throw new LiveError(409, 'launch_pending');
     if (player.health <= 0) throw new LiveError(409, "player_downed");
     if (command.type === "cancelTreatment") { cancelTreatment(player); return; }
     if (command.type === "move") { cancelTreatment(player); player.aim = null; player.leaveAt = 0; player.destination = { x: command.x, y: command.y }; player.patrol = false; player.targetId = null; player.searching = null; Object.assign(player, freshPath()); }
@@ -1002,7 +1066,7 @@ export function createLiveService(options: LiveOptions): LiveService {
       if (!maps.get(player.mapId)!.extracts.some(exit => distance(player, exit) <= 1.5)) throw new LiveError(409, "extract_out_of_range");
       if (player.lastCombatAt > now() - COMBAT_TRAVEL_MS) throw new LiveError(409, "in_combat");
       if (pendingRows.all(player.identity).some(row => row.kind === "supply")) throw new LiveError(409, "supply_pending");
-      const ammo = Math.max(0, 60 - player.ammo), medkits = liveMedicalSupplyNeeded(player.medicine);
+      const ammo = Math.max(0, (player.loadout?.maxAmmo ?? 60) - player.ammo), medkits = liveMedicalSupplyNeeded(player.medicine);
       if (!ammo && !medkits) throw new LiveError(409, "already_supplied");
       if (!player.economyOwner || !player.gameId) throw new LiveError(401, "join_required");
       prepare(player, "supply", { id: randomUUID(), owner: player.economyOwner, gameId: player.gameId, createdAt: now(), ammo, medkits });
@@ -1016,22 +1080,28 @@ export function createLiveService(options: LiveOptions): LiveService {
     try {
       if (closed || failed) throw new LiveError(503, "service_unavailable");
       if (!hosts.has(url.host)) throw new LiveError(403, "host_not_allowed");
-      const method = ["/api/live/status", "/api/live/state"].includes(path) ? "GET" : ["/api/live/join", "/api/live/action", "/api/live/leave"].includes(path) ? "POST" : null;
+      const method = ["/api/live/status", "/api/live/state", '/api/live/entry'].includes(path) ? "GET" : ["/api/live/join", "/api/live/action", "/api/live/leave"].includes(path) ? "POST" : null;
       if (!method) return response({ code: "not_found" }, 404);
       if (request.method !== method) return response({ code: "method_not_allowed" }, 405, { Allow: method });
       const ipKey = hashToken(clientAddress);
       limit(`api:${ipKey}`, 6000);
       if (request.method === "POST" && (!origins.has(request.headers.get("origin") ?? "") || request.headers.get("sec-fetch-site") === "cross-site")) throw new LiveError(403, "origin_not_allowed");
+      if (path === '/api/live/entry') return response(entry(request));
       tick();
       if (failed) throw new LiveError(503, "service_unavailable");
       expire();
       if (path === "/api/live/status") return response(status());
       if (path === "/api/live/join") {
         const body = await readJson(request);
-        if (!Object.keys(body).every(key => ["districtId", "purpose"].includes(key)) || body.districtId !== undefined && !districtFrom(body.districtId) || body.purpose !== undefined && !purposeFrom(body.purpose)) throw new LiveError(400, "invalid_request");
+        if (!Object.keys(body).every(key => ["districtId", "purpose", 'kitId', 'intent'].includes(key)) || body.districtId !== undefined && !districtFrom(body.districtId) || body.purpose !== undefined && !purposeFrom(body.purpose)
+          || body.kitId !== undefined && !isLiveKitId(body.kitId) || body.intent !== undefined && !['deploy', 'continue'].includes(body.intent as string)) throw new LiveError(400, "invalid_request");
         limit(`join:${ipKey}`, 120);
         let identity = identityFrom(request, true), token: string | undefined;
         let player = identity ? players.get(identity.identity) ?? loadPlayer(identity.identity) : undefined;
+        if (body.intent === 'continue' && !player) throw new LiveError(409, 'no_fighter');
+        if (body.intent === 'deploy' && player && player.health > 0 && !player.entryPending) throw new LiveError(409, 'fighter_alive');
+        const creating = !player;
+        if (creating && options.economy?.entry && identity?.economy) validateLaunch(identity.economy, isLiveKitId(body.kitId) ? body.kitId : 'scav');
         if (!player?.online && status().online >= LIVE_CAPACITY) throw new LiveError(503, "server_full");
         if (!identity) {
           limit(`guest:${ipKey}`, 12, 60 * 60_000);
@@ -1047,6 +1117,15 @@ export function createLiveService(options: LiveOptions): LiveService {
         }
         players.set(player.identity, player);
         if (identity.economy) { player.economyOwner = identity.economy.key; player.gameId = identity.economy.gameId; player.lootItems ??= []; }
+        if (creating && options.economy?.entry) {
+          player.ammo = 0; player.medicine = createMedicalInventory(false); player.medkits = 0;
+          launch(player, isLiveKitId(body.kitId) ? body.kitId : 'scav', player.districtId, player.purpose, false);
+        } else if (player.entryPending) { persist(); flushEconomy(); }
+        else if (body.intent === 'deploy' && player.health <= 0 && options.economy?.entry) {
+          if (player.respawnAt > now()) throw new LiveError(409, 'respawn_not_ready');
+          launch(player, isLiveKitId(body.kitId) ? body.kitId : 'scav', districtFrom(body.districtId) ?? player.districtId, purposeFrom(body.purpose) ?? player.purpose, true);
+        }
+        if (player.entryPending) throw new LiveError(409, 'launch_pending');
         if (identity.name) player.name = identity.name;
         if (body.purpose !== undefined) player.purpose = body.purpose as LivePurpose;
         if (!player.online) {
