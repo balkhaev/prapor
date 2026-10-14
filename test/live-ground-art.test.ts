@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { buildRoadSurfacePlan, buildSurfaceMasks, cityPedestrianCrossings, paintTerrainTexture, roadHasMarkings, TERRAIN_PIGMENTS, terrainTextureResolution } from '../src/live-ground-art';
+import { buildRoadSurfacePlan, buildSurfaceMasks, cityPedestrianCrossings, paintRoadSurface, paintTerrainTexture, PIXEL_TERRAIN_PALETTES, roadHasMarkings, TERRAIN_PIGMENTS, terrainTextureResolution } from '../src/live-ground-art';
 import type { LiveLandscapePath, LiveTerrain, LiveWorld } from '../src/game/live';
 
 function world(width: number, height: number): LiveWorld {
@@ -20,6 +20,7 @@ describe('surface texture budget and continuity', () => {
     expect(terrainTextureResolution(256, 256)).toBe(16);
     expect(terrainTextureResolution(320, 320)).toBe(12);
     expect(terrainTextureResolution(448, 448)).toBe(9);
+    expect(terrainTextureResolution(512, 512)).toBe(8);
     for (const [w, h] of [[320, 240], [512, 512], [1024, 512], [2048, 2048]]) {
       const resolution = terrainTextureResolution(w!, h!);
       expect(Math.max(w!, h!) * resolution).toBeLessThanOrEqual(4096);
@@ -42,6 +43,19 @@ describe('surface texture budget and continuity', () => {
     expect(water[2]! - water[0]!).toBeGreaterThan(30);
     expect(grass[1]! - grass[0]!).toBeGreaterThan(20);
     expect(Math.max(...road) - Math.min(...road)).toBeLessThan(15);
+  });
+  test('pixel terrain uses opaque stepped palettes with distinct material motifs', () => {
+    const map = world(18, 19);
+    for (const material of Object.keys(PIXEL_TERRAIN_PALETTES) as LiveTerrain[]) {
+      const { pixels } = renderPixels(map, Array<LiveTerrain>(map.width * map.height).fill(material), 8);
+      const allowed = new Set(PIXEL_TERRAIN_PALETTES[material].map(color => color.join(','))), used = new Set<string>();
+      let opaque = true;
+      for (let at = 0; at < pixels.length; at += 4) {
+        used.add(`${pixels[at]},${pixels[at + 1]},${pixels[at + 2]}`); opaque &&= pixels[at + 3] === 255;
+      }
+      expect(opaque).toBe(true); expect([...used].every(color => allowed.has(color))).toBe(true);
+      expect(used.size).toBeGreaterThanOrEqual(3); expect(used.size).toBeLessThanOrEqual(6);
+    }
   });
 });
 
@@ -91,5 +105,21 @@ describe('authoritative road markings', () => {
     const plan = buildRoadSurfacePlan(paths, new Uint8Array(400).fill(1), 20, 20);
     expect(plan.intersections.length).toBeGreaterThan(1); expect(cityPedestrianCrossings(plan)).toHaveLength(1);
     expect(roadHasMarkings(paths[0]!)).toBe(true); expect(roadHasMarkings(paths[2]!)).toBe(false);
+  });
+  test('pixel asphalt keeps the entire continuous lane inside the physical clip', () => {
+    const map = world(30, 30), points = [{ x: 3, y: 3 }, { x: 13, y: 13 }, { x: 24, y: 13 }];
+    map.paths = [{ id: 'arterial-fixture', name: 'Тракт', kind: 'road', width: 6, points }];
+    const masks = { road: new Uint8Array(900).fill(1), indoor: new Uint8Array(900), roadRuns: [{ x: 0, y: 0, width: 30 }] };
+    const strokes: Array<{ width: number; color: string; points: number[][] }> = []; let current: number[][] = [], clipped = false, saves = 0;
+    const c = {
+      lineWidth: 0, strokeStyle: '', save() { saves++; }, restore() { saves--; }, beginPath() { current = []; },
+      rect() {}, clip() { clipped = true; }, moveTo(x: number, y: number) { current.push([x, y]); }, lineTo(x: number, y: number) { current.push([x, y]); },
+      stroke(this: { lineWidth: number; strokeStyle: string }) { expect(clipped).toBe(true); strokes.push({ width: this.lineWidth, color: this.strokeStyle, points: [...current] }); },
+    } as unknown as CanvasRenderingContext2D;
+    paintRoadSurface(c, map, masks);
+    expect(saves).toBe(0);
+    expect(strokes[0]!.width).toBeCloseTo(6.35); expect(strokes[1]!.width).toBeCloseTo(5.72);
+    expect(strokes[1]!.points).toEqual(points.map(point => [point.x + .5, point.y + .5]));
+    expect(strokes.every(stroke => /^#[0-9a-f]{6}$/i.test(stroke.color))).toBe(true);
   });
 });

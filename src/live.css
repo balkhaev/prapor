@@ -1,6 +1,6 @@
 .live-world{position:relative;width:100%;height:100%;min-height:360px;overflow:hidden;background:#15291f;isolation:isolate}
 .live-world[hidden]{display:none}
-.live-world canvas{display:block;width:100%;height:100%;outline:none;touch-action:none;cursor:crosshair}
+.live-world canvas{image-rendering:pixelated;display:block;width:100%;height:100%;outline:none;touch-action:none;cursor:crosshair}
 .live-world canvas.is-dragging{cursor:grabbing}
 .live-world canvas:focus-visible{outline:2px solid #e7c887;outline-offset:-4px}
 .live-world-overlay{position:absolute;inset:0;pointer-events:none;z-index:2}

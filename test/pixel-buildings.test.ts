@@ -1,0 +1,116 @@
+import { afterEach, expect, test } from 'bun:test';
+import type { LiveCityBuilding, LiveObstacle } from '../src/game/live';
+import { PIXEL_BUILDING_CACHE_BYTES, PixelBuildingArt, pixelBuildingSpriteBytes } from '../src/pixel-buildings';
+import { pixelIso } from '../src/pixel-art';
+import { generateLiveWorld } from '../src/game/world-generation';
+import { sceneBuildings } from '../src/live-map-art';
+
+type CanvasRecord = HTMLCanvasElement & { paints: number; integerBounds: boolean; colors: Set<string>; spans: Array<[number, number, number, number, string]> };
+let restoreDocument: (() => void) | undefined;
+afterEach(() => { restoreDocument?.(); restoreDocument = undefined; });
+
+function canvases(recordSpans = false): CanvasRecord[] {
+  const old = Object.getOwnPropertyDescriptor(globalThis, 'document'), images: CanvasRecord[] = [];
+  Object.defineProperty(globalThis, 'document', { configurable: true, value: { createElement() {
+    const image = { width: 0, height: 0, paints: 0, integerBounds: true, colors: new Set<string>(), spans: [] } as unknown as CanvasRecord;
+    const context = { fillStyle: '', setTransform() {}, fillRect(x: number, y: number, width: number, height: number) {
+      image.paints++; image.colors.add(this.fillStyle);
+      image.integerBounds &&= [x, y, width, height].every(Number.isInteger) && x >= 0 && y >= 0 && width > 0 && height > 0 && x + width <= image.width && y + height <= image.height;
+      if (recordSpans) image.spans.push([x, y, width, height, this.fillStyle]);
+    } };
+    image.getContext = (() => context) as unknown as HTMLCanvasElement['getContext'];
+    images.push(image); return image;
+  } } });
+  restoreDocument = () => { if (old) Object.defineProperty(globalThis, 'document', old); else Reflect.deleteProperty(globalThis, 'document'); };
+  return images;
+}
+
+const building: LiveCityBuilding = { id: 'brick-home', name: 'Дом', x: 10, y: 20, width: 8, height: 8, kind: 'apartment',
+  floors: 2, facade: 'brick', roof: 'gable', roofAxis: 'x', entrances: [{ x: 13, y: 20 }, { x: 13, y: 27 }] };
+
+test('all facade and roof combinations use bounded integer surfaces at all three pixel levels', () => {
+  const images = canvases(), original = structuredClone(building), art = new PixelBuildingArt();
+  for (const facade of ['brick', 'plaster', 'panel', 'metal'] as const) for (const roof of ['flat', 'gable', 'sawtooth'] as const) for (const tile of [32, 64, 128] as const) {
+    const sprite = art.get({ ...building, id: `${facade}-${roof}`, facade, roof, roofAxis: roof === 'sawtooth' ? 'y' : 'x' }, false, tile);
+    expect(Number.isInteger(sprite.anchor.x) && Number.isInteger(sprite.anchor.y)).toBe(true);
+    expect(sprite.image.width).toBeLessThanOrEqual(4096); expect(sprite.image.height).toBeLessThanOrEqual(4096);
+    expect(pixelBuildingSpriteBytes({ ...building, facade, roof }, false, tile)).toBe(sprite.image.width * sprite.image.height * 4);
+    expect(art.retainedBytes).toBeLessThanOrEqual(32 * 1024 * 1024);
+  }
+  expect(images.every(image => image.integerBounds && image.paints > 100 && image.colors.size >= 15)).toBe(true);
+  expect(building).toEqual(original);
+});
+
+test('cutaway keeps real doorway gaps transparent and removes the roof while preserving the room floor', () => {
+  const images = canvases(true), art = new PixelBuildingArt(), open = art.get(building, true, 128);
+  const image = images[0]!, pixelAt = (x: number, y: number): string | undefined => [...image.spans].reverse().find(span => x >= span[0] && y >= span[1] && x < span[0] + span[2] && y < span[1] + span[3])?.[4];
+  expect(pixelBuildingSpriteBytes(building, true, 128)).toBe(image.width * image.height * 4);
+  const interior = pixelIso(4, 4, 0, open.anchor), door = pixelIso(4, .5, 9, open.anchor), wall = pixelIso(2, .5, 9, open.anchor);
+  expect(pixelAt(interior.x, interior.y)).toBeDefined();
+  expect(pixelAt(door.x, door.y)).toBeUndefined();
+  expect(pixelAt(wall.x, wall.y)).toBeDefined();
+  expect(image.colors.has('#849589') || image.colors.has('#9d765f')).toBe(false);
+  const closed = art.get(building, false, 128);
+  expect(closed).not.toBe(open); expect(closed.image.height).toBeGreaterThan(open.image.height);
+  expect(images[1]!.colors.has('#849589') || images[1]!.colors.has('#9d765f')).toBe(true);
+});
+
+test('legacy cutaway uses the supplied perimeter pieces rather than assuming a two-cell doorway', () => {
+  const images = canvases(true), art = new PixelBuildingArt(), hall = { ...building, id: 'hall-wide-doors', entrances: [{ x: 13.5, y: 20 }, { x: 13.5, y: 27 }] };
+  const walls: LiveObstacle[] = [
+    { x: 10, y: 20, width: 2, height: 1, kind: 'wall' }, { x: 16, y: 20, width: 2, height: 1, kind: 'wall' },
+    { x: 10, y: 27, width: 2, height: 1, kind: 'wall' }, { x: 16, y: 27, width: 2, height: 1, kind: 'wall' },
+    { x: 10, y: 21, width: 1, height: 6, kind: 'wall' }, { x: 17, y: 21, width: 1, height: 6, kind: 'wall' },
+  ];
+  const original = structuredClone(walls), sprite = art.get(hall, true, 128, walls), image = images[0]!;
+  const pixelAt = (x: number, y: number) => [...image.spans].reverse().find(span => x >= span[0] && y >= span[1] && x < span[0] + span[2] && y < span[1] + span[3]);
+  for (const x of [2.5, 3.5, 4.5, 5.5]) { const at = pixelIso(x, .5, 9, sprite.anchor); expect(pixelAt(at.x, at.y)).toBeUndefined(); }
+  const actualWall = pixelIso(1.5, .5, 9, sprite.anchor); expect(pixelAt(actualWall.x, actualWall.y)).toBeDefined();
+  expect(walls).toEqual(original);
+});
+
+test('generated legacy hall cutaways preserve every actual free doorway cell and perimeter wall', () => {
+  const images = canvases(true), art = new PixelBuildingArt(), world = generateLiveWorld('pixel-door-geometry');
+  const halls = sceneBuildings(world).filter(building => building.id.startsWith('hall-')).slice(0, 8);
+  expect(halls.length).toBeGreaterThan(3);
+  for (const hall of halls) {
+    const walls = world.obstacles.filter(wall => wall.kind === 'wall' && wall.x >= hall.x && wall.y >= hall.y
+      && wall.x + wall.width <= hall.x + hall.width && wall.y + wall.height <= hall.y + hall.height);
+    const sprite = art.get(hall, true, 64, walls), image = images[images.length - 1]!;
+    const points = [...Array.from({ length: hall.width }, (_, x) => ({ x, y: 0 })), ...Array.from({ length: hall.width }, (_, x) => ({ x, y: hall.height - 1 })),
+      ...Array.from({ length: hall.height - 2 }, (_, y) => ({ x: 0, y: y + 1 })), ...Array.from({ length: hall.height - 2 }, (_, y) => ({ x: hall.width - 1, y: y + 1 }))];
+    for (const point of points) {
+      const wallCell = walls.some(wall => point.x + hall.x >= wall.x && point.y + hall.y >= wall.y && point.x + hall.x < wall.x + wall.width && point.y + hall.y < wall.y + wall.height);
+      const at = pixelIso((point.x + .5) / 2, (point.y + .5) / 2, 4.5, sprite.anchor);
+      const painted = image.spans.some(span => at.x >= span[0] && at.y >= span[1] && at.x < span[0] + span[2] && at.y < span[1] + span[3]);
+      expect(painted).toBe(wallCell);
+    }
+  }
+});
+
+test('building cache is lazy, reuses sprites, separates levels and evicts the least recently used surface', () => {
+  const images = canvases(), art = new PixelBuildingArt();
+  expect(images).toHaveLength(0);
+  const large = { ...building, width: 23, height: 9, floors: 3 as const, entrances: [] }, first = art.get(large, false);
+  expect(art.get(large, false)).toBe(first);
+  expect(art.get({ ...large, x: 100, y: 200 }, false)).toBe(first);
+  expect(art.get(large, false, 64)).not.toBe(first);
+  for (let index = 0; index < 5; index++) { art.get({ ...large, id: `large-${index}` }, false); expect(art.retainedBytes).toBeLessThanOrEqual(32 * 1024 * 1024); }
+  expect(art.get(large, false)).not.toBe(first);
+  art.clear(); expect(art.retainedBytes).toBe(0);
+  expect(art.get(large, false)).not.toBe(first);
+});
+
+test('a viewport budget lowers the whole frame level so five large houses remain cached between frames', () => {
+  const images = canvases(), art = new PixelBuildingArt();
+  const visible = Array.from({ length: 5 }, (_, index) => ({ ...building, id: `viewport-house-${index}`, width: 23, height: 9, floors: 3 as const, entrances: [] }));
+  const budget = PIXEL_BUILDING_CACHE_BYTES - 8 * 1024 * 1024;
+  const sum = (tile: 32 | 64 | 128) => visible.reduce((bytes, house) => bytes + pixelBuildingSpriteBytes(house, false, tile), 0);
+  expect(sum(128)).toBeGreaterThan(PIXEL_BUILDING_CACHE_BYTES);
+  const detail = ([128, 64, 32] as const).find(tile => sum(tile) <= budget)!;
+  expect(detail).toBe(64);
+  const firstFrame = visible.map(house => art.get(house, false, detail));
+  expect(images).toHaveLength(5); expect(art.retainedBytes).toBe(sum(detail));
+  for (let frame = 0; frame < 3; frame++) expect(visible.map(house => art.get(house, false, detail))).toEqual(firstFrame);
+  expect(images).toHaveLength(5);
+});
