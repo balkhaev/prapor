@@ -32,6 +32,8 @@ describe('inhabited district ground and access', () => {
     for (const site of world.citySites!) {
       const walks = landscape.paths.filter(path => path.id.startsWith(`footway-${site.id}-`));
       expect(walks).toHaveLength(2);
+      expect(landscape.paths.some(path => path.id === `access-${site.id}`)).toBe(false);
+      expect(walks.every(walk => walk.points.length <= 256)).toBe(true);
       for (const building of site.buildings) {
         for (const door of building.entrances) expect(walks.some(walk => walk.points.some(point => point.x === door.x && point.y === door.y))).toBe(true);
         for (let y = building.y; y < building.y + building.height; y++) for (let x = building.x; x < building.x + building.width; x++) if (!blocked[y * world.width + x]) expect(material({ x, y })).toBe('c');

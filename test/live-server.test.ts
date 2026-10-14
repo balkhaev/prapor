@@ -441,9 +441,9 @@ describe("shared endless live server", () => {
     expect(restored.server.bosses).toHaveLength(4);
     expect(restored.server.maps[0]!.npcs).toBe(getLiveMap("perimeter").npcSpawns.length + restored.server.bosses!.filter(boss => boss.state === 'alive').length); expect(service.healthy()).toBe(true);
   });
-  test.each(["perimeter-g2-a827381f", "perimeter-g3-b38b4b0d", "perimeter-g6-shipped", "perimeter-g7-shipped"])("expanding saved geometry %s preserves translated body positions, private kit and durable loose cargo across two restarts", async geometryVersion => {
-    const guest = await enter(), map = getLiveMap("perimeter"), previousOffset = geometryVersion.startsWith("perimeter-g7-") ? 32 : 0, point = { x: previousOffset, y: previousOffset };
-    expect(isLiveWalkable(map, point)).toBe(true);
+  test.each(["perimeter-g2-a827381f", "perimeter-g3-b38b4b0d", "perimeter-g6-shipped", "perimeter-g7-shipped", "perimeter-g8-shipped"])("expanding saved geometry %s preserves translated body positions, private kit and durable loose cargo across two restarts", async geometryVersion => {
+    const guest = await enter(), map = getLiveMap("perimeter"), previousOffset = geometryVersion.startsWith("perimeter-g8-") ? 96 : geometryVersion.startsWith("perimeter-g7-") ? 32 : 0, point = { x: previousOffset, y: previousOffset };
+    expect(isLiveWalkable(map, { x: LIVE_WORLD_OFFSET, y: LIVE_WORLD_OFFSET })).toBe(true);
     placePlayers([{ session: guest.session, ...point, health: 71, ammo: 17, medkits: 1, cargo: 65, stash: 120 }]);
     editStorage(db => {
       const saved = JSON.parse(db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!.state);
@@ -452,7 +452,7 @@ describe("shared endless live server", () => {
     });
     const restored = (await enter(guest.session)).state;
     expect({ width: restored.world.width, height: restored.world.height, generatorVersion: restored.world.generatorVersion })
-      .toEqual({ width: 448, height: 448, generatorVersion: LIVE_GENERATOR_VERSION });
+      .toEqual({ width: 512, height: 512, generatorVersion: LIVE_GENERATOR_VERSION });
     expect(restored.world.version).toBe(map.version); expect(restored.worldVersion).toBe(map.version);
     expect(restored.self).toMatchObject({ ammo: 17, medkits: 1, cargo: 65, stash: 120 });
     const translated = { x: point.x + LIVE_WORLD_OFFSET - previousOffset, y: point.y + LIVE_WORLD_OFFSET - previousOffset };
@@ -493,8 +493,8 @@ describe("shared endless live server", () => {
     }
   });
 
-  test.each([6, 7])('G%s offline fighters migrate before the new world is saved and can join later without a second coordinate shift', async previousVersion => {
-    const active = await enter(), offline = await enter(), body = createHealth(71), previousOffset = previousVersion === 7 ? 32 : 0; body.parts.leftLeg.fracture = true;
+  test.each([6, 7, 8])('G%s offline fighters migrate before the new world is saved and can join later without a second coordinate shift', async previousVersion => {
+    const active = await enter(), offline = await enter(), body = createHealth(71), previousOffset = previousVersion === 8 ? 96 : previousVersion === 7 ? 32 : 0; body.parts.leftLeg.fracture = true;
     editStorage(db => {
       for (const row of db.query<{ identity: string; state: string }, []>('SELECT identity,state FROM live_players').all()) {
         const fighter = JSON.parse(row.state); Object.assign(fighter, { x: previousOffset + (fighter.id === active.session.id ? 0 : 1), y: previousOffset, ammo: 17, cargo: 65, stash: 120, body, healthAt: time, safeUntil: time + 120_000 });
@@ -511,7 +511,7 @@ describe("shared endless live server", () => {
       const savedOffline = db.query<{ state: string }, []>('SELECT state FROM live_players').all().map(row => JSON.parse(row.state)).find(fighter => fighter.id === offline.session.id)!;
       expect(savedOffline).toMatchObject({ x: LIVE_WORLD_OFFSET + 1, y: LIVE_WORLD_OFFSET, ammo: 17, cargo: 65, stash: 120, body });
     } finally { db.close(); }
-    // This fighter was not loaded by the application during either G7 startup.
+    // This fighter was not loaded by the application during either new startup.
     editStorage(() => {}); editStorage(() => {});
     const late = (await enter(offline.session)).state;
     expect(late.entities.find(entity => entity.id === offline.session.id)).toMatchObject({ x: LIVE_WORLD_OFFSET + 1, y: LIVE_WORLD_OFFSET });

@@ -47,6 +47,8 @@ export function regionalStreetPlan(width: number, height: number, city: LiveCity
   const north = city.y + city.height / 4, south = city.y + city.height * 3 / 4;
   const west = city.x + city.width / 4, east = city.x + city.width * 3 / 4;
   const road = (id: string, name: string, points: LivePoint[], width = 6): LiveLandscapePath => ({ id, name, kind: 'road', width, points });
+  const loop = (id: string, name: string, x1: number, y1: number, x2: number, y2: number): LiveLandscapePath => road(id, name,
+    [{ x: x1, y: y1 }, { x: x2, y: y1 }, { x: x2, y: y2 }, { x: x1, y: y2 }, { x: x1, y: y1 }], 3.5);
   return [
     road('arterial-west', 'Западный грузовой тракт', [{ x: 10, y: 10 }, { x: left, y: 10 }, { x: left, y: height - 11 }, { x: 10, y: height - 11 }]),
     road('arterial-east', 'Восточный пригородный тракт', [{ x: width - 11, y: 10 }, { x: right, y: 10 }, { x: right, y: height - 11 }, { x: width - 11, y: height - 11 }]),
@@ -60,6 +62,14 @@ export function regionalStreetPlan(width: number, height: number, city: LiveCity
     road('collector-sawmill-north', 'Лесопильная улица', [{ x: east, y: top }, { x: east, y: city.y }]),
     road('collector-depot-south', 'Товарная улица', [{ x: west, y: bottom }, { x: west, y: city.y + city.height - 1 }]),
     road('collector-village-south', 'Слободская улица', [{ x: east, y: bottom }, { x: east, y: city.y + city.height - 1 }]),
+    ...width >= 500 ? [
+      loop('neighbourhood-customs', 'Улицы Северных складов', 28, 28, width / 2 - 40, top + 24),
+      loop('neighbourhood-sawmill', 'Лесная слобода', width / 2 + 40, 28, width - 88, top + 24),
+      loop('neighbourhood-depot', 'Улицы Путевого посёлка', 28, bottom - 24, width / 2 - 40, height - 28),
+      loop('neighbourhood-village', 'Улицы Южной слободы', width / 2 + 40, bottom - 24, width - 88, height - 28),
+      road('neighbourhood-customs-service', 'Западная складская улица', [{ x: 28, y: top + 24 }, { x: 28, y: city.y + city.height / 2 - 40 }, { x: left, y: city.y + city.height / 2 - 40 }], 3.5),
+      road('neighbourhood-depot-service', 'Улица ремонтных мастерских', [{ x: 28, y: bottom - 24 }, { x: 28, y: city.y + city.height / 2 + 40 }, { x: left, y: city.y + city.height / 2 + 40 }], 3.5),
+    ] : [],
   ];
 }
 
@@ -83,9 +93,9 @@ export function generateLandscape(world: LandscapeWorld, seed: string): { terrai
   for (const poi of world.pois.filter(poi => !poi.tags.includes('city-site'))) for (let y = poi.y; y < poi.y + poi.height; y++) for (let x = poi.x; x < poi.x + poi.width; x++) footprints[y * width + x] = 1;
   for (const site of world.citySites ?? []) for (const building of site.buildings) for (let y = building.y; y < building.y + building.height; y++) for (let x = building.x; x < building.x + building.width; x++) { indoor[y * width + x] = 1; footprints[y * width + x] = 1; }
   const riverX = width - 64;
-  const channel = [{ x: riverX + 2, y: 0 }, { x: riverX - 4, y: 54 }, { x: riverX + 3, y: 112 },
-    { x: riverX - 5, y: 184 }, { x: riverX + 4, y: 246 }, { x: riverX - 3, y: 312 },
-    { x: riverX + 4, y: 386 }, { x: riverX - 2, y: height - 1 }];
+  const channel = [{ x: riverX + 2, y: 0 }, { x: riverX - 4, y: Math.round(height * .12) }, { x: riverX + 3, y: Math.round(height * .25) },
+    { x: riverX - 5, y: Math.round(height * .41) }, { x: riverX + 4, y: Math.round(height * .55) }, { x: riverX - 3, y: Math.round(height * .7) },
+    { x: riverX + 4, y: Math.round(height * .86) }, { x: riverX - 2, y: height - 1 }];
   const paths: LiveLandscapePath[] = [{ id: 'river-east', name: 'Речка Ольховая', kind: 'river', width: 7, points: riverCurve(channel, width, height) }];
   const river = paths[0]!;
   // The same bounded curve drives the visible path, bank raster and collision water.
@@ -127,7 +137,7 @@ export function generateLandscape(world: LandscapeWorld, seed: string): { terrai
   // Logistics occupies connected service ground around the north terminals and
   // the western freight fan, rather than floating as eight unrelated islands.
   for (const rectangle of [
-    { x: 28, y: 28, width: 165, height: 30 }, { x: 28, y: 58, width: 64, height: 151 },
+    { x: 28, y: 28, width: width / 2 - 63, height: 30 }, { x: 28, y: 58, width: 64, height: height / 2 - 47 },
     { x: 26, y: height - 208, width: 64, height: 184 }, { x: 88, y: height - 92, width: 104, height: 41 },
   ]) fill(rectangle, 'y');
   // The outer places use broad clearings or working aprons; city land use is
@@ -215,6 +225,8 @@ export function generateLandscape(world: LandscapeWorld, seed: string): { terrai
       for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
         const next = { x: point.x + dx!, y: point.y + dy! };
         if (orthogonal && dx && dy || !clear(next) || bounds && !contains(next, bounds) || avoidLots && footprints[key(next)]
+          || vehicleRadius && !bridgeCorridors[key(next)] && clearance[key(next)]! < Math.ceil(vehicleRadius + .5)
+          || avoidLots && [-1, 0, 1].some(oy => [-1, 0, 1].some(ox => footprints[(next.y + oy) * width + next.x + ox]))
           || outsideRooms && indoor[key(next)] && key(next) !== end
           || dx && dy && (!clear({ x: next.x, y: point.y }) || !clear({ x: point.x, y: next.y })
             || outsideRooms && (indoor[point.y * width + next.x] || indoor[next.y * width + point.x]))) continue;
@@ -278,7 +290,9 @@ export function generateLandscape(world: LandscapeWorld, seed: string): { terrai
     for (const point of points) if (ground[key(point)] === 'w' && bridgeCorridors[key(point)]) ground[key(point)] = code;
   };
   const nearestClear = (point: LivePoint): LivePoint => {
-    for (let radius = 0; radius < 24; radius++) for (let y = point.y - radius; y <= point.y + radius; y++) for (let x = point.x - radius; x <= point.x + radius; x++) if (clear({ x, y }) && !footprints[y * width + x]) return { x, y };
+    for (let radius = 0; radius < 24; radius++) for (let y = point.y - radius; y <= point.y + radius; y++) for (let x = point.x - radius; x <= point.x + radius; x++) {
+      if ([-1, 0, 1].every(dy => [-1, 0, 1].every(dx => clear({ x: x + dx, y: y + dy }) && !footprints[(y + dy) * width + x + dx]))) return { x, y };
+    }
     throw new Error(`Transport corridor has no clear port near ${point.x},${point.y}`);
   };
   if (!world.city) throw new Error('An authored city is required for the regional street hierarchy');
@@ -386,6 +400,7 @@ export function generateLandscape(world: LandscapeWorld, seed: string): { terrai
     // Other entrances are footways, never another equal-priority through road.
     // Return branches are explicit, so simplifying the wire path cannot invent
     // a shortcut between doors on opposite sides of a room.
+    if (poi.tags.includes('city-site')) continue;
     const access: LivePoint[] = [entry.door];
     for (const door of poi.entrances.filter(door => door !== entry.door)) {
       const cells = route(entry.door, door, poi.tags.includes('city-site'));
@@ -422,19 +437,43 @@ export function generateLandscape(world: LandscapeWorld, seed: string): { terrai
     paint(points, 5, 'y'); paint(points, 1.5, 't');
     if (points.length > 1) paths.push({ id: `siding-${poi.id}`, name: `${poi.name}: погрузочная ветка`, kind: 'rail', width: 1.5, points });
   }
-  // A pair of compact exterior walks serves every actual doorway in a lot.
-  // Repeated branches form one public path per gate, keeping the static wire
-  // graph small without drawing shortcut lines through a house or its walls.
+  // All houses share the same exterior alley tree. Walking each edge outward
+  // and back retains real geometry while reusing common trunks between doors.
+  // A denser frontage therefore needs no public path for every individual house.
   for (const site of world.citySites ?? []) {
     const poi = world.pois.find(poi => poi.id === site.poiId)!;
     for (const [gateIndex, gate] of poi.entrances.entries()) {
-      const cells: LivePoint[] = [gate];
-      for (const building of site.buildings) {
-        const door = building.entrances[gateIndex]!, approach = route(gate, door, true, { x: site.x - 2, y: site.y - 2, width: site.width + 4, height: site.height + 4 });
-        paint(approach, 2, site.quarterId === 'old-center' ? 'c' : site.quarterId === 'industrial' ? 'y' : 'p', true);
-        cells.push(...approach.slice(1), ...approach.slice(0, -1).reverse());
+      const bounds = { x: site.x - 2, y: site.y - 2, width: site.width + 4, height: site.height + 4 };
+      const targets = [...site.buildings.map(building => building.entrances[gateIndex]!), ...poi.entrances.filter(port => port !== gate)];
+      const goals = new Set(targets.map(key)), remaining = new Set(goals), parents = new Int32Array(total).fill(-1), queue = new Int32Array(total);
+      const root = key(gate); let head = 0, tail = 1; queue[0] = root; parents[root] = root; remaining.delete(root);
+      while (head < tail && remaining.size) {
+        const cell = queue[head++]!, x = cell % width, y = Math.floor(cell / width);
+        for (const [nx, ny] of [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]]) {
+          const point = { x: nx!, y: ny! };
+          if (!contains(point, bounds) || !clear(point)) continue;
+          const next = key(point);
+          if (parents[next] !== -1 || indoor[next] && !goals.has(next)) continue;
+          parents[next] = cell; queue[tail++] = next; remaining.delete(next);
+        }
       }
+      if (remaining.size) throw new Error(`Neighbourhood ${site.id} has an unreachable exterior doorway`);
+      const children = new Map<number, Set<number>>();
+      for (const target of targets) for (let cell = key(target); cell !== root; cell = parents[cell]!) {
+        const parent = parents[cell]!, branch = children.get(parent) ?? new Set<number>();
+        branch.add(cell); children.set(parent, branch);
+      }
+      const cells: LivePoint[] = [gate];
+      const walk = (cell: number): void => {
+        for (const child of children.get(cell) ?? []) {
+          cells.push({ x: child % width, y: Math.floor(child / width) }); walk(child);
+          cells.push({ x: cell % width, y: Math.floor(cell / width) });
+        }
+      };
+      walk(root);
+      paint(cells, 2, site.quarterId === 'old-center' ? 'c' : site.quarterId === 'industrial' ? 'y' : 'p', true);
       const points = simplify(cells);
+      if (points.length > 256) throw new Error(`Neighbourhood ${site.id} exterior walk exceeds the bounded public path`);
       if (points.length > 1) paths.push({ id: `footway-${site.id}-${gateIndex}`, name: `${site.name}: пешеходный проход`, kind: 'trail', width: 1.5, points });
     }
   }

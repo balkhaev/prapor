@@ -14,9 +14,10 @@ export function migrateExpandedLiveCoordinates(db: Database, current: LiveWorld)
   const world = JSON.parse(row.state) as Saved;
   const previous = typeof world.geometryVersion === 'string' ? /^perimeter-g(\d+)-/.exec(world.geometryVersion) : undefined;
   if (!previous && world.geometryVersion !== undefined) return false;
-  const targetVersion = current.generatorVersion >= 8 ? 8 : 7, targetOffset = targetVersion === 8 ? 96 : 32;
+  const targetVersion = current.generatorVersion >= 9 ? 9 : current.generatorVersion >= 8 ? 8 : 7;
+  const targetOffset = targetVersion === 9 ? 128 : targetVersion === 8 ? 96 : 32;
   const frameVersion = typeof world.coordinateExpansionVersion === 'number' ? world.coordinateExpansionVersion : previous ? Number(previous[1]) : 0;
-  const previousOffset = frameVersion >= 8 ? 96 : frameVersion >= 7 ? 32 : 0, delta = targetOffset - previousOffset;
+  const previousOffset = frameVersion >= 9 ? 128 : frameVersion >= 8 ? 96 : frameVersion >= 7 ? 32 : 0, delta = targetOffset - previousOffset;
   if (delta <= 0) return false;
   const point = (value: unknown, district?: unknown): void => {
     if (!record(value) || typeof value.x !== 'number' || typeof value.y !== 'number' || !Number.isFinite(value.x) || !Number.isFinite(value.y)) return;

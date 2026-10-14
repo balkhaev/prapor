@@ -1,4 +1,4 @@
-import type { LiveContainerAnchor, LiveDistrictId, LiveObstacle, LivePoi, LivePoint, LiveZone } from './live';
+import type { LiveCityRegion, LiveContainerAnchor, LiveDistrictId, LiveObstacle, LivePoi, LivePoint, LiveZone } from './live';
 import type { LiveNpcSpawn } from './live-maps';
 import type { WorldTemplate } from './world-generation';
 import { prefabObstacles } from './world-prefabs';
@@ -6,20 +6,20 @@ import { prefabObstacles } from './world-prefabs';
 const plans: Array<{ district: LiveDistrictId; templates: string[]; names: string[]; centers: LivePoint[] }> = [
   { district: 'customs', templates: ['checkpoint', 'fuel', 'warehouse', 'office', 'containers', 'warehouse', 'workshop'],
     names: ['Западная проходная', 'Северная придорожная заправка', 'Таможенные резервные склады', 'Контора грузового тракта', 'Западный перевалочный двор', 'Северная грузовая база', 'Мастерские Западной слободы'],
-    centers: [{ x: 26, y: 24 }, { x: 86, y: 16 }, { x: 180, y: 16 }, { x: 16, y: 86 }, { x: 16, y: 180 }, { x: 210, y: 92 }, { x: 98, y: 98 }] },
+    centers: [{ x: 48, y: 14 }, { x: 110, y: 14 }, { x: 210, y: 14 }, { x: 14, y: 120 }, { x: 14, y: 212 }, { x: 242, y: 14 }, { x: 94, y: 104 }] },
   { district: 'sawmill', templates: ['cabin', 'camp', 'logging', 'hunting', 'creekcamp', 'sawmill', 'cabin'],
     names: ['Дом смотрителя леса', 'Северный лагерь лесорубов', 'Лесосклад на тракте', 'Восточный охотничий кордон', 'Прибрежная лесная стоянка', 'Малая лесопилка', 'Дома лесных рабочих'],
-    centers: [{ x: 432, y: 24 }, { x: 362, y: 16 }, { x: 268, y: 16 }, { x: 432, y: 86 }, { x: 432, y: 180 }, { x: 238, y: 92 }, { x: 350, y: 98 }] },
+    centers: [{ x: 497, y: 34 }, { x: 362, y: 14 }, { x: 278, y: 14 }, { x: 416, y: 120 }, { x: 416, y: 212 }, { x: 310, y: 14 }, { x: 376, y: 104 }] },
   { district: 'depot', templates: ['depot', 'coal', 'substation', 'wagons', 'workshop', 'substation', 'workshop'],
     names: ['Западный путевой пост', 'Южный угольный терминал', 'Подстанция грузовой ветки', 'Внешний вагонный парк', 'Мастерская путевого хозяйства', 'Южная служебная станция', 'Железнодорожные мастерские'],
-    centers: [{ x: 26, y: 424 }, { x: 86, y: 432 }, { x: 180, y: 432 }, { x: 16, y: 362 }, { x: 16, y: 268 }, { x: 210, y: 356 }, { x: 86, y: 350 }] },
+    centers: [{ x: 48, y: 498 }, { x: 110, y: 498 }, { x: 210, y: 498 }, { x: 14, y: 392 }, { x: 14, y: 300 }, { x: 242, y: 498 }, { x: 82, y: 408 }] },
   { district: 'village', templates: ['apartments', 'market', 'greenhouse', 'school', 'clinic', 'apartments', 'school'],
     names: ['Дома у Южного въезда', 'Загородный торговый двор', 'Южное тепличное хозяйство', 'Школа Восточной слободы', 'Сельский фельдшерский пункт', 'Жилые дома у сада', 'Школа Южной слободы'],
-    centers: [{ x: 432, y: 424 }, { x: 362, y: 432 }, { x: 268, y: 432 }, { x: 432, y: 362 }, { x: 432, y: 268 }, { x: 238, y: 356 }, { x: 350, y: 350 }] },
+    centers: [{ x: 497, y: 478 }, { x: 362, y: 498 }, { x: 278, y: 498 }, { x: 416, y: 392 }, { x: 416, y: 300 }, { x: 310, y: 498 }, { x: 376, y: 408 }] },
 ];
 
 /** The newly opened outer land has inhabited addresses, supplies and patrols. */
-export function generatePeripheralSites(templates: readonly WorldTemplate[], world: { width: number; height: number; streetMask: Uint8Array; established: LivePoi[]; extracts: LivePoint[] }): { pois: LivePoi[]; obstacles: LiveObstacle[]; containers: LiveContainerAnchor[]; npcSpawns: LiveNpcSpawn[]; zones: LiveZone[] } {
+export function generatePeripheralSites(templates: readonly WorldTemplate[], world: { width: number; height: number; city: LiveCityRegion; streetMask: Uint8Array; established: LivePoi[]; extracts: LivePoint[] }): { pois: LivePoi[]; obstacles: LiveObstacle[]; containers: LiveContainerAnchor[]; npcSpawns: LiveNpcSpawn[]; zones: LiveZone[] } {
   const pois: LivePoi[] = [], obstacles: LiveObstacle[] = [], containers: LiveContainerAnchor[] = [], npcSpawns: LiveNpcSpawn[] = [], zones: LiveZone[] = [];
   for (const [quarter, plan] of plans.entries()) for (const [slot, center] of plan.centers.entries()) {
     const template = templates.find(template => template.id === plan.templates[slot])!, width = slot === 0 || slot >= 5 ? 22 : 18, height = slot === 0 || slot >= 5 ? 18 : 16;
@@ -29,8 +29,8 @@ export function generatePeripheralSites(templates: readonly WorldTemplate[], wor
     for (let radius = 0; !origin && radius <= 90; radius++) for (let dy = -radius; !origin && dy <= radius; dy++) for (let dx = -radius; !origin && dx <= radius; dx++) {
       if (Math.max(Math.abs(dx), Math.abs(dy)) !== radius) continue;
       const rect = { x: center.x - Math.floor(width / 2) + dx, y: center.y - Math.floor(height / 2) + dy, width, height };
-      if (rect.x < quarter % 2 * 224 + 3 || rect.y < Math.floor(quarter / 2) * 224 + 3 || rect.x + width > (quarter % 2 + 1) * 224 - 3 || rect.y + height > (Math.floor(quarter / 2) + 1) * 224 - 3
-        || [...world.established, ...pois].some(poi => overlap(rect, poi, 5)) || overlap(rect, { x: 366, y: 0, width: 32, height: world.height }, 2)
+      if (rect.x < quarter % 2 * world.width / 2 + 3 || rect.y < Math.floor(quarter / 2) * world.height / 2 + 3 || rect.x + width > (quarter % 2 + 1) * world.width / 2 - 3 || rect.y + height > (Math.floor(quarter / 2) + 1) * world.height / 2 - 3
+        || overlap(rect, world.city, 2) || [...world.established, ...pois].some(poi => overlap(rect, poi, 5)) || overlap(rect, { x: 430, y: 0, width: 36, height: world.height }, 2)
         || world.extracts.some(at => Math.hypot(Math.max(rect.x - at.x, 0, at.x - rect.x - width + 1), Math.max(rect.y - at.y, 0, at.y - rect.y - height + 1)) < 6)) continue;
       let blocked = false;
       for (let y = rect.y; !blocked && y < rect.y + height; y++) for (let x = rect.x; x < rect.x + width; x++) if (world.streetMask[y * world.width + x]) { blocked = true; break; }

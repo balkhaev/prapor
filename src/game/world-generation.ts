@@ -6,12 +6,13 @@ import { BOSSES } from './bosses';
 import { cityLandmarkOrigin, generateCitySites } from './world-city';
 import { generateWorldProps } from './world-props';
 import { generatePeripheralSites } from './world-fringe';
+import { generateDistrictInfill } from './world-neighbourhood-infill';
 
-export const LIVE_GENERATOR_VERSION = 8;
+export const LIVE_GENERATOR_VERSION = 9;
 export const LIVE_WORLD_SEED = 'perimeter-alpha-01';
 export const LIVE_CHUNK_SIZE = 32;
-export const LIVE_WORLD_SIZE = 448;
-export const LIVE_WORLD_OFFSET = 96;
+export const LIVE_WORLD_SIZE = 512;
+export const LIVE_WORLD_OFFSET = 128;
 export interface WorldTemplate {
   id: string; name: string; theme: LiveDistrict['theme']; size: number;
   obstacles: LiveObstacle[];
@@ -66,15 +67,15 @@ const CORE_DISTRICTS: readonly LiveDistrict[] = [
   { id: 'village', name: 'Посёлок', description: 'Жилые дворы с садами, местный рынок, школа и речные переправы.', x: 128, y: 128, width: 128, height: 128, theme: 'urban', spawns: [p(249, 249)], labelPoint: p(224, 224) },
 ];
 export const LIVE_DISTRICTS: readonly LiveDistrict[] = CORE_DISTRICTS.map((district, index) => ({ ...district,
-  x: index % 2 * 224, y: Math.floor(index / 2) * 224, width: 224, height: 224,
-  spawns: [p(index % 2 ? 437 : 10, index < 2 ? 10 : 437), p(index % 2 ? 339 : 108, index < 2 ? 108 : 339)],
-  labelPoint: p(index % 2 ? 378 : 70, index < 2 ? 70 : 378),
+  x: index % 2 * 256, y: Math.floor(index / 2) * 256, width: 256, height: 256,
+  spawns: [p(index % 2 ? 501 : 10, index < 2 ? 10 : 501), p(index === 2 ? 82 : index % 2 ? 407 : 104, index < 2 ? 104 : 407)],
+  labelPoint: p(index % 2 ? 442 : 70, index < 2 ? 70 : 442),
 }));
-export const LIVE_CITY: LiveCityRegion = { name: 'Ольховск', x: 116, y: 116, width: 216, height: 216, quarters: [
-  { id: 'old-center', name: 'Старый центр', x: 116, y: 116, width: 108, height: 108 },
-  { id: 'industrial', name: 'Заводской квартал', x: 224, y: 116, width: 108, height: 108 },
-  { id: 'station', name: 'Вокзальный квартал', x: 116, y: 224, width: 108, height: 108 },
-  { id: 'residential', name: 'Южные дворы', x: 224, y: 224, width: 108, height: 108 },
+export const LIVE_CITY: LiveCityRegion = { name: 'Ольховск', x: 112, y: 112, width: 288, height: 288, quarters: [
+  { id: 'old-center', name: 'Старый центр', x: 112, y: 112, width: 144, height: 144 },
+  { id: 'industrial', name: 'Заводской квартал', x: 256, y: 112, width: 144, height: 144 },
+  { id: 'station', name: 'Вокзальный квартал', x: 112, y: 256, width: 144, height: 144 },
+  { id: 'residential', name: 'Южные дворы', x: 256, y: 256, width: 144, height: 144 },
 ] };
 export const isLiveDistrictId = (value: unknown): value is LiveDistrictId => LIVE_DISTRICTS.some(district => district.id === value);
 
@@ -102,11 +103,14 @@ const FOOTPRINTS: Record<string, [number, number]> = {
   'city-hospital': [22, 21], 'city-police': [20, 19], 'city-mall': [23, 18], 'city-tram': [22, 18],
 };
 const NORTHWEST_CENTERS = [p(48, 48), p(86, 50), p(45, 90), p(40, 142), p(155, 44), p(158, 84), p(45, 190), p(85, 190)];
+// The eastern settlements stay on the inhabited west bank. The strip beyond
+// the river carries the boundary road rather than squeezing warehouses into it.
+const NORTHEAST_CENTERS = [p(405, 44), p(300, 48), p(410, 106), p(410, 164), p(353, 42), p(354, 94), p(411, 222), p(296, 100)];
 const PLACE_CENTERS: Record<LiveDistrictId, LivePoint[]> = {
   customs: NORTHWEST_CENTERS,
-  sawmill: NORTHWEST_CENTERS.map(at => p(LIVE_WORLD_SIZE - at.x, at.y)),
+  sawmill: NORTHEAST_CENTERS,
   depot: NORTHWEST_CENTERS.map(at => p(at.x, LIVE_WORLD_SIZE - at.y)),
-  village: NORTHWEST_CENTERS.map(at => p(LIVE_WORLD_SIZE - at.x, LIVE_WORLD_SIZE - at.y)),
+  village: NORTHEAST_CENTERS.map(at => p(at.x, LIVE_WORLD_SIZE - at.y)),
 };
 const PLACE_NAMES: Record<LiveDistrictId, string[]> = {
   customs: ['Терминал «Северный»', 'Проходная у тракта', 'Грузовой двор «Ржавый»', 'Ангары «Промзона»', 'Заправка «Стрелка»', 'КПП «Кирпич»', 'Склады «Союз»', 'Мастерские у насыпи'],
@@ -162,7 +166,7 @@ export function generateLiveWorld(seed = LIVE_WORLD_SEED): LiveMapDefinition {
       for (let ny = Math.max(0, Math.floor(y - radius)); ny <= Math.min(LIVE_WORLD_SIZE - 1, Math.ceil(y + radius)); ny++) for (let nx = Math.max(0, Math.floor(x - radius)); nx <= Math.min(LIVE_WORLD_SIZE - 1, Math.ceil(x + radius)); nx++) if (Math.hypot(nx - x, ny - y) <= radius) streetMask[ny * LIVE_WORLD_SIZE + nx] = 1;
     }
   }
-  for (let y = 214; y <= 234; y++) for (let x = 214; x <= 234; x++) streetMask[y * LIVE_WORLD_SIZE + x] = 1;
+  for (let y = LIVE_WORLD_SIZE / 2 - 10; y <= LIVE_WORLD_SIZE / 2 + 10; y++) for (let x = LIVE_WORLD_SIZE / 2 - 10; x <= LIVE_WORLD_SIZE / 2 + 10; x++) streetMask[y * LIVE_WORLD_SIZE + x] = 1;
   const extracts = districts.flatMap(district => district.spawns.map(point => ({ ...point })));
   const choices: Array<{ cx: number; cy: number; slot: number; district: LiveDistrict; template: WorldTemplate; rotation: number; width: number; height: number; center: LivePoint; city: boolean; origin?: LivePoint }> = [];
   const npcOwners: LivePoi[] = [], poiFactions = new Map<string, 'scavs' | 'raiders'>();
@@ -182,7 +186,7 @@ export function generateLiveWorld(seed = LIVE_WORLD_SEED): LiveMapDefinition {
       center: p(center.x + Math.floor(random() * 5) - 2, center.y + Math.floor(random() * 5) - 2) });
   }
   const cityTemplates = ['city-hospital', 'city-mall', 'warehouse', 'city-tram', 'city-police', 'archive', 'city-mall', 'office', 'city-tram', 'depot', 'market', 'city-hospital', 'apartments', 'school', 'city-mall', 'city-police'];
-  const cityCenters = [144, 198, 252, 306];
+  const cityCenters = Array.from({ length: 4 }, (_, index) => city.x + city.width / 8 + index * city.width / 4);
   for (let cy = 0; cy < 4; cy++) for (let column = 0; column < 4; column++) {
     const slot = cy * 4 + column, district = districts[(cy < 2 ? 0 : 2) + (column < 2 ? 0 : 1)]!, template = WORLD_TEMPLATES.find(template => template.id === cityTemplates[slot])!;
     const [landmarkWidth, landmarkHeight] = FOOTPRINTS[template.id]!;
@@ -210,7 +214,7 @@ export function generateLiveWorld(seed = LIVE_WORLD_SEED): LiveMapDefinition {
         for (const { x, y } of candidates) {
           if (x < minX || y < minY || x > maxX || y > maxY) continue;
           const rectangle = { x, y, width: choice.width, height: choice.height };
-          if (!choice.city && (intersects(rectangle, city, 2) || intersects(rectangle, { x: 366, y: 0, width: 32, height: LIVE_WORLD_SIZE }, 1))) continue;
+          if (!choice.city && (intersects(rectangle, city, 2) || intersects(rectangle, { x: 430, y: 0, width: 36, height: LIVE_WORLD_SIZE }, 1))) continue;
           if (choice.city && (x < city.x + 3 || y < city.y + 3 || x + choice.width > city.x + city.width - 3 || y + choice.height > city.y + city.height - 3 || Math.hypot(x + choice.width / 2 - choice.center.x, y + choice.height / 2 - choice.center.y) > 6)) continue;
           let street = false;
           for (let ny = y; !street && ny < y + choice.height; ny++) for (let nx = x; nx < x + choice.width; nx++) if (streetMask[ny * LIVE_WORLD_SIZE + nx]) { street = true; break; }
@@ -276,13 +280,14 @@ export function generateLiveWorld(seed = LIVE_WORLD_SEED): LiveMapDefinition {
   const neighbourhoods = generateCitySites(city, LIVE_WORLD_SIZE, streetMask, pois.filter(poi => poi.tags.includes('city')));
   pois.push(...neighbourhoods.pois); obstacles.push(...neighbourhoods.obstacles); containers.push(...neighbourhoods.containers);
   npcSpawns.push(...neighbourhoods.npcSpawns); zones.push(...neighbourhoods.zones);
-  const fringe = generatePeripheralSites(WORLD_TEMPLATES, { width: LIVE_WORLD_SIZE, height: LIVE_WORLD_SIZE, streetMask, established: pois, extracts });
+  const fringe = generatePeripheralSites(WORLD_TEMPLATES, { width: LIVE_WORLD_SIZE, height: LIVE_WORLD_SIZE, city, streetMask, established: pois, extracts });
   obstacles.push(...fringe.obstacles); zones.push(...fringe.zones); pois.push(...fringe.pois); containers.push(...fringe.containers); npcSpawns.push(...fringe.npcSpawns);
+  obstacles.push(...generateDistrictInfill({ width: LIVE_WORLD_SIZE, height: LIVE_WORLD_SIZE, city, obstacles, pois, extracts, districts, containers, npcSpawns, streetMask }, seed));
   // Trees form groves across administrative boundaries. A clear ring prevents sealed cells.
-  const groves = [p(188, 30), p(265, 35), p(425, 130), p(312, 40), p(26, 108), p(24, 218), p(30, 340), p(280, 420), p(160, 420), p(50, 300), p(420, 310), p(75, 112)];
+  const groves = [p(242, 32), p(279, 36), p(492, 148), p(362, 24), p(24, 116), p(24, 240), p(24, 370), p(280, 488), p(244, 474), p(50, 280), p(492, 354), p(83, 118)];
   for (const grove of groves) for (let index = 0; index < 48; index++) {
     const angle = random() * Math.PI * 2, radius = Math.sqrt(random()) * 19, point = p(Math.round(grove.x + Math.cos(angle) * radius), Math.round(grove.y + Math.sin(angle) * radius));
-    if (point.x < 2 || point.y < 10 || point.x > LIVE_WORLD_SIZE - 3 || point.y > LIVE_WORLD_SIZE - 3 || intersects({ ...point, width: 1, height: 1 }, city, 2) || point.x >= 366 && point.x <= 398
+    if (point.x < 2 || point.y < 10 || point.x > LIVE_WORLD_SIZE - 3 || point.y > LIVE_WORLD_SIZE - 3 || intersects({ ...point, width: 1, height: 1 }, city, 2) || point.x >= 430 && point.x <= 466
       || [-1, 0, 1].some(dy => [-1, 0, 1].some(dx => streetMask[(point.y + dy) * LIVE_WORLD_SIZE + point.x + dx]))
       || pois.some(poi => intersects({ ...point, width: 1, height: 1 }, poi, 2)) || extracts.some(exit => Math.hypot(exit.x - point.x, exit.y - point.y) < 8) || obstacles.some(wall => intersects({ ...point, width: 1, height: 1 }, wall, 1))) continue;
     obstacles.push(cover(point.x, point.y, 1, 1, 'tree'));
