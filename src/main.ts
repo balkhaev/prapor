@@ -130,7 +130,7 @@ import { modularWeaponArtFamilies, modularWeaponArtFamily, modularWeaponArtRevis
 import { MODULE_DISPLAY_SLOTS, moduleCatalogPage, moduleFitsWeaponFamily, moduleModelMatches, moduleMountLabel, moduleSlotHint } from "./module-catalog";
 import { getResolvedModuleMounts, type ModuleModel } from "./game/modules";
 import { scavGearIllustration } from "./scav-gear-art";
-import { sectorArt, roomMiniArt } from "./command-art";
+import { roomMiniArt } from "./command-art";
 import { getCommandSummary, type CommandSummary, type CommandRoomTab, type RoomCommandStatus } from "./command-summary";
 import { getGameplayGuidance } from "./gameplay-guidance";
 import { gameplayFocus, gameplayRoadmap, scavHealthPanel, updateScavHealthPanels, medicalPackEditor, raidHealthPanel } from "./gameplay-ui";
@@ -166,6 +166,7 @@ import { mountAccountUI } from "./account-ui";
 
 import { readAccountEmailLink, isAccountEmailFragment, type AccountEmailLink } from "./account-link";
 import { createLiveMode } from "./live-ui";
+import { ENTRY_DISTRICTS, multiplayerEntryBrief, multiplayerSelection, type RaidEntrySelection } from "./multiplayer-entry";
 import { fleaPage, fleaPricePreview, readFleaOrder, readFleaInteger, raidLootReceipt, raidLootOverflow, raidGearReceipt, raidModulePending, barterConfirmation, type FleaView, type FleaTab, type TradeKindFilter, type LootCatalogGroup } from './flea-ui';
 import { getBarterQuote } from './game/barter';
 import { getLootUses } from './game/loot-uses';
@@ -374,7 +375,7 @@ document.addEventListener("pointerdown", captureInterfacePointer, true);
 const app = document.querySelector<HTMLDivElement>("#app")!;
 const names: Record<Page, string> = {
 	home: "Штаб",
-	raids: "Рейды",
+	raids: "Рейд",
 	arsenal: "Арсенал",
 	base: "База",
 	contracts: "Контракты",
@@ -384,7 +385,7 @@ const names: Record<Page, string> = {
 	achievements: "Достижения",
 	flea: "Барахолка",
 };
-app.innerHTML = `<div id="save-banner" class="save-banner" role="status" hidden></div><div class="shell command-shell"><header class="topbar command-hud"><div class="command-brand"><span class="brand-mark">П</span><div><strong>ПРАПОР</strong><small>УБЕЖИЩЕ 07</small></div></div><div class="level"><span class="eyebrow">Репутация</span><strong id="level-label"></strong><div class="xp-track"><i id="xp-fill"></i></div></div><div class="resources">${[["money", "Рубли"], ["ammo", "Патроны"], ["medicine", "Медикаменты"], ["scrap", "Материалы"], ["intel", "Разведданные"]].map(([key, label]) => `<div class="resource" title="${label}">${icon(key!,18)}<div><label>${label}</label><strong id="res-${key}"></strong></div><i class="resource-cap" id="cap-${key}"></i></div>`).join("")}</div><button class="settings" data-action="settings" aria-label="Сохранение и помощь">${icon("settings",18)}</button></header><main class="main command-main"><div class="command-toolbar"><div class="command-heading"><h1>Свои люди. Своё убежище.</h1><span><i class="status-dot"></i><span id="passive-note">База на связи</span></span></div><nav class="nav command-tools" aria-label="Инструменты штаба">${(Object.keys(names) as Page[]).map((id) => `<button data-page="${id}" aria-label="${names[id]}" title="${names[id]}">${icon(id,17)}<span>${names[id]}</span>${id === "raids" ? '<b class="badge" id="raid-badge">0</b>' : id === "squad" ? '<b class="badge" id="squad-badge" hidden>0</b>' : ""}</button>`).join("")}</nav></div><div class="command-stage-layout"><section id="hero" class="hero-grid"><section class="world-card"><div class="world-head"><div class="view-switch" aria-label="Вид сцены"><button class="active" data-view="base" aria-label="Убежище" title="Убежище" aria-pressed="true">${icon("home",14)} Убежище</button><button data-view="map" aria-label="Сектора" title="Сектора" aria-pressed="false">${icon("raids",14)} Сектора</button><button data-view="raid" aria-label="Живой рейд" title="Живой рейд" aria-pressed="false" disabled>${icon("people",14)} Рейд</button></div><button class="text-button room-index-button" data-page="base">${icon("base",14)} База</button><span class="world-coordinate mono">БАЗА 07 · СЕВЕР</span></div><div id="world" aria-label="Территория базы: постройки, двор и рабочие"></div><div class="world-bottom"><span><i class="status-dot"></i><span id="scene-hint">Выбери постройку, свободную землю или бойца</span></span><span id="world-raid-note">ОТРЯД НА БАЗЕ</span></div><div class="room-shortcuts" hidden></div></section></section><aside id="command-dock" class="command-dock" aria-label="Сводка и управление выбранным объектом"></aside></div><section id="command-crew" class="command-crew" aria-label="Отряд и рабочие"></section><section id="command-routes" class="command-routes" aria-label="Рейды и сектора"></section><div id="offline-summary"></div><footer class="footer-line command-footer"><span id="save-status">ПРОГРЕСС НА ЭТОМ УСТРОЙСТВЕ</span><span>ПРАПОР · 0.15.0</span></footer></main></div><div id="tool-root" class="tool-backdrop" hidden><section class="tool-window" role="dialog" aria-modal="true" aria-labelledby="tool-title"><header class="tool-head"><div id="page-head" class="page-head"></div><button class="icon-button" data-action="close-tools" aria-label="Закрыть инструмент и вернуться в штаб">×</button></header><div class="tool-scroll"><div id="expedition-alerts"></div><div id="panel"></div></div></section></div><div id="context-shade" class="context-shade" hidden></div><div id="toast" role="status" aria-live="polite" hidden></div><div id="inspector-root"></div><div id="modal-root"></div>`;
+app.innerHTML = `<div id="save-banner" class="save-banner" role="status" hidden></div><div class="shell command-shell"><header class="topbar command-hud"><div class="command-brand"><span class="brand-mark">П</span><div><strong>ПРАПОР</strong><small>УБЕЖИЩЕ 07</small></div></div><div class="level"><span class="eyebrow">Репутация</span><strong id="level-label"></strong><div class="xp-track"><i id="xp-fill"></i></div></div><div class="resources">${[["money", "Рубли"], ["ammo", "Патроны"], ["medicine", "Медикаменты"], ["scrap", "Материалы"], ["intel", "Разведданные"]].map(([key, label]) => `<div class="resource" title="${label}">${icon(key!,18)}<div><label>${label}</label><strong id="res-${key}"></strong></div><i class="resource-cap" id="cap-${key}"></i></div>`).join("")}</div><button class="settings" data-action="settings" aria-label="Сохранение и помощь">${icon("settings",18)}</button></header><main class="main command-main"><div class="command-toolbar"><div class="command-heading"><h1>Свои люди. Своё убежище.</h1><span><i class="status-dot"></i><span id="passive-note">База на связи</span></span></div><nav class="nav command-tools" aria-label="Инструменты штаба">${(Object.keys(names) as Page[]).map((id) => `<button data-page="${id}" aria-label="${names[id]}" title="${names[id]}">${icon(id,17)}<span>${names[id]}</span>${id === "raids" ? '<b class="badge" id="raid-badge" hidden>0</b>' : id === "squad" ? '<b class="badge" id="squad-badge" hidden>0</b>' : ""}</button>`).join("")}</nav></div><div class="command-stage-layout"><section id="hero" class="hero-grid"><section class="world-card"><div class="world-head"><div class="view-switch" aria-label="Вид сцены"><button class="active" data-view="base" aria-label="Убежище" title="Убежище" aria-pressed="true">${icon("home",14)} Убежище</button><button data-view="map" aria-label="Маршруты отряда" title="Маршруты отряда" aria-pressed="false">${icon("raids",14)} Маршруты</button><button data-view="raid" aria-label="Задание отряда" title="Задание отряда" aria-pressed="false" disabled>${icon("people",14)} Задание</button></div><button class="text-button room-index-button" data-page="base">${icon("base",14)} База</button><span class="world-coordinate mono">БАЗА 07 · СЕВЕР</span></div><div id="world" aria-label="Территория базы: постройки, двор и рабочие"></div><div class="world-bottom"><span><i class="status-dot"></i><span id="scene-hint">Выбери постройку, свободную землю или бойца</span></span><span id="world-raid-note">ОТРЯД НА БАЗЕ</span></div><div class="room-shortcuts" hidden></div></section></section><aside id="command-dock" class="command-dock" aria-label="Сводка и управление выбранным объектом"></aside></div><section id="command-crew" class="command-crew" aria-label="Отряд и рабочие"></section><section id="command-routes" class="command-routes" aria-label="Рейды и сектора"></section><div id="offline-summary"></div><footer class="footer-line command-footer"><span id="save-status">ПРОГРЕСС НА ЭТОМ УСТРОЙСТВЕ</span><span>ПРАПОР · 0.15.0</span></footer></main></div><div id="tool-root" class="tool-backdrop" hidden><section class="tool-window" role="dialog" aria-modal="true" aria-labelledby="tool-title"><header class="tool-head"><div id="page-head" class="page-head"></div><button class="icon-button" data-action="close-tools" aria-label="Закрыть инструмент и вернуться в штаб">×</button></header><div class="tool-scroll"><div id="expedition-alerts"></div><div id="panel"></div></div></section></div><div id="context-shade" class="context-shade" hidden></div><div id="toast" role="status" aria-live="polite" hidden></div><div id="inspector-root"></div><div id="modal-root"></div>`;
 const panel = document.querySelector<HTMLDivElement>("#panel")!;
 document.querySelector<HTMLButtonElement>('.nav [data-page="achievements"]')!.insertAdjacentHTML('beforeend', '<b class="badge" id="achievement-badge">0/12</b>');
 app.insertAdjacentHTML('beforeend', '<aside id="achievement-notice" class="achievement-notice" aria-label="Новая нашивка" hidden></aside>');
@@ -392,7 +393,7 @@ document.querySelector(".command-footer")!.prepend(document.querySelector("#offl
 document.querySelector(".world-head .view-switch")!.insertAdjacentHTML("afterend", '<div class="camera-controls" role="group" aria-label="Вид убежища"><button data-camera="out" aria-label="Отдалить убежище" title="Отдалить (−)">−</button><span id="camera-scale" class="camera-scale" aria-label="Масштаб">100%</span><button data-camera="in" aria-label="Приблизить убежище" title="Приблизить (+)">+</button><button data-camera="fit" class="camera-fit" aria-label="Обзор всего убежища" title="Обзор всего убежища (0)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 9V3h6m6 0h6v6m0 6v6h-6M9 21H3v-6"/></svg><span>Обзор</span></button><button data-camera="pan" aria-label="Рука: перемещать вид" title="Рука: перетаскивать убежище" aria-pressed="false"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 12V5a2 2 0 0 1 4 0v7-8a2 2 0 0 1 4 0v8-5a2 2 0 0 1 4 0v8c0 4-3 7-7 7h-1c-2 0-4-1-5-3L3 12a2 2 0 0 1 3-2l2 2"/></svg></button></div>');
 const worldViewport = document.querySelector<HTMLElement>("#world")!;
 worldViewport.insertAdjacentHTML("afterend", '<div id="live-world" aria-label="Общий онлайн-периметр" hidden></div>');
-document.querySelector(".world-head .view-switch")!.insertAdjacentHTML("beforeend", '<button data-view="live" aria-label="Бесконечный лайв онлайн" title="Один общий сервер" aria-pressed="false"><span class="live-tab-dot" aria-hidden="true"></span> Лайв · онлайн</button>');
+document.querySelector(".world-head .view-switch")!.insertAdjacentHTML("beforeend", '<button data-view="live" aria-label="Мультиплеерный рейд" title="Общий Периметр" aria-pressed="false"><span class="live-tab-dot" aria-hidden="true"></span> Рейд · онлайн</button>');
 document.querySelector('.camera-controls [data-camera="fit"]')!.insertAdjacentHTML("beforebegin", `<button data-camera="near" class="camera-fit camera-near" aria-label="Рабочий вид базы" title="Рабочий вид базы: ближе к постройкам">${icon("base",15)}<span>К постройкам</span></button>`);
 document.querySelector(".world-head")!.insertAdjacentHTML("beforeend", `<button class="scene-sound" data-action="toggle-sound" aria-label="Звуки игры" aria-pressed="false" title="Включить звуки игры">${icon("sound",17)}<span>Звук</span></button>`);
 worldViewport.insertAdjacentHTML("afterend", '<div id="scene-hover" class="scene-hover" hidden><strong></strong><span></span></div>');
@@ -1128,7 +1129,7 @@ function hud() {
 		`${Math.min(100, ((state.xp - start) / (end - start)) * 100)}%`;
 	const waitingCount = raidRepresentatives(state.raids).filter((raid) => raid.expedition?.status === "choice").length;
 	document.querySelector("#raid-badge")!.textContent = waitingCount ? "!" : String(state.raids.length);
-	document.querySelector<HTMLButtonElement>('.nav [data-page="raids"]')?.setAttribute("aria-label", waitingCount ? `Рейды: ${waitingCount} ждут приказа` : "Рейды");
+	document.querySelector<HTMLButtonElement>('.nav [data-page="raids"]')?.setAttribute("aria-label", "Рейд");
 	document.querySelector("#passive-note")!.textContent =
 		state.money >= getRecoveryAllowance(state) ? "Резерв заполнен · прибыль в рейдах" : `Резерв: +${getIncomePerMinute(state)} ₽ / мин`;
 	const incomeStatus = document.querySelector<HTMLElement>("#income-status");
@@ -1394,15 +1395,17 @@ function loadoutEditor(scav: Scav, trainingExpanded = false) {
 	return `<section class="inspector-section loadout-section"><div class="inspector-section-title"><h3>${busy ? "Комплект в рейде" : "Комплект для выхода"}</h3><button class="text-button" data-action="open-equipment" data-focus-key="equipment-store">Склад и сборка →</button></div><div class="loadout-stats"><span>Вес ${stats.weight.toFixed(1)} кг</span><span>Защита ${Math.round(stats.protection * 100)}%</span><span>Груз до ${stats.capacity.toFixed(1)} ед.</span><span>Время ×${stats.speedMultiplier.toFixed(2)}</span></div>${role ? `<p class="field-hint">${e(getWeaponRole(role).label)}: ${e(getWeaponRole(role).description)}</p>` : ""}${options}${ammunition}${medicalPackEditor(state, scav)}<details class="training-section" ${trainingExpanded ? "open" : ""}><summary data-focus-key="training-summary">Подготовка оснащения · броня ${scav.gear.armor} / рюкзак ${scav.gear.backpack}</summary><p class="field-hint">Постоянная подготовка бойца дополняет выбранные предметы.</p><div class="gear-grid">${gearCard(scav, "armor")}${gearCard(scav, "backpack")}</div></details></section>`;
 }
 function sortiePreview(scav: Scav) {
+	if (page !== "raids" && scav.status !== "raiding") return `<section class="inspector-section sortie-section"><h3>Играть на Периметре</h3><p>В общем рейде ты управляешь своим бойцом. Его комплект выбирается перед выходом. Люди убежища выполняют отдельные задания.</p><button class="button" data-open-live>В рейд →</button><button class="text-button" data-mission-board>Задания отряда →</button></section>`;
 	const map = MAP_BY_ID[selectedMap]!, quote = getRaidQuote(state, scav, map);
 	return `<section class="inspector-section sortie-section"><h3>${scav.status === "raiding" ? "Следующая экспедиция" : "Новая экспедиция"}</h3><label class="field-label">Сектор<select data-inspector-map data-focus-key="map" aria-label="Сектор для экспедиции">${MAPS.map((sector) => `<option value="${sector.id}" ${sector.id === selectedMap ? "selected" : ""} ${state.level < sector.level ? "disabled" : ""}>${e(sector.name)}${state.level < sector.level ? ` · ур. ${sector.level}` : ""}</option>`).join("")}</select></label>${raidPlanEditor(state, scav, selectedMap)}${sectorIntelPanel(state, selectedMap)}${raidRelationsPanel(state, scav, selectedMap)}<div class="sortie-preview"><span><strong data-chance="${scav.id}">${Math.round(quote.chance * 100)}% успеха</strong><small>Первый этап</small></span><span><strong>${seconds(quote.duration)}</strong><small>До точки связи</small></span><span><strong data-dispatch-cost="${scav.id}">${n(quote.money)} ₽ + ${quote.ammo} патр.${quote.intel ? ` + ${quote.intel} разв.` : ""}${quote.medicine ? ` + ${quote.medicine} мед.` : ""}</strong><small>На входе</small></span></div><p class="field-hint">До трёх этапов. После каждого — эвакуация или риск дальше. Добыча остаётся в рюкзаке до возвращения; чертежи сохраняются сразу.</p></section>`;
 }
 function inspectorFooter(scav: Scav, raid: Raid | undefined) {
+	if (!raid && page !== "raids") return `<footer class="inspector-actions"><div><strong>Общий Периметр</strong><span>Игроки, NPC и добыча в одном мире</span></div><button class="button" data-open-live>В рейд ${icon("arrow",17)}</button></footer>`;
 	if (raid?.squad) return `<footer class="inspector-actions"><div><strong>Совместный рейд · ${getRaidGroup(state, raid).length} бойца</strong><span>Приказ касается всего состава</span></div><button class="button secondary" data-watch-raid="${getRaidGroupKey(raid)}" data-focus-key="party-watch">Наблюдать отряд →</button></footer>`;
 	const run = raid?.expedition;
 	if (raid && run?.status === "choice") return `<footer class="inspector-actions decision-footer"><div><strong>Точка ${run.stage} / 3 · связь установлена</strong><small class="dispatch-preview">В рюкзаке ≈ ${n(getCargoValue(run.cargo))} ₽</small><span>${run.stage >= 3 ? "Маршрут пройден. Забери добычу на базу" : "Выбери путь выше или возвращайся сейчас"}</span></div><button class="button" data-action="extract" data-id="${raid.id}" data-focus-key="footer-extract">Эвакуация ${icon("check", 17)}</button></footer>`;
 	const map = MAP_BY_ID[selectedMap]!, quote = getRaidQuote(state, scav, map);
-	return `<footer class="inspector-actions"><div><strong>${raid ? "Боец на маршруте" : e(map.name)}</strong><small class="dispatch-preview"><b data-chance="${scav.id}">${Math.round(quote.chance * 100)}% успеха</b> · <span data-dispatch-cost="${scav.id}">${n(quote.money)} ₽ + ${quote.ammo} патр.${quote.intel ? ` + ${quote.intel} разв.` : ""}${quote.medicine ? ` + ${quote.medicine} мед.` : ""}</span></small><span data-dispatch-note="${scav.id}">${e(quote.reason ?? "Готов к первому этапу")}</span></div><button class="button" data-action="dispatch" data-id="${scav.id}" data-focus-key="dispatch" ${quote.reason ? "disabled" : ""}>В рейд ${icon("arrow", 17)}</button></footer>`;
+	return `<footer class="inspector-actions"><div><strong>${raid ? "Боец на маршруте" : e(map.name)}</strong><small class="dispatch-preview"><b data-chance="${scav.id}">${Math.round(quote.chance * 100)}% успеха</b> · <span data-dispatch-cost="${scav.id}">${n(quote.money)} ₽ + ${quote.ammo} патр.${quote.intel ? ` + ${quote.intel} разв.` : ""}${quote.medicine ? ` + ${quote.medicine} мед.` : ""}</span></small><span data-dispatch-note="${scav.id}">${e(quote.reason ?? "Готов к первому этапу")}</span></div><button class="button" data-action="dispatch" data-id="${scav.id}" data-focus-key="dispatch" ${quote.reason ? "disabled" : ""}>Отправить на задание ${icon("arrow", 17)}</button></footer>`;
 }
 function scavWorkPanel(scav: Scav) {
 	const room = state.shelter.rooms.find((item) => item.id === scav.assignment); if (!room) return "";
@@ -1746,7 +1749,7 @@ function renderCommandBoard() {
 const crewEvents = getSquadSocialEvents(state);
 	const focusedWorker = document.activeElement instanceof HTMLElement && crew.contains(document.activeElement) ? document.activeElement.dataset.workerHandle ?? document.activeElement.dataset.scav : null;
 	const focusWasHandle = document.activeElement instanceof HTMLElement && Boolean(document.activeElement.dataset.workerHandle);
-	crew.innerHTML = `<div class="command-strip-head"><h2>Свои люди <span>${state.scavs.length} / ${getScavCapacity(state)}</span><small class="crew-drag-help">Перенеси портрет в комнату</small></h2><button class="text-button" data-page="raids">Снаряжение и приказы →</button></div><div class="command-crew-strip">${state.scavs.map((scav) => {
+	crew.innerHTML = `<div class="command-strip-head"><h2>Свои люди <span>${state.scavs.length} / ${getScavCapacity(state)}</span><small class="crew-drag-help">Перенеси портрет в комнату</small></h2><button class="text-button" data-mission-board>Снаряжение отряда →</button></div><div class="command-crew-strip">${state.scavs.map((scav) => {
 		const raid = state.raids.find((item) => item.scavId === scav.id), working = scav.assignment ? state.shelter.rooms.find((item) => item.id === scav.assignment) : null;
 		const waiting = raid?.expedition?.status === "choice";
 		const pickReason = workerPickReason(scav.id);
@@ -1756,7 +1759,7 @@ const sharedEvent = crewEvents.find(event => event.scavIds.includes(scav.id));
 	const crewStrip = crew.querySelector<HTMLElement>(".command-crew-strip"); if (crewStrip) crewStrip.scrollLeft = crewScroll;
 	if (focusedWorker) crew.querySelector<HTMLElement>(`[data-${focusWasHandle ? "worker-handle" : "scav"}="${CSS.escape(focusedWorker)}"]`)?.focus({ preventScroll: true });
 	const routes = document.querySelector<HTMLElement>("#command-routes")!;
-	routes.innerHTML = `<div class="command-strip-head"><h2>За периметром <span>${state.raids.length} в пути</span></h2><button class="text-button" data-page="raids">Подготовить выход →</button></div>${state.raids.length ? `<div class="command-active-raids">${state.raids.map((raid) => `<button class="mission-chip ${raid.expedition?.status === "choice" ? "needs-decision" : ""}" data-watch-raid="${raid.id}" aria-label="Наблюдать рейд: ${e(raid.scavName)}"><span>${icon("raids",15)} ${e(raid.scavName)} · ${e(MAP_BY_ID[raid.mapId]!.name)}</span><strong data-raid-time="${raid.id}">${raid.expedition?.status === "choice" ? "ПРИКАЗ" : seconds((raid.endsAt-Date.now())/1000)}</strong><i class="progress"><i data-raid-progress="${raid.id}"></i></i></button>`).join("")}</div>` : ""}<div class="command-sector-strip">${MAPS.map((map) => `<button class="sector-chip ${map.id === selectedMap ? "selected" : ""} ${state.level < map.level ? "locked" : ""}" data-command-map="${map.id}" ${state.level < map.level ? "disabled" : ""} aria-label="Подготовить выход: ${e(map.name)}${state.level < map.level ? `, требуется уровень ${map.level}` : ""}"><span class="sector-chip-art" aria-hidden="true">${sectorArt(map.id, `board-${map.id}`)}</span><span><strong>${e(map.name)}</strong><small>${state.level < map.level ? `УР. ${map.level} · закрыт` : `${map.reward[0]}–${map.reward[1]} ₽`}</small></span>${state.level < map.level ? icon("lock",12) : icon("arrow",12)}</button>`).join("")}</div>`;
+	routes.innerHTML = `<div class="command-strip-head"><h2>Общий Периметр</h2><button class="text-button" data-open-live>Подготовить выход →</button></div><div class="command-sector-strip">${ENTRY_DISTRICTS.map(district => `<button class="sector-chip" data-live-district="${district.id}" aria-label="Подготовить выход: ${district.name}"><span class="sector-chip-art" aria-hidden="true">${district.symbol}</span><span><strong>${district.name}</strong><small>${district.detail}</small></span>${icon("arrow",12)}</button>`).join("")}</div><button class="text-button" data-mission-board>Задания отряда · ${state.raids.length} в пути →</button>`;
 }
 function commandNextAction(item: RoomCommandStatus) {
 	const room = state.shelter.rooms.find((candidate) => candidate.id === item.roomId); if (!room) return "";
@@ -1785,7 +1788,7 @@ function commandOverview(summary = getCommandSummary(state)) {
 		system("Журнал", "journal", last ? `${last.scavName}: ${last.success ? "вернулся" : "потери"}` : "Отчёты о выходах", 'data-page="journal"'),
 		system("Память отряда", "intel", `${state.blueprints.length} открытий`, 'data-action="open-discoveries"'),
 	].join("");
-	return `${gameplayFocus(getGameplayGuidance(state))}${nextSteps ? `<div class="gameplay-attention"><span class="eyebrow">Оплаченная работа ждёт</span>${nextSteps}</div>` : ""}<div class="command-overview-head"><span class="eyebrow">Дела базы</span><strong>${counts}</strong><small>${summary.freeWorkers} свободных бойцов${summary.counts.building ? ` · ${summary.counts.building} строек` : ""}${state.shelter.expansions.length ? ` · участков в подготовке: ${state.shelter.expansions.length}` : ""}</small></div><div class="command-system-grid">${tools}</div>`;
+	return `${multiplayerEntryBrief(state.raids.length, state.raids.filter(raid => raid.expedition?.status === "choice").length)}<details class="command-squad-goal"><summary>Поручения убежища и отряда</summary>${gameplayFocus(getGameplayGuidance(state))}</details>${nextSteps ? `<div class="gameplay-attention"><span class="eyebrow">Оплаченная работа ждёт</span>${nextSteps}</div>` : ""}<div class="command-overview-head"><span class="eyebrow">Дела базы</span><strong>${counts}</strong><small>${summary.freeWorkers} свободных бойцов${summary.counts.building ? ` · ${summary.counts.building} строек` : ""}${state.shelter.expansions.length ? ` · участков в подготовке: ${state.shelter.expansions.length}` : ""}</small></div><div class="command-system-grid">${tools}</div>`;
 }
 function renderShelter() {
 	const planOpen = Boolean(buildingPlacement) || Boolean(panel.querySelector<HTMLDetailsElement>(".territory-layout-tools")?.open);
@@ -1912,7 +1915,7 @@ function renderExpeditionAlerts() {
 }
 function operationsBar() {
 	const enabled = state.scavs.filter((scav) => scav.autoRaid.enabled).length;
-	return `<div class="operations-bar"><div>${icon("repeat", 25)}<div><span class="eyebrow">Постоянные приказы</span><strong><span id="auto-order-count">${enabled}</span> — на автовыходах</strong><p>Ручной выход ждёт приказа на точках связи. Автовыход сам эвакуируется на заданной глубине.</p></div></div>${enabled ? '<button class="button danger small" data-action="auto-stop-all">Остановить все автовыходы</button>' : (page === "raids" ? '<button class="button secondary small" data-action="focus-roster">Выбрать бойца</button>' : '<button class="button secondary small" data-page="raids">Настроить отряд</button>')}</div>`;
+	return `<div class="operations-bar"><div>${icon("repeat", 25)}<div><span class="eyebrow">Постоянные приказы</span><strong><span id="auto-order-count">${enabled}</span> — на автовыходах</strong><p>Ручной выход ждёт приказа на точках связи. Автовыход сам эвакуируется на заданной глубине.</p></div></div>${enabled ? '<button class="button danger small" data-action="auto-stop-all">Остановить все автовыходы</button>' : (page === "raids" ? '<button class="button secondary small" data-action="focus-roster">Выбрать бойца</button>' : '<button class="button secondary small" data-mission-board>Настроить отряд</button>')}</div>`;
 }
 let visibleWeaponArtRequest = "";
 /** Load only owned or currently displayed new parts; startup keeps its small original artwork. */
@@ -1952,11 +1955,11 @@ function render() {
 	document
 		.querySelectorAll<HTMLButtonElement>(".nav button")
 		.forEach((button) =>
-			((button.classList.toggle("active", button.dataset.page === page)), (button.setAttribute("aria-current", button.dataset.page === page ? "page" : "false")))
+			((button.classList.toggle("active", button.dataset.page === (liveMode?.isActive() ? "raids" : page))), (button.setAttribute("aria-current", button.dataset.page === (liveMode?.isActive() ? "raids" : page) ? "page" : "false")))
 		);
 	const captions: Record<Page, string> = {
 		home: "Железо в арсенале. Свои люди на связи.",
-		raids: "Три этапа. Выбери путь, сохрани добычу или рискни дальше.",
+		raids: "Задания твоих диких: снаряжение, постоянные приказы и связь на маршруте.",
 		arsenal: "Собери оружие из деталей. Настрой комплект под свой маршрут.",
 		base: "Территория, свободная планировка и большие постройки.",
 		contracts: "Репутация строится на выполненных обещаниях.",
@@ -1967,7 +1970,7 @@ function render() {
 		flea: "Находки, их польза и твоя цена. Общая торговля между игроками.",
 	};
 	document.querySelector("#page-head")!.innerHTML =
-		`<div><div class="eyebrow"><span class="page-number">0${Object.keys(names).indexOf(page) + 1} /</span> ${page === "home" ? "УБЕЖИЩЕ ПРАПОРА" : names[page]}</div><h2 id="tool-title">${names[page]}</h2><p>${captions[page]}</p></div><span class="tag">${icon("time", 13)} <span id="income-status"></span></span>`;
+		`<div><div class="eyebrow"><span class="page-number">0${Object.keys(names).indexOf(page) + 1} /</span> ${page === "home" ? "УБЕЖИЩЕ ПРАПОРА" : names[page]}</div><h2 id="tool-title">${page === "raids" ? "Задания отряда" : names[page]}</h2><p>${captions[page]}</p></div><span class="tag">${icon("time", 13)} <span id="income-status"></span></span>`;
 	(document.querySelector("#hero") as HTMLElement).style.display =
 		"";
 	renderOfflineSummary();
@@ -2005,7 +2008,7 @@ function render() {
 			)
 			.join(
 				""
-			)}</div>${shelterHomeNote()}${operationsBar()}<div class="section-head"><h2>Твои люди <span class="muted">/ ${state.scavs.length}</span></h2><button class="link-button" data-page="raids">Управлять отрядом →</button></div><div class="card-grid scav-grid">${state.scavs.map(scavCard).join("") || '<div class="empty">Отряд пуст. Найми дикого в разделе «Рейды» — первый после потери отряда приходит бесплатно.</div>'}</div><div class="section-head"><h2>Прапор поручил</h2><button class="link-button" data-page="contracts">Все контракты →</button></div><div class="quick-contracts">${
+			)}</div>${shelterHomeNote()}${operationsBar()}<div class="section-head"><h2>Твои люди <span class="muted">/ ${state.scavs.length}</span></h2><button class="link-button" data-mission-board>Задания отряда →</button></div><div class="card-grid scav-grid">${state.scavs.map(scavCard).join("") || '<div class="empty">Отряд пуст. Найми дикого в разделе «Рейды» — первый после потери отряда приходит бесплатно.</div>'}</div><div class="section-head"><h2>Прапор поручил</h2><button class="link-button" data-page="contracts">Все контракты →</button></div><div class="quick-contracts">${
 			CONTRACTS.filter((c) => !state.claimedContracts.includes(c.id) && !getContractLockReason(state, c))
 				.slice(0, 2)
 				.map(contractCard)
@@ -2054,7 +2057,7 @@ function renderArsenal() {
 	if (arsenalTab === "equipment") { renderEquipment(); return; }
 	if (arsenalTab === "market") { renderMarket(); return; }
 	const noMatches = `<div class="empty">Ничего не найдено.<br>Измени поиск или категорию.<button class="button ghost small" data-action="reset-weapon-filters">Сбросить поиск и фильтры</button></div>`;
-	const emptyArsenal = `<div class="empty">Арсенал пуст.<br>Отправь бойца за добычей или найми нового, если отряд потерян.<button class="button secondary small" data-page="raids">К отряду ${icon("arrow", 14)}</button></div>`;
+	const emptyArsenal = `<div class="empty">Арсенал пуст.<br>Отправь бойца за добычей или найми нового, если отряд потерян.<button class="button secondary small" data-mission-board>К отряду ${icon("arrow", 14)}</button></div>`;
 	const guns = state.weapons.filter(
 		(w) => (category === "all" || getWeaponDefinition(w).category === category) && getWeaponDefinition(w).name.toLocaleLowerCase("ru").includes(weaponSearch.toLocaleLowerCase("ru"))
 	);
@@ -2247,7 +2250,7 @@ function renderEquipment() {
 		const known = !model.blueprint || state.blueprints.includes(model.blueprint);
 		return `<article class="logistics-card ${known ? "" : "locked"}"><span class="eyebrow">${known ? "Чертёж известен" : "Нужен чертёж"}</span>${scavGearIllustration(model.id, model.label)}<h3>${icon(model.slot, 22)} ${e(model.label)}</h3><p>${e(model.description)}</p><div class="loadout-stats"><span>Вес ${model.weight} кг</span>${model.protection ? `<span>Защита до ${Math.round(model.protection * 100)}%</span>` : ""}${model.capacity ? `<span>Груз до ${model.capacity} ед.</span>` : ""}</div><button class="button secondary" data-action="craft-gear" data-id="${model.id}" ${reason ? "disabled" : ""}>Собрать · ${costLabel(model)}</button><small class="quote-note" data-craft-note="${model.id}">${e(reason ?? "Снаряжение появится на складе")}</small></article>`;
 	}).join("");
-	panel.innerHTML = `${arsenalTabs()}<div class="logistics-intro">${icon("armor", 28)}<div><h3>У комплекта есть цена и характер.</h3><p>Броня и шлем повышают защиту, вместительный рюкзак удержит больше находок. Вес удлиняет путь и расход; износ ослабляет предмет. Сравни итоговый комплект в личном деле бойца.</p></div></div><div class="section-head"><h2>Склад снаряжения <span class="muted">/ ${state.gearItems.length}</span></h2><button class="text-button" data-page="raids">К бойцам →</button></div>${items ? `<div class="logistics-grid">${items}</div>` : '<div class="empty">Отдельных предметов пока нет. Собери броню, шлем или рюкзак ниже, затем выдай бойцу.</div>'}<div class="section-head"><h2>Сборка по чертежам</h2><button class="text-button" data-action="open-discoveries">Постоянные открытия →</button></div><div class="logistics-grid">${recipes}</div>`;
+	panel.innerHTML = `${arsenalTabs()}<div class="logistics-intro">${icon("armor", 28)}<div><h3>У комплекта есть цена и характер.</h3><p>Броня и шлем повышают защиту, вместительный рюкзак удержит больше находок. Вес удлиняет путь и расход; износ ослабляет предмет. Сравни итоговый комплект в личном деле бойца.</p></div></div><div class="section-head"><h2>Склад снаряжения <span class="muted">/ ${state.gearItems.length}</span></h2><button class="text-button" data-mission-board>К бойцам →</button></div>${items ? `<div class="logistics-grid">${items}</div>` : '<div class="empty">Отдельных предметов пока нет. Собери броню, шлем или рюкзак ниже, затем выдай бойцу.</div>'}<div class="section-head"><h2>Сборка по чертежам</h2><button class="text-button" data-action="open-discoveries">Постоянные открытия →</button></div><div class="logistics-grid">${recipes}</div>`;
 }
 function renderMarket() {
 	const capacities = getSupplyCapacity(state);
@@ -2298,16 +2301,7 @@ function followGameplayAction(origin: HTMLElement) {
 		}
 		return;
 	}
-	if (action.kind === "raid") {
-		page = "raids"; render();
-		if (action.scavId) {
-			openInspector(action.scavId);
-			document.querySelector<HTMLElement>(".sortie-section")?.scrollIntoView({ block: "start", behavior: scrollBehavior() });
-			document.querySelector<HTMLSelectElement>("[data-inspector-map]")?.focus({ preventScroll: true });
-		}
-		else document.querySelector<HTMLButtonElement>('[data-action="close-tools"]')?.focus();
-		return;
-	}
+	if (action.kind === "raid") { openMultiplayerEntry(multiplayerSelection(action.mapId)); return; }
 	if (action.kind === "market") { page = "arsenal"; arsenalTab = "market"; }
 	else if (action.kind === "arsenal") { page = "arsenal"; arsenalTab = "weapons"; }
 	else if (action.kind === "recruits") page = "recruits";
@@ -2326,7 +2320,7 @@ document.addEventListener("click", async (event) => {
 	const target = (event.target as HTMLElement).closest<HTMLButtonElement>(
 		"button"
 	);
-	if (target && (!serverReady || saveConflict || protectedSave) && !target.hasAttribute('data-open-live') && target.dataset.view !== 'live' && !(liveMode?.isActive() && ['base','map','raid'].includes(target.dataset.view ?? '')) && !['settings','close-modal','export','import','reconnect-server','save-now'].includes(target.dataset.action ?? '')) return;
+	if (target && (!serverReady || saveConflict || protectedSave) && !target.hasAttribute('data-open-live') && target.dataset.page !== "raids" && target.dataset.view !== 'live' && !(liveMode?.isActive() && ['base','map','raid'].includes(target.dataset.view ?? '')) && !['settings','close-modal','export','import','reconnect-server','save-now'].includes(target.dataset.action ?? '')) return;
 	if (!target || target.disabled) {
 		if ((event.target as HTMLElement).classList.contains("inspector-backdrop")) closeInspector();
 		if ((event.target as HTMLElement).classList.contains("modal-backdrop")) closeModal();
@@ -2334,7 +2328,9 @@ document.addEventListener("click", async (event) => {
 		if ((event.target as HTMLElement).id === "context-shade") closeCommandContext();
 		return;
 	}
-	if (target.hasAttribute('data-open-live')) { setView('live'); return; }
+	if (target.hasAttribute('data-open-live')) { openMultiplayerEntry(); return; }
+	if (target.hasAttribute('data-mission-board')) { openMissionBoard(); return; }
+	if (target.dataset.liveDistrict) { const district = ENTRY_DISTRICTS.find(item => item.id === target.dataset.liveDistrict); if (district) openMultiplayerEntry({ districtId: district.id }); return; }
 	if (target.dataset.action === "choose-plan-ground" || buildingPlacement && target.dataset.shelterRoom && target.closest("[data-territory-plan]")) {
 		if (buildingPlacement) {
 			if (event.detail === 0) { closeTools(); worldViewport.focus({ preventScroll: true }); return; }
@@ -2371,10 +2367,11 @@ document.addEventListener("click", async (event) => {
 	if (target.dataset.commandRoom) { openShelterRoom(target.dataset.commandRoom, target.dataset.commandTab as CommandRoomTab); return; }
 	if (target.dataset.shelterRoom) { openShelterRoom(target.dataset.shelterRoom); return; }
 	if (target.dataset.roomContextTab) { roomContextTab = target.dataset.roomContextTab as typeof roomContextTab; renderCommandBoard(); document.querySelector<HTMLElement>("#room-management")?.scrollTo({ top: 0 }); document.querySelector<HTMLButtonElement>(`[data-room-context-tab="${roomContextTab}"]`)?.focus({ preventScroll: true }); return; }
-	if (target.dataset.commandMap) { selectedMap = target.dataset.commandMap; toolOrigin = target; page = "raids"; render(); document.querySelector<HTMLButtonElement>('[data-action="close-tools"]')?.focus(); return; }
+	if (target.dataset.commandMap) { selectedMap = target.dataset.commandMap; openMultiplayerEntry(multiplayerSelection(selectedMap)); return; }
 	if (target.dataset.shelterColumn != null) { openShelterSite(Number(target.dataset.shelterColumn), Number(target.dataset.shelterRow)); return; }
 	if (target.dataset.benchSlot) { selectBenchSlot(target.dataset.benchSlot as ModuleSlot); return; }
 	if (target.dataset.roomLink) { openRoom(target.dataset.roomLink as BaseRoom); return; }
+	if (target.dataset.page === "raids") { openMultiplayerEntry(); return; }
 	if (target.dataset.page) {
 		if (buildingPlacement && target.dataset.page !== "base") cancelBuildingPlacement();
 		closeInspector();
@@ -2438,7 +2435,7 @@ document.addEventListener("click", async (event) => {
 		case 'flea-hunt':{
 			const hunt=readLootHunt({modelId:target.dataset.model,mapId:target.dataset.huntMap,branch:target.dataset.branch,depth:Number(target.dataset.depth)});
 			if(!hunt||state.level<(MAP_BY_ID[hunt.mapId]?.level??Infinity))break;
-			lootHunt=hunt;selectedMap=hunt.mapId;page="raids";render();break;
+			lootHunt=hunt;selectedMap=hunt.mapId;openMultiplayerEntry(multiplayerSelection(hunt.mapId, "loot"));break;
 		}
 		case 'flea-use-construction':{
 			const type=target.dataset.roomType;
@@ -2583,18 +2580,7 @@ document.addEventListener("click", async (event) => {
 			act(result);
 			break;
 		}
-		case "seek-production-resource": {
-			const supply = target.dataset.supply as RaidObjective;
-			if (!["ammo", "medicine", "scrap", "intel"].includes(supply)) break;
-			const scav = state.scavs.find(item => !item.assignment && item.status !== "raiding" && isScavMedicallyReady(item) && item.weaponInstanceId);
-			if (!scav) { page = "raids"; render(); toast("Освободи рабочего или подготовь свободного бойца для выхода."); break; }
-			const result = await gameAction({ type: "setRaidPlan", args: [scav.id, supply, getRaidPlan(scav).preparation] });
-			if (!result.ok) { act(result); break; }
-			persist(); page = "raids"; render(); openInspector(scav.id);
-			document.querySelector('#inspector-root .sortie-section')?.scrollIntoView({ block: "start", behavior: scrollBehavior() });
-			document.querySelector<HTMLSelectElement>('#inspector-root [data-raid-objective]')?.focus({ preventScroll: true });
-			break;
-		}
+		case "seek-production-resource": { openMultiplayerEntry({ purpose: "loot" }); break; }
 		case "set-room-recipe": {
 			const repeat = target.hasAttribute("data-loot-order") ? false : document.querySelector<HTMLInputElement>(`[data-room-repeat="${CSS.escape(id)}"]`)?.checked ?? false;
 			roomRepeatPreferences.set(id, repeat);
@@ -3130,6 +3116,14 @@ function watchRaid(id: string) {
 	document.querySelector<HTMLElement>(".command-main")?.scrollTo({ top: 0, behavior: "instant" });
 	worldViewport.focus({preventScroll:true});
 }
+function openMultiplayerEntry(selection: RaidEntrySelection = {}): void {
+	liveMode?.setEntrySelection(selection); setView("live");
+}
+function openMissionBoard(): void {
+	if (liveMode?.isActive() && !liveMode.hide()) return;
+	setView("base"); closeInspector(); page = "raids"; render();
+	document.querySelector<HTMLButtonElement>('[data-action="close-tools"]')?.focus({ preventScroll: true });
+}
 function setView(view: "base" | "map" | "raid" | "live") {
 	if (view !== "base") cancelBuildingPlacement();
 	if (view === "live") {
@@ -3154,7 +3148,7 @@ function setView(view: "base" | "map" | "raid" | "live") {
 	if (view === "raid") {
 		const target = state.raids.find(raid => raid.id === selectedRaidId) ?? (lastWatchedRaid?.id === selectedRaidId ? null : state.raids[0]);
 		if (target) { selectedRaidId = target.id; lastWatchedRaid = target; world?.selectRaid(target.id); }
-		else if (!lastWatchedRaid) { toast("Подготовь выход, чтобы наблюдать улицу."); return; }
+		else if (!lastWatchedRaid) { openMultiplayerEntry(); return; }
 		contextMode = "overview";
 	}
 	if (worldView !== view) cancelWorkerPlacement(false, true);
@@ -3195,10 +3189,7 @@ world = createWorld(
 	}),
 	(id) => {
 		if (!canWorldInteract()) return;
-		selectedMap = id;
-		page = "raids";
-		render();
-		document.querySelector<HTMLButtonElement>('[data-action="close-tools"]')?.focus();
+		selectedMap = id; openMultiplayerEntry(multiplayerSelection(id));
 	},
 	{ canInteract: canWorldInteract,
 		onHover: updateSceneHover,
@@ -3358,6 +3349,7 @@ liveMode = createLiveMode({
 		void refreshServerProgress().then(ready=>{if(ready&&page==='flea')void refreshFleaMarket();});
 	},
 	onExit: () => setView("base"),
+	onMissionBoard: openMissionBoard,
 	onAccount: () => document.querySelector<HTMLButtonElement>('.account-launcher')?.click(),
 	onError: message => toast(message, false),
 });

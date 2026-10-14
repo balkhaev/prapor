@@ -7,6 +7,7 @@ import { getLiveMap, isLiveWalkable } from '../src/game/live-maps';
 import { createHealth, createMedicalInventory } from '../src/game/health';
 import { BOSSES } from '../src/game/bosses';
 import { getLiveBossArena } from '../src/game/live-boss-arenas';
+import { quoteLiveKits, type LiveEntry } from '../src/game/live-entry';
 
 const GAME='cba21a6d-2936-4590-9433-dfa2b58c8dc8', NEXT='4ad58c2f-7616-4600-8134-83b7a210814d';
 const loot=(modelId='gold-ring',suffix=1):EconomyLoot=>({id:`532cfa7a-5ca1-4742-a07c-ffefdc785d${String(suffix).padStart(2,'0')}`,modelId,foundAt:1000});
@@ -20,6 +21,14 @@ function fixture(game=GAME):LiveSnapshot {
     entities:[{id:'player-1',name:'Игрок',kind:'player',appearance:0,...exit,health:100,action:'idle',safeUntil:0}],drops:[],events:[],
   };
 }
+function entryFixture(state: LiveSnapshot): LiveEntry {
+  const stock = { money: 640, ammo: 100, medicine: 3 };
+  const own = state.entities.find(entity => entity.id === state.selfId)!;
+  const fighter = own.health > 0 ? null : { id: own.id, name: own.name, x: own.x, y: own.y, health: own.health,
+    body: state.self.body, medicine: state.self.medicine, ammo: state.self.ammo, districtId: state.self.districtId, purpose: state.self.purpose,
+    cargo: state.self.cargo, lootCount: state.self.lootItems?.length ?? 0, respawnAt: state.self.respawnAt, online: true };
+  return { server: state.server, now: state.now, mode: fighter ? 'downed' : 'new', fighter, stock, kits: quoteLiveKits(stock) };
+}
 const response=(value:unknown,status=200)=>new Response(JSON.stringify(value),{status});
 const tick=()=>new Promise<void>(resolve=>globalThis.setTimeout(resolve,0));
 
@@ -31,10 +40,10 @@ class Element {
   children:Element[]=[];
   append(...elements:unknown[]){this.children.push(...elements.filter((element):element is Element=>element instanceof Element));} remove(){} setAttribute(_name:string,_value:string){} removeAttribute(_name:string){}
   querySelector(){return null;} querySelectorAll(){return [];} closest(){return this;}
-  contains(value:unknown){return value instanceof Element;}
+  contains(value:unknown):boolean{return value===this||this.children.some(child=>child.contains(value));}
   addEventListener(name:string,listener:EventListenerOrEventListenerObject){this.listeners.set(name,listener);}
   removeEventListener(name:string){this.listeners.delete(name);}
-  click(action:string){const button=new Element();button.dataset.liveButton=action;(this.listeners.get('click') as (event:unknown)=>void)({target:button});}
+  click(action:string){const button=new Element();button.dataset.liveButton=action;this.append(button);(this.listeners.get('click') as (event:unknown)=>void)({target:button});}
 }
 let cleanup:(()=>void)|null=null;
 afterEach(()=>{cleanup?.();cleanup=null;});
@@ -53,7 +62,7 @@ function harness(run:(url:string,init:RequestInit)=>Promise<Response>,getGameId:
   });
   cleanup=()=>{mode.destroy();if(originalDocument)Object.defineProperty(globalThis,'document',originalDocument);else Reflect.deleteProperty(globalThis,'document');if(originalWindow)Object.defineProperty(globalThis,'window',originalWindow);else Reflect.deleteProperty(globalThis,'window');};
   const pump=async()=>{await tick();await tick();};
-  return {mode,world,dock,calls,updates,routeUpdates,pump,get economicChanges(){return economicChanges;},get marketOpens(){return marketOpens;},firePoll(){const next=timers.entries().next().value;if(next){timers.delete(next[0]);next[1]();}}};
+  return {mode,world,dock,overlay:world.children[0]!,calls,updates,routeUpdates,pump,get economicChanges(){return economicChanges;},get marketOpens(){return marketOpens;},firePoll(){const next=timers.entries().next().value;if(next){timers.delete(next[0]);next[1]();}}};
 }
 
 describe('live loot and headquarters presentation',()=>{
@@ -61,11 +70,11 @@ describe('live loot and headquarters presentation',()=>{
     const state=fixture();state.self.purpose='boss';
     state.server.bosses=BOSSES.map(boss=>{const arena=getLiveBossArena(state.world,boss.id);return {bossId:boss.id,name:boss.name,districtId:boss.districtId,poiId:arena.poiId,area:arena.area,state:'alive',respawnAt:0};});
     const h=harness(async url=>{
-      if(url.endsWith('/status'))return response(state.server);
+      if(url.endsWith('/entry'))return response(entryFixture(state));
       if(url.endsWith('/leave'))return response({ok:true});
       return response(url.endsWith('/join')?state:{...state,world:undefined,server:{...state.server,maps:state.server.maps.map(({city:_city,...map})=>map)}});
     });
-    h.mode.show();await h.pump();h.dock.click('join');await h.pump();
+    h.mode.show();await h.pump();h.overlay.click('join');await h.pump();
     const first=state.server.bosses.find(boss=>boss.districtId==='customs')!;
     expect(h.routeUpdates.at(-1)).toEqual([first.poiId]);
     const city=state.world.city!, district=state.world.districts.find(district=>district.id==='sawmill')!;
@@ -96,7 +105,7 @@ describe('live loot and headquarters presentation',()=>{
     ]};
     state.server.maps[0]!.city=structuredClone(state.world.city);
     const h=harness(async(url,init)=>{
-      if(url.endsWith('/status'))return response(state.server);
+      if(url.endsWith('/entry'))return response(entryFixture(state));
       if(url.endsWith('/leave'))return response({ok:true});
       if(url.endsWith('/action')){expect(JSON.parse(init.body as string).type).toBe('respawn');state.entities[0]!.health=100;state.entities[0]!.action='idle';state.self.respawnAt=0;}
       return response(url.endsWith('/join')?state:{...state,world:undefined,server:{...state.server,maps:state.server.maps.map(({city:_city,...map})=>map)}});
@@ -104,7 +113,7 @@ describe('live loot and headquarters presentation',()=>{
     h.mode.show();await h.pump();
     expect(h.world.children[0]!.innerHTML).toContain('Город в сердце Периметра');
     expect(h.world.children[0]!.innerHTML).toContain('Ольховск');
-    h.dock.click('join');await h.pump();
+    h.overlay.click('join');await h.pump();
     const original=state.world.routes!.find(route=>route.purpose==='loot'&&route.districtId==='customs')!;
     expect(h.routeUpdates.at(-1)).toEqual(original.poiIds);
     state.self.districtId='sawmill';state.entities[0]!.x=side*2+2;state.entities[0]!.y=side+2;
@@ -115,14 +124,14 @@ describe('live loot and headquarters presentation',()=>{
     expect(h.updates.at(-1)?.world.city).toEqual(state.world.city);
     expect(h.calls.some(call=>call.url.endsWith('/action'))).toBe(false);
     state.entities[0]!.health=0;state.entities[0]!.action='downed';h.firePoll();await h.pump();
-    h.dock.click('district:sawmill');h.dock.click('respawn');await h.pump();
+    h.overlay.click('district:sawmill');h.overlay.click('respawn');await h.pump();
     expect(h.routeUpdates.at(-1)).toEqual(state.world.routes!.find(route=>route.purpose==='loot'&&route.districtId==='sawmill')!.poiIds);
     expect(h.calls.filter(call=>call.url.endsWith('/action'))).toHaveLength(1);
   });
   test('guidance clears on a confirmed injury and identity change, resumes after return and resets on a new world revision',async()=>{
     const state=fixture();let game=GAME;
-    const h=harness(async url=>url.endsWith('/status')?response(state.server):url.endsWith('/leave')?response({ok:true}):response(state),()=>game);
-    h.mode.show();await h.pump();h.dock.click('join');await h.pump();
+    const h=harness(async url=>url.endsWith('/entry')?response(entryFixture(state)):url.endsWith('/leave')?response({ok:true}):response(state),()=>game);
+    h.mode.show();await h.pump();h.overlay.click('join');await h.pump();
     const selected=state.world.routes!.find(route=>route.purpose==='loot'&&route.districtId==='sawmill')!;
     h.dock.click(`route:${selected.id}`);expect(h.routeUpdates.at(-1)).toEqual(selected.poiIds);
     state.entities[0]!.health=0;state.entities[0]!.action='downed';state.self.respawnAt=state.now+10_000;
@@ -140,18 +149,18 @@ describe('live loot and headquarters presentation',()=>{
     const state=fixture();
     state.server.routes=state.world.routes!.map(({id,name,description,districtId,purpose,poiIds})=>({id,name,description,districtId,purpose,stops:poiIds.map(id=>state.world.pois.find(poi=>poi.id===id)!.name)}));
     const h=harness(async url=>{
-      if(url.endsWith('/status'))return response(state.server);
+      if(url.endsWith('/entry'))return response(entryFixture(state));
       if(url.endsWith('/action'))return response({...state,world:undefined});
       if(url.endsWith('/leave'))return response({ok:true});
       return response(state);
     });
     h.mode.show();await h.pump();
-    h.dock.click('district:sawmill');h.dock.click('purpose:quests');
+    h.overlay.click('district:sawmill');h.overlay.click('purpose:quests');
     const scouting=state.server.routes.find(route=>route.districtId==='sawmill'&&route.purpose==='quests')!;
-    expect(h.dock.innerHTML).toContain(scouting.name);
-    for(const stop of scouting.stops)expect(h.dock.innerHTML).toContain(stop);
+    expect(h.overlay.innerHTML).toContain(scouting.name);
+    for(const stop of scouting.stops)expect(h.overlay.innerHTML).toContain(stop);
     expect(h.calls.some(call=>call.url.endsWith('/action'))).toBe(false);
-    h.dock.click('join');await h.pump();
+    h.overlay.click('join');await h.pump();
     const original=state.world.routes!.find(route=>route.purpose===state.self.purpose&&route.districtId===state.self.districtId)!;
     expect(h.routeUpdates.at(-1)).toEqual(original.poiIds);
     const selected=state.world.routes!.find(route=>route.purpose===state.self.purpose&&route.districtId==='sawmill')!;
@@ -204,8 +213,8 @@ describe('live loot and headquarters presentation',()=>{
   });
   test('refilling a consumed aid refreshes headquarters even when the medkit HP and ammunition stay full',async()=>{
     const state=fixture();state.self.ammo=60;state.self.medkits=2;state.self.medicine.medkit=80;state.self.medicine.splint=0;
-    const h=harness(async url=>url.endsWith('/status')?response(state.server):url.endsWith('/leave')?response({ok:true}):response(state));
-    h.mode.show();await h.pump();h.dock.click('join');await h.pump();
+    const h=harness(async url=>url.endsWith('/entry')?response(entryFixture(state)):url.endsWith('/leave')?response({ok:true}):response(state));
+    h.mode.show();await h.pump();h.overlay.click('join');await h.pump();
     expect(h.dock.innerHTML).toContain('Заберёшь: патроны +0, лекарства +1');
     expect(h.dock.innerHTML).not.toContain('Комплект пополнен');
     expect(h.dock.innerHTML).not.toContain('data-live-button="resupply" disabled');
@@ -214,8 +223,8 @@ describe('live loot and headquarters presentation',()=>{
   });
   test('connects the live market button, named inventory and refill using the captured shelter identity',async()=>{
     const state=fixture();state.self.lootItems=[loot()];
-    const h=harness(async url=>url.endsWith('/status')?response(state.server):url.endsWith('/leave')?response({ok:true}):response(state));
-    h.mode.show();await h.pump();h.dock.click('join');await h.pump();
+    const h=harness(async url=>url.endsWith('/entry')?response(entryFixture(state)):url.endsWith('/leave')?response({ok:true}):response(state));
+    h.mode.show();await h.pump();h.overlay.click('join');await h.pump();
     expect(h.dock.innerHTML).toContain('Золотое кольцо');expect(h.dock.innerHTML).toContain('Склад и барахолка');
     expect(h.dock.innerHTML).toContain('Заберёшь: патроны +30, лекарства +1');
     h.dock.click('resupply');await h.pump();
@@ -228,7 +237,7 @@ describe('live loot and headquarters presentation',()=>{
   test('refreshes headquarters after extraction and after the pending parcel arrives on a fresh read',async()=>{
     let state=fixture();state.self.lootItems=[loot()];
     const h=harness(async (url,init)=>{
-      if(url.endsWith('/status'))return response(state.server);
+      if(url.endsWith('/entry'))return response(entryFixture(state));
       if(url.endsWith('/action')){
         expect(JSON.parse(init.body as string)).toEqual({type:'extract'});
         const items=state.self.lootItems!;state=structuredClone(state);state.self.lootItems=[];
@@ -236,7 +245,7 @@ describe('live loot and headquarters presentation',()=>{
       }
       return response(state);
     });
-    h.mode.show();await h.pump();h.dock.click('join');await h.pump();
+    h.mode.show();await h.pump();h.overlay.click('join');await h.pump();
     h.dock.click('extract');await h.pump();
     expect(h.economicChanges).toBe(2);expect(h.dock.innerHTML).toContain('Уже вынесено');
     state.self.pendingDelivery=[];h.firePoll();await h.pump();
@@ -245,22 +254,22 @@ describe('live loot and headquarters presentation',()=>{
   test('a response from the previous shelter cannot restore its inventory or trigger an economy refresh',async()=>{
     let game=GAME,release!: (response:Response)=>void;
     const h=harness(async url=>{
-      if(url.endsWith('/status'))return response(fixture().server);
+      if(url.endsWith('/entry'))return response(entryFixture(fixture(game)));
       if(url.endsWith('/action'))return new Promise<Response>(resolve=>{release=resolve;});
       return response(fixture(game));
     },()=>game);
-    h.mode.show();await h.pump();h.dock.click('join');await h.pump();
+    h.mode.show();await h.pump();h.overlay.click('join');await h.pump();
     h.dock.click('extract');await h.pump();
     game=NEXT;h.mode.refreshPanel();
     const old=fixture();old.self.lootItems=[loot('secure-drive')];release(response(old));await h.pump();
     expect(h.economicChanges).toBe(1);expect(h.updates).toHaveLength(1);expect(h.dock.innerHTML).not.toContain('Защищённый накопитель');
-    h.dock.click('join');await h.pump();expect(h.updates.at(-1)?.self.gameId).toBe(NEXT);
+    h.overlay.click('join');await h.pump();expect(h.updates.at(-1)?.self.gameId).toBe(NEXT);
     expect(h.calls.filter(call=>call.url.endsWith('/action'))).toHaveLength(1);
   });
   test('a delayed resupply confirmation refreshes HQ when its stocks finally reach the player',async()=>{
     const state=fixture();
-    const h=harness(async url=>url.endsWith('/status')?response(state.server):response(state));
-    h.mode.show();await h.pump();h.dock.click('join');await h.pump();
+    const h=harness(async url=>url.endsWith('/entry')?response(entryFixture(state)):response(state));
+    h.mode.show();await h.pump();h.overlay.click('join');await h.pump();
     h.dock.click('resupply');await h.pump();expect(h.economicChanges).toBe(2);
     state.self.ammo=60;state.self.medkits=2;state.self.medicine.medkit=80;h.firePoll();await h.pump();
     expect(h.economicChanges).toBe(3);expect(h.dock.innerHTML).toContain('Комплект пополнен');
@@ -268,18 +277,19 @@ describe('live loot and headquarters presentation',()=>{
   test('a late join for another account is cleaned up before joining the current identity',async()=>{
     let game=GAME,account:string|null='account-a',release!: (response:Response)=>void,joins=0;
     const h=harness(async url=>{
-      if(url.endsWith('/status'))return response(fixture().server);
+      if(url.endsWith('/entry'))return response(entryFixture(fixture(game)));
       if(url.endsWith('/join')){
         if(++joins===1)return new Promise<Response>(resolve=>{release=resolve;});
         return response(fixture(game));
       }
       return response({ok:true});
     },()=>game,()=>account);
-    h.mode.show();await h.pump();h.dock.click('join');await h.pump();
-    account='account-b';game=NEXT;h.mode.resetIdentity();await h.pump();h.dock.click('join');
+    h.mode.show();await h.pump();h.overlay.click('join');await h.pump();
+    account='account-b';game=NEXT;h.mode.resetIdentity();await h.pump();h.overlay.click('join');
     const old=fixture();old.self.lootItems=[loot('secure-drive')];release(response(old));await h.pump();await h.pump();
     expect(h.updates).toHaveLength(1);expect(h.updates[0]!.self.gameId).toBe(NEXT);expect(h.economicChanges).toBe(1);
-    const requests=h.calls.filter(call=>!call.url.endsWith('/status'));
+    expect(h.calls.filter(call=>call.url.endsWith('/entry'))).toHaveLength(2);
+    const requests=h.calls.filter(call=>!call.url.endsWith('/status')&&!call.url.endsWith('/entry'));
     expect(requests.map(call=>call.url)).toEqual(['/api/live/join','/api/live/leave','/api/live/join']);
     expect(requests[1]!.init.headers).toMatchObject({'x-prapor-account':'account-a','x-prapor-game':GAME});
     expect(requests[2]!.init.headers).toMatchObject({'x-prapor-account':'account-b','x-prapor-game':NEXT});
@@ -288,17 +298,17 @@ describe('live loot and headquarters presentation',()=>{
   test('an uncertain spending command is observed but never automatically replayed',async()=>{
     const state=fixture();let actions=0;
     const h=harness(async url=>{
-      if(url.endsWith('/status'))return response(state.server);
+      if(url.endsWith('/entry'))return response(entryFixture(state));
       if(url.endsWith('/action')){actions++;throw new TypeError('lost response');}
       return response(state);
     });
-    h.mode.show();await h.pump();h.dock.click('join');await h.pump();
+    h.mode.show();await h.pump();h.overlay.click('join');await h.pump();
     h.dock.click('resupply');await h.pump();expect(h.dock.innerHTML).toContain('автоматически не повторяется');
     h.firePoll();await h.pump();expect(actions).toBe(1);expect(h.economicChanges).toBe(1);
   });
   test('entry waits for the authoritative headquarters rather than creating a separate live wallet',async()=>{
     const h=harness(async()=>response(fixture().server),()=>null);
-    h.mode.show();await h.pump();expect(h.dock.innerHTML).toContain('Подключаемся к убежищу');
-    h.dock.click('join');await h.pump();expect(h.calls.some(call=>call.url.endsWith('/join'))).toBe(false);
+    h.mode.show();await h.pump();expect(h.overlay.innerHTML).toContain('Подключаемся к убежищу');
+    h.overlay.click('join');await h.pump();expect(h.calls.some(call=>call.url.endsWith('/join'))).toBe(false);
   });
 });

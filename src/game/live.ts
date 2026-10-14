@@ -1,6 +1,8 @@
 /** Shared wire contract. The server owns every live position, clock and reward. */
 import type { BodyPart, HealthState, MedicalInventory, TreatmentType } from './health';
 import type { BossId } from './bosses';
+import type { LiveKitId, LiveLoadout } from './live-entry';
+export type { LiveKitId, LiveLoadout, LiveKitQuote, LiveEntry, LiveEntryFighter, LiveEntryStock } from './live-entry';
 export type { EconomyLoot } from "../../server/live-economy";
 import type { EconomyLoot } from "../../server/live-economy";
 export { getLiveLootDefinition, getLiveLootWeight, readEconomyLoot, readEconomyLootItems, type LiveLootDefinition } from './live-loot';
@@ -131,6 +133,9 @@ export interface LiveTreatment { type: TreatmentType; part: BodyPart; startedAt:
 export interface LivePlayer {
   id: string;
   ammo: number;
+  /** Absent on older fighters, whose paid/persistent combat rules remain unchanged. */
+  loadout?: LiveLoadout;
+  launchPending?: boolean;
   medkits: number;
   cargo: number;
   stash: number;
@@ -210,6 +215,6 @@ export type LiveCommand =
   | { type: "treat"; medicine: TreatmentType; part: BodyPart }
   | { type: "cancelTreatment" }
   | { type: "extract" }
-  | { type: "respawn"; districtId?: LiveDistrictId; purpose?: LivePurpose }
+  | { type: "respawn"; districtId?: LiveDistrictId; purpose?: LivePurpose; kitId?: LiveKitId }
   | { type: "resupply" }
   | { type: "patrol"; enabled: boolean };

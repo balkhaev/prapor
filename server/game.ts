@@ -12,6 +12,7 @@ import type { GameActionSnapshot, GameCommand, GameCommandType, GameIdentity, Ga
 import { getLootTraderPrice, isAutoSellLoot, LOOT_MODEL_BY_ID } from '../src/game/loot';
 import { getLiveLootDefinition, getLiveLootWeight, readEconomyLoot } from '../src/game/live-loot';
 import { LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT } from '../src/game/live';
+import { LIVE_FIELD_KITS, getLiveLoadout, isLiveKitId } from '../src/game/live-entry';
 import { LiveEconomyError, type LiveDelivery, type LiveEconomy, type LiveSupplyRequest, type LiveSupplyReceipt } from './live-economy';
 
 export interface GameOptions {
@@ -152,9 +153,11 @@ function readLiveDelivery(value: unknown): LiveDelivery {
   return { id: value.id, owner: value.owner as string, gameId: value.gameId, createdAt: value.createdAt as number, money: value.money as number, items };
 }
 function readLiveSupply(value: unknown): LiveSupplyRequest {
-  if (!object(value) || !exact(value, ['id', 'owner', 'gameId', 'createdAt', 'ammo', 'medkits']) || !uuid(value.id) || !id(value.owner) || !uuid(value.gameId)
+  if (!object(value) || !exact(value, ['id', 'owner', 'gameId', 'createdAt', 'ammo', 'medkits', ...(value.kitId !== undefined ? ['kitId'] : [])]) || !uuid(value.id) || !id(value.owner) || !uuid(value.gameId)
     || !timestamp(value.createdAt) || !integer(0, 60)(value.ammo) || !integer(0, 2)(value.medkits)) throw new LiveEconomyError(400, 'invalid_live_supply');
-  return { id: value.id, owner: value.owner as string, gameId: value.gameId, createdAt: value.createdAt as number, ammo: value.ammo as number, medkits: value.medkits as number };
+  if (value.kitId !== undefined && (!isLiveKitId(value.kitId) || value.ammo !== LIVE_FIELD_KITS[value.kitId].maxAmmo || value.medkits !== 2)) throw new LiveEconomyError(400, 'invalid_live_supply');
+  return { id: value.id, owner: value.owner as string, gameId: value.gameId, createdAt: value.createdAt as number, ammo: value.ammo as number, medkits: value.medkits as number,
+    ...(isLiveKitId(value.kitId) ? { kitId: value.kitId } : {}) };
 }
 export function readGameOptions(env: Record<string, string | undefined>, accounts?: GameOptions['accounts']): GameOptions {
   const production = env.NODE_ENV === 'production';
@@ -273,11 +276,22 @@ export function createGameService(options: GameOptions): GameService {
         if (request.method !== 'GET' && (!origins.has(request.headers.get('origin') ?? '') || request.headers.get('sec-fetch-site') === 'cross-site')) throw new LiveEconomyError(403, 'origin_not_allowed');
         return db.transaction(() => {
           const { identity, row } = current(request);
-          db.query('INSERT OR IGNORE INTO authoritative_live_links(identity,game_id,linked_at) VALUES(?,?,?)').run(identity.key, row.id, now());
-          linkedGame(identity.key, row.id);
+          // Inspecting entry does not enrol a fighter, reserve stock or create a transfer link.
+          if (new URL(request.url).pathname !== '/api/live/entry') {
+            db.query('INSERT OR IGNORE INTO authoritative_live_links(identity,game_id,linked_at) VALUES(?,?,?)').run(identity.key, row.id, now());
+            linkedGame(identity.key, row.id);
+          }
           return { key: identity.key, gameId: row.id, name: identity.name };
         })();
       } catch (error) { if (error instanceof GameError) throw new LiveEconomyError(error.status, error.code); throw error; }
+    },
+    entry(identity) {
+      if (closed) throw new LiveEconomyError(503, 'service_unavailable');
+      const row = read.get(identity.key);
+      if (!row || row.id !== identity.gameId) throw new LiveEconomyError(401, 'game_identity_changed');
+      const state = engine.parseSave(row.state);
+      if (!state) throw new Error('Invalid stored authoritative game');
+      return { money: state.money, ammo: Math.floor(state.supplies.ammo), medicine: Math.floor(state.supplies.medicine) };
     },
     deliver(input) {
       if (closed) throw new LiveEconomyError(503, 'service_unavailable');
@@ -336,9 +350,14 @@ export function createGameService(options: GameOptions): GameService {
         }
         const { snapshot, before } = advanceRow(row, identity), state = structuredClone(snapshot.state);
         const ammo = Math.min(request.ammo, Math.floor(state.supplies.ammo)), medkits = Math.min(request.medkits, Math.floor(state.supplies.medicine));
+        const kit = request.kitId ? LIVE_FIELD_KITS[request.kitId] : undefined;
+        if (kit && state.money < kit.money) throw new LiveEconomyError(409, 'insufficient_money');
+        if (kit && ammo < 1) throw new LiveEconomyError(409, 'no_ammo');
+        if (kit) state.money -= kit.money;
         state.supplies.ammo -= ammo; state.supplies.medicine -= medkits;
         validateTransfer(state);
-        const receipt: LiveSupplyReceipt = { ammo, medkits, message: ammo || medkits ? `Из убежища взято ${ammo} патронов и ${medkits} аптечек.` : 'На складе нет патронов и аптечек для пополнения.' };
+        const receipt: LiveSupplyReceipt = { ammo, medkits, ...(kit ? { loadout: getLiveLoadout(kit.kitId), money: kit.money } : {}),
+          message: kit ? `${kit.label}: ${ammo} патронов и ${medkits} аптечек из убежища${kit.money ? `; оплачено ${kit.money} ₽` : ''}.` : ammo || medkits ? `Из убежища взято ${ammo} патронов и ${medkits} аптечек.` : 'На складе нет патронов и аптечек для пополнения.' };
         db.query('INSERT INTO authoritative_live_supplies(id,owner,payload,receipt) VALUES(?,?,?,?)').run(request.id, request.owner, payload, JSON.stringify(receipt));
         snapshot.state = state;
         persistSnapshot(identity, snapshot, before, true);

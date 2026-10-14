@@ -41,9 +41,10 @@ async function fixture() {
     const gameReply = (await game.fetch(request("game/join", undefined, {})))!;
     expect(gameReply.status).toBe(200);
     const player = { cookie: gameReply.headers.get("set-cookie")!.split(";")[0]!, game: await gameReply.json() as GameSnapshot, live: { selfId: "" } as LiveSnapshot };
-    const liveReply = (await value.live.fetch(request("live/join", player, {})))!;
+    const liveReply = (await value.live.fetch(request("live/join", player, { kitId: 'assault' })))!;
     expect(liveReply.status).toBe(200); player.live = await liveReply.json() as LiveSnapshot;
     const liveCookie = liveReply.headers.get("set-cookie")?.split(";")[0]; if (liveCookie) player.cookie += `; ${liveCookie}`;
+    await gameState(player);
     return player;
   }
   async function gameState(player: Player) {
@@ -202,6 +203,7 @@ describe("real multiplayer loot, shared market and headquarters supplies", () =>
     await f.gameAction(second, { type: "recycleLootItem", args: [bought.id] });
     expect(second.game.state.supplies.scrap).toBe(scrap + 1);
 
+    await f.gameAction(first, { type: 'buySupplies', args: ['ammo'] });
     await f.gameAction(first, { type: "listMarketItem", args: [{ kind: "supply", id: "ammo", quantity: 10 }, 65] });
     const ammoOffer = (await f.market(second)).offers.find(offer => offer.asset.kind === "supply" && offer.asset.id === "ammo")!;
     await f.gameAction(second, { type: "buyMarketListing", args: [ammoOffer.id] });
