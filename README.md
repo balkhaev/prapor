@@ -284,7 +284,7 @@ docker build -t prapor .
 docker run --rm -p 3000:3000 prapor
 ```
 
-Проект в MVP с `remote: null`: изменения сохраняются в локальном `main`; выпуск на собственные домены выполняется отдельной процедурой `infra/deploy.ps1`.
+Проект в MVP с `origin` → `https://github.com/balkhaev/prapor`: проверенные изменения публикуются в `main`. Coolify получает события push и собирает production из корневого `docker-compose.yaml` на прежнем сервере, сохраняя постоянные базы и внешние файлы секретов. Настройка и проверка выпуска описаны в `infra/README.md`; старый ручной `infra/deploy.ps1` больше не запускает production.
 
 Для почты задаются только серверные `RESEND_API_KEY_FILE` (или `RESEND_API_KEY`), `RESEND_FROM` и `PUBLIC_BASE_URL`. Ключ не попадает в Git, образ, `dist` или настройки браузера. Локально он хранится в `F:/AI/prapor/resend_api_key`, на production — в отдельном защищённом файле, смонтированном только для чтения. По умолчанию письма ведут на https://game.balkhaev.com. Если почта не настроена, обычный вход и восстановление по коду продолжают работать.
 

@@ -101,6 +101,7 @@ try {
     if ($canonicalRoot -ne ($projectPath -replace '\\', '/')) { throw 'Project must be the repository root.' }
     $policy = Get-Content -LiteralPath (Join-Path $projectPath '.devhub/worktree.json') -Raw | ConvertFrom-Json
     if ($policy.releaseBranch -ne 'main') { throw 'Unexpected release branch in project policy.' }
+    if (-not $ValidateOnly -and $policy.remote) { throw 'Production is now managed by Coolify from GitHub main. Do not create a second database writer with the legacy Compose release.' }
 
     if ($ResendKeyFile -and (Test-Path -LiteralPath $ResendKeyFile -PathType Leaf)) {
         $secretSource = (Resolve-Path -LiteralPath $ResendKeyFile).Path

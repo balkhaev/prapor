@@ -6,7 +6,7 @@
   ],
   "mode": "mvp",
   "releaseBranch": "main",
-  "remote": null,
+  "remote": "origin",
   "stageBranch": "stage",
   "version": 1,
   "worktreeRoot": "F:/worktrees/prapor"
