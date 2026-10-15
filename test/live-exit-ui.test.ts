@@ -159,13 +159,38 @@ describe('visible server-confirmed live exit', () => {
     await click('join');expect(joins).toBe(1);expect(server.self.districtId).toBe('customs');
     await click('boss-route:komendant');expect(server.self.districtId).toBe('customs');expect(joins).toBe(1);
   });
-  test('opening the headquarters market waits for confirmed departure while the body remains visible', async () => {
-    mode!.show(); await settle(); await click('join'); await click('market');
-    expect(marketOpened).toBe(0); expect(exited).toBe(0); expect(mode!.isActive()).toBe(true);
-    expect(world.hidden).toBe(false); expect(dock.innerHTML).toContain('Выход через 5 сек.');
+  test('opening the market preserves the live fighter, automation, selected contact and observed camera', async () => {
+    const route = server.world.routes!.find(route => route.purpose === 'loot' && route.districtId === 'customs')!;
+    const poi = server.world.pois.find(poi => poi.id === route.poiIds[0])!;
+    server.self.automation = { enabled: true, stage: 'route', goal: 'Идёт к ориентиру', targetId: null, target: { x: poi.x, y: poi.y }, routeId: route.id, routeName: route.name, stopIndex: 0, stopCount: route.poiIds.length, reason: null, startedAt: time, completedAt: 0 };
+    server.self.cargo = 360;
+    server.entities.push({ ...server.entities[0]!, id: 'observed', name: 'Наблюдаемый', kind: 'scav' });
+    mode!.show(); await settle(); await click('join');
+    await click('select:observed'); await click(`poi-view:${poi.id}`);
+    const fighter = structuredClone(server.self), position = { x: server.entities[0]!.x, y: server.entities[0]!.y };
+    await click('market');
+    expect(marketOpened).toBe(1); expect(exited).toBe(0); expect(mode!.isActive()).toBe(true);
+    expect(world.hidden).toBe(false); expect(leaves).toBe(0); expect(commands).toHaveLength(0);
+    expect(server.self).toEqual(fighter);
+    expect(sceneFocus).toEqual([poi]); expect(sceneRoute).toEqual(route.poiIds);
+    expect(dock.innerHTML).toContain('data-live-button="select:observed" aria-pressed="true"');
+    expect({ x: server.entities[0]!.x, y: server.entities[0]!.y }).toEqual(position);
+    server.self.ammo = 41; time += 5000; await poll();
+    expect(hud.children[0]!.innerHTML).toContain('<dt>Боезапас</dt><dd>41</dd>');
+    expect(dock.innerHTML).toContain('data-live-button="select:observed" aria-pressed="true"');
+    expect(sceneFocus).toEqual([poi]); expect(sceneRoute).toEqual(route.poiIds);
+    expect(server.self.automation).toEqual(fighter.automation);
+    expect(mode!.isActive()).toBe(true); expect(joins).toBe(1); expect(leaves).toBe(0); expect(commands).toHaveLength(0);
+  });
+  test('opening the market during an explicit exit leaves its existing deadline unchanged', async () => {
+    mode!.show(); await settle(); await click('join'); await click('exit');
+    const deadline = server.self.leaveAt;
+    await click('market');
+    expect(marketOpened).toBe(1); expect(exited).toBe(0); expect(mode!.isActive()).toBe(true);
+    expect(server.self.leaveAt).toBe(deadline); expect(leaves).toBe(1); expect(commands).toHaveLength(0);
+    expect(dock.innerHTML).toContain('Выход через 5 сек.');
     time += 5000; await poll();
-    expect(marketOpened).toBe(1); expect(exited).toBe(0); expect(mode!.isActive()).toBe(false); expect(world.hidden).toBe(true);
-    expect(leaves).toBe(1);
+    expect(marketOpened).toBe(1); expect(exited).toBe(1); expect(mode!.isActive()).toBe(false); expect(leaves).toBe(1);
   });
   test('keeps the dangerous countdown visible through a failed read and exits once presence is gone', async () => {
     mode!.show(); await settle(); await click('join');

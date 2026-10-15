@@ -371,7 +371,7 @@ function scheduleSessionSave() {
 }
 function holdWorldInput() { worldInputBlockedUntil = Date.now() + 350; }
 function isInspectorOpen() { return inspectorVisible && Boolean(selectedScav) && page === "home"; }
-function isContextDialogOpen() { return page === "home" && window.innerWidth <= 850 && contextMode !== "overview" && (fieldInterface?.isPanelOpen("dock") ?? true); }
+function isContextDialogOpen() { return page === "home" && worldView === "base" && !liveMode?.isActive() && window.innerWidth <= 850 && contextMode !== "overview" && (fieldInterface?.isPanelOpen("dock") ?? true); }
 function canWorldDrag() {
 	if (buildingPlacement || buildingDragPreview?.active) return false;
 	return !liveMode?.isActive() && !accountDialogOpen && !accountChanging && serverReady && !saveConflict && !protectedSave && worldView === "base" && page === "home" && !isInspectorOpen() && !document.querySelector("#modal-root .modal") && !isContextDialogOpen();
@@ -433,7 +433,7 @@ function mainFieldLayer() {
   projectScav: id => world?.projectScav(id) ?? null,
   onRoomDetails: (id, tab) => openShelterRoom(id, tab),
   onScavDetails: (id, tab) => { openInspector(id); if (tab === "orders") { const orders = document.querySelector<HTMLDetailsElement>(".inspector .order-section"); if (orders) { orders.open = true; orders.scrollIntoView({ block: "nearest" }); } } },
-  insets: { top: 110, left: window.innerWidth <= 640 ? 8 : 84, right: 14, bottom: window.innerWidth <= 640 ? 170 : 80 },
+  insets: () => window.innerWidth <= 640 ? { top: 128, left: 8, right: 8, bottom: 170 } : window.innerHeight <= 540 ? { top: 100, left: 108, right: 14, bottom: 80 } : { top: 110, left: 84, right: 14, bottom: 110 },
  });
 }
 function updateSceneHover(value: { title: string; detail: string } | null) {
@@ -797,7 +797,7 @@ function scheduleAchievementNotice() {
 	if (achievementNoticeSchedule !== null || !getUnseenAchievementIds(state).length) return;
 	achievementNoticeSchedule = setTimeout(async () => {
 		achievementNoticeSchedule = null;
-		if (document.hidden || !serverReady || saveConflict || protectedSave || accountChanging || accountDialogOpen || selectedScav || document.querySelector('#modal-root .modal') || (page !== 'home' && page !== 'achievements')) return;
+		if (document.hidden || !serverReady || saveConflict || protectedSave || accountChanging || accountDialogOpen || isInspectorOpen() || document.querySelector<HTMLElement>('.field-object-card')?.hidden === false || document.querySelector('#modal-root .modal') || (page !== 'home' && page !== 'achievements')) return;
 		const ids = getUnseenAchievementIds(state);
 		if (!ids.length) return;
 		for (const id of ids) freshAchievements.add(id);
@@ -1083,12 +1083,12 @@ function act(result: ActionResult, cue: GameSoundCue = "confirm") {
 			else if (page === "arsenal" && arsenalTab === "bench") document.querySelector<HTMLButtonElement>(`[data-bench-slot="${selectedModuleSlot}"]`)?.focus({ preventScroll: true });
 			else if (page === "arsenal") document.querySelector<HTMLButtonElement>(`[data-arsenal-tab="${arsenalTab}"]`)?.focus({ preventScroll: true });
 			else if (page === "flea") panel.querySelector<HTMLButtonElement>(`[data-flea-tab="${fleaView.tab}"]`)?.focus({preventScroll:true});
-			else if (origin?.dataset.action === "cancel-production") document.querySelector<HTMLButtonElement>(`${scope} [data-room-context-tab="production"]`)?.focus({ preventScroll: true });
+			else if (origin?.dataset.action === "cancel-production") activeRoomPanel().querySelector<HTMLButtonElement>('[data-room-context-tab="production"]')?.focus({ preventScroll: true });
 			else if (origin?.dataset.action === "social-choice") {
 				const next = document.querySelector<HTMLButtonElement>('#tool-root [data-action="social-choice"]:not(:disabled)') ?? document.querySelector<HTMLButtonElement>('#tool-root [data-action="close-tools"]');
 				next?.focus({ preventScroll: true });
 			}
-			else if (contextMode !== "overview") document.querySelector<HTMLButtonElement>('[data-action="close-context"]')?.focus({ preventScroll: true });
+			else if (contextMode !== "overview") activeRoomPanel().querySelector<HTMLButtonElement>('[data-action="close-context"]')?.focus({ preventScroll: true });
 		}
 	}
 }
@@ -1350,24 +1350,23 @@ function hud() {
 	document.querySelectorAll<HTMLButtonElement>('[data-action="assemble-weapon"]').forEach((node) => { node.disabled = state.weapons.length >= getStorageCapacity(state); node.title = node.disabled ? "Арсенал полон: освободи место или развивай склад" : "Коробка станет основой новой сборки"; });
 	for (const room of state.shelter.rooms) {
 		const production = getRoomProductionState(state, room);
-		const readout = document.querySelector<HTMLElement>(`[data-production-readout="${room.id}"]`);
-		if (readout) updateProductionReadout(readout, room, production);
+		document.querySelectorAll<HTMLElement>(`[data-production-readout="${room.id}"]`).forEach(readout => updateProductionReadout(readout, room, production));
 		const roomSummary = commandSummary.rooms.find((item) => item.roomId === room.id);
 		document.querySelectorAll<HTMLElement>(`[data-room-status="${room.id}"]`).forEach((node) => { node.textContent = production.status; });
 		document.querySelectorAll<HTMLElement>(`[data-room-progress="${room.id}"]`).forEach((node) => { node.style.width = `${Math.round(production.progress * 100)}%`; });
 		document.querySelectorAll<HTMLElement>(`[data-room-eta="${room.id}"]`).forEach((node) => { node.textContent = production.remainingSeconds == null ? "" : `${seconds(production.remainingSeconds)} до готовности`; });
 		document.querySelectorAll<HTMLElement>(`[data-room-reason="${room.id}"]`).forEach((node) => { node.textContent = production.reason ?? (room.status !== "ready" ? "Во время стройки и улучшения работа приостановлена" : roomSummary?.cta ? roomSummary.detail : ""); });
-		document.querySelector<HTMLElement>(`[data-room-summary="${room.id}"]`)?.setAttribute("data-room-kind", roomSummary?.kind ?? "passive");
+		document.querySelectorAll<HTMLElement>(`[data-room-summary="${room.id}"]`).forEach(node => node.setAttribute("data-room-kind", roomSummary?.kind ?? "passive"));
 		for (const job of room.queue) {
-			const progress = document.querySelector<HTMLElement>(`[data-job-progress="${job.id}"]`); if (progress) progress.style.width = `${Math.min(100, job.workDone / job.workRequired * 100)}%`;
-			const time = document.querySelector<HTMLElement>(`[data-job-time="${job.id}"]`); if (time) time.textContent = production.remainingSeconds == null ? "ПАУЗА" : seconds(production.remainingSeconds);
-			const reason = document.querySelector<HTMLElement>(`[data-job-status="${job.id}"]`); if (reason) reason.textContent = production.reason ?? production.status;
-			const refund = document.querySelector<HTMLElement>(`[data-job-refund="${job.id}"]`); if (refund) refund.textContent = productionRefundLabel(job);
+			document.querySelectorAll<HTMLElement>(`[data-job-progress="${job.id}"]`).forEach(node => { node.style.width = `${Math.min(100, job.workDone / job.workRequired * 100)}%`; });
+			document.querySelectorAll<HTMLElement>(`[data-job-time="${job.id}"]`).forEach(node => { node.textContent = production.remainingSeconds == null ? "ПАУЗА" : seconds(production.remainingSeconds); });
+			document.querySelectorAll<HTMLElement>(`[data-job-status="${job.id}"]`).forEach(node => { node.textContent = production.reason ?? production.status; });
+			document.querySelectorAll<HTMLElement>(`[data-job-refund="${job.id}"]`).forEach(node => { node.textContent = productionRefundLabel(job); });
 		}
 	}
 	document.querySelectorAll<HTMLButtonElement>('[data-action="upgrade-room"]').forEach((node) => {
 		const quote = getRoomUpgradeQuote(state, node.dataset.id ?? ""); node.disabled = Boolean(quote.reason);
-		const note = document.querySelector<HTMLElement>(`[data-room-upgrade-note="${node.dataset.id}"]`); if (note) note.textContent = quote.reason ?? "Затраты будут списаны при начале улучшения";
+		const note = node.closest('.room-panel-section')?.querySelector<HTMLElement>(`[data-room-upgrade-note="${node.dataset.id}"]`); if (note) note.textContent = quote.reason ?? "Затраты будут списаны при начале улучшения";
 	});
 	document.querySelectorAll<HTMLButtonElement>('[data-action="excavate-wall"]').forEach((node) => {
 		const quote = getExcavationQuote(state, Number(node.dataset.column), Number(node.dataset.row)); node.disabled = Boolean(quote.reason);
@@ -1385,19 +1384,20 @@ function hud() {
 	});
 	document.querySelectorAll<HTMLButtonElement>('[data-action="queue-room-module"]').forEach((node) => {
 		const quote = getModuleProductionQuote(state, node.dataset.id ?? "", node.dataset.modelId ?? ""); node.disabled = Boolean(quote.reason);
-		const note = document.querySelector<HTMLElement>(`[data-room-module-note="${node.dataset.modelId}"]`); if (note) note.textContent = quote.reason ?? "Оплаченный заказ начнётся по очереди";
+		const note = node.closest('.room-module-recipe')?.querySelector<HTMLElement>(`[data-room-module-note="${node.dataset.modelId}"]`); if (note) note.textContent = quote.reason ?? "Оплаченный заказ начнётся по очереди";
 	});
 	document.querySelectorAll<HTMLButtonElement>('[data-action="set-room-recipe"]').forEach((node) => {
 		const quote = getResourceProductionQuote(state, node.dataset.id ?? "", node.dataset.recipeId ?? "");
 		const room = state.shelter.rooms.find(item => item.id === node.dataset.id), recipe = RESOURCE_RECIPES.find(item => item.id === node.dataset.recipeId);
 		node.disabled = !room || room.status !== "ready" || room.level < (recipe?.minLevel ?? 1) || Boolean(recipe?.lootRequirements?.length&&quote.reason);
-		const eta = document.querySelector<HTMLElement>(`[data-recipe-duration="${node.dataset.recipeId}"]`); if (eta) eta.textContent = quote.actualDuration == null ? `Базовая работа ${seconds(quote.duration)}` : `С текущими рабочими ≈ ${seconds(Math.ceil(quote.actualDuration))}`;
-		const note = document.querySelector<HTMLElement>(`[data-resource-recipe-note="${node.dataset.recipeId}"]`); if (note) note.textContent = quote.reason ?? "Бойцы запустят партию; результат поступит на склад";
+		const recipeCard = node.closest('.resource-recipe');
+		const eta = recipeCard?.querySelector<HTMLElement>(`[data-recipe-duration="${node.dataset.recipeId}"]`); if (eta) eta.textContent = quote.actualDuration == null ? `Базовая работа ${seconds(quote.duration)}` : `С текущими рабочими ≈ ${seconds(Math.ceil(quote.actualDuration))}`;
+		const note = recipeCard?.querySelector<HTMLElement>(`[data-resource-recipe-note="${node.dataset.recipeId}"]`); if (note) note.textContent = quote.reason ?? "Бойцы запустят партию; результат поступит на склад";
 	});
 	document.querySelectorAll<HTMLButtonElement>('[data-action="queue-field-kit"]').forEach(node => {
 		const kit = node.dataset.kit as FieldKit, quote = getFieldKitProductionQuote(state, node.dataset.id ?? "", kit);
 		node.disabled = Boolean(quote.reason);
-		const note = document.querySelector<HTMLElement>(`[data-field-kit-order-note="${FIELD_KITS[kit].recipeId}"]`); if (note) note.textContent = quote.reason ?? "Оплата сейчас. Заказ займёт место в очереди и дождётся работников; цель повторения на него не влияет.";
+		const note = node.closest('.resource-recipe')?.querySelector<HTMLElement>(`[data-field-kit-order-note="${FIELD_KITS[kit].recipeId}"]`); if (note) note.textContent = quote.reason ?? "Оплата сейчас. Заказ займёт место в очереди и дождётся работников; цель повторения на него не влияет.";
 	});
 	const kits = getFieldKitStock(state);
 	document.querySelectorAll<HTMLElement>('[data-field-kit-stock]').forEach(node => { const kit = node.dataset.fieldKitStock as keyof typeof kits; node.textContent = `${kits[kit]} / ${FIELD_KITS[kit].capacity}`; });
@@ -1585,7 +1585,25 @@ function openShelterRoom(id: string, requestedTab?: CommandRoomTab) {
 	document.body.classList.add("field-dock-open");
 	document.body.classList.remove("field-dock-collapsed");
 	render();
-	document.querySelector<HTMLButtonElement>('[data-action="close-context"]')?.focus({ preventScroll: true });
+	activeRoomPanelScroll()?.scrollTo({ top: 0 });
+	activeRoomPanel().querySelector<HTMLButtonElement>('[data-action="close-context"]')?.focus({ preventScroll: true });
+}
+function activeRoomPanel(): HTMLElement {
+	return roomToolOpen && page === "base" ? panel : document.querySelector<HTMLElement>("#command-dock")!;
+}
+function activeRoomPanelScroll(root = activeRoomPanel()): HTMLElement | null {
+	return root.closest<HTMLElement>(".tool-scroll") ?? root.querySelector<HTMLElement>("[data-room-management]");
+}
+function renderActiveRoomPanel(): HTMLElement {
+	const root = activeRoomPanel();
+	if (root === panel) {
+		const oldScroll = activeRoomPanelScroll(root)?.scrollTop ?? 0;
+		const openLogistics = Array.from(root.querySelectorAll<HTMLDetailsElement>('details[data-logistics-detail][open]')).map(node => node.dataset.logisticsDetail);
+		renderShelter();
+		const scroll = activeRoomPanelScroll(root); if (scroll) scroll.scrollTop = oldScroll;
+		root.querySelectorAll<HTMLDetailsElement>('details[data-logistics-detail]').forEach(node => { node.open = openLogistics.includes(node.dataset.logisticsDetail); });
+	} else renderCommandBoard();
+	return root;
 }
 function commandSummaryKey(summary: CommandSummary) {
 	return JSON.stringify([getGameplayGuidance(state), summary.counts, summary.queuedJobs, summary.freeWorkers, summary.rooms.map((room) => [room.roomId, room.kind, room.title, room.detail, room.cta]), state.scavs.map(scav => [scav.id, scav.story.pending?.eventId, scav.status]), getSocialPresentationKey(state)]);
@@ -1898,7 +1916,7 @@ function managedRoomPanel(room: RoomInstance) {
 	const tab = info.production ? roomContextTab : "upgrade";
 	const tabs = info.production ? [["staff","Люди"],["production","Производство"],["upgrade","Развитие"]] : [["upgrade","Развитие"]];
 	const content = tab === "staff" ? roomWorkersPanel(room) : tab === "production" ? `${productionReserveEditor(state, room.id, productionReserveDraft, true)}<section class="room-panel-section"><h3>Очередь · ${room.queue.length} / 5</h3>${roomQueuePanel(room)}</section><section class="room-panel-section"><h3>${room.type === "workshop" ? "Комплекты для выхода" : "Рецепты"}</h3>${roomResourcesPanel(room)}</section>${room.type === "workshop" ? `<section class="room-panel-section"><h3>Оружейные модули</h3>${roomModulesPanel(room)}</section>` : ""}` : room.status === "building" ? '<div class="room-queue-empty">Строительство началось. Дождись готовности, затем назначь работников или развивай комнату.</div>' : `<section class="room-panel-section"><h3>Уровень ${room.level} → ${Math.min(5,room.level+1)}</h3><p>Улучшение ускоряет партии и добавляет рабочие места. Люди и оплаченная очередь сохранятся.</p>${roomUpgradeRecipeBenefits(room)}<div class="loadout-stats"><span>Время ${seconds(upgrade.duration)}</span></div><button class="button secondary" data-action="upgrade-room" data-id="${room.id}" ${upgrade.reason ? "disabled" : ""}>Улучшить · ${costLabel(upgrade)}</button><small class="quote-note" data-room-upgrade-note="${room.id}">${e(upgrade.reason ?? "Оплата при начале улучшения")}</small></section>`;
-	return `<header class="command-context-head"><div><span class="eyebrow">Свободная планировка · ур. ${room.level || "—"}</span><h2>${e(info.label)}</h2></div><button class="icon-button" data-action="close-context" data-focus-key="context-close" aria-label="Закрыть комнату">×</button></header><div class="command-room-banner" data-room-summary="${room.id}" data-room-kind="${roomSummary.kind}" style="--room-accent:${info.color}">${roomMiniArt(room.type,`selected-${room.id}`).replace("<svg ", '<svg aria-hidden="true" ')}<div><strong data-room-status="${room.id}">${e(production.status)}</strong><small data-room-eta="${room.id}">${production.remainingSeconds == null ? "" : `${seconds(production.remainingSeconds)} до готовности`}</small><div class="command-room-meta"><span>${info.production ? `${icon("people",12)} ${room.workerIds.length}/${getRoomWorkerCapacity(room)}` : `${icon("check",12)} Без персонала`}</span>${info.production ? `<span>${icon("scrap",12)} Заказов: ${room.queue.length}</span>` : ""}</div><span class="progress"><i data-room-progress="${room.id}" style="width:${production.progress*100}%"></i></span><button class="text-button room-view-action" data-camera-room="${room.id}" data-focus-key="camera-room-${room.id}">Осмотреть комнату ${icon("arrow",13)}</button></div></div><div class="context-tabs" role="group" aria-label="Управление комнатой">${tabs.map(([id,label]) => `<button data-room-context-tab="${id}" data-focus-key="context-tab-${id}" aria-pressed="${tab===id}" class="${tab===id?"active":""}">${label}</button>`).join("")}</div><div class="command-dock-scroll" id="room-management" tabindex="-1">${productionReadout(room)}<p class="command-room-reason" data-room-reason="${room.id}">${e(production.reason ?? (room.status !== "ready" ? "Работа приостановлена до готовности комнаты" : roomSummary.cta ? roomSummary.detail : ""))}</p>${content}${buildingRelocationControls(room)}${!info.production ? `<p class="field-hint">${e(info.description)} Работники не требуются.</p>` : ""}</div>`;
+	return `<header class="command-context-head"><div><span class="eyebrow">Свободная планировка · ур. ${room.level || "—"}</span><h2>${e(info.label)}</h2></div><button class="icon-button" data-action="close-context" data-focus-key="context-close" aria-label="Закрыть комнату">×</button></header><div class="command-room-banner" data-room-summary="${room.id}" data-room-kind="${roomSummary.kind}" style="--room-accent:${info.color}">${roomMiniArt(room.type,`selected-${room.id}`).replace("<svg ", '<svg aria-hidden="true" ')}<div><strong data-room-status="${room.id}">${e(production.status)}</strong><small data-room-eta="${room.id}">${production.remainingSeconds == null ? "" : `${seconds(production.remainingSeconds)} до готовности`}</small><div class="command-room-meta"><span>${info.production ? `${icon("people",12)} ${room.workerIds.length}/${getRoomWorkerCapacity(room)}` : `${icon("check",12)} Без персонала`}</span>${info.production ? `<span>${icon("scrap",12)} Заказов: ${room.queue.length}</span>` : ""}</div><span class="progress"><i data-room-progress="${room.id}" style="width:${production.progress*100}%"></i></span><button class="text-button room-view-action" data-camera-room="${room.id}" data-focus-key="camera-room-${room.id}">Осмотреть комнату ${icon("arrow",13)}</button></div></div><div class="context-tabs" role="group" aria-label="Управление комнатой">${tabs.map(([id,label]) => `<button data-room-context-tab="${id}" data-focus-key="context-tab-${id}" aria-pressed="${tab===id}" class="${tab===id?"active":""}">${label}</button>`).join("")}</div><div class="command-dock-scroll" data-room-management tabindex="-1">${productionReadout(room)}<p class="command-room-reason" data-room-reason="${room.id}">${e(production.reason ?? (room.status !== "ready" ? "Работа приостановлена до готовности комнаты" : roomSummary.cta ? roomSummary.detail : ""))}</p>${content}${buildingRelocationControls(room)}${!info.production ? `<p class="field-hint">${e(info.description)} Работники не требуются.</p>` : ""}</div>`;
 }
 function roomWorkersPanel(room: RoomInstance) {
 	const capacity = getRoomWorkerCapacity(room), skill = ROOM_DEFINITIONS[room.type].workerSkill;
@@ -2094,6 +2112,7 @@ function render() {
 	});
 	renderCommandBoard();
 	const tools = document.querySelector<HTMLElement>("#tool-root")!; tools.hidden = page === "home";
+	tools.dataset.tool = page; tools.dataset.roomTool = String(page === "base" && roomToolOpen);
 	renderInspector();
 	setOverlayState();
 	hud();
@@ -2415,7 +2434,13 @@ document.addEventListener("click", async (event) => {
 	if (target.dataset.cameraRoom) { inspectRoomView(target.dataset.cameraRoom); return; }
 	if (target.dataset.commandRoom) { openShelterRoom(target.dataset.commandRoom, target.dataset.commandTab as CommandRoomTab); return; }
 	if (target.dataset.shelterRoom) { openShelterRoom(target.dataset.shelterRoom); return; }
-	if (target.dataset.roomContextTab) { roomContextTab = target.dataset.roomContextTab as typeof roomContextTab; renderCommandBoard(); document.querySelector<HTMLElement>("#room-management")?.scrollTo({ top: 0 }); document.querySelector<HTMLButtonElement>(`[data-room-context-tab="${roomContextTab}"]`)?.focus({ preventScroll: true }); return; }
+	if (target.dataset.roomContextTab) {
+		roomContextTab = target.dataset.roomContextTab as typeof roomContextTab;
+		const root = renderActiveRoomPanel();
+		activeRoomPanelScroll(root)?.scrollTo({ top: 0 });
+		root.querySelector<HTMLButtonElement>(`[data-room-context-tab="${roomContextTab}"]`)?.focus({ preventScroll: true });
+		return;
+	}
 	if (target.dataset.commandMap) { selectedMap = target.dataset.commandMap; openMultiplayerEntry(multiplayerSelection(selectedMap)); return; }
 	if (target.dataset.shelterColumn != null) { openShelterSite(Number(target.dataset.shelterColumn), Number(target.dataset.shelterRow)); return; }
 	if (target.dataset.benchSlot) { selectBenchSlot(target.dataset.benchSlot as ModuleSlot); return; }
@@ -2499,7 +2524,7 @@ document.addEventListener("click", async (event) => {
 			const room=state.shelter.rooms.find(room=>room.type===recipe.roomType&&room.status==='ready')??state.shelter.rooms.find(room=>room.type===recipe.roomType);
 			if(!room){page='base';render();toast(`Сначала построй ${ROOM_DEFINITIONS[recipe.roomType].label}.`);break;}
 			openShelterRoom(room.id,'production');
-			const control=document.querySelector<HTMLButtonElement>(`[data-action="set-room-recipe"][data-recipe-id="${CSS.escape(id)}"]`);
+			const control=activeRoomPanel().querySelector<HTMLButtonElement>(`[data-action="set-room-recipe"][data-recipe-id="${CSS.escape(id)}"]`);
 			control?.closest('.resource-recipe')?.scrollIntoView({block:'nearest',behavior:scrollBehavior()});
 			if(control&&!control.disabled)control.focus({preventScroll:true});
 			break;
@@ -2629,7 +2654,7 @@ document.addEventListener("click", async (event) => {
 		}
 		case "seek-production-resource": { openMultiplayerEntry({ purpose: "loot" }); break; }
 		case "set-room-recipe": {
-			const repeat = target.hasAttribute("data-loot-order") ? false : document.querySelector<HTMLInputElement>(`[data-room-repeat="${CSS.escape(id)}"]`)?.checked ?? false;
+			const repeat = target.hasAttribute("data-loot-order") ? false : target.closest('[data-room-management]')?.querySelector<HTMLInputElement>(`[data-room-repeat="${CSS.escape(id)}"]`)?.checked ?? false;
 			roomRepeatPreferences.set(id, repeat);
 			const oldRecipe = state.shelter.rooms.find(room => room.id === id)?.recipeId;
 			const result = await gameAction({ type: "setRoomRecipe", args: [id, target.dataset.recipeId ?? null, repeat] });
@@ -2999,8 +3024,8 @@ document.addEventListener("change", async (event) => {
 		if (room?.recipeId) act(await gameAction({ type: "setRoomRecipe", args: [room.id, room.recipeId, (target as HTMLInputElement).checked] }));
 		return;
 	}
-	if (target.hasAttribute("data-room-module-slot")) { roomModuleSlot = target.value as typeof roomModuleSlot; renderCommandBoard(); document.querySelector<HTMLSelectElement>('[data-room-module-slot]')?.focus({ preventScroll: true }); return; }
-	if (target.hasAttribute("data-room-module-weapon")) { selectedWeapon = target.value; renderCommandBoard(); document.querySelector<HTMLSelectElement>('[data-room-module-weapon]')?.focus({ preventScroll: true }); return; }
+	if (target.hasAttribute("data-room-module-slot")) { roomModuleSlot = target.value as typeof roomModuleSlot; renderActiveRoomPanel().querySelector<HTMLSelectElement>('[data-room-module-slot]')?.focus({ preventScroll: true }); return; }
+	if (target.hasAttribute("data-room-module-weapon")) { selectedWeapon = target.value; renderActiveRoomPanel().querySelector<HTMLSelectElement>('[data-room-module-weapon]')?.focus({ preventScroll: true }); return; }
 	if (target.hasAttribute("data-production-workshop")) { productionWorkshopId = target.value; renderModules(); document.querySelector<HTMLSelectElement>('[data-production-workshop]')?.focus({ preventScroll: true }); return; }
 	if (target.hasAttribute("data-bench-weapon")) {
 		selectedWeapon = target.value; selectedBenchModule = null; benchPartSearch = "";
@@ -3063,8 +3088,8 @@ document.addEventListener("input", (event) => {
 	}
 	if (input.dataset.roomStockTarget) { roomStockTargetDrafts.set(input.dataset.roomStockTarget, input.value); return; }
 	if (input.hasAttribute("data-room-module-search")) {
-		roomModuleSearch = input.value; const caret = input.selectionStart; renderCommandBoard();
-		const replacement = document.querySelector<HTMLInputElement>("[data-room-module-search]"); replacement?.focus({ preventScroll: true });
+		roomModuleSearch = input.value; const caret = input.selectionStart;
+		const replacement = renderActiveRoomPanel().querySelector<HTMLInputElement>("[data-room-module-search]"); replacement?.focus({ preventScroll: true });
 		if (caret != null) replacement?.setSelectionRange(caret, caret); return;
 	}
 	if (input.hasAttribute("data-module-search") || input.hasAttribute("data-bench-search")) {
@@ -3398,7 +3423,7 @@ liveMode = createLiveMode({
 	},
 	onMarket: () => {
 		fleaReadGeneration++; fleaView.market=null; fleaView.loading=false; authoritative?.invalidateMarket();
-		setView('base'); page='flea'; fleaView.tab='inventory'; render();
+		page='flea'; fleaView.tab='inventory'; render();
 		void refreshServerProgress().then(ready=>{if(ready&&page==='flea')void refreshFleaMarket();});
 	},
 	onExit: () => setView("base"),
