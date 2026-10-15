@@ -23,6 +23,7 @@ import { paintCanvasSceneWeather } from './scene-weather';
 import { SceneWeatherCache } from './scene-weather-cache';
 import { paintCanvasWetSurfaces } from './scene-wet-surfaces';
 import { wetGroundCandidates, WetGroundFrameCache, type WetGroundCandidate } from './scene-wet-ground';
+import { clearFieldHudRect, fieldHudOverlaps, placeFieldHudBox, readFieldHudBounds, type FieldHudBox } from './field-hud';
 
 type Motion = PixelMotion;
 type LabelBox = { x: number; y: number; width: number; height: number };
@@ -38,6 +39,8 @@ export class LiveScene {
   private overlayObserver: MutationObserver;
   private overlayBounds: LabelBox[] = [];
   private overlayBoundsDirty = true;
+  private fieldRect: FieldHudBox = { x: 0, y: 0, width: 800, height: 520 };
+  private minimapLayout: (ReturnType<typeof fitMinimap> & { visible: boolean }) | null = null;
   private snapshot: LiveSnapshot | null = null;
   private motions = new Map<string, Motion>();
   private renderer: PixelRaidRenderer;
@@ -104,7 +107,7 @@ export class LiveScene {
     this.observer = new ResizeObserver(() => this.resize());
     this.observer.observe(host);
     this.overlayObserver = new MutationObserver(() => { this.overlayBoundsDirty = true; });
-    this.overlayObserver.observe(host, { childList: true, subtree: true, characterData: true });
+    this.overlayObserver.observe(host.ownerDocument?.body ?? host.closest?.('.command-shell') ?? host, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['class', 'style', 'hidden', 'open'] });
     this.canvas.addEventListener('click', this.click);
     this.canvas.addEventListener('pointerdown', this.pointerDown);
     this.canvas.addEventListener('pointermove', this.pointerMove);
@@ -184,14 +187,14 @@ export class LiveScene {
   }
   private viewTile(world: LiveWorld): number {
     const frame = this.viewFrame(world);
-    return this.overview ? Math.min(this.width * 1.8 / (frame.width + frame.height), Math.max(120, this.height - 95) * 3.6 / (frame.width + frame.height)) : (this.width < 480 ? 48 : 64) * this.zoom;
+    return this.overview ? Math.min(this.fieldRect.width * 1.8 / (frame.width + frame.height), Math.max(120, this.fieldRect.height - 30) * 3.6 / (frame.width + frame.height)) : (this.width < 480 ? 48 : 64) * this.zoom;
   }
   private click = (event: MouseEvent): void => {
     if (!this.snapshot || !this.active || performance.now() < this.ignoreClickUntil) return;
     this.canvas.focus({ preventScroll: true });
     const rect = this.canvas.getBoundingClientRect(), x = event.clientX - rect.left, y = event.clientY - rect.top;
     const mini = this.minimapBounds(this.snapshot);
-    if (x >= mini.x - 8 && x <= mini.x + mini.width + 8 && y >= mini.y - 18 && y <= mini.y + mini.height + 22) {
+    if (mini.visible && x >= mini.x - 8 && x <= mini.x + mini.width + 8 && y >= mini.y - 18 && y <= mini.y + mini.height + 22) {
       if (x >= mini.x && x <= mini.x + mini.width && y >= mini.y && y <= mini.y + mini.height) this.focusPoint({ x: clamp((x - mini.x) / mini.scale, 0, this.snapshot.world.width - 1), y: clamp((y - mini.y) / mini.scale, 0, this.snapshot.world.height - 1) });
       return;
     }
@@ -251,7 +254,19 @@ export class LiveScene {
   private project(point: LivePoint, elevation = 0): LivePoint { return { x: this.origin.x + ((point.x - this.camera.x) - (point.y - this.camera.y)) * this.tile / 2, y: this.origin.y + ((point.x - this.camera.x) + (point.y - this.camera.y)) * this.tile / 4 - elevation }; }
   private polygon(points: LivePoint[], color: string, stroke?: string): void { const c = this.context; c.beginPath(); points.forEach((p, i) => i ? c.lineTo(p.x, p.y) : c.moveTo(p.x, p.y)); c.closePath(); c.fillStyle = color; c.fill(); if (stroke) { c.strokeStyle = stroke; c.lineWidth = .7; c.stroke(); } }
   private quad(x: number, y: number, width = 1, height = 1, elevation = 0): LivePoint[] { return [{ x, y }, { x: x + width, y }, { x: x + width, y: y + height }, { x, y: y + height }].map(p => this.project(p, elevation)); }
-  private label(text: string, x: number, y: number, color: string, size = 10): void { const c = this.context; c.font = `600 ${size}px Manrope, sans-serif`; c.textAlign = 'center'; c.lineWidth = 4; c.strokeStyle = '#101c18'; c.strokeText(text, x, y); c.fillStyle = color; c.fillText(text, x, y); }
+  private label(text: string, x: number, y: number, color: string, size = 10): void {
+    const c = this.context; c.font = `600 ${size}px Manrope, sans-serif`;
+    const width = c.measureText(text).width + 8;
+    if (this.overlayBounds.some(box => fieldHudOverlaps(box, { x: x - width / 2, y: y - size - 3, width, height: size + 7 }))) return;
+    c.textAlign = 'center'; c.lineWidth = 4; c.strokeStyle = '#101c18'; c.strokeText(text, x, y); c.fillStyle = color; c.fillText(text, x, y);
+  }
+  private refreshHudBounds(): void {
+    if (!this.overlayBoundsDirty) return;
+    this.overlayBounds = readFieldHudBounds(this.canvas);
+    this.fieldRect = clearFieldHudRect({ width: this.width, height: this.height }, this.overlayBounds);
+    this.minimapLayout = null;
+    this.overlayBoundsDirty = false;
+  }
   private unproject(x: number, y: number): LivePoint {
     const dx = (x - this.origin.x) / (this.tile / 2), dy = (y - this.origin.y) / (this.tile / 4);
     return { x: (dx + dy) / 2 + this.camera.x, y: (dy - dx) / 2 + this.camera.y };
@@ -528,10 +543,11 @@ export class LiveScene {
     c.fillStyle = T.background; c.fillRect(0, 0, this.width, this.height);
     c.imageSmoothingEnabled = false;
     if (!this.snapshot) return;
+    this.refreshHudBounds();
     const snapshot = this.snapshot, self = snapshot.entities.find(entity => entity.id === snapshot.selfId);
     const frame = this.viewFrame(snapshot.world);
     this.tile = this.viewTile(snapshot.world);
-    this.origin = { x: this.width * .5, y: this.height * (this.overview ? .54 : .58) };
+    this.origin = { x: this.fieldRect.x + this.fieldRect.width * .5, y: this.fieldRect.y + this.fieldRect.height * (this.overview ? .54 : .58) };
     if (this.overview) this.camera = { x: frame.x + frame.width / 2, y: frame.y + frame.height / 2 };
     else if (self && this.following) this.camera = this.interpolated(this.motions.get(self.id)!, now);
     const world = snapshot.world;
@@ -625,21 +641,10 @@ export class LiveScene {
   }
   private paintLandmarks(world: LiveWorld): void {
     const c = this.context, small = this.overview || this.tile < 12;
-    // UI rendering follows the snapshot update. Read its final layout on the next paint,
-    // then reuse these bounds until the overlay changes or the viewport is resized.
-    if (this.overlayBoundsDirty) {
-      const canvas = this.canvas.getBoundingClientRect();
-      this.overlayBounds = [...this.host.querySelectorAll<HTMLElement>('.live-field-hud, .live-field-legend, .live-auto-world-status, .live-camera')].flatMap(element => {
-        const rect = element.getBoundingClientRect();
-        if (rect.width < 1 || rect.height < 1) return [];
-        return [{ x: rect.left - canvas.left - 5, y: rect.top - canvas.top - 5, width: rect.width + 10, height: rect.height + 10 }];
-      });
-      this.overlayBoundsDirty = false;
-    }
     const boxes: LabelBox[] = [...this.overlayBounds];
     if (this.snapshot) {
       const mini = this.minimapBounds(this.snapshot);
-      boxes.push({ x: mini.x - 12, y: mini.y - 12, width: mini.width + 24, height: mini.height + 37 });
+      if (mini.visible) boxes.push({ x: mini.x - 12, y: mini.y - 18, width: mini.width + 24, height: mini.height + 40 });
     }
     for (const id of this.routePoiIds) {
       const entrance = world.pois.find(poi => poi.id === id)?.entrances[0];
@@ -825,13 +830,17 @@ export class LiveScene {
     } else if (entity.bleeding || entity.limping) this.label(entity.bleeding ? 'КРОВОТЕЧЕНИЕ' : 'ХРОМАЕТ', p.x, p.y + 22, T.injured, 7);
     this.hitTargets.push({ entity, x: p.x, y: p.y, bounds });
   }
-  private minimapBounds(snapshot: LiveSnapshot): { x: number; y: number; width: number; height: number; scale: number } {
+  private minimapBounds(snapshot: LiveSnapshot): ReturnType<typeof fitMinimap> & { visible: boolean } {
+    this.refreshHudBounds();
+    if (this.minimapLayout) return this.minimapLayout;
     const areaWidth = Math.min(this.width < 480 ? 112 : 164, this.width * .34), areaHeight = Math.min(138, this.height * .23);
     const fitted = fitMinimap(snapshot.world, { x: 0, y: 0, width: areaWidth, height: areaHeight });
-    return { ...fitted, x: this.width - fitted.width - 16, y: 78 };
+    const box = placeFieldHudBox({ width: this.width, height: this.height }, { width: fitted.width + 16, height: fitted.height + 40 }, this.overlayBounds, { x: this.width - fitted.width - 24, y: 60 });
+    return this.minimapLayout = { ...fitted, x: box ? box.x + 8 : 0, y: box ? box.y + 18 : 0, visible: Boolean(box) };
   }
   private minimap(snapshot: LiveSnapshot): void {
     const c = this.context, layout = this.minimapBounds(snapshot), { x, y, width, height } = layout;
+    if (!layout.visible) return;
     const at = (point: LivePoint) => minimapPoint(layout, point);
     const diamond = (point: LivePoint, size: number, color: string) => {
       c.beginPath(); c.moveTo(point.x, point.y - size); c.lineTo(point.x + size, point.y); c.lineTo(point.x, point.y + size); c.lineTo(point.x - size, point.y); c.closePath();
