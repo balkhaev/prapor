@@ -189,6 +189,24 @@ describe('articulated fighter rig and shared phases', () => {
     expect(normal.size).toBe(PIXEL_ACTOR_FRAMES.walk); expect(injured.size).toBe(PIXEL_ACTOR_FRAMES.walk); expect(healthySupport).toBeGreaterThan(injuredSupport);
   });
 
+  test('resting and aiming stand almost straight instead of folding the walking chain into a crouch', () => {
+    for (const mode of ['idle', 'aim', 'fire'] as const) for (let frame = 0; frame < PIXEL_ACTOR_FRAMES[mode]; frame++) {
+      const rig = pixelActorRig({ mode, frame, facing: 'e' });
+      for (const [hip, knee, ankle] of [[rig.leftHip, rig.leftKnee, rig.leftAnkle], [rig.rightHip, rig.rightKnee, rig.rightAnkle]]) {
+        expect(knee!.x - hip!.x).toBeGreaterThanOrEqual(3); expect(knee!.x - hip!.x).toBeLessThanOrEqual(6);
+        expect(Math.abs(knee!.x - ankle!.x)).toBeLessThanOrEqual(6);
+        expect(knee!.y).toBeGreaterThan(hip!.y); expect(knee!.y).toBeLessThan(ankle!.y);
+      }
+      expect(rig.leftContact && rig.rightContact).toBe(true);
+      if (mode !== 'idle') {
+        // Calibrated raised grip and cheek tuck bring native sights to the face;
+        // all installed weapon sockets still derive from this same grip.
+        expect(rig.anchor.y + 15 * .5 - rig.grip.y).toBeGreaterThanOrEqual(117.5);
+        expect(rig.headBob).toBeLessThanOrEqual(-7);
+      }
+    }
+  });
+
   test('breathing moves the upper body while feet and hips stay still; aiming sights remain steady', () => {
     for (const facing of PIXEL_FACINGS) {
       const idle = Array.from({ length: PIXEL_ACTOR_FRAMES.idle }, (_, frame) => pixelActorRig({ mode: 'idle', frame, facing }));
