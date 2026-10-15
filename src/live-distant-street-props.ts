@@ -26,12 +26,12 @@ export function distantStreetPropSurfaces(prop: LiveWorldProp): DistantStreetPro
     face([[.1, .225, 47], [.9, .225, 47], [.9, .225, 120], [.1, .225, 120]], C.glass);
     for (const u of [.09, .42, .91]) box(u, .2, u + .022, .235, 5, 128, C.steel, C.steelShade, C.steelLight);
     box(.18, .31, .74, .61, 31, 37, C.wood, C.woodShade, C.woodLight);
+    face([[.91, .25, 50], [.91, .7, 50], [.91, .7, 115], [.91, .25, 115]], C.cream);
     face([[.025, .035, 141], [.975, .035, 141], [.975, .95, 132], [.025, .95, 132]], roof);
     face([[.025, .95, 124], [.975, .95, 124], [.975, .95, 132], [.025, .95, 132]], C.steelShade);
     face([[.975, .035, 133], [.975, .95, 124], [.975, .95, 132], [.975, .035, 141]], C.steelShade);
     face([[.79, .96, 128], [.94, .96, 128], [.94, .96, 157], [.79, .96, 157]], C.blue);
     face([[.81, .965, 136], [.92, .965, 136], [.92, .965, 150], [.81, .965, 150]], C.cream);
-    face([[.91, .25, 50], [.91, .7, 50], [.91, .7, 115], [.91, .25, 115]], C.cream);
     return result;
   }
   const bodyTop = prop.kind === 'bus' ? 76 : prop.kind === 'van' ? 59 : prop.kind === 'truck' ? 43 : 37;
