@@ -1,5 +1,5 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import { parseArguments, waitForWebhook } from "../infra/git-egress/verify-release";
+import { parseArguments, publicVerificationProgram, waitForWebhook } from "../infra/git-egress/verify-release";
 
 type Deployment = Awaited<ReturnType<typeof waitForWebhook>>;
 const COMMIT = "a1b2c3d4".repeat(5);
@@ -118,4 +118,42 @@ describe("standalone native release verification", () => {
       sleep.mockRestore();
     }
   });
+});
+
+async function executePublicProgram(brokenCsp: boolean): Promise<{ exit: number; output: { ok?: boolean; domains?: number; pages?: number; assets?: number; requests?: number }[]; stderr: string }> {
+  const fixture = `let fixtureRequests = 0;
+globalThis.fetch = async (input, init) => {
+  const url = new URL(String(input)); fixtureRequests++;
+  if (!['https://game.delopusk.ru','https://game.balkhaev.com'].includes(url.origin) || init.headers || (init.method && init.method !== 'GET')) throw Error('Unexpected fixture request');
+  const headers = {'content-security-policy':${JSON.stringify(brokenCsp ? "script-src 'unsafe-eval'; frame-ancestors 'none'" : "script-src 'self'; frame-ancestors 'none'")}};
+  if (url.pathname === '/health') return Response.json({ok:true},{headers});
+  if (url.pathname === '/api/live/status') return Response.json({maps:[{width:1024,height:1024,city:{quarters:Array(16).fill({})}}]},{headers});
+  if (url.pathname === '/api/auth/session') return Response.json({googleEnabled:true},{headers});
+  if (['/assets/game-fixture.js','/assets/fixture.css'].includes(url.pathname)) return new Response('built fixture',{headers:{...headers,'content-type':'text/plain'}});
+  if (!['/','/characters.html','/models.html','/environment.html'].includes(url.pathname)) throw Error('Unexpected fixture path');
+  const entry = url.pathname === '/' ? 'game' : url.pathname.slice(1,-5);
+  return new Response('<script type="module" src="/assets/'+entry+'-fixture.js"></script>',{headers:{...headers,'content-type':'text/html'}});
+};`;
+  const program = publicVerificationProgram(["assets/game-fixture.js", "assets/fixture.css"], 1000);
+  const child = Bun.spawn([process.execPath, "-"], { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: {}, signal: AbortSignal.timeout(5000) });
+  try {
+    child.stdin.write(`${fixture}\n${program}\nconsole.log(JSON.stringify({requests:fixtureRequests}));`);
+    child.stdin.end();
+    const [exit, output, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    return { exit, output: output.trim().split("\n").map(line => JSON.parse(line)), stderr };
+  } finally { if (child.exitCode === null) child.kill(); }
+}
+
+test("public probe is self-contained on Bun stdin with no operator environment or network", async () => {
+  const result = await executePublicProgram(false);
+  expect(result.exit).toBe(0);
+  expect(result.stderr).toBe("");
+  expect(result.output).toEqual([{ ok: true, domains: 2, pages: 4, assets: 2 }, { requests: 18 }]);
+});
+
+test("self-contained public probe rejects unsafe CSP without reporting success", async () => {
+  const result = await executePublicProgram(true);
+  expect(result.exit).toBe(1);
+  expect(result.stderr).toBe("");
+  expect(result.output).toEqual([{ ok: false }, { requests: 1 }]);
 });

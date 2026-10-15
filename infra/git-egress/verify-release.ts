@@ -6,6 +6,7 @@ const APP = "zycfl8uafyxiplfpq4tbtxkc";
 const API = "https://deploy.balkhaev.com/api/v1/";
 const ORIGINS = ["https://game.delopusk.ru", "https://game.balkhaev.com"];
 const PAGES = ["/", "/characters.html", "/models.html", "/environment.html"];
+const SSH_OPTIONS = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=10"];
 const ssh = promisify(execFile);
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 function need(condition: unknown, message: string): asserts condition { if (!condition) throw new Error(message); }
@@ -81,11 +82,14 @@ checks['mailFile']=public['mailFile']; checks['googleFile']=public['googleFile']
 print(json.dumps({'checks':checks,'assets':public['assets']}))`;
 }
 
+function originSshArguments(command: string): string[] {
+  const origin = ["ssh", "-i", "/data/coolify/ssh/keys/ssh_key@iy9ziufgkgvawjlsyyidpote", ...SSH_OPTIONS, "root@81.90.31.214", command];
+  return [...SSH_OPTIONS, "root@deploy.balkhaev.com", origin.map(quote).join(" ")];
+}
+
 export async function inspectRuntime(commit: string, deadline: number): Promise<Runtime> {
-  const options = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=10"];
-  const origin = ["ssh", "-i", "/data/coolify/ssh/keys/ssh_key@iy9ziufgkgvawjlsyyidpote", ...options, "root@81.90.31.214", `python3 -c ${quote(inspectionScript(commit))}`];
   let output: string;
-  try { output = (await ssh("ssh", [...options, "root@deploy.balkhaev.com", origin.map(quote).join(" ")], { timeout: Math.max(1, Math.min(25_000, deadline - Date.now())), maxBuffer: 1024 * 1024, windowsHide: true })).stdout; }
+  try { output = (await ssh("ssh", originSshArguments(`python3 -c ${quote(inspectionScript(commit))}`), { timeout: Math.max(1, Math.min(25_000, deadline - Date.now())), maxBuffer: 1024 * 1024, windowsHide: true })).stdout; }
   catch { throw new Error("Origin inspection failed (SSH/Docker)"); }
   const result = JSON.parse(output) as Runtime;
   for (const [name, passed] of Object.entries(result.checks)) need(passed === true, `Container check failed: ${name}`);
@@ -121,6 +125,29 @@ export async function verifyPublic(assets: string[], deadline: number): Promise<
   }
 }
 
+export function publicVerificationProgram(assets: string[], budgetMs: number): string {
+  need(Number.isFinite(budgetMs) && budgetMs > 0 && budgetMs <= 90_000, "Invalid public verification budget");
+  const source = [
+    `const ORIGINS = ${JSON.stringify(ORIGINS)}, PAGES = ${JSON.stringify(PAGES)};`,
+    need.toString(), publicResponse.toString(), verifyPublic.toString(),
+    `try { await verifyPublic(${JSON.stringify(assets)}, Date.now() + ${Math.floor(budgetMs)});`,
+    `console.log(JSON.stringify({ok:true,domains:2,pages:4,assets:${assets.length}}));`,
+    `} catch { console.log(JSON.stringify({ok:false})); process.exitCode = 1; }`,
+  ].join("\n");
+  return new Bun.Transpiler({ loader: "ts", target: "bun" }).transformSync(source);
+}
+
+async function verifyPublicFromOrigin(assets: string[], deadline: number): Promise<void> {
+  const budget = Math.max(1, deadline - Date.now());
+  const payload = Buffer.from(publicVerificationProgram(assets, budget)).toString("base64");
+  const command = `printf %s ${quote(payload)} | base64 -d | docker exec -i prapor-game bun -`;
+  try {
+    const result = await ssh("ssh", originSshArguments(command), { timeout: budget, maxBuffer: 1024 * 1024, windowsHide: true });
+    const summary = JSON.parse(result.stdout);
+    need(summary.ok === true && summary.domains === 2 && summary.pages === 4 && summary.assets === assets.length, "Invalid origin public verification summary");
+  } catch { throw new Error("Public checks from origin failed (SSH/HTTP)"); }
+}
+
 export async function main(args = Bun.argv.slice(2)): Promise<void> {
   const { commit, wait } = parseArguments(args), token = process.env.COOLIFY_ACCESS_TOKEN;
   need(token, "COOLIFY_ACCESS_TOKEN is required");
@@ -129,7 +156,7 @@ export async function main(args = Bun.argv.slice(2)): Promise<void> {
   do {
     try {
       const runtime = await inspectRuntime(commit, deadline);
-      await verifyPublic(runtime.assets, deadline);
+      await verifyPublicFromOrigin(runtime.assets, deadline);
       console.log(`Verified ${commit}: webhook ${job.deployment_uuid}; healthy image and revision; container controls and secrets; 2 domains, 4 pages, ${runtime.assets.length} assets each; CSP; world 1024/16.`);
       return;
     } catch (error) {
