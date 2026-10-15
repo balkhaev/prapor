@@ -3,6 +3,7 @@ import { legacyHallEnvelopes } from './game/world-building-envelope';
 import { PIXEL_PALETTE as P, pixelSeed } from './pixel-art';
 import { buildingArchitecture, buildingArchitectureHeightAt } from './building-architecture';
 import { pixelLandcoverBands, type LandcoverRect } from './pixel-landcover';
+import { buildingStreetSign } from './live-street-life';
 
 export type SceneryBounds = LivePoint & { width: number; height: number };
 export const BUILDING_EXTERIOR_HEIGHT_SCALE = 1.7;
@@ -216,8 +217,18 @@ export function distantBuildingSurfaces(building: LiveCityBuilding): DistantBuil
       wallRect(u - width / 2 - .065, width + .13, low - .04, high + .04, style.trim);
       wallRect(u - width / 2, width, low, high, side === 'x' ? '#557b81' : '#334f55');
     }
-    if (building.kind === 'shop') wallRect(.2, length - .4, Math.min(.89, wall - .27), wall - .16, style.accent);
     for (const u of doors.slice(0, 2)) wallRect(Math.max(.12, u - .38), Math.min(.76, length - u + .26), 0, Math.min(wall - .14, .81), style.accentShade);
+    const business = buildingStreetSign(building), entrance = doors[0];
+    if (business && entrance !== undefined) {
+      const width = Math.min(business.label.length * .29 + .6, 3.5, length - .6, entrance * 2 - .3, (length - entrance) * 2 - .3);
+      const top = Math.min(facade.top * 128 - 9, (industrial ? 76 : 61) + 28) / 128 * BUILDING_EXTERIOR_HEIGHT_SCALE;
+      const low = top - 18 / 128 * BUILDING_EXTERIOR_HEIGHT_SCALE, left = entrance - width / 2;
+      if (width > .65 && low > bottom) {
+        wallRect(left, width, low, top, business.edge);
+        wallRect(left + .04, width - .08, low + .025, top - .025, business.board);
+        for (const t of [.16, .4, .64]) wallRect(left + width * t, width * .11, low + .07, top - .07, business.lettering);
+      }
+    }
   }
   const materials = { roofLight: style.roof[0], roofDark: style.roof[1], wallLight: style.light, wallDark: style.dark, trim: style.trim, glass: '#334f55' };
   for (const surface of plan.surfaces) face(surface.points.map(p => point(p.x, p.y, p.z * BUILDING_EXTERIOR_HEIGHT_SCALE)), materials[surface.material]);
@@ -430,6 +441,21 @@ export function paintPropModel(c: CanvasRenderingContext2D, prop: LiveWorldProp,
       for (let u = .03; u < .95; u += .15) uvQuad(u, .05, .15, .9, 48, Math.floor(u * 7) % 2 ? '#a59367' : '#65795d');
       for (const u of [.16, .4, .65]) uvBox(u, .23, .16, .47, 21, ['#82774f', '#5e603e', '#9b9862'], 13);
     } else { uvBox(.1, .2, .2, .2, 25, ['#647d78', '#425f58', '#92a197'], 21); }
+    return;
+  }
+
+  if (kind === 'bus-stop') {
+    uvBox(.04, .12, .92, .76, 3, ['#899485', '#657769', '#b6ae8d']);
+    uvBox(.08, .13, .83, .05, 57, ['#7e9490', '#4b6863', '#b0bbb0'], 3);
+    const backA = uv(.13, .19), backB = uv(.87, .19);
+    polygon([p(backA.x, backA.y, 19), p(backB.x, backB.y, 19), p(backB.x, backB.y, 54), p(backA.x, backA.y, 54)], '#567d7a');
+    for (const u of [.07, .91]) uvBox(u, .75, .025, .05, 57, ['#849b97', '#526e65', '#b7c3b3'], 3);
+    uvBox(.2, .35, .57, .2, 14, ['#9c835d', '#695a40', '#b7a076'], 11);
+    uvBox(.03, .08, .94, .84, 61, ['#596f65', '#405a50', variant % 2 ? '#6c8790' : '#788779'], 57);
+    const at = uv(.17, .93); polygon([{ x: p(at.x, at.y, 59).x - 7, y: p(at.x, at.y, 59).y },
+      { x: p(at.x, at.y, 59).x + 7, y: p(at.x, at.y, 59).y }, { x: p(at.x, at.y, 59).x + 7, y: p(at.x, at.y, 59).y + 7 },
+      { x: p(at.x, at.y, 59).x - 7, y: p(at.x, at.y, 59).y + 7 }], '#516e7c');
+    line({ x: p(at.x, at.y, 59).x - 4, y: p(at.x, at.y, 59).y + 3 }, { x: p(at.x, at.y, 59).x + 4, y: p(at.x, at.y, 59).y + 3 }, '#d6d2ac', 2);
     return;
   }
 

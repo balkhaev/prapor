@@ -67,6 +67,21 @@ test('native and cached street passes share an exact physical clip and do not le
   expect(saves).toBe(0); expect(strokes).toBeGreaterThan(details.length * 2);
 });
 
+test('parking and stop markings use only the real paved pocket outside physical cover', () => {
+  const f = fixture();
+  const car = { id: 'street-park:avenue:1', kind: 'car' as const, x: 22, y: 20, width: 3, height: 1, orientation: 'x' as const, variant: 0, blocking: true };
+  const stop = { ...car, id: 'street-stop:avenue:1', kind: 'bus-stop' as const, x: 17, y: 3, width: 4, height: 2 };
+  f.world.props = [car, stop];
+  for (const prop of f.world.props) for (let y = prop.y; y < prop.y + prop.height; y++) for (let x = prop.x; x < prop.x + prop.width; x++) f.walkable[y * 32 + x] = 0;
+  const markings = buildCityStreetGround(f.world, f.terrain, f.walkable, f.indoor).filter(detail => detail.kind === 'parking-bay' || detail.kind === 'stop-pad');
+  expect(markings.map(detail => detail.kind)).toEqual(['parking-bay', 'stop-pad']);
+  for (const detail of markings) for (const run of detail.clip) for (let x = run.x; x < run.x + run.width; x++) {
+    expect(f.walkable[run.y * 32 + x]).toBe(1); expect(f.terrain[run.y * 32 + x]).toBe('concrete');
+  }
+  f.terrain.fill('grass');
+  expect(buildCityStreetGround(f.world, f.terrain, f.walkable, f.indoor).some(detail => detail.kind === 'parking-bay' || detail.kind === 'stop-pad')).toBe(false);
+});
+
 test('long streets retain bounded chunks and a finite world-level plan', () => {
   const f = fixture();
   f.world.paths = Array.from({ length: 5000 }, (_, id) => ({ id: `metro-repeated-${id}`, name: '', kind: 'road', width: 5, points: [{ x: 8, y: 2 }, { x: 8, y: 29 }] }));

@@ -3,6 +3,7 @@ import { BUILDING_EXTERIOR_HEIGHT_SCALE, buildingExteriorStyle, buildingFacadeCa
 import type { LiveCityBuilding, LiveObstacle, LiveWorld, LiveWorldProp } from '../src/game/live';
 import { prefabObstacles } from '../src/game/world-prefabs';
 import { buildingArchitecture } from '../src/building-architecture';
+import { buildingStreetSign } from '../src/live-street-life';
 
 const building: LiveCityBuilding = { id: 'home', name: 'Дом', x: 10, y: 12, width: 8, height: 6, kind: 'apartment', entrances: [{ x: 13, y: 12 }, { x: 13, y: 17 }], floors: 3, facade: 'brick', roof: 'gable' };
 
@@ -62,7 +63,7 @@ describe('raid architecture visibility', () => {
   });
   test('distant frontages retain framed glass, cornice shadows and shop colour rather than one flat roof', () => {
     for (const kind of ['apartment', 'shop', 'workshop', 'garage', 'service'] as const) {
-      const house = { ...building, kind, floors: 3 as const, width: 16, height: 11 }, before = structuredClone(house);
+      const house = { ...building, kind, floors: 3 as const, width: 16, height: 11, entrances: [{ x: 13, y: 22 }] }, before = structuredClone(house);
       const surfaces = distantBuildingSurfaces(house), style = buildingExteriorStyle(house), wall = buildingWallHeight(house) * BUILDING_EXTERIOR_HEIGHT_SCALE;
       expect(surfaces.length).toBeLessThanOrEqual(72);
       expect(surfaces.some(surface => surface.color === style.joint && surface.points.every(point => point.z >= wall - .15 && point.z < wall))).toBe(true);
@@ -72,7 +73,8 @@ describe('raid architecture visibility', () => {
         const low = Math.min(...pane.points.map(point => point.z)), high = Math.max(...pane.points.map(point => point.z));
         expect(surfaces.some(frame => frame.color === style.trim && Math.min(...frame.points.map(point => point.z)) < low && Math.max(...frame.points.map(point => point.z)) > high)).toBe(true);
       }
-      if (kind === 'shop') expect(surfaces.some(surface => surface.color === style.accent)).toBe(true);
+      const sign = buildingStreetSign(house);
+      if (sign) expect(surfaces.some(surface => surface.color === sign.board && surface.points.every(point => point.z > .5 && point.z < 1.4))).toBe(true);
       expect(house).toEqual(before);
     }
   });
@@ -196,7 +198,7 @@ function recordingContext(): { context: CanvasRenderingContext2D; coordinates: n
   return { context, get coordinates() { return state.coordinates; }, get paints() { return state.paints; } };
 }
 
-const kinds: LiveWorldProp['kind'][] = ['car', 'van', 'truck', 'bus', 'lamp', 'dumpster', 'pallet', 'crate', 'barrel', 'bench', 'planter', 'shed', 'sign', 'fence', 'shrub', 'tree', 'logs', 'railcar', 'transformer', 'playground', 'garden', 'kiosk', 'market-stall', 'workbench', 'hydrant', 'power-pole', 'bollard'];
+const kinds: LiveWorldProp['kind'][] = ['car', 'van', 'truck', 'bus', 'lamp', 'dumpster', 'pallet', 'crate', 'barrel', 'bench', 'planter', 'shed', 'sign', 'fence', 'shrub', 'tree', 'logs', 'railcar', 'transformer', 'playground', 'garden', 'kiosk', 'market-stall', 'workbench', 'hydrant', 'power-pole', 'bollard', 'bus-stop'];
 
 test('every public scenery kind renders finite visible geometry for both directions and all variants', () => {
   for (const kind of kinds) for (const orientation of ['x', 'y'] as const) for (let variant = 0; variant < 4; variant++) {

@@ -1,6 +1,7 @@
 import type { LiveContainerAnchor, LiveDistrict, LiveLandscapePath, LiveObstacle, LivePoint, LivePoi, LiveWorldRoute } from './live';
 import type { LiveMapDefinition } from './live-maps';
 import { generateWorldProps } from './world-props';
+import { generateStreetFurniture } from './world-street-furniture';
 import { LIVE_WORLD_LIMITS } from './live-world-limits';
 import { generateMetropolisSites } from './world-metropolis-sites';
 import { METROPOLIS_CITY, METROPOLIS_CORE, METROPOLIS_CORE_SHIFT, METROPOLIS_SIZE, inMetropolisCore, metropolisHash, metropolisStreetPlan } from './world-metropolis-plan';
@@ -193,6 +194,8 @@ export function generateMetropolis(core: LiveMapDefinition): LiveMapDefinition {
     { exclude: METROPOLIS_CORE, budget: Math.min(9800, LIVE_WORLD_LIMITS.props - (shifted.props?.length ?? 0)), idPrefix: 'metro-prop', organicGreenery: true });
   obstacles.push(...scenery.obstacles);
   const props = [...shifted.props ?? [], ...scenery.props], zones = [...shifted.zones, ...additions.zones, ...parkPois.map(({ x, y, width, height, name, danger }) => ({ x, y, width, height, name, danger, terrain: 'grass' as const }))];
+  const streetFurniture = generateStreetFurniture({ width: METROPOLIS_SIZE, height: METROPOLIS_SIZE, obstacles, props, pois, extracts, city, districts, citySites, containers, npcSpawns, paths, terrainRows: land.terrainRows }, core.seed, METROPOLIS_CORE);
+  props.push(...streetFurniture.props); obstacles.push(...streetFurniture.obstacles); land.terrainRows = streetFurniture.terrainRows;
   const routes = metropolisRoutes(shifted.routes ?? [], pois, additions.sites);
   const layout = { seed: core.seed, generatorVersion: 11, chunkSize: core.chunkSize, width: METROPOLIS_SIZE, height: METROPOLIS_SIZE, districts, obstacles, zones, pois, containers,
     terrainRows: land.terrainRows, paths, routes, city, citySites, props };
