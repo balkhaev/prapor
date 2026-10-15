@@ -273,6 +273,7 @@ export function createWorld(
 		private atmosphereLights: ShelterAtmosphereLight[] = [];
 		private windProps: { art: Phaser.GameObjects.Graphics; decoration: ShelterLandscapeDecoration }[] = [];
 		private foliageAnchors: { x: number; y: number; radius: number }[] = [];
+		private birdFlightBounds: ShelterRect = { x: 0, y: 150, width: 840, height: 70 };
 		private lastAtmospherePaint = -1000;
 		private lastWindPaint = -1000;
 		private dragGhost!: Phaser.GameObjects.Graphics;
@@ -993,6 +994,14 @@ export function createWorld(
 			for (const room of shelter.rooms) if (!this.cells.has(roomCellKey(room.id))) this.createCell(room.column, room.row, room);
 			const landscape = getShelterLandscape(sites, buildings, expansions);
 			this.landscape = landscape; this.lastAtmospherePaint = -1000; this.lastWindPaint = -1000;
+			const yard = landscape.lots.map(projectShelterBounds);
+			if (yard.length) {
+				const left = Math.min(...yard.map(rect => rect.x)), top = Math.min(...yard.map(rect => rect.y));
+				const width = Math.max(...yard.map(rect => rect.x + rect.width)) - left, height = Math.max(...yard.map(rect => rect.y + rect.height)) - top;
+				// Birds cross the inhabited clearing, independently of the much wider
+				// camera/navigation bounds that include the surrounding forest.
+				this.birdFlightBounds = { x: left + width * .08, y: top + height * .37, width: width * .84, height: height * .14 };
+			}
 			this.smokeEmitters = []; this.atmosphereLights = []; this.windProps = []; this.foliageAnchors = [];
 			for (const room of shelter.rooms) if (room.status === "ready") {
 				const chimney = getShelterChimney(room);
@@ -1392,7 +1401,7 @@ export function createWorld(
 				dayPhase: climate.dayPhase, daylight: Math.max(0, Math.min(1, 1 - (profile.lights - .18) / 1.32)),
 				foliageAnchors: this.foliageAnchors,
 				weatherRain: climate.rain, weatherFog: climate.fog, weatherWind: climate.wind,
-				birdBounds: { x: this.worldBounds.x + 25, y: this.worldBounds.y + this.worldBounds.height * .13, width: Math.max(100, this.worldBounds.width - 50), height: this.worldBounds.height * .34 },
+				birdBounds: this.birdFlightBounds,
 				mistZones: this.windProps.filter(prop => prop.decoration.kind === "tree" && !prop.decoration.owned).slice(-3).map(prop => {
 					const at = projectShelterPoint(prop.decoration.point);
 					return { x: at.x - 48, y: at.y - 12, width: 96, height: 20 };

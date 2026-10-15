@@ -84,7 +84,7 @@ export function sampleWorldBirds(input: WorldBirdInput): WorldBird[] {
 		const wing = Math.sin(t / (430 + i * 17) * TAU + i * .8) * (1 - glide * .86) * 2.2;
 		const sx = x + 24, sy = y + 94 + rank * 2;
 		const inside = !ground || sx >= ground.x && sx <= ground.x + ground.width && sy >= ground.y && sy <= ground.y + ground.height;
-		birds.push({ x, y, size: 3 + i % 3 * .5, wing, alpha, heading,
+		birds.push({ x, y, size: 4 + i % 3 * .5, wing, alpha, heading,
 			bank: Math.sin(t / 3000 + i * .8) * .6,
 			shadowX: sx, shadowY: sy, shadowAlpha: inside ? alpha * .17 : 0 });
 	}
