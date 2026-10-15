@@ -1,7 +1,7 @@
 import type { RaidFieldBuilding, RaidFieldFrame, RaidFieldPlan, RaidFieldProp } from './raid-field';
 import type { LiveCityBuilding, LiveWorldProp } from './game/live';
 import type { PixelActorFrame, PixelFacing } from './pixel-animation';
-import { PIXEL_ACTOR_CYCLE_MS, PIXEL_ACTOR_FRAMES, PIXEL_ACTOR_WALK_CYCLE_DISTANCE, pixelActorTimedFrame } from './pixel-actor-config';
+import { PIXEL_ACTOR_CYCLE_MS, PIXEL_ACTOR_FRAMES, PIXEL_ACTOR_LIMP_CYCLE_SCALE, PIXEL_ACTOR_WALK_CYCLE_DISTANCE, pixelActorTimedFrame } from './pixel-actor-config';
 
 /** Sample the paid route analytically. Render frequency never creates steps. */
 export function raidPixelDistance(plan: RaidFieldPlan, frame: Pick<RaidFieldFrame, 'segmentIndex' | 'segmentProgress'>): number {
@@ -14,14 +14,20 @@ export function raidPixelDistance(plan: RaidFieldPlan, frame: Pick<RaidFieldFram
   return distance;
 }
 
-export function raidPixelFrame(plan: RaidFieldPlan, frame: RaidFieldFrame, input: { facing: PixelFacing; appearance: number; hostile?: boolean; downed?: boolean; reducedMotion?: boolean; shotAge?: number; displayHeight?: number }): PixelActorFrame {
+type RaidPixelPresentation = {
+  facing: PixelFacing; appearance: number; hostile?: boolean; downed?: boolean; limping?: boolean;
+  reducedMotion?: boolean; shotAge?: number; displayHeight?: number;
+};
+export function raidPixelFrame(plan: RaidFieldPlan, frame: RaidFieldFrame, input: RaidPixelPresentation): PixelActorFrame {
   const facing = input.facing;
   if (input.downed) return { mode: 'downed', frame: 0, facing };
   if (!input.reducedMotion && !frame.paused && input.shotAge !== undefined && input.shotAge >= 0 && input.shotAge < PIXEL_ACTOR_CYCLE_MS.fire) return { mode: 'fire', frame: pixelActorTimedFrame('fire', input.shotAge, false), facing };
   if (frame.walking && !frame.paused && !input.hostile) {
+    if (input.reducedMotion) return { mode: 'idle', frame: 0, facing };
     // Phaser's shared adapter uses height/160; the live compositor uses .32.
-    const distance = raidPixelDistance(plan, frame), cycle = PIXEL_ACTOR_WALK_CYCLE_DISTANCE * (input.displayHeight ?? 48) / (160 * .32);
-    return { mode: 'walk', frame: input.reducedMotion ? 0 : Math.floor(distance / cycle * PIXEL_ACTOR_FRAMES.walk) % PIXEL_ACTOR_FRAMES.walk, facing };
+    const height = Number.isFinite(input.displayHeight) && input.displayHeight! > 0 ? input.displayHeight! : 48;
+    const distance = raidPixelDistance(plan, frame), cycle = PIXEL_ACTOR_WALK_CYCLE_DISTANCE * height / (160 * .32) * (input.limping ? PIXEL_ACTOR_LIMP_CYCLE_SCALE : 1);
+    return { mode: 'walk', frame: Math.floor(distance / cycle * PIXEL_ACTOR_FRAMES.walk) % PIXEL_ACTOR_FRAMES.walk, facing };
   }
   const mode = frame.action === 'skirmish' || frame.action === 'cover' ? 'aim' : 'idle';
   return { mode, frame: input.reducedMotion || frame.paused ? 0 : pixelActorTimedFrame(mode, frame.weatherPhase * 1000 + input.appearance * 173), facing };
