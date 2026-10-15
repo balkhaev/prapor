@@ -25,7 +25,7 @@ import type { SceneLamp } from './pixel-lighting';
 import { getShelterRoutine, restoreShelterRoutine, type ShelterRoutine } from "./shelter-routines";
 import { getShelterActivityPose } from "./shelter-activity";
 import type { ShelterPersonView } from "./territory-life";
-import { getShelterBackdropCoverage, getShelterBackdropDecorations, paintShelterBackdropTile, SHELTER_BACKDROP_TILE } from './shelter-backdrop';
+import { getShelterBackdropCoverage, getShelterBackdropDecorations, paintShelterBackdropTerrain, paintShelterBackdropTile, SHELTER_BACKDROP_TILE } from './shelter-backdrop';
 
 export interface WorldSnapshot {
 	identityKey?: string;
@@ -974,7 +974,9 @@ export function createWorld(
 			this.backdropGround.setPosition(coverage.x, coverage.y).setDisplaySize(coverage.width, coverage.height)
 				.setTileScale(SHELTER_BACKDROP_TILE / coverage.width, SHELTER_BACKDROP_TILE / coverage.height).setTilePosition(coverage.x, coverage.y);
 			this.backdropTrees.clear();
-			for (const decoration of getShelterBackdropDecorations(coverage, this.worldBounds)) paintShelterDecoration(this.backdropTrees, decoration);
+			const forest = getShelterBackdropDecorations(coverage, this.worldBounds);
+			paintShelterBackdropTerrain(this.backdropTrees, coverage, forest);
+			for (const decoration of forest) paintShelterDecoration(this.backdropTrees, decoration);
 		}
 
 		private syncShelterLayout(state: WorldSnapshot): void {

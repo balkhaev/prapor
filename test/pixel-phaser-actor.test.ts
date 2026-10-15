@@ -62,6 +62,23 @@ test('actual assembly, absent parts, empty hands and gear changes invalidate the
   a.destroy(); a.update(look, frame, weapon, gear); expect((a.image as unknown as { destroyed: boolean }).destroyed).toBe(true);
 });
 
+test('retina minification keeps readable tiers without moving the body or weapon sockets', () => {
+  const h = harness(), a = h.actor();
+  a.update(look, frame, 'sks', gear, 48, { screenScale: .5, deviceRatio: 2 });
+  const farKey = imageKey(a), muzzle = a.muzzlePoint(), ejection = a.ejectionPoint();
+  a.update(look, frame, 'sks', gear, 48, { screenScale: .625, deviceRatio: 2 });
+  const middleKey = imageKey(a); expect(middleKey).not.toBe(farKey);
+  // More physical pixels at the same small apparent height retain this coherent
+  // middle atlas instead of falling back to high-frequency native face detail.
+  a.update(look, frame, 'sks', gear, 48, { screenScale: 1, deviceRatio: 2 });
+  expect(imageKey(a)).toBe(middleKey);
+  a.update(look, frame, 'sks', gear, 48, { screenScale: 1.5, deviceRatio: 2 });
+  expect(imageKey(a)).not.toBe(middleKey);
+  expect(a.muzzlePoint()).toEqual(muzzle); expect(a.ejectionPoint()).toEqual(ejection);
+  expect(h.textures.size).toBe(3);
+  a.destroy();
+});
+
 test('the texture cache remains bounded while an earlier actor is still displaying its frame', () => {
   const h = harness(), pinned = h.actor(), moving = h.actor();
   pinned.update(look, frame, 'svd', gear); const pinnedKey = imageKey(pinned);

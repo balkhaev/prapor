@@ -85,11 +85,13 @@ function pixelMotifTone(material: LiveTerrain, px: number, py: number, resolutio
     else if (tuft % 3 !== 0 && (tx === stemX || tx === stemX + 1) && ty === stemY) tone = 4;
     else if (tuft % 13 === 0 && tx === stemX - 1 && ty === stemY + 2) tone = 5;
   } else if (material === 'concrete') {
-    const tileW = style === 1 ? Math.max(4, Math.round(resolution * .75)) : style === 2 ? Math.max(6, resolution) : Math.max(8, Math.round(resolution * 2.4));
+    const tileW = style === 1 ? Math.max(4, Math.round(resolution * .75)) : style === 2 ? Math.max(6, resolution) : Math.max(4, Math.round(resolution));
     const tileH = style === 1 ? Math.max(3, Math.round(resolution * .5)) : style === 2 ? Math.max(4, Math.round(resolution * .75)) : tileW;
     const row = Math.floor(py / tileH), shiftedX = px + (style ? row % 2 * Math.floor(tileW / 2) : 0), tx = shiftedX % tileW, ty = py % tileH;
     const stone = hash(Math.floor(shiftedX / tileW), row ^ seed);
-    tone = tx === 0 || ty === 0 ? 0 : ty === 1 ? 4 : 2 + stone % 2;
+    // Broad slab seams used to dominate the street at a distance. Keep masonry
+    // in its middle tones so silhouettes and actual street furniture lead.
+    tone = tx === 0 || ty === 0 ? 1 : ty === 1 ? 3 : 2 + Number(stone % 7 === 0);
     if (!style && stone % 5 === 0 && tx === 3 + ty % 3 && ty > tileH / 2) tone = 1;
     else if (stone % 7 === 0 && tx === tileW - 2 && ty === tileH - 2) tone = 1;
   } else if (material === 'water') {
@@ -135,7 +137,7 @@ export function paintTerrainTexture(c: CanvasRenderingContext2D, world: GroundWo
   const packed = (color: RGB): number => littleEndian ? color[0] | color[1] << 8 | color[2] << 16 | 255 << 24 : color[0] << 24 | color[1] << 16 | color[2] << 8 | 255;
   const atlases = [...kinds, 'concrete', 'concrete'].map((material, id) => {
     const style = id >= kinds.length ? id - kinds.length + 1 : 0;
-    const tileW = style === 1 ? Math.max(4, Math.round(resolution * .75)) : style === 2 ? Math.max(6, resolution) : Math.max(8, Math.round(resolution * 2.4));
+    const tileW = style === 1 ? Math.max(4, Math.round(resolution * .75)) : style === 2 ? Math.max(6, resolution) : Math.max(4, Math.round(resolution));
     const tileH = style === 1 ? Math.max(3, Math.round(resolution * .5)) : style === 2 ? Math.max(4, Math.round(resolution * .75)) : tileW;
     // Paving repeats on whole masonry blocks, never half of a slab at an atlas edge.
     const w = material === 'concrete' ? tileW * (style ? 16 : 8) : 128, h = material === 'concrete' ? tileH * (style ? 16 : 8) : 128;

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { buildingFacadeCadence, buildingNeedsCutaway, buildingPalette, buildingWallHeight, liveMapRasterPlan, mapVegetationBands, paintMapFootprints, paintPropModel, PropArtCache, sceneBuildings, SceneryIndex } from '../src/live-map-art';
+import { BUILDING_EXTERIOR_HEIGHT_SCALE, buildingExteriorStyle, buildingFacadeCadence, buildingNeedsCutaway, buildingPalette, buildingWallHeight, distantBuildingSurfaces, liveMapRasterPlan, mapVegetationBands, paintMapFootprints, paintPropModel, PropArtCache, sceneBuildings, SceneryIndex } from '../src/live-map-art';
 import type { LiveCityBuilding, LiveObstacle, LiveWorld, LiveWorldProp } from '../src/game/live';
 import { prefabObstacles } from '../src/game/world-prefabs';
 
@@ -31,6 +31,30 @@ describe('raid architecture visibility', () => {
     const { facade: _facade, floors: _floors, roof: _roof, ...legacy } = building;
     expect(buildingPalette(legacy)).toHaveLength(3);
     expect(buildingPalette({ ...legacy, kind: 'workshop' })).toEqual(buildingPalette({ ...building, facade: 'metal' }));
+  });
+  test('public address colours stay consistent between detailed houses and the distant map', () => {
+    const styles = Array.from({ length: 96 }, (_, index) => buildingExteriorStyle({ ...building, id: `street-home-${index}` }));
+    expect(new Set(styles.map(style => style.light)).size).toBe(3);
+    expect(new Set(styles.map(style => style.roof[0])).size).toBe(4);
+    expect(buildingExteriorStyle({ ...building, x: 870, y: 94 })).toEqual(buildingExteriorStyle(building));
+    const style = buildingExteriorStyle(building);
+    expect(buildingPalette(building)).toEqual([style.light, style.dark, style.roof[0]]);
+  });
+  test('distant roofs preserve gables and sawtooths, entrances and bounded public footprints', () => {
+    for (const roof of ['flat', 'gable', 'sawtooth'] as const) for (const roofAxis of ['x', 'y'] as const) {
+      const house = { ...building, roof, roofAxis, floors: 4 as const, width: 40, height: 32, entrances: [{ x: 13, y: 12 }, { x: 13, y: 43 }] }, before = structuredClone(house);
+      const surfaces = distantBuildingSurfaces(house), wall = buildingWallHeight(house) * BUILDING_EXTERIOR_HEIGHT_SCALE;
+      const points = surfaces.flatMap(surface => surface.points), peak = Math.max(...points.map(point => point.z));
+      expect(surfaces.length).toBeLessThanOrEqual(44);
+      expect(points.every(point => Number.isFinite(point.x + point.y + point.z))).toBe(true);
+      expect(points.every(point => point.x >= house.x - .5 && point.x <= house.x + house.width - .5 && point.y >= house.y - .5 && point.y <= house.y + house.height - .5)).toBe(true);
+      if (roof === 'flat') expect(peak).toBe(wall);
+      else { expect(peak).toBeGreaterThan(wall); expect(peak).toBeLessThan(wall + .6); }
+      if (roof === 'gable') expect(surfaces.some(surface => surface.points.length === 3)).toBe(true);
+      if (roof === 'sawtooth') expect(surfaces.filter(surface => surface.points.every(point => point.z >= wall)).length).toBe(12);
+      expect(surfaces.some(surface => surface.color === '#334f55')).toBe(true);
+      expect(house).toEqual(before);
+    }
   });
   test('authored open houses own their collider segments without acquiring duplicate solid roofs', () => {
     const map = { chunkSize: 32, pois: [], citySites: [{ buildings: [building] }], obstacles: [

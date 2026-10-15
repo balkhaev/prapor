@@ -1,9 +1,10 @@
 import type { LiveCityBuilding, LivePoint, LiveWorld, LiveWorldProp } from './game/live';
 import { legacyHallEnvelopes } from './game/world-building-envelope';
-import { PIXEL_PALETTE as P } from './pixel-art';
+import { PIXEL_PALETTE as P, pixelSeed } from './pixel-art';
 import { pixelLandcoverBands, type LandcoverRect } from './pixel-landcover';
 
 export type SceneryBounds = LivePoint & { width: number; height: number };
+export const BUILDING_EXTERIOR_HEIGHT_SCALE = 1.7;
 
 export function mapVegetationBands(prop: Pick<LiveWorldProp, 'id' | 'kind' | 'x' | 'y' | 'width' | 'height'>): LandcoverRect[] {
   return pixelLandcoverBands(prop, prop.id, prop.kind === 'tree' ? 7 : 5);
@@ -119,13 +120,104 @@ export function sceneBuildings(world: LiveWorld): LiveCityBuilding[] {
 }
 
 export function buildingPalette(building: LiveCityBuilding): readonly [string, string, string] {
-  const palettes = {
-    brick: [P.brick, P.brickShade, P.roof],
-    plaster: [P.plaster, P.plasterShade, P.roof],
-    panel: [P.panel, P.panelShade, P.roof],
-    metal: [P.steel, P.steelShade, P.steelLight],
-  } as const;
-  return palettes[building.facade ?? (building.kind === 'workshop' || building.kind === 'garage' ? 'metal' : building.kind === 'apartment' ? 'plaster' : 'brick')];
+  const style = buildingExteriorStyle(building);
+  return [style.light, style.dark, style.roof[0]];
+}
+
+const BUILDING_MATERIALS = {
+    brick: [
+      { light: P.brick, dark: P.brickShade, trim: '#d2bb95', joint: '#896752', patch: '#b18469' },
+      { light: '#b18b70', dark: '#805b48', trim: '#dfc9a2', joint: '#96735c', patch: '#bf9b7d' },
+      { light: '#a7846e', dark: '#76594e', trim: '#d4c0a2', joint: '#876952', patch: '#b59b7e' },
+    ],
+    plaster: [
+      { light: P.plaster, dark: P.plasterShade, trim: '#e5d7b4', joint: '#ae9f84', patch: '#b8a88c' },
+      { light: '#c0c4ac', dark: '#899783', trim: '#e1d9b8', joint: '#a3ac95', patch: '#b2b59a' },
+      { light: '#c4b5a2', dark: '#958271', trim: '#e4d5b7', joint: '#aa9884', patch: '#b8a88e' },
+    ],
+    panel: [
+      { light: P.panel, dark: P.panelShade, trim: '#d4d6bb', joint: '#65786d', patch: '#909f92' },
+      { light: '#b7b8a5', dark: '#858c79', trim: '#dcdbc0', joint: '#737d6c', patch: '#a4aa94' },
+      { light: '#a5b4af', dark: '#728980', trim: '#d3d7bc', joint: '#5d796e', patch: '#8faaa0' },
+    ],
+    metal: [
+      { light: P.steel, dark: P.steelShade, trim: '#c1c8b2', joint: '#445d61', patch: '#966e50' },
+      { light: '#939f89', dark: '#607563', trim: '#cbd0b2', joint: '#4c6356', patch: '#9f7957' },
+      { light: '#a69a80', dark: '#746b57', trim: '#d5c7a5', joint: '#625f50', patch: '#9d7354' },
+    ],
+} as const;
+const BUILDING_ROOFS = [[P.roof, P.roofShade], [P.terra, P.terraShade], ['#879ca0', '#506c75'], ['#b1a482', '#827453']] as const;
+const BUILDING_ACCENTS = {
+  shop: [[P.red, '#744d43'], ['#487b74', '#34564e'], ['#68899a', '#465f70'], ['#bd9c5f', '#877247']],
+  service: [[P.blue, '#45636d'], ['#6c8b78', '#4b6556']],
+  home: [[P.blue, '#47646c'], ['#9c735c', '#755444'], ['#778d79', '#4e6759'], ['#ad945f', '#7c6946']],
+} as const;
+
+/** Public address identity survives distance: broad wall/roof colours carry the
+ * house before brick joints and scratches can occupy a single screen pixel. */
+export function buildingExteriorStyle(building: LiveCityBuilding): {
+  light: string; dark: string; trim: string; joint: string; patch: string;
+  accent: string; accentShade: string; roof: readonly [string, string];
+} {
+  const seed = pixelSeed(building.id), variant = (seed >>> 4) % 3;
+  const material = building.facade ?? (building.kind === 'workshop' || building.kind === 'garage' ? 'metal' : building.kind === 'apartment' ? 'plaster' : 'brick');
+  const accents = BUILDING_ACCENTS[building.kind === 'shop' || building.kind === 'service' ? building.kind : 'home'];
+  const accent = accents[(seed >>> 9) % accents.length]!;
+  return { ...BUILDING_MATERIALS[material][variant]!, accent: accent[0], accentShade: accent[1], roof: BUILDING_ROOFS[(seed >>> 13) % BUILDING_ROOFS.length]! };
+}
+
+type ElevatedPoint = LivePoint & { z: number };
+export type DistantBuildingSurface = { points: ElevatedPoint[]; color: string };
+
+/** The medium-distance city keeps a house's actual roof type and a few large
+ * openings. At most 44 small polygons replace a sprite; no bitmap is allocated. */
+export function distantBuildingSurfaces(building: LiveCityBuilding): DistantBuildingSurface[] {
+  const w = building.width, h = building.height, wall = buildingWallHeight(building) * BUILDING_EXTERIOR_HEIGHT_SCALE;
+  const style = buildingExteriorStyle(building), result: DistantBuildingSurface[] = [];
+  const point = (x: number, y: number, z = 0): ElevatedPoint => ({ x: building.x - .5 + x, y: building.y - .5 + y, z });
+  const face = (points: ElevatedPoint[], color: string) => result.push({ points, color });
+  const wallRect = (side: 'x' | 'y', u: number, width: number, low: number, high: number, color: string) => {
+    const p = (at: number, z: number) => side === 'y' ? point(at, h, z) : point(w, at, z);
+    face([p(u, low), p(u + width, low), p(u + width, high), p(u, high)], color);
+  };
+  for (const side of ['x', 'y'] as const) {
+    const length = side === 'y' ? w : h, floors = building.floors ?? (building.kind === 'apartment' ? 2 : 1);
+    wallRect(side, 0, length, 0, wall, side === 'x' ? style.light : style.dark);
+    wallRect(side, 0, length, wall - .075, wall, style.trim);
+    const doors = building.entrances.filter(door => side === 'y' ? door.y === building.y + h - 1 : door.x === building.x + w - 1)
+      .map(door => (side === 'y' ? door.x - building.x : door.y - building.y) + 1);
+    const columns = Math.min(3, Math.max(1, Math.floor(length / 3)));
+    for (let floor = 0; floor < floors; floor++) for (let column = 0; column < columns; column++) {
+      const u = length * (column + 1) / (columns + 1);
+      if (!floor && doors.some(door => Math.abs(door - u) < 1.05)) continue;
+      const low = .25 + floor * .97;
+      wallRect(side, u - .32, .64, low, Math.min(wall - .15, low + .3), side === 'x' ? '#557b81' : '#334f55');
+    }
+    // A published entrance remains a recognisable dark recess, rather than a
+    // new navigable gap or a marker for undiscovered room contents.
+    for (const u of doors.slice(0, 2)) wallRect(side, u - .38, .76, 0, Math.min(wall - .14, .81), style.accentShade);
+  }
+  const roof = building.roof ?? (building.kind === 'workshop' ? 'sawtooth' : building.kind === 'apartment' ? 'gable' : 'flat');
+  const axis = building.roofAxis ?? (w >= h ? 'x' : 'y');
+  if (roof === 'gable') {
+    const lift = (building.kind === 'workshop' ? 26 : 40) / 128 * BUILDING_EXTERIOR_HEIGHT_SCALE;
+    const ra = axis === 'x' ? point(0, h / 2, wall + lift) : point(w / 2, 0, wall + lift);
+    const rb = axis === 'x' ? point(w, h / 2, wall + lift) : point(w / 2, h, wall + lift);
+    face(axis === 'x' ? [point(0, 0, wall), point(w, 0, wall), rb, ra] : [point(0, 0, wall), ra, rb, point(0, h, wall)], style.roof[0]);
+    face(axis === 'x' ? [ra, rb, point(w, h, wall), point(0, h, wall)] : [ra, point(w, 0, wall), point(w, h, wall), rb], style.roof[1]);
+    face(axis === 'x' ? [point(w, 0, wall), point(w, h, wall), rb] : [point(0, h, wall), point(w, h, wall), rb], style.light);
+  } else if (roof === 'sawtooth') {
+    const span = axis === 'x' ? h : w, count = Math.min(6, Math.max(2, Math.round(span / 3))), band = span / count;
+    const lift = 26 / 128 * BUILDING_EXTERIOR_HEIGHT_SCALE;
+    for (let row = 0; row < count; row++) {
+      const a = row * band, b = (row + 1) * band;
+      const ra = axis === 'x' ? point(0, a, wall + lift) : point(a, 0, wall + lift);
+      const rb = axis === 'x' ? point(w, a, wall + lift) : point(a, h, wall + lift);
+      face([ra, rb, axis === 'x' ? point(w, b, wall) : point(b, h, wall), axis === 'x' ? point(0, b, wall) : point(b, 0, wall)], style.roof[row % 2]!);
+      face(axis === 'x' ? [point(0, a, wall), point(w, a, wall), rb, ra] : [point(a, 0, wall), point(a, h, wall), rb, ra], '#334f55');
+    }
+  } else face([point(0, 0, wall), point(w, 0, wall), point(w, h, wall), point(0, h, wall)], style.roof[0]);
+  return result;
 }
 
 type PropSprite = { image: HTMLCanvasElement; anchor: LivePoint };

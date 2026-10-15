@@ -3,7 +3,7 @@ import type { LiveCityBuilding, LiveObstacle } from '../src/game/live';
 import { PIXEL_BUILDING_CACHE_BYTES, PixelBuildingArt, pixelBuildingSpriteBytes, pixelBuildingVentAnchor } from '../src/pixel-buildings';
 import { pixelIso, PIXEL_PALETTE as P } from '../src/pixel-art';
 import { generatePerimeterCore } from '../src/game/world-generation';
-import { sceneBuildings } from '../src/live-map-art';
+import { buildingExteriorStyle, sceneBuildings } from '../src/live-map-art';
 
 type CanvasRecord = HTMLCanvasElement & { paints: number; integerBounds: boolean; colors: Set<string>; spans: Array<[number, number, number, number, string]> };
 let restoreDocument: (() => void) | undefined;
@@ -49,10 +49,11 @@ test('cutaway keeps real doorway gaps transparent and removes the roof while pre
   expect(pixelAt(interior.x, interior.y)).toBeDefined();
   expect(pixelAt(door.x, door.y)).toBeUndefined();
   expect(pixelAt(wall.x, wall.y)).toBeDefined();
-  expect(image.colors.has('#849589') || image.colors.has('#9d765f')).toBe(false);
+  const roofColor = buildingExteriorStyle(building).roof[0];
+  expect(image.colors.has(roofColor)).toBe(false);
   const closed = art.get(building, false, 128);
   expect(closed).not.toBe(open); expect(closed.image.height).toBeGreaterThan(open.image.height);
-  expect(images[1]!.colors.has('#849589') || images[1]!.colors.has('#9d765f')).toBe(true);
+  expect(images[1]!.colors.has(roofColor)).toBe(true);
 });
 
 test('legacy cutaway uses the supplied perimeter pieces rather than assuming a two-cell doorway', () => {
@@ -150,6 +151,22 @@ test('a shop entrance retains real glass on either side, with dark recesses and 
     expect(glass.some(color => color === '#334f55' || color === P.glassLight || color === P.steelShade)).toBe(true);
   }
   expect(image.colors.has(P.glassLight)).toBe(true);
-  expect(image.colors.has(P.red)).toBe(true); // public shop sign
+  expect(image.colors.has(buildingExteriorStyle(shop).accent)).toBe(true); // public shop sign and matching awning
   expect(image.integerBounds).toBe(true);
+});
+
+test('distant houses preserve their large roof, masonry, corner and glass shapes without close-up texture noise', () => {
+  const images = canvases(), art = new PixelBuildingArt();
+  for (const kind of ['apartment', 'shop', 'workshop', 'garage', 'service'] as const) {
+    const house = { ...building, id: `street-identity-${kind}`, kind, roof: 'gable' as const, facade: 'plaster' as const };
+    const style = buildingExteriorStyle(house);
+    art.get(house, false, 32); const distant = images.at(-1)!;
+    art.get(house, false, 128); const close = images.at(-1)!;
+    for (const color of [style.roof[0], style.roof[1], style.light, style.dark, style.trim, P.ink]) expect(distant.colors.has(color)).toBe(true);
+    expect(['#334f55', '#557b81', P.wood].some(color => distant.colors.has(color))).toBe(true);
+    expect(distant.integerBounds).toBe(true);
+    // A distant sprite paints fewer strokes per native square cell as well as
+    // fewer pixels; dense mortar grids cannot compete with an actor silhouette.
+    expect(distant.paints).toBeLessThan(close.paints / 3);
+  }
 });

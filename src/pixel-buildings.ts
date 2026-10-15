@@ -1,12 +1,12 @@
 import type { LiveCityBuilding, LiveObstacle, LivePoint } from './game/live';
-import { buildingFacadeCadence, buildingWallHeight } from './live-map-art';
+import { BUILDING_EXTERIOR_HEIGHT_SCALE, buildingExteriorStyle, buildingFacadeCadence, buildingWallHeight } from './live-map-art';
 import { PIXEL_TILE, PIXEL_PALETTE as P, PixelRaster, pixelIso, pixelRandom, pixelSeed } from './pixel-art';
 
 type BuildingSprite = { image: HTMLCanvasElement; anchor: LivePoint };
 type NativeTile = 32 | 64 | 128;
 type FacadeSide = 'x' | 'y';
 export const PIXEL_BUILDING_CACHE_BYTES = 32 * 1024 * 1024;
-const EXTERIOR_HEIGHT_SCALE = 1.7;
+const EXTERIOR_HEIGHT_SCALE = BUILDING_EXTERIOR_HEIGHT_SCALE;
 
 /** Human-scale elevations for the pixel renderer; collision footprints stay unchanged. */
 export function pixelBuildingWallHeight(building: LiveCityBuilding): number {
@@ -50,12 +50,6 @@ export function pixelBuildingSpriteBytes(building: LiveCityBuilding, cutaway: bo
   const layout = buildingSpriteLayout(building, cutaway, nativeTile);
   return layout.width * layout.height * 4;
 }
-const MATERIALS = {
-  brick: { light: P.brick, dark: P.brickShade, trim: '#c4ad89', joint: '#896752', patch: '#b18469' },
-  plaster: { light: P.plaster, dark: P.plasterShade, trim: '#ddd0ad', joint: '#ae9f84', patch: '#b8a88c' },
-  panel: { light: P.panel, dark: P.panelShade, trim: '#c4cab5', joint: '#65786d', patch: '#909f92' },
-  metal: { light: P.steel, dark: P.steelShade, trim: '#adbab0', joint: '#445d61', patch: '#966e50' },
-} as const;
 const INK = '#273b35', GLASS = '#557b81', GLASS_DARK = '#334f55', FRAME = '#d3c8aa';
 
 /** Raster sprites keep the published footprint and doorway cells. Detail is
@@ -96,7 +90,7 @@ export class PixelBuildingArt {
 function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LivePoint, scale: number, wallHeight: number, cutaway: boolean, walls?: readonly LiveObstacle[]): void {
   const w = building.width, h = building.height, floors = building.floors ?? (building.kind === 'apartment' ? 2 : 1);
   const material = building.facade ?? (building.kind === 'workshop' || building.kind === 'garage' ? 'metal' : building.kind === 'apartment' ? 'plaster' : 'brick');
-  const palette = MATERIALS[material], seed = pixelSeed(building.id), random = pixelRandom(seed);
+  const palette = buildingExteriorStyle(building), seed = pixelSeed(building.id), random = pixelRandom(seed);
   const elevationScale = cutaway ? 1 : EXTERIOR_HEIGHT_SCALE, fine = scale >= .5;
   const p = (x: number, y: number, z = 0): LivePoint => pixelIso(x * scale, y * scale, z * scale * elevationScale, anchor);
   const line = (a: LivePoint, b: LivePoint, color: string, width = 1) => r.line(a.x, a.y, b.x, b.y, color, Math.max(1, Math.round(width * scale)));
@@ -187,6 +181,12 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
     }
     line(facePoint(side, center, low), facePoint(side, center, high), FRAME, 2);
     line(facePoint(side, left, low + (high - low) * .45), facePoint(side, right, low + (high - low) * .45), FRAME, 2);
+    if (fine && building.kind === 'apartment' && material === 'plaster' && variation % 5 === 1) {
+      for (const u of [left - .22, right + .08]) {
+        faceRect(side, u, .13, low - 1, high + 2, palette.accentShade);
+        for (let z = low + 3; z < high; z += 5) line(facePoint(side, u + .02, z), facePoint(side, u + .11, z), palette.accent);
+      }
+    }
     faceRect(side, left - .1, width + .2, low - 6, low - 3, palette.dark);
     faceRect(side, left - .1, width + .2, low - 4, low - 2, P.cream);
     line(facePoint(side, left - .06, low - 7), facePoint(side, left - .04, low - 12), palette.joint);
@@ -195,7 +195,7 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
   for (const side of ['x', 'y'] as const) {
     const length = side === 'y' ? w : h, shade = side === 'x' ? palette.light : palette.dark;
     faceRect(side, 0, length, 0, wallHeight, shade);
-    if (material === 'brick') {
+    if (material === 'brick' && fine) {
       for (let z = 8, row = 0; z < wallHeight; z += 8, row++) {
         line(facePoint(side, 0, z), facePoint(side, length, z), palette.joint);
         for (let u = row % 2 * .15; u < length; u += .3) {
@@ -204,22 +204,22 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
         }
       }
     } else if (material === 'metal') {
-      for (let u = .18; u < length; u += .24) {
+      for (let u = .18; u < length; u += fine ? .24 : .72) {
         line(facePoint(side, u, 10), facePoint(side, u, wallHeight - 5), palette.joint, 2);
         line(facePoint(side, u + .035, 12), facePoint(side, u + .035, wallHeight - 5), palette.trim);
       }
-      for (let mark = 0; mark < 8; mark++) {
+      for (let mark = 0; mark < (fine ? 8 : 2); mark++) {
         const u = .3 + random() * (length - .8), top = 10 + random() * wallHeight * .3;
         faceRect(side, u, .035 + random() * .05, 7, top, palette.patch);
       }
     } else if (material === 'panel') {
-      for (let u = 1.4; u < length; u += 1.4) {
+      for (let u = 1.4; u < length; u += fine ? 1.4 : 2.8) {
         line(facePoint(side, u, 10), facePoint(side, u, wallHeight - 6), palette.joint, 2);
         line(facePoint(side, u + .04, 10), facePoint(side, u + .04, wallHeight - 6), palette.trim);
       }
       for (let floor = 1; floor < floors; floor++) line(facePoint(side, 0, floor * 73), facePoint(side, length, floor * 73), palette.joint, 3);
     } else {
-      for (let mark = 0; mark < 14; mark++) {
+      for (let mark = 0; mark < (fine ? 14 : 3); mark++) {
         const u = .2 + random() * (length - .7), z = 15 + random() * (wallHeight - 27);
         faceRect(side, u, .13 + random() * .22, z, Math.min(wallHeight - 4, z + 5 + random() * 12), palette.patch);
       }
@@ -230,6 +230,18 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
     faceRect(side, 0, length, 0, 11, '#647467');
     line(facePoint(side, 0, 12), facePoint(side, length, 12), palette.trim, 3);
     faceRect(side, 0, length, wallHeight - 6, wallHeight, palette.trim);
+    // Broad architectural bands stay readable when mortar and wear disappear.
+    // These are painted on the real wall, never new cover along an alley.
+    for (const u of [0, length - .15]) faceRect(side, u, .15, 12, wallHeight - 6, palette.trim);
+    for (let floor = 1; floor < floors; floor++) {
+      faceRect(side, .15, length - .3, floor * 73 - 4, floor * 73 + 1, palette.dark);
+      line(facePoint(side, .15, floor * 73 + 2), facePoint(side, length - .15, floor * 73 + 2), palette.trim, 2);
+    }
+    if (building.kind === 'shop') faceRect(side, .15, length - .3, 68, Math.min(83, wallHeight - 8), palette.accentShade);
+    else if (building.kind === 'workshop' || building.kind === 'garage') {
+      faceRect(side, .15, length - .3, 15, 23, palette.accentShade);
+      line(facePoint(side, .15, 24), facePoint(side, length - .15, 24), P.sand, 2);
+    }
     const cadence = buildingFacadeCadence(building, length), doors = doorPositions(side);
     const columns = Math.max(cadence.columns, Math.floor((length - .7) / (cadence.industrial ? 3.9 : building.kind === 'shop' ? 2.6 : 2.3)));
     for (let floor = 0; floor < floors; floor++) for (let column = 0; column < columns; column++) {
@@ -248,6 +260,14 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
           const x = a.x + bw * bar / 4, y = a.y + bh;
           line(p(x, y, z), p(x, y, z + 16), INK);
         }
+        if (fine && (column + floor + seed) % 3 === 1) {
+          // Laundry is attached to an existing balcony; it introduces no actor.
+          const at = (t: number, zz: number) => side === 'y' ? p(a.x + bw * t, a.y + bh, zz) : p(a.x + bw, a.y + bh * t, zz);
+          line(at(.08, z + 17), at(.92, z + 17), P.cream);
+          for (const [start, end, color] of [[.16, .43, P.cream], [.53, .8, palette.accent]] as const) {
+            r.polygon([at(start, z + 17), at(end, z + 17), at(end, z + 4), at(start, z + 6)], color);
+          }
+        }
       } else if (fine && floor > 0 && (column + floor + seed) % 3 === 0) {
         const x = side === 'y' ? u - .25 : w, y = side === 'y' ? h : u - .25;
         const acWidth = side === 'y' ? .5 : .16, acHeight = side === 'y' ? .16 : .5;
@@ -256,6 +276,16 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
         r.ellipse(vent.x, vent.y, Math.max(2, Math.round(4 * scale)), Math.max(2, Math.round(5 * scale)), P.ink);
         line({ x: vent.x - 1, y: vent.y - 3 * scale }, { x: vent.x + 1, y: vent.y + 3 * scale }, P.steelLight);
         line(facePoint(side, u + .27, low - 16), facePoint(side, u + .27, low + 1), P.cream);
+      }
+      if (fine && building.kind === 'apartment' && floor === 0 && (column + seed) % 4 === 1) {
+        const x = side === 'y' ? u - .3 : w, y = side === 'y' ? h : u - .3;
+        const ww = side === 'y' ? .6 : .13, hh = side === 'y' ? .13 : .6;
+        box(x, y, ww, hh, low - 12, low - 5, [P.terra, P.terraShade, P.soil]);
+        for (let flower = 0; flower < 3; flower++) {
+          const at = side === 'y' ? p(x + .1 + flower * .19, y + hh, low - 3) : p(x + ww, y + .1 + flower * .19, low - 3);
+          r.rect(at.x - 2 * scale, at.y - 3 * scale, 5 * scale, 5 * scale, P.leafShade);
+          r.rect(at.x, at.y - 4 * scale, 2 * scale, 2 * scale, flower % 2 ? P.cream : P.red);
+        }
       }
     }
     for (const u of doors) {
@@ -269,6 +299,8 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
           const at = u - width * .35 + n * width * .34;
           line(facePoint(side, at, 9), facePoint(side, at + .04, 17 + n * 3), P.rustShade, 2);
         }
+        faceRect(side, u - width / 2 - .08, width + .16, high + 5, high + 10, INK);
+        for (let mark = 0; mark < 5; mark++) faceRect(side, u - width / 2 + mark * width / 5, width / 10, high + 5, high + 10, P.yellow);
       } else {
         faceRect(side, u - width * .31, width * .62, 31, 51, GLASS_DARK);
         line(facePoint(side, u + width * .29, 23), facePoint(side, u + width * .4, 23), '#d0bc7d', 3);
@@ -285,13 +317,18 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
         box(x, y, side === 'y' ? width + .18 : .15, side === 'y' ? .15 : width + .18, 0, (2 - step) * 3, ['#8b927e', '#737d6b', '#b4b59b']);
       }
       if (building.kind === 'shop' || building.kind === 'service') {
-        const x = side === 'y' ? u - .67 : w, y = side === 'y' ? h : u - .67;
-        const aw = side === 'y' ? 1.34 : .38, ah = side === 'y' ? .38 : 1.34;
-        box(x, y, aw, ah, high + 3, high + 7, ['#6c826b', '#4c6857', '#93a087']);
+        const awningWidth = building.kind === 'shop' ? Math.min(3.1, length - .6, u * 2 - .4, (length - u) * 2 - .4) : 1.34;
+        const x = side === 'y' ? u - awningWidth / 2 : w, y = side === 'y' ? h : u - awningWidth / 2;
+        const aw = side === 'y' ? awningWidth : .38, ah = side === 'y' ? .38 : awningWidth;
+        box(x, y, aw, ah, high + 3, high + 7, [palette.accent, palette.accentShade, palette.accent]);
+        if (building.kind === 'shop') for (let stripe = 0; stripe < 7; stripe += 2) {
+          const stripeWidth = awningWidth / 7;
+          quad(x + (side === 'y' ? stripe * stripeWidth : 0), y + (side === 'x' ? stripe * stripeWidth : 0), side === 'y' ? stripeWidth : aw, side === 'x' ? stripeWidth : ah, high + 8, P.cream);
+        }
         line(p(x, y + ah, high + 7), p(x + aw, y + ah, high + 7), '#c6bb92', 2);
         // Public building type controls the sign, never hidden room contents.
         faceRect(side, u - .72, 1.44, high + 11, high + 25, P.ink);
-        faceRect(side, u - .68, 1.36, high + 13, high + 23, building.kind === 'shop' ? P.red : P.blue);
+        faceRect(side, u - .68, 1.36, high + 13, high + 23, palette.accent);
         const z = high + 18;
         if (building.kind === 'service') {
           line(facePoint(side, u - .16, z), facePoint(side, u + .16, z), P.cream, 3);
@@ -299,6 +336,18 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
         } else {
           faceRect(side, u - .2, .4, z - 3, z + 2, P.cream);
           line(facePoint(side, u - .12, z + 3), facePoint(side, u + .12, z + 3), P.cream);
+        }
+      }
+      // An address tile and notices make a doorway distinct at walking zoom.
+      if (fine) {
+        const at = Math.min(length - .42, u + width / 2 + .18);
+        faceRect(side, at, .22, high - 1, high + 11, palette.accentShade);
+        faceRect(side, at + .035, .15, high + 1, high + 9, P.cream);
+        line(facePoint(side, at + .08, high + 3), facePoint(side, at + .08, high + 7), INK, 2);
+        if (building.kind !== 'garage' && building.kind !== 'workshop') {
+          faceRect(side, at, .27, 21, 35, palette.dark);
+          faceRect(side, at + .025, .11, 23, 33, P.sand);
+          faceRect(side, at + .15, .095, 25, 34, '#c9c8af');
         }
       }
     }
@@ -324,19 +373,19 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
   }
 
   const surface = roofSurface(building), { roof, axis } = surface;
-  const slate = material === 'metal' ? ['#91aaa4', '#607f79'] : seed % 3 ? ['#849589', '#5a6e62'] : ['#9d765f', '#6f594b'];
+  const slate = palette.roof;
   if (roof === 'gable') {
     const lift = building.kind === 'workshop' ? 26 : 40;
     const ra = axis === 'x' ? p(0, h / 2, wallHeight + lift) : p(w / 2, 0, wallHeight + lift);
     const rb = axis === 'x' ? p(w, h / 2, wallHeight + lift) : p(w / 2, h, wallHeight + lift);
     r.polygon(axis === 'x' ? [p(0, 0, wallHeight), p(w, 0, wallHeight), rb, ra] : [p(0, 0, wallHeight), ra, rb, p(0, h, wallHeight)], slate[0]!);
     r.polygon(axis === 'x' ? [ra, rb, p(w, h, wallHeight), p(0, h, wallHeight)] : [ra, p(w, 0, wallHeight), p(w, h, wallHeight), rb], slate[1]!);
-    for (let u = .3; u < (axis === 'x' ? w : h); u += .36) {
+    for (let u = .3; u < (axis === 'x' ? w : h); u += fine ? .36 : 1.1) {
       const ridge = axis === 'x' ? p(u, h / 2, wallHeight + lift) : p(w / 2, u, wallHeight + lift);
       line(axis === 'x' ? p(u, 0, wallHeight) : p(0, u, wallHeight), ridge, '#b0b49c');
       line(ridge, axis === 'x' ? p(u, h, wallHeight) : p(w, u, wallHeight), '#465e52');
     }
-    for (let v = .3; v < (axis === 'x' ? h : w); v += .35) {
+    for (let v = .3; fine && v < (axis === 'x' ? h : w); v += .35) {
       const span = axis === 'x' ? h : w, z = wallHeight + lift * (1 - Math.abs(v - span / 2) / (span / 2));
       line(axis === 'x' ? p(0, v, z) : p(v, 0, z), axis === 'x' ? p(w, v, z) : p(v, h, z), v < span / 2 ? '#7b8d7f' : '#506659');
     }
@@ -344,6 +393,9 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
     line(ra, rb, '#c2c3a9', 3);
     line(axis === 'x' ? p(w, 0, wallHeight) : p(0, h, wallHeight), rb, palette.trim, 3);
     line(rb, p(w, h, wallHeight), palette.trim, 3);
+    const vent = axis === 'x' ? p(w, h / 2, wallHeight + 15) : p(w / 2, h, wallHeight + 15);
+    r.ellipse(vent.x, vent.y, Math.max(1, Math.round(7 * scale)), Math.max(1, Math.round(9 * scale)), palette.trim);
+    r.ellipse(vent.x, vent.y, Math.max(1, Math.round(4 * scale)), Math.max(1, Math.round(6 * scale)), INK);
     if (fine) {
       // Flashing and one fitted skylight follow the actual inclined roof plane.
       const sx = w * .23, sy = h * .67, sw = Math.min(1.1, w * .16), sh = Math.min(.6, h * .12);
@@ -361,7 +413,7 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
       const rb = axis === 'x' ? p(w, a, wallHeight + lift) : p(a, h, wallHeight + lift);
       const da = axis === 'x' ? p(0, b, wallHeight) : p(b, 0, wallHeight), db = axis === 'x' ? p(w, b, wallHeight) : p(b, h, wallHeight);
       r.polygon([ra, rb, db, da], row % 2 ? '#839b90' : '#9aafa0');
-      for (let u = .3; u < (axis === 'x' ? w : h); u += .5) line(axis === 'x' ? p(u, a, wallHeight + lift) : p(a, u, wallHeight + lift), axis === 'x' ? p(u, b, wallHeight) : p(b, u, wallHeight), '#5e796c');
+      for (let u = .3; u < (axis === 'x' ? w : h); u += fine ? .5 : 1.5) line(axis === 'x' ? p(u, a, wallHeight + lift) : p(a, u, wallHeight + lift), axis === 'x' ? p(u, b, wallHeight) : p(b, u, wallHeight), '#5e796c');
       r.polygon(axis === 'x' ? [p(0, a, wallHeight), p(w, a, wallHeight), rb, ra] : [p(a, 0, wallHeight), p(a, h, wallHeight), rb, ra], GLASS_DARK);
       for (let u = .5; u < (axis === 'x' ? w : h); u += 1) line(axis === 'x' ? p(u, a, wallHeight + 2) : p(a, u, wallHeight + 2), axis === 'x' ? p(u, a, wallHeight + lift - 2) : p(a, u, wallHeight + lift - 2), '#bec6ad', 2);
       if (fine) {
@@ -372,10 +424,10 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
       line(ra, rb, '#c5cbb4', 2);
     }
   } else {
-    quad(0, 0, w, h, wallHeight, '#829284');
-    quad(.18, .18, w - .36, h - .36, wallHeight + 1, '#667d6c');
-    for (let x = .5; x < w; x += 1.15) line(p(x, .18, wallHeight + 2), p(x, h - .18, wallHeight + 2), '#536b5a');
-    for (let y = .5; y < h; y += 1.15) line(p(.18, y, wallHeight + 2), p(w - .18, y, wallHeight + 2), '#93a18a');
+    quad(0, 0, w, h, wallHeight, slate[0]);
+    quad(.18, .18, w - .36, h - .36, wallHeight + 1, slate[1]);
+    for (let x = .5; x < w; x += fine ? 1.15 : 3.45) line(p(x, .18, wallHeight + 2), p(x, h - .18, wallHeight + 2), '#536b5a');
+    for (let y = .5; fine && y < h; y += 1.15) line(p(.18, y, wallHeight + 2), p(w - .18, y, wallHeight + 2), '#93a18a');
     for (const [x, y, ww, hh] of [[0, 0, w, .16], [0, h - .16, w, .16], [0, .16, .16, h - .32], [w - .16, .16, .16, h - .32]]) box(x!, y!, ww!, hh!, wallHeight, wallHeight + 9, ['#8e9c87', '#647961', '#b4bda2']);
     box(w * .25, h * .36, .7, .65, wallHeight + 2, wallHeight + 17, ['#a3aea1', '#6d8374', '#d0cfb3']);
     const vent = p(w * .25 + .35, h * .36 + .32, wallHeight + 18);
@@ -415,6 +467,22 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
       const outlet = p(fanX + .2, fanY + .19, baseZ + 15);
       r.ellipse(outlet.x, outlet.y, Math.max(1, Math.round(9 * scale)), Math.max(1, Math.round(4 * scale)), P.ink);
       line({ x: outlet.x - 5 * scale, y: outlet.y }, { x: outlet.x + 5 * scale, y: outlet.y }, P.steel, 2);
+    }
+    if (building.kind === 'apartment' || building.kind === 'service') {
+      const ax = w * .19, ay = h * .34, az = surface.height(ax, ay);
+      // Aerials belong to a few public roofs, away from the real steam outlet.
+      if (seed % 3 === 0) {
+        line(p(ax, ay, az), p(ax, ay, az + 36), INK, 3);
+        line(p(ax - .27, ay, az + 28), p(ax + .27, ay, az + 28), P.steelLight, 2);
+        for (const u of [-.2, 0, .2]) line(p(ax + u, ay - .14, az + 28), p(ax + u, ay + .14, az + 28), P.steelShade, 2);
+        line(p(ax - .2, ay + .16, az), p(ax, ay, az + 12), P.steelShade);
+      } else if (seed % 3 === 1) {
+        line(p(ax, ay, az), p(ax, ay, az + 14), P.steelShade, 3);
+        const dish = p(ax, ay, az + 19);
+        r.ellipse(dish.x, dish.y, Math.max(1, Math.round(10 * scale)), Math.max(1, Math.round(7 * scale)), P.steelShade);
+        r.ellipse(dish.x - scale, dish.y - scale, Math.max(1, Math.round(8 * scale)), Math.max(1, Math.round(5 * scale)), P.cream);
+        line({ x: dish.x, y: dish.y + 3 * scale }, { x: dish.x + 7 * scale, y: dish.y - 6 * scale }, INK, 2);
+      }
     }
   }
 }
