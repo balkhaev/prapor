@@ -619,7 +619,8 @@ export class LiveScene {
       const p = this.project(extract); this.polygon(this.quad(extract.x - .7, extract.y - .7, 1.4, 1.4), `${T.extract}55`, T.extract);
       const flagHeight = this.overview ? 12 : 40;
       c.strokeStyle = T.extract; c.lineWidth = 2; c.beginPath(); c.moveTo(p.x, p.y); c.lineTo(p.x, p.y - flagHeight); c.stroke();
-      this.polygon([{ x: p.x, y: p.y - flagHeight }, { x: p.x + flagHeight * .6, y: p.y - flagHeight * .87 }, { x: p.x, y: p.y - flagHeight * .72 }], T.extract); this.label(`ВЫХОД ${index + 1}`, p.x, p.y + (this.overview ? 12 : 21), T.text, this.overview ? 7 : 10);
+      this.polygon([{ x: p.x, y: p.y - flagHeight }, { x: p.x + flagHeight * .6, y: p.y - flagHeight * .87 }, { x: p.x, y: p.y - flagHeight * .72 }], T.extract);
+      if (this.width >= 600 || !this.overview && this.tile >= 2) this.label(`ВЫХОД ${index + 1}`, p.x, p.y + (this.overview ? 12 : 21), T.text, this.overview ? 7 : 10);
     }
     const objects: { depth: number; paint: () => void }[] = [];
     // Far views already contain every real footprint. Never sort thousands of invisible detail sprites.
@@ -727,7 +728,7 @@ export class LiveScene {
       const p = this.project(district.labelPoint ?? { x: district.x + district.width / 2, y: district.y + district.height / 2 });
       placeLabel(district.name.toUpperCase(), { x: p.x, y: p.y - 24 }, this.width < 480 ? 11 : 14, T.text, true);
     }
-    if (small && world.city && (this.cityOverview || !this.overview && this.tile >= 1.2)) for (const quarter of world.city.quarters) {
+    if (small && world.city && (this.cityOverview && this.width >= 600 || !this.overview && this.tile >= 1.2)) for (const quarter of world.city.quarters) {
       const p = this.project({ x: quarter.x + quarter.width / 2, y: quarter.y + quarter.height / 2 });
       placeLabel(quarter.name, { x: p.x, y: p.y - 16 }, this.width < 480 ? 9 : 11, T.text, true);
     }
