@@ -49,7 +49,7 @@ export function buildCityGardenGround(world: GardenWorld, terrain: readonly Live
   }
   const result: CityGardenGroundDetail[] = [];
   let attempts = 0;
-  const add = (rect: Rect, kind: CityGardenGroundDetail['kind'], axis: 'x' | 'y', sourceId: string, seed: number): void => {
+  const add = (rect: Rect, kind: CityGardenGroundDetail['kind'], axis: 'x' | 'y', sourceId: string, seed: number, naturalOnly = false, scope?: Rect): void => {
     if (++attempts > MAX_ATTEMPTS || result.length >= MAX_DETAILS || rect.width > 10 || rect.height > 10) return;
     const left = Math.max(0, Math.floor(rect.x)), top = Math.max(0, Math.floor(rect.y));
     const right = Math.min(width, Math.ceil(rect.x + rect.width)), bottom = Math.min(height, Math.ceil(rect.y + rect.height));
@@ -59,7 +59,9 @@ export function buildCityGardenGround(world: GardenWorld, terrain: readonly Live
       let start = -1;
       for (let x = left; x <= right; x++) {
         const cell = y * width + x;
-        const accept = x < right && inside({ x, y }, city) && !reserved[cell] && !planted[cell] && !indoor[cell] && !!walkable[cell] && greenGround.has(terrain[cell]!);
+        const material = terrain[cell];
+        const accept = x < right && inside({ x, y }, city) && (!scope || inside({ x, y }, scope)) && !reserved[cell] && !planted[cell] && !indoor[cell] && !!walkable[cell]
+          && (naturalOnly ? material === 'grass' || material === 'forest' : greenGround.has(material!));
         if (accept && start < 0) start = x;
         else if (!accept && start >= 0) { clip.push({ x: start, y, width: x - start, height: 1 }); area += x - start; start = -1; }
       }
@@ -85,6 +87,29 @@ export function buildCityGardenGround(world: GardenWorld, terrain: readonly Live
       const x = horizontal ? court.x + (court.width - w) * along : side === 2 ? court.x + .3 : court.x + court.width - w - .3;
       const y = horizontal ? side === 0 ? court.y + .3 : court.y + court.height - h - .3 : court.y + (court.height - h) * along;
       add({ x, y, width: w, height: h }, i % 3 === 0 ? 'lawn-island' : i % 3 === 1 ? 'shrub-border' : 'flower-bed', horizontal ? 'x' : 'y', site.id, seed + i * 17);
+    }
+    // The courtyard metadata describes its narrow circulation apron. Garden
+    // ground also exists behind the houses and around the outside corners;
+    // use those real grass cells instead of leaving the whole address bare.
+    const residential = site.kind === 'courtyard' || site.kind === 'service-yard';
+    if (!residential) continue;
+    for (let side = 0; side < 4; side++) for (let part = 0; part < 2; part++) {
+      const horizontal = side < 2, length = horizontal ? site.width : site.height;
+      const long = Math.min(8.8, Math.max(4.5, length * .22)), depth = 3.8;
+      const along = length * (part ? .59 : .16) - long / 2;
+      const x = horizontal ? site.x + along : side === 2 ? site.x + .5 : site.x + site.width - depth - .5;
+      const y = horizontal ? side === 0 ? site.y + .5 : site.y + site.height - depth - .5 : site.y + along;
+      add({ x, y, width: horizontal ? long : depth, height: horizontal ? depth : long }, 'shrub-border', horizontal ? 'x' : 'y', site.id, seed + 197 + side * 31 + part * 7, true, site);
+    }
+    for (const [index, building] of site.buildings.entries()) {
+      const variant = pixelSeed(building.id), offset = variant % 4;
+      for (let i = 0; i < 2; i++) {
+        const corner = (offset + i * 2) % 4, east = corner === 1 || corner === 2, south = corner >= 2;
+        const x = east ? building.x + building.width - .7 : building.x - 4.9;
+        const y = south ? building.y + building.height - .7 : building.y - 4.1;
+        add({ x, y, width: 5.6, height: 4.8 }, (index + i) % 3 ? 'shrub-border' : 'flower-bed', building.width >= building.height ? 'x' : 'y', site.id,
+          variant + i * 53, true, site);
+      }
     }
   }
   for (const prop of world.props ?? []) {

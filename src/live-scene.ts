@@ -3,7 +3,7 @@ import { PixelCombatAnimation, pixelFacing, samplePixelMotion, stopPixelMotion, 
 import { liveDropLabel, liveLootTotals } from './live-loot-ui';
 import { getBoss } from './game/bosses';
 import { WEAPON_BY_ID } from './game/data';
-import { buildingNeedsCutaway, distantBuildingSurfaces, liveMapRasterPlan, mapVegetationBands, paintMapFootprints, sceneBuildings, SceneryIndex, type DistantBuildingSurface } from './live-map-art';
+import { buildingNeedsCutaway, distantBuildingSurfaces, liveMapRasterPlan, paintMapFootprints, sceneBuildings, SceneryIndex, type DistantBuildingSurface } from './live-map-art';
 import { PixelRaidRenderer, pixelSpriteRect, type PixelDetail } from './pixel-renderer';
 import { PixelContainerArt } from './pixel-containers';
 import { PixelActorArt, PIXEL_ACTOR_ANCHOR, PIXEL_ACTOR_NATIVE_SIZE } from './pixel-actors';
@@ -16,7 +16,7 @@ import { PixelObstacleArt } from './pixel-obstacles';
 import { PIXEL_TILE, PIXEL_PALETTE as P, pixelIso, pixelSeed } from './pixel-art';
 import { PIXEL_SCENE_THEME as T } from './pixel-scene-theme';
 import { buildSurfaceMasks, courtyardGroundMarks, paintRoadSurface, paintTerrainTexture, terrainTextureResolution, type SurfaceMasks } from './live-ground-art';
-import type { LandcoverRect } from './pixel-landcover';
+import { distantPlantSurfaces, type DistantPlantSurface } from './live-distant-plants';
 import { paintPropAtmosphere, paintBuildingAtmosphere, type EnvironmentPixel } from './pixel-environment';
 import { fitMinimap, minimapPoint, minimapViewport } from './minimap-presentation';
 import { SceneLightBuffer, propLampSources, type SceneLamp } from './pixel-lighting';
@@ -91,7 +91,7 @@ export class LiveScene {
   private scenery = new SceneryIndex<StaticScenery>([]);
   private lampScenery = new SceneryIndex<LiveWorldProp>([]);
   private siteScenery = new SceneryIndex<NonNullable<LiveWorld['citySites']>[number]>([]);
-  private vegetationBands = new Map<string, LandcoverRect[]>();
+  private distantPlants = new Map<string, DistantPlantSurface[]>();
   private groundAmbience = new SceneryIndex<LiveAmbientGround>([]);
   private streetGround = new SceneryIndex<StreetGroundDetail>([]);
   private cityStreetGround = new SceneryIndex<CityStreetGroundDetail>([]);
@@ -201,7 +201,7 @@ export class LiveScene {
     this.surfaceMasks = { road: new Uint8Array(), indoor: new Uint8Array(), roadRuns: [] };
     this.scenery = new SceneryIndex<StaticScenery>([]); this.lampScenery = new SceneryIndex<LiveWorldProp>([]);
     this.siteScenery = new SceneryIndex<NonNullable<LiveWorld['citySites']>[number]>([]);
-    this.vegetationBands.clear();
+    this.distantPlants.clear();
     this.groundAmbience = new SceneryIndex<LiveAmbientGround>([]);
     this.streetGround = new SceneryIndex<StreetGroundDetail>([]);
     this.cityStreetGround = new SceneryIndex<CityStreetGroundDetail>([]);
@@ -510,9 +510,13 @@ export class LiveScene {
     if (this.tile < 14) {
       if (!prop.blocking && !['tree', 'shrub', 'garden', 'playground'].includes(prop.kind)) return;
       if (['tree', 'shrub', 'garden', 'planter'].includes(prop.kind)) {
-        let bands = this.vegetationBands.get(prop.id);
-        if (!bands) { bands = mapVegetationBands(prop); this.vegetationBands.set(prop.id, bands); }
-        for (const band of bands) this.polygon(this.quad(band.x - .5, band.y - .5, band.width, band.height), P.leafShade);
+        let surfaces = this.distantPlants.get(prop.id);
+        if (!surfaces) {
+          surfaces = distantPlantSurfaces(prop);
+          if (this.distantPlants.size >= 1024) this.distantPlants.delete(this.distantPlants.keys().next().value!);
+          this.distantPlants.set(prop.id, surfaces);
+        }
+        for (const surface of surfaces) this.polygon(surface.points.map(point => this.project(point, point.z * this.tile)), surface.color);
       } else this.polygon(this.quad(prop.x - .5, prop.y - .5, prop.width, prop.height), P.panelShade);
       return;
     }

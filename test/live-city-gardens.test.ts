@@ -9,8 +9,8 @@ function fixture() {
   const world = { width: 40, height: 40, city: { x: 1, y: 1, width: 38, height: 38 }, extracts: [{ x: 4, y: 4 }],
     containers: [{ x: 23, y: 23 }], obstacles: [{ x: 30, y: 2, width: 3, height: 35 }], districts: [], pois: [],
     paths: [{ kind: 'road', width: 3, points: [{ x: 12, y: 1 }, { x: 12, y: 38 }] }],
-    citySites: [{ id: 'green-court', kind: 'courtyard', courtyard: { x: 3, y: 3, width: 33, height: 33 },
-      buildings: [{ x: 3, y: 18, width: 6, height: 8, entrances: [{ x: 8, y: 22 }] }],
+    citySites: [{ id: 'green-court', x: 3, y: 3, width: 33, height: 33, kind: 'courtyard', courtyard: { x: 3, y: 3, width: 33, height: 33 },
+      buildings: [{ id: 'home', x: 3, y: 18, width: 6, height: 8, entrances: [{ x: 8, y: 22 }] }],
       passages: [[{ x: 1, y: 20 }, { x: 38, y: 20 }]] }],
     props: [
       { id: 'bench', kind: 'bench', x: 18, y: 9, width: 1.5, height: .6, orientation: 'x' },
@@ -67,8 +67,13 @@ test('new metropolitan homes receive grouped garden borders with bounded shared 
   const masks = buildSurfaceMasks(world, terrain, walkable), details = buildCityGardenGround(world, terrain, walkable, masks.indoor);
   const homes = world.citySites!.filter(site => site.quarterId === 'metro-southcenter');
   const homeGardens = details.filter(detail => homes.some(site => site.id === detail.sourceId));
-  expect(homeGardens.length).toBeGreaterThan(6);
+  expect(homeGardens.length).toBeGreaterThan(20);
   expect(new Set(homeGardens.map(detail => detail.sourceId)).size).toBeGreaterThan(4);
+  const outsideCourt = homeGardens.filter(detail => {
+    const court = homes.find(site => site.id === detail.sourceId)!.courtyard;
+    return detail.clip.some(run => run.x < court.x || run.x + run.width > court.x + court.width || run.y < court.y || run.y >= court.y + court.height);
+  });
+  expect(outsideCourt.length).toBeGreaterThan(10);
   expect(details.length).toBeLessThanOrEqual(4096);
   expect(details.every(detail => detail.width <= 10 && detail.height <= 10 && detail.clip.length <= 11 * 11)).toBe(true);
   const planted = new Set<number>();
