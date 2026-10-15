@@ -99,7 +99,7 @@ test('the unarmored rear silhouette narrows from chest to waist and breathing ke
   paintPixelActor(s.context, scav, { mode: 'idle', frame: 0, facing: 'n' }, empty, bare);
   const coat = new Set(['#67745c', '#3e5041', '#8c9576']);
   const band = (top: number, bottom: number) => {
-    let left = W, right = 0;
+    let left: number = W, right = 0;
     for (let y = top; y <= bottom; y++) for (let x = PIXEL_ACTOR_ANCHOR.x - 20; x <= PIXEL_ACTOR_ANCHOR.x + 20; x++) {
       if (coat.has(colors[s.pixels[y * W + x]!]!)) { left = Math.min(left, x); right = Math.max(right, x); }
     }

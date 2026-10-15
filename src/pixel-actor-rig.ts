@@ -44,19 +44,23 @@ export function pixelActorRig(animation: PixelActorFrame, limping = false): Pixe
   const hipSway = walk ? -Math.sin(angle) * (limping ? 1.5 : 3) + (limping ? .8 : 0) : mode === 'hit' ? -hit * .4 : 0;
   const sway = walk ? -hipSway * .45 : mode === 'idle' ? Math.cos(angle) * .65 : mode === 'hit' ? -hit : 0;
   const lean = walk ? 2 + Math.sin(angle * 2) * .35 : mode === 'hit' ? -hit * 1.6 : aimed ? 3 - recoil * .6 : 0;
-  const headBob = aimed ? -3 - recoil * .15 : walk ? -bob * .35 : mode === 'idle' ? Math.sin(angle - .65) * .8 : -hit * .5;
+  const headBob = aimed ? -7 - recoil * .15 : walk ? -bob * .35 : mode === 'idle' ? Math.sin(angle - .65) * .8 : -hit * .5;
   const headForward = aimed ? 5 : walk ? 1 : mode === 'hit' ? -hit : 0;
   const p = (side: number, forward: number, z: number) => point(PIXEL_ACTOR_ANCHOR.x + lateral.x * side + bearing.x * forward, PIXEL_ACTOR_ANCHOR.y + lateral.y * side + bearing.y * forward - z);
   const shoulderForward = lean - recoil * .4, shoulderZ = 110 + bob - recoil * .2;
   // Aiming hands remain fixed through the breath cycle; shoulders and elbows
   // absorb the subtle chest movement instead of dragging the sights around.
   const gripSide = 15 + (aimed ? -recoil * .15 : sway * .6), gripForward = aimed ? 20 - recoil * .55 : 17 + lean;
-  const gripZ = aimed ? 108 + recoil * .25 : mode === 'hit' ? 81 - hit : 82 + bob * .7;
+  const gripZ = aimed ? 118 + recoil * .25 : mode === 'hit' ? 81 - hit : 82 + bob * .7;
   const lowerBob = walk || mode === 'hit' ? bob : 0;
   const hipForward = walk ? Math.sin(angle * 2) * .5 : 0, hipZ = 57 + lowerBob * .45;
   const shoulderRoll = mode === 'aim' ? Math.cos(angle) * 1.2 : 0;
   const ankle = (side: number, value: Foot) => p(side, value.stride, 9 + value.lift);
   const knee = (side: number, value: Foot) => {
+    // The standing trouser silhouette has a shorter exposed chain than a
+    // striding leg. Keep its knee almost over the ankle instead of folding
+    // the longer walking links into a permanent crouch.
+    if (!walk) return p(side + hipSway * .5, hipForward + value.stride * .5 + (aimed ? 4.5 : 4), 33 + lowerBob * .4);
     // Two fixed-length links in the forward/height plane. The forward solution
     // bends a swinging knee instead of stretching or shrinking the leg.
     const thigh = 29, shin = 28, forward = value.stride - hipForward, vertical = 9 + value.lift - hipZ;
