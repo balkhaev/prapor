@@ -74,7 +74,7 @@ export class LiveScene {
   private cutawayBuildings = new Set<string>();
   private surfaceMasks: SurfaceMasks = { road: new Uint8Array(), indoor: new Uint8Array(), roadRuns: [] };
   private environmentAt = 0;
-  private reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+  private reducedMotion = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
 
   constructor(private host: HTMLElement, _command: (command: LiveCommand) => void, private select: (id: string) => void) {
     const context = this.canvas.getContext('2d');
@@ -400,7 +400,7 @@ export class LiveScene {
     const extent = (prop.width + prop.height) * this.tile / 2;
     if (anchor.x + prop.width * this.tile / 2 < -8 || anchor.x - prop.height * this.tile / 2 > this.width + 8 || anchor.y + extent / 2 < -8 || anchor.y - this.tile * 2.5 > this.height + 8) return;
     this.renderer.sprite(this.propArt.get(prop), anchor, this.tile / PIXEL_TILE, this.width, this.height);
-    this.paintAtmosphere(anchor, plot => paintPropAtmosphere(prop, this.environmentAt, plot, this.reducedMotion.matches));
+    this.paintAtmosphere(anchor, plot => paintPropAtmosphere(prop, this.environmentAt, plot, this.reducedMotion?.matches));
   }
   private paintAtmosphere(origin: LivePoint, paint: (plot: EnvironmentPixel) => void): void {
     const c = this.context, scale = this.tile / PIXEL_TILE;
@@ -427,7 +427,7 @@ export class LiveScene {
     }
     const detail = this.buildingDetail;
     this.renderer.sprite(this.buildingArt.get(building, cutaway, detail, this.buildingWalls.get(building.id)), this.project({ x, y }), this.tile / detail, this.width, this.height);
-    if (!cutaway) this.paintAtmosphere(this.project({ x, y }), plot => paintBuildingAtmosphere(building, this.environmentAt, plot, this.reducedMotion.matches));
+    if (!cutaway) this.paintAtmosphere(this.project({ x, y }), plot => paintBuildingAtmosphere(building, this.environmentAt, plot, this.reducedMotion?.matches));
   }
   private buildingVisible(building: LiveCityBuilding): boolean {
     const base = this.quad(building.x - .5, building.y - .5, building.width, building.height), height = this.tile * pixelBuildingWallHeight(building);
