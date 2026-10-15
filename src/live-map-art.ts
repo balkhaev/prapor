@@ -146,7 +146,9 @@ const BUILDING_MATERIALS = {
       { light: '#a69a80', dark: '#746b57', trim: '#d5c7a5', joint: '#625f50', patch: '#9d7354' },
     ],
 } as const;
-const BUILDING_ROOFS = [[P.roof, P.roofShade], [P.terra, P.terraShade], ['#879ca0', '#506c75'], ['#b1a482', '#827453']] as const;
+// Roofs use broad, separated planes. Their cool slate / warm clay range also
+// keeps a whole block apart from the olive ground and courtyard vegetation.
+const BUILDING_ROOFS = [['#8c9e98', '#536b65'], ['#ac816b', '#735648'], ['#91a4ad', '#4f6978'], ['#b9a780', '#796c50']] as const;
 const BUILDING_ACCENTS = {
   shop: [[P.red, '#744d43'], ['#487b74', '#34564e'], ['#68899a', '#465f70'], ['#bd9c5f', '#877247']],
   service: [[P.blue, '#45636d'], ['#6c8b78', '#4b6556']],
@@ -169,8 +171,18 @@ export function buildingExteriorStyle(building: LiveCityBuilding): {
 type ElevatedPoint = LivePoint & { z: number };
 export type DistantBuildingSurface = { points: ElevatedPoint[]; color: string };
 
-/** The medium-distance city keeps a house's actual roof type and a few large
- * openings. At most 44 small polygons replace a sprite; no bitmap is allocated. */
+/** One fitted dormer makes some old homes inhabited without adding street
+ * objects. The same model-local placement is used by both levels of detail. */
+export function buildingRoofDormer(building: LiveCityBuilding): { x: number; y: number; width: number; height: number; side: 'x' | 'y' } | null {
+  const roof = building.roof ?? (building.kind === 'apartment' ? 'gable' : 'flat');
+  if (roof !== 'gable' || building.kind !== 'apartment' || building.facade === 'panel' || pixelSeed(building.id) % 3 !== 0 || Math.min(building.width, building.height) < 6) return null;
+  const axis = building.roofAxis ?? (building.width >= building.height ? 'x' : 'y');
+  return axis === 'x' ? { x: building.width * .4, y: building.height * .65, width: 1.2, height: .6, side: 'y' }
+    : { x: building.width * .65, y: building.height * .4, width: .6, height: 1.2, side: 'x' };
+}
+
+/** Medium-distance architecture retains its volume, framed openings and public
+ * frontage. At most 72 small polygons replace a sprite; no bitmap is allocated. */
 export function distantBuildingSurfaces(building: LiveCityBuilding): DistantBuildingSurface[] {
   const w = building.width, h = building.height, wall = buildingWallHeight(building) * BUILDING_EXTERIOR_HEIGHT_SCALE;
   const style = buildingExteriorStyle(building), result: DistantBuildingSurface[] = [];
@@ -183,19 +195,27 @@ export function distantBuildingSurfaces(building: LiveCityBuilding): DistantBuil
   for (const side of ['x', 'y'] as const) {
     const length = side === 'y' ? w : h, floors = building.floors ?? (building.kind === 'apartment' ? 2 : 1);
     wallRect(side, 0, length, 0, wall, side === 'x' ? style.light : style.dark);
+    wallRect(side, 0, length, 0, .14, '#617369');
+    wallRect(side, 0, length, wall - .145, wall - .075, style.joint);
     wallRect(side, 0, length, wall - .075, wall, style.trim);
+    for (const u of [0, length - .14]) wallRect(side, u, .14, .14, wall - .075, style.trim);
+    for (let floor = 1; floor < floors; floor++) wallRect(side, .14, length - .28, floor * .97 - .04, floor * .97 + .005, style.trim);
     const doors = building.entrances.filter(door => side === 'y' ? door.y === building.y + h - 1 : door.x === building.x + w - 1)
       .map(door => (side === 'y' ? door.x - building.x : door.y - building.y) + 1);
-    const columns = Math.min(3, Math.max(1, Math.floor(length / 3)));
+    const industrial = building.kind === 'workshop' || building.kind === 'garage';
+    const columns = Math.min(floors > 3 ? 2 : 3, Math.max(1, Math.floor((length - .7) / (industrial ? 3.9 : building.kind === 'shop' ? 2.6 : 2.3))));
     for (let floor = 0; floor < floors; floor++) for (let column = 0; column < columns; column++) {
       const u = length * (column + 1) / (columns + 1);
       if (!floor && doors.some(door => Math.abs(door - u) < 1.05)) continue;
-      const low = .25 + floor * .97;
-      wallRect(side, u - .32, .64, low, Math.min(wall - .15, low + .3), side === 'x' ? '#557b81' : '#334f55');
+      const width = industrial ? 1.1 : building.kind === 'shop' && !floor ? 1.25 : .72;
+      const low = industrial ? wall - .4 : .24 + floor * .97, high = Math.min(wall - .16, low + (industrial ? .2 : building.kind === 'shop' && !floor ? .43 : .34));
+      wallRect(side, u - width / 2 - .065, width + .13, low - .04, high + .04, style.trim);
+      wallRect(side, u - width / 2, width, low, high, side === 'x' ? '#557b81' : '#334f55');
     }
+    if (building.kind === 'shop') wallRect(side, .2, length - .4, Math.min(.89, wall - .27), wall - .16, style.accent);
     // A published entrance remains a recognisable dark recess, rather than a
     // new navigable gap or a marker for undiscovered room contents.
-    for (const u of doors.slice(0, 2)) wallRect(side, u - .38, .76, 0, Math.min(wall - .14, .81), style.accentShade);
+    for (const u of doors.slice(0, 2)) wallRect(side, Math.max(.12, u - .38), Math.min(.76, length - u + .26), 0, Math.min(wall - .14, .81), style.accentShade);
   }
   const roof = building.roof ?? (building.kind === 'workshop' ? 'sawtooth' : building.kind === 'apartment' ? 'gable' : 'flat');
   const axis = building.roofAxis ?? (w >= h ? 'x' : 'y');
@@ -216,7 +236,24 @@ export function distantBuildingSurfaces(building: LiveCityBuilding): DistantBuil
       face([ra, rb, axis === 'x' ? point(w, b, wall) : point(b, h, wall), axis === 'x' ? point(0, b, wall) : point(b, 0, wall)], style.roof[row % 2]!);
       face(axis === 'x' ? [point(0, a, wall), point(w, a, wall), rb, ra] : [point(a, 0, wall), point(a, h, wall), rb, ra], '#334f55');
     }
-  } else face([point(0, 0, wall), point(w, 0, wall), point(w, h, wall), point(0, h, wall)], style.roof[0]);
+  } else {
+    face([point(0, 0, wall), point(w, 0, wall), point(w, h, wall), point(0, h, wall)], style.roof[0]);
+    face([point(.16, .16, wall), point(w - .16, .16, wall), point(w - .16, h - .16, wall), point(.16, h - .16, wall)], style.roof[1]);
+    wallRect('x', 0, h, wall, wall + .12, style.trim);
+    wallRect('y', 0, w, wall, wall + .12, style.trim);
+  }
+  const dormer = buildingRoofDormer(building);
+  if (dormer) {
+    const { x, y, width: dw, height: dh, side } = dormer;
+    const lift = 40 / 128 * BUILDING_EXTERIOR_HEIGHT_SCALE, span = axis === 'x' ? h : w;
+    const roofZ = (xx: number, yy: number) => wall + lift * (1 - Math.abs((axis === 'x' ? yy : xx) / span - .5) * 2);
+    const base = roofZ(x + dw, y + dh), top = base + 18 / 128 * BUILDING_EXTERIOR_HEIGHT_SCALE;
+    face([point(x + dw, y, roofZ(x + dw, y)), point(x + dw, y + dh, base), point(x + dw, y + dh, top), point(x + dw, y, top)], style.light);
+    face([point(x, y + dh, roofZ(x, y + dh)), point(x + dw, y + dh, base), point(x + dw, y + dh, top), point(x, y + dh, top)], style.dark);
+    face([point(x, y, top), point(x + dw, y, top), point(x + dw, y + dh, top), point(x, y + dh, top)], style.roof[1]);
+    const p = (u: number, z: number) => side === 'y' ? point(x + dw * u, y + dh, z) : point(x + dw, y + dh * u, z);
+    face([p(.18, base + .045), p(.82, base + .045), p(.82, top - .035), p(.18, top - .035)], '#334f55');
+  }
   return result;
 }
 

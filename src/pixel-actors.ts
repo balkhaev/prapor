@@ -34,7 +34,11 @@ class ActorRaster extends PixelRaster {
 }
 
 type PaintedActor = { muzzle?: LivePoint; ejection?: LivePoint };
-function paintModel(r: PixelRaster, entity: ActorIdentity, animation: PixelActorFrame, weapon: PixelWeaponInput, gear?: PixelActorGear): PaintedActor {
+function paintModel(r: PixelRaster, entity: ActorIdentity, animation: PixelActorFrame, weapon: PixelWeaponInput, gear?: PixelActorGear, detail: PixelActorDetail = 160): PaintedActor {
+  // The distant model is painted for its apparent size before coverage sampling.
+  // Large cloth/skin planes carry the pose; seams, laces and facial marks only
+  // return when the body has enough pixels to resolve them independently.
+  const distant = detail !== 160, fine = detail === 160, planeWidth = detail === 32 ? 5 : detail === 64 ? 4 : 2;
   const look = Number.isFinite(entity.appearance) ? Math.abs(Math.trunc(entity.appearance)) % 32 : 0;
   const bearing = pixelBearing(animation.facing), lateral = { x: -bearing.y * 2, y: bearing.x * .5 }, rear = bearing.y < -.1;
   const rig = pixelActorRig(animation, entity.limping), boss = entity.bossId;
@@ -66,7 +70,7 @@ function paintModel(r: PixelRaster, entity: ActorIdentity, animation: PixelActor
     outline([point(from.x + dx * half, from.y + dy * half), point(to.x + dx * tip, to.y + dy * tip), point(to.x - dx * tip, to.y - dy * tip), point(from.x - dx * half, from.y - dy * half)], color);
     r.ellipse(from.x, from.y, Math.round(half), Math.round(half * .8), color);
     r.ellipse(to.x, to.y, Math.max(2, Math.round(tip)), Math.max(2, Math.round(tip * .8)), color);
-    if (highlight) line(point(from.x - 2, from.y + 1), point(to.x - 2, to.y - 2), highlight, 2);
+    if (highlight) line(point(from.x - 2, from.y + 1), point(to.x - 2, to.y - 2), highlight, planeWidth);
   };
   const volume = (side: number, forward: number, halfW: number, halfD: number, low: number, high: number, colors: readonly string[]) => {
     const s = lateral.y >= 0 ? 1 : -1, f = bearing.y >= 0 ? 1 : -1;
@@ -122,15 +126,15 @@ function paintModel(r: PixelRaster, entity: ActorIdentity, animation: PixelActor
     outline([edge(heel, -4, 4), edge(heel, 4, 4), edge(heel, 4, 12, 4), edge(heel, -4, 12, 4)], '#39453d');
     outline([edge(heel, -4, 12, 4), edge(heel, 4, 12, 4), edge(toe, 4, 4), edge(toe, 2, 3, 2), edge(toe, -2, 3, 2), edge(toe, -4, 4)], '#4b5549');
     line(edge(toe, -3, 2, 2), edge(toe, 3, 2, 2), '#8a8d76');
-    for (let lace = 0; lace < 3; lace++) line(edge(heel, -3, 10 - lace, 5 + lace * 2), edge(heel, 3, 10 - lace, 5 + lace * 2), '#a09879');
+    if (fine) for (let lace = 0; lace < 3; lace++) line(edge(heel, -3, 10 - lace, 5 + lace * 2), edge(heel, 3, 10 - lace, 5 + lace * 2), '#a09879');
     line(edge(heel, -3, 6), edge(heel, -3, 11, 3), '#75806c');
   };
   const leg = (side: number, near: boolean) => {
     const knee = side < 0 ? rig.leftKnee : rig.rightKnee, hip = side < 0 ? rig.leftHip : rig.rightHip, ankle = side < 0 ? rig.leftAnkle : rig.rightAnkle;
-    limb(hip, knee, 16, near ? trousers : '#435248', near ? trouserLight : undefined); limb(knee, ankle, 11, trousers, near ? trouserLight : undefined);
+    limb(hip, knee, 16, near ? trousers : '#435248', near ? trouserLight : undefined); limb(knee, ankle, 11, distant && !near ? '#435248' : trousers, near ? trouserLight : undefined);
     r.ellipse(knee.x, knee.y, 7, 6, '#3b4b40'); r.ellipse(knee.x - 1, knee.y - 1, 5, 4, trousers);
-    line(point(knee.x - 4, knee.y - 3), point(knee.x + 2, knee.y - 4), '#87917a', 2);
-    if (near) { line(point(hip.x - 4, hip.y + 10), point(hip.x + 3, hip.y + 13), trouserLight, 2); line(point(knee.x + 3, knee.y + 9), point(ankle.x + 3, ankle.y - 4), '#435248', 2); }
+    line(point(knee.x - 4, knee.y - 3), point(knee.x + 2, knee.y - 4), '#87917a', distant ? 3 : 2);
+    if (near && fine) { line(point(hip.x - 4, hip.y + 10), point(hip.x + 3, hip.y + 13), trouserLight, 2); line(point(knee.x + 3, knee.y + 9), point(ankle.x + 3, ankle.y - 4), '#435248', 2); }
     foot(side);
   };
   const nearSign = lateral.y >= 0 ? 1 : -1;
@@ -142,7 +146,7 @@ function paintModel(r: PixelRaster, entity: ActorIdentity, animation: PixelActor
     softVolume(0, -14, [[66, wide - 3, 5], [72, wide, 8], [97, wide, 8], [105, wide - 2, 6], [108, wide - 6, 4]], ['#768067', '#465941', '#97a080']);
     softVolume(0, -22, [[74, 8, 2], [78, 10, 3], [88, 10, 3], [91, 8, 2]], ['#52664d', '#465941', '#97a080']);
     line(b(-8, -25, 89), b(8, -25, 89), '#b3ae82', 2);
-    for (const side of [-7, 7]) { line(b(side, -23, 72), b(side, -23, 103), '#374c37', 2); line(b(side - 1, -24, 84), b(side + 1, -24, 84), '#b3ae82', 2); }
+    for (const side of [-7, 7]) { line(b(side, -23, 72), b(side, -23, 103), '#374c37', 2); if (fine) line(b(side - 1, -24, 84), b(side + 1, -24, 84), '#b3ae82', 2); }
     softVolume(-wide - 2, -14, [[73, 3, 4], [89, 3, 4], [93, 2, 3]], ['#949877', '#5b6b51', '#bab798']);
   };
   if (!rear) pack();
@@ -153,9 +157,9 @@ function paintModel(r: PixelRaster, entity: ActorIdentity, animation: PixelActor
     const shoulder = side < 0 ? rig.leftShoulder : rig.rightShoulder;
     const elbow = point(shoulder.x * .48 + hand.x * .52 - bearing.x * (far ? 6 : 3), shoulder.y * .48 + hand.y * .52 + (shouldered ? 12 : 10));
     limb(shoulder, elbow, 14, far ? shade : coat, far ? undefined : light); limb(elbow, hand, 10, coat, far ? undefined : light);
-    r.ellipse(elbow.x, elbow.y, 6, 5, shade); line(point(elbow.x - 4, elbow.y - 1), point(elbow.x + 2, elbow.y + 2), light, 2);
+    r.ellipse(elbow.x, elbow.y, 6, 5, shade); line(point(elbow.x - 4, elbow.y - 1), point(elbow.x + 2, elbow.y + 2), light, distant ? 3 : 2);
     const crease = point(shoulder.x * .45 + elbow.x * .55, shoulder.y * .45 + elbow.y * .55);
-    line(point(crease.x - 4, crease.y), point(crease.x + 3, crease.y + 2), shade, 2);
+    if (fine) line(point(crease.x - 4, crease.y), point(crease.x + 3, crease.y + 2), shade, 2);
     line(point(elbow.x * .22 + hand.x * .78, elbow.y * .22 + hand.y * .78), hand, '#3f4c3d', 10);
   };
   const farHand = nearSign > 0 ? leftHand : rightHand, nearHand = nearSign > 0 ? rightHand : leftHand;
@@ -171,8 +175,8 @@ function paintModel(r: PixelRaster, entity: ActorIdentity, animation: PixelActor
   softVolume(0, 1, [[53, 13, 8], [58, 16, 10], [64, 14, 9]], [trousers, '#435248', trouserLight]);
   line(b(-12, 11, 64), b(12, 11, 64), '#354a39', 4);
   const buckle = b(0, 12, 64); r.rect(buckle.x - 3, buckle.y - 2, 6, 4, '#c9b27e');
-  for (const side of [-1, 1]) { line(b(side * 15, 11, 91), b(side * 12, 10, 74), shade, 2); line(b(side * 12, 11, 71), b(side * 5, 12, 68), light, 2); }
-  if (!rear) { line(b(0, 12, 102), b(0, 10, 68), '#b9aa7f'); for (const side of [-1, 1]) outline([b(side * 2, 8, 118), b(side * 10, 6, 113), b(side * 8, 11, 106), b(side * 2, 12, 111)], coat); }
+  if (fine) for (const side of [-1, 1]) { line(b(side * 15, 11, 91), b(side * 12, 10, 74), shade, 2); line(b(side * 12, 11, 71), b(side * 5, 12, 68), light, 2); }
+  if (!rear) { if (fine) line(b(0, 12, 102), b(0, 10, 68), '#b9aa7f'); for (const side of [-1, 1]) outline([b(side * 2, 8, 118), b(side * 10, 6, 113), b(side * 8, 11, 106), b(side * 2, 12, 111)], coat); }
   if (rear) {
     if (armor) {
       softVolume(0, -11, [[72, 11, 2], [96, torsoHalf - 6, 3], [104, 11, 2]], ['#5f7263', '#384e43', '#92a184']);
@@ -206,10 +210,10 @@ function paintModel(r: PixelRaster, entity: ActorIdentity, animation: PixelActor
     r.polygon([h(-9, 10, 134), h(-3, 14, 132), h(-4, 13, 127), h(-10, 9, 129)], skinLight);
     for (const u of bearing.y > .18 && Math.abs(bearing.x) < .5 ? [-6, 6] : [bearing.x >= 0 ? -5 : 5]) {
       const eye = h(u, 12, 137); r.rect(eye.x - 2, eye.y - 2, 5, 2, hair); r.rect(eye.x - 1, eye.y + 1, 4, 2, skinShade);
-      r.rect(eye.x, eye.y + 1, 2, 2, '#263631'); r.rect(eye.x - 1, eye.y + 1, 1, 1, '#e3d0a9');
+      if (fine) { r.rect(eye.x, eye.y + 1, 2, 2, '#263631'); r.rect(eye.x - 1, eye.y + 1, 1, 1, '#e3d0a9'); }
     }
     const nose = h(0, 16, 131), root = h(0, 11, 136); outline([point(root.x - 1, root.y), nose, point(nose.x - 2, nose.y + 3), h(0, 11, 129)], skinLight, skinShade);
-    line(h(-3, 13, 125), h(4, 13, 125), '#876247'); line(h(-2, 12, 122), h(4, 12, 122), skinLight);
+    if (fine) { line(h(-3, 13, 125), h(4, 13, 125), '#876247'); line(h(-2, 12, 122), h(4, 12, 122), skinLight); }
     if (look % 4 !== 3 || boss === 'lesnik' || boss === 'bugor') { outline([h(-10, 11, 128), h(-6, 14, 124), h(7, 14, 124), h(11, 10, 128), h(8, 12, boss === 'lesnik' ? 111 : 119), h(-7, 12, 119)], boss === 'lesnik' ? '#a49b82' : hair); line(h(-3, 14, 125), h(4, 14, 125), '#7c6450'); }
   }
   const hatY = head.y - 12;
@@ -226,7 +230,7 @@ function paintModel(r: PixelRaster, entity: ActorIdentity, animation: PixelActor
     r.ellipse(head.x, hatY, headW + 2, 10, P.ink); r.ellipse(head.x, hatY - 1, headW + 1, 9, boss === 'lesnik' ? '#817856' : '#6f6754');
     for (const side of [-1, 1]) { r.ellipse(head.x + side * (headW - 1), head.y - 1, 5, 12, '#595b48'); r.ellipse(head.x + side * (headW - 1), head.y - 3, 4, 10, '#a79a76'); }
     line(point(head.x - headW + 1, hatY + 6), point(head.x + headW - 1, hatY + 6), '#b1a489', 4);
-    for (let stitch = 0; stitch < 7; stitch++) r.rect(head.x - 12 + stitch * 4, hatY - 3 + stitch % 2, 2, 2, '#b7aa88');
+    if (fine) for (let stitch = 0; stitch < 7; stitch++) r.rect(head.x - 12 + stitch * 4, hatY - 3 + stitch % 2, 2, 2, '#b7aa88');
   } else if (hat === 1) {
     r.ellipse(head.x, hatY - 1, headW + 1, 9, P.ink); r.ellipse(head.x, hatY - 2, headW, 8, boss === 'komendant' ? '#607983' : '#79745e');
     line(point(head.x - headW + 2, hatY + 4), point(head.x + headW - 2, hatY + 4), '#3e514c', 3);
@@ -256,7 +260,7 @@ export class PixelActorArt {
     const old = this.sprites.get(key); if (old) { this.sprites.delete(key); this.sprites.set(key, old); return old; }
     const native = document.createElement('canvas'); native.width = PIXEL_ACTOR_NATIVE_SIZE.width; native.height = PIXEL_ACTOR_NATIVE_SIZE.height;
     const context = native.getContext('2d'); let left = 0, top = 0, width: number = native.width, height: number = native.height, metadata: PaintedActor = {};
-    if (context) { const raster = new ActorRaster(context, native.width, native.height); metadata = paintModel(raster, entity, normalized, weapon, gear); left = Math.max(0, raster.left - 2); top = Math.max(0, raster.top - 2); width = Math.min(native.width - left, raster.right - left + 2); height = Math.min(native.height - top, raster.bottom - top + 2); }
+    if (context) { const raster = new ActorRaster(context, native.width, native.height); metadata = paintModel(raster, entity, normalized, weapon, gear, detail); left = Math.max(0, raster.left - 2); top = Math.max(0, raster.top - 2); width = Math.min(native.width - left, raster.right - left + 2); height = Math.min(native.height - top, raster.bottom - top + 2); }
     const image = document.createElement('canvas'); image.width = width; image.height = height;
     const cropped = image.getContext('2d'); if (cropped) {
       cropped.imageSmoothingEnabled = false; cropped.drawImage(native, left, top, width, height, 0, 0, width, height);

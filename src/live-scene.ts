@@ -29,6 +29,8 @@ import { fieldHudOverlaps, placeFieldHudBox, readFieldHudBounds, type FieldHudBo
 import { liveAmbientBirds, liveAmbientGround, liveAmbientGroundMarks, liveCloudShadows, type LiveAmbientGround } from './live-world-ambience';
 import { sampleWorldSunlight, type WorldBird } from './world-ambience';
 import { paintStreetGroundDetail, streetGroundDetails, type StreetGroundDetail } from './live-street-details';
+import { paintCityRelief } from './live-city-relief';
+import { buildCityStreetGround, paintCityStreetGroundDetail, type CityStreetGroundDetail } from './live-city-streets';
 
 type Motion = PixelMotion;
 type LabelBox = { x: number; y: number; width: number; height: number };
@@ -90,6 +92,7 @@ export class LiveScene {
   private vegetationBands = new Map<string, LandcoverRect[]>();
   private groundAmbience = new SceneryIndex<LiveAmbientGround>([]);
   private streetGround = new SceneryIndex<StreetGroundDetail>([]);
+  private cityStreetGround = new SceneryIndex<CityStreetGroundDetail>([]);
   private propArt = new PixelPropArt();
   private buildingArt = new PixelBuildingArt();
   private buildingDetail: PixelDetail = 64;
@@ -197,6 +200,7 @@ export class LiveScene {
     this.vegetationBands.clear();
     this.groundAmbience = new SceneryIndex<LiveAmbientGround>([]);
     this.streetGround = new SceneryIndex<StreetGroundDetail>([]);
+    this.cityStreetGround = new SceneryIndex<CityStreetGroundDetail>([]);
     this.buildingForObstacle.clear(); this.buildingWalls.clear(); this.cutawayBuildings.clear(); this.distantBuildings.clear();
     this.propArt.clear(); this.buildingArt.clear(); this.obstacleArt.clear(); this.actorArt.clear(); this.containerArt.clear();
     this.clearWetGround(); this.lampProps = [];
@@ -350,6 +354,8 @@ export class LiveScene {
     this.surfaceMasks = buildSurfaceMasks(world, this.terrain, this.walkableGround, buildings);
     this.groundAmbience = new SceneryIndex(liveAmbientGround(world, this.terrain, this.walkableGround, this.surfaceMasks.indoor), world.chunkSize);
     this.streetGround = new SceneryIndex(streetGroundDetails(world, this.terrain, this.walkableGround, this.surfaceMasks.indoor), world.chunkSize);
+    const cityStreets = buildCityStreetGround(world, this.terrain, this.walkableGround, this.surfaceMasks.indoor);
+    this.cityStreetGround = new SceneryIndex(cityStreets, world.chunkSize);
     this.lampProps = (world.props ?? []).filter(prop => prop.kind === 'lamp');
     this.lampScenery = new SceneryIndex(this.lampProps, world.chunkSize);
     this.wetLamps = this.lampProps.flatMap(prop => {
@@ -365,7 +371,9 @@ export class LiveScene {
     if (ground) {
       paintTerrainTexture(ground, world, this.terrain, resolution);
       ground.save(); ground.scale(resolution, resolution);
-      this.paintSiteGround(world, ground); this.paintLandscape(world, ground); this.paintGroundDetails(world, ground); ground.restore();
+      this.paintSiteGround(world, ground); this.paintLandscape(world, ground);
+      for (const detail of cityStreets) paintCityStreetGroundDetail(ground, detail, false);
+      this.paintGroundDetails(world, ground); ground.restore();
     }
     this.terrainTexture = texture;
     const budget = liveMapRasterPlan(world.width, world.height);
@@ -380,7 +388,13 @@ export class LiveScene {
     this.minimapTerrain = minimap;
     const overview = document.createElement('canvas'); overview.width = budget.overview.width; overview.height = budget.overview.height;
     const overviewContext = overview.getContext('2d');
-    if (overviewContext) { const scale = budget.overview.scale; overviewContext.imageSmoothingEnabled = false; overviewContext.save(); overviewContext.transform(scale, scale / 2, -scale, scale / 2, world.height * scale, 0); overviewContext.drawImage(minimap, 0, 0, world.width, world.height); overviewContext.restore(); }
+    if (overviewContext) {
+      const scale = budget.overview.scale;
+      overviewContext.imageSmoothingEnabled = false; overviewContext.save();
+      overviewContext.transform(scale, scale / 2, -scale, scale / 2, world.height * scale, 0);
+      overviewContext.drawImage(minimap, 0, 0, world.width, world.height); overviewContext.restore();
+      paintCityRelief(overviewContext, buildings, world.height, scale);
+    }
     this.overviewTerrain = overview;
   }
   /** All surface marks are cached once; free ground remains free ground. */
@@ -717,6 +731,7 @@ export class LiveScene {
       }
       c.strokeStyle = '#697b6859'; c.lineWidth = .035; c.stroke();
     }
+    for (const detail of this.cityStreetGround.visible(area).slice(0, 160)) paintCityStreetGroundDetail(c, detail, this.tile >= 24);
     for (const detail of details) paintStreetGroundDetail(c, detail);
     c.restore();
   }
@@ -980,12 +995,22 @@ export class LiveScene {
       const muzzle = this.renderer.spritePoint(sprite, p, actorScale, sprite.muzzle), ejection = this.renderer.spritePoint(sprite, p, actorScale, sprite.ejection);
       this.weaponMounts.set(entity.id, { point, muzzle, ejection, offset: { x: (muzzle.x - p.x) / zoom, y: (muzzle.y - p.y) / zoom }, ejectOffset: { x: (ejection.x - p.x) / zoom, y: (ejection.y - p.y) / zoom } });
     }
-    const top = bounds.y - 37;
-    this.label(own ? `ТЫ · ${entity.name}` : entity.name, p.x, top, color, own ? 11 : 10);
-    const role = boss ? 'БОСС' : entity.kind === 'player' ? own ? 'ТВОЙ БОЕЦ' : 'ИГРОК' : entity.faction === 'raiders' ? 'РЕЙДЕР' : 'ДИКИЙ';
-    const weaponName = WEAPON_BY_ID[typeof weapon === 'string' ? weapon : weapon.weaponId]?.name;
-    this.label(`${role}${weaponName ? ` · ${weaponName}` : ''}`, p.x, top + 13, boss?T.boss:own ? T.text : entity.kind === 'player' ? T.ally : T.muted, 7);
-    c.fillStyle = T.panel; c.fillRect(p.x - 17, top + 18, 34, 3); c.fillStyle = entity.health > 35 ? T.healthy : T.injured; c.fillRect(p.x - 17, top + 18, 34 * entity.health / 100, 3);
+    // A distant body must remain the subject. Repeated name/loadout stacks can
+    // be wider than the entire street; selection restores its identity while
+    // the own fighter, bosses and observed combat warnings stay recognisable.
+    const compact = 160 * scale < 36, named = !compact || own || selected || !!boss;
+    const top = bounds.y - (compact ? 18 : 37);
+    if (named) this.label(own ? `ТЫ · ${entity.name}` : boss && compact ? `БОСС · ${boss.name}` : entity.name, p.x, top, color, own ? 11 : 10);
+    if (!compact) {
+      const role = boss ? 'БОСС' : entity.kind === 'player' ? own ? 'ТВОЙ БОЕЦ' : 'ИГРОК' : entity.faction === 'raiders' ? 'РЕЙДЕР' : 'ДИКИЙ';
+      const weaponName = WEAPON_BY_ID[typeof weapon === 'string' ? weapon : weapon.weaponId]?.name;
+      this.label(`${role}${weaponName ? ` · ${weaponName}` : ''}`, p.x, top + 13, boss?T.boss:own ? T.text : entity.kind === 'player' ? T.ally : T.muted, 7);
+    }
+    if (named || entity.health < 100) {
+      const width = compact ? 22 : 34, y = compact ? bounds.y - 8 : top + 18;
+      c.fillStyle = T.panel; c.fillRect(p.x - width / 2, y, width, 3);
+      c.fillStyle = entity.health > 35 ? T.healthy : T.injured; c.fillRect(p.x - width / 2, y, width * entity.health / 100, 3);
+    }
     if (entity.safeUntil > snapshot.now) this.label('ЗАЩИТА', p.x, p.y + 20, T.extract, 8);
     if (entity.aimUntil && entity.aimUntil > snapshot.now) {
       c.strokeStyle = T.hostile; c.lineWidth = 2; c.beginPath(); c.ellipse(p.x, p.y, 18 * zoom, 9 * zoom, 0, 0, Math.PI * 2); c.stroke();

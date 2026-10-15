@@ -1,5 +1,5 @@
 import type { LiveCityBuilding, LiveObstacle, LivePoint } from './game/live';
-import { BUILDING_EXTERIOR_HEIGHT_SCALE, buildingExteriorStyle, buildingFacadeCadence, buildingWallHeight } from './live-map-art';
+import { BUILDING_EXTERIOR_HEIGHT_SCALE, buildingExteriorStyle, buildingFacadeCadence, buildingRoofDormer, buildingWallHeight } from './live-map-art';
 import { PIXEL_TILE, PIXEL_PALETTE as P, PixelRaster, pixelIso, pixelRandom, pixelSeed } from './pixel-art';
 
 type BuildingSprite = { image: HTMLCanvasElement; anchor: LivePoint };
@@ -91,7 +91,7 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
   const w = building.width, h = building.height, floors = building.floors ?? (building.kind === 'apartment' ? 2 : 1);
   const material = building.facade ?? (building.kind === 'workshop' || building.kind === 'garage' ? 'metal' : building.kind === 'apartment' ? 'plaster' : 'brick');
   const palette = buildingExteriorStyle(building), seed = pixelSeed(building.id), random = pixelRandom(seed);
-  const elevationScale = cutaway ? 1 : EXTERIOR_HEIGHT_SCALE, fine = scale >= .5;
+  const elevationScale = cutaway ? 1 : EXTERIOR_HEIGHT_SCALE, fine = scale >= .5, close = scale >= 1;
   const p = (x: number, y: number, z = 0): LivePoint => pixelIso(x * scale, y * scale, z * scale * elevationScale, anchor);
   const line = (a: LivePoint, b: LivePoint, color: string, width = 1) => r.line(a.x, a.y, b.x, b.y, color, Math.max(1, Math.round(width * scale)));
   const quad = (x: number, y: number, width: number, height: number, z: number, color: string): void => {
@@ -181,10 +181,11 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
     }
     line(facePoint(side, center, low), facePoint(side, center, high), FRAME, 2);
     line(facePoint(side, left, low + (high - low) * .45), facePoint(side, right, low + (high - low) * .45), FRAME, 2);
-    if (fine && building.kind === 'apartment' && material === 'plaster' && variation % 5 === 1) {
-      for (const u of [left - .22, right + .08]) {
-        faceRect(side, u, .13, low - 1, high + 2, palette.accentShade);
-        for (let z = low + 3; z < high; z += 5) line(facePoint(side, u + .02, z), facePoint(side, u + .11, z), palette.accent);
+    if (building.kind === 'apartment' && (material === 'plaster' || material === 'brick') && variation % 3 === 1) {
+      for (const u of [left - .28, right + .08]) {
+        faceRect(side, u, .2, low - 1, high + 2, palette.accentShade);
+        line(facePoint(side, u + .02, high + 1), facePoint(side, u + .18, high + 1), palette.accent, 2);
+        if (fine) for (let z = low + 3; z < high; z += 6) line(facePoint(side, u + .025, z), facePoint(side, u + .17, z), palette.accent);
       }
     }
     faceRect(side, left - .1, width + .2, low - 6, low - 3, palette.dark);
@@ -195,7 +196,7 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
   for (const side of ['x', 'y'] as const) {
     const length = side === 'y' ? w : h, shade = side === 'x' ? palette.light : palette.dark;
     faceRect(side, 0, length, 0, wallHeight, shade);
-    if (material === 'brick' && fine) {
+    if (material === 'brick' && close) {
       for (let z = 8, row = 0; z < wallHeight; z += 8, row++) {
         line(facePoint(side, 0, z), facePoint(side, length, z), palette.joint);
         for (let u = row % 2 * .15; u < length; u += .3) {
@@ -204,11 +205,11 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
         }
       }
     } else if (material === 'metal') {
-      for (let u = .18; u < length; u += fine ? .24 : .72) {
+      for (let u = .18; u < length; u += close ? .32 : .96) {
         line(facePoint(side, u, 10), facePoint(side, u, wallHeight - 5), palette.joint, 2);
         line(facePoint(side, u + .035, 12), facePoint(side, u + .035, wallHeight - 5), palette.trim);
       }
-      for (let mark = 0; mark < (fine ? 8 : 2); mark++) {
+      for (let mark = 0; mark < (close ? 8 : 2); mark++) {
         const u = .3 + random() * (length - .8), top = 10 + random() * wallHeight * .3;
         faceRect(side, u, .035 + random() * .05, 7, top, palette.patch);
       }
@@ -219,7 +220,7 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
       }
       for (let floor = 1; floor < floors; floor++) line(facePoint(side, 0, floor * 73), facePoint(side, length, floor * 73), palette.joint, 3);
     } else {
-      for (let mark = 0; mark < (fine ? 14 : 3); mark++) {
+      for (let mark = 0; mark < (close ? 14 : 3); mark++) {
         const u = .2 + random() * (length - .7), z = 15 + random() * (wallHeight - 27);
         faceRect(side, u, .13 + random() * .22, z, Math.min(wallHeight - 4, z + 5 + random() * 12), palette.patch);
       }
@@ -229,6 +230,7 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
     }
     faceRect(side, 0, length, 0, 11, '#647467');
     line(facePoint(side, 0, 12), facePoint(side, length, 12), palette.trim, 3);
+    faceRect(side, 0, length, wallHeight - 12, wallHeight - 6, palette.joint);
     faceRect(side, 0, length, wallHeight - 6, wallHeight, palette.trim);
     // Broad architectural bands stay readable when mortar and wear disappear.
     // These are painted on the real wall, never new cover along an alley.
@@ -247,12 +249,13 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
     for (let floor = 0; floor < floors; floor++) for (let column = 0; column < columns; column++) {
       const u = length * (column + 1) / (columns + 1), industrial = cadence.industrial;
       if (!floor && doors.some(door => Math.abs(door - u) < (industrial ? 1.65 : 1.05))) continue;
-      const width = industrial ? 1.1 : building.kind === 'shop' && !floor ? 1.12 : .62;
+      const width = industrial ? 1.1 : building.kind === 'shop' && !floor ? 1.25 : .72;
       const low = industrial ? wallHeight - 30 : 18 + floor * 73, high = Math.min(wallHeight - 12, low + (industrial ? 15 : building.kind === 'shop' && !floor ? 32 : 25));
       window(side, u, width, low, high, column + floor + seed);
       if (building.kind === 'apartment' && floor > 0 && (material === 'panel' || (column + seed) % 3 === 0)) {
-        const z = low - 7, a = side === 'y' ? { x: u - .45, y: h } : { x: w, y: u - .45 };
-        const bw = side === 'y' ? .9 : .22, bh = side === 'y' ? .22 : .9;
+        const balconyWidth = material === 'panel' ? 1.16 : 1.35;
+        const z = low - 7, a = side === 'y' ? { x: u - balconyWidth / 2, y: h } : { x: w, y: u - balconyWidth / 2 };
+        const bw = side === 'y' ? balconyWidth : .34, bh = side === 'y' ? .34 : balconyWidth;
         box(a.x, a.y, bw, bh, z - 4, z, ['#8c9887', '#647363', '#bbc0a6']);
         line(p(a.x, a.y + bh, z + 16), p(a.x + bw, a.y + bh, z + 16), INK, 2);
         line(p(a.x + bw, a.y, z + 16), p(a.x + bw, a.y + bh, z + 16), INK, 2);
@@ -266,6 +269,17 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
           line(at(.08, z + 17), at(.92, z + 17), P.cream);
           for (const [start, end, color] of [[.16, .43, P.cream], [.53, .8, palette.accent]] as const) {
             r.polygon([at(start, z + 17), at(end, z + 17), at(end, z + 4), at(start, z + 6)], color);
+          }
+        } else if (fine && (column + floor + seed) % 4 === 0) {
+          // One planted balcony is a quiet sign of occupation, attached to
+          // the existing railing rather than a new navigable object.
+          const bx = side === 'y' ? a.x + .12 : a.x + bw, by = side === 'y' ? a.y + bh : a.y + .12;
+          const pw = side === 'y' ? .62 : .1, ph = side === 'y' ? .1 : .62;
+          box(bx, by, pw, ph, z + 6, z + 11, [P.terra, P.terraShade, P.terra]);
+          quad(bx, by, pw, ph, z + 13, '#6f8358');
+          if (close) for (const t of [.15, .6]) {
+            const at = p(bx + pw * t, by + ph * t, z + 15);
+            r.rect(at.x, at.y, Math.max(1, 3 * scale), Math.max(1, 2 * scale), '#c7ae83');
           }
         }
       } else if (fine && floor > 0 && (column + floor + seed) % 3 === 0) {
@@ -337,6 +351,16 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
           faceRect(side, u - .2, .4, z - 3, z + 2, P.cream);
           line(facePoint(side, u - .12, z + 3), facePoint(side, u + .12, z + 3), P.cream);
         }
+      } else if (building.kind === 'apartment') {
+        const canopyWidth = Math.min(1.65, length - .4, u * 2 - .3, (length - u) * 2 - .3);
+        const x = side === 'y' ? u - canopyWidth / 2 : w, y = side === 'y' ? h : u - canopyWidth / 2;
+        const cw = side === 'y' ? canopyWidth : .46, ch = side === 'y' ? .46 : canopyWidth;
+        box(x, y, cw, ch, high + 4, high + 9, [palette.accent, palette.accentShade, palette.accent]);
+        line(p(x, y + ch, high + 9), p(x + cw, y + ch, high + 9), palette.trim, 2);
+        for (const t of [.12, .88]) {
+          const ax = side === 'y' ? x + cw * t : x + cw, ay = side === 'x' ? y + ch * t : y + ch;
+          line(p(ax, ay, high + 3), side === 'y' ? p(ax, h, high - 9) : p(w, ay, high - 9), INK, 2);
+        }
       }
       // An address tile and notices make a doorway distinct at walking zoom.
       if (fine) {
@@ -357,7 +381,7 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
     line(facePoint(side, drain + .025, 8), facePoint(side, drain + .025, wallHeight - 3), P.steelLight, 2);
     for (let z = 19; z < wallHeight - 6; z += 38) line(facePoint(side, drain - .07, z), facePoint(side, drain + .07, z), INK, 2);
     line(facePoint(side, drain, 7), facePoint(side, drain - .11, 4), P.steelShade, 3);
-    if (fine) {
+    if (close) {
       const cableZ = wallHeight - 10;
       for (let span = 0; span < 4; span++) {
         const a = span / 4, b = (span + 1) / 4;
@@ -380,12 +404,12 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
     const rb = axis === 'x' ? p(w, h / 2, wallHeight + lift) : p(w / 2, h, wallHeight + lift);
     r.polygon(axis === 'x' ? [p(0, 0, wallHeight), p(w, 0, wallHeight), rb, ra] : [p(0, 0, wallHeight), ra, rb, p(0, h, wallHeight)], slate[0]!);
     r.polygon(axis === 'x' ? [ra, rb, p(w, h, wallHeight), p(0, h, wallHeight)] : [ra, p(w, 0, wallHeight), p(w, h, wallHeight), rb], slate[1]!);
-    for (let u = .3; u < (axis === 'x' ? w : h); u += fine ? .36 : 1.1) {
+    for (let u = .3; u < (axis === 'x' ? w : h); u += close ? .72 : 2.1) {
       const ridge = axis === 'x' ? p(u, h / 2, wallHeight + lift) : p(w / 2, u, wallHeight + lift);
-      line(axis === 'x' ? p(u, 0, wallHeight) : p(0, u, wallHeight), ridge, '#b0b49c');
-      line(ridge, axis === 'x' ? p(u, h, wallHeight) : p(w, u, wallHeight), '#465e52');
+      line(axis === 'x' ? p(u, 0, wallHeight) : p(0, u, wallHeight), ridge, '#a4b0a3');
+      line(ridge, axis === 'x' ? p(u, h, wallHeight) : p(w, u, wallHeight), '#60776d');
     }
-    for (let v = .3; fine && v < (axis === 'x' ? h : w); v += .35) {
+    for (let v = .5; close && v < (axis === 'x' ? h : w); v += .8) {
       const span = axis === 'x' ? h : w, z = wallHeight + lift * (1 - Math.abs(v - span / 2) / (span / 2));
       line(axis === 'x' ? p(0, v, z) : p(v, 0, z), axis === 'x' ? p(w, v, z) : p(v, h, z), v < span / 2 ? '#7b8d7f' : '#506659');
     }
@@ -396,7 +420,7 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
     const vent = axis === 'x' ? p(w, h / 2, wallHeight + 15) : p(w / 2, h, wallHeight + 15);
     r.ellipse(vent.x, vent.y, Math.max(1, Math.round(7 * scale)), Math.max(1, Math.round(9 * scale)), palette.trim);
     r.ellipse(vent.x, vent.y, Math.max(1, Math.round(4 * scale)), Math.max(1, Math.round(6 * scale)), INK);
-    if (fine) {
+    if (close) {
       // Flashing and one fitted skylight follow the actual inclined roof plane.
       const sx = w * .23, sy = h * .67, sw = Math.min(1.1, w * .16), sh = Math.min(.6, h * .12);
       const roofPoint = (x: number, y: number, offset = 0) => p(x, y, surface.height(x, y) + offset);
@@ -412,10 +436,10 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
       const ra = axis === 'x' ? p(0, a, wallHeight + lift) : p(a, 0, wallHeight + lift);
       const rb = axis === 'x' ? p(w, a, wallHeight + lift) : p(a, h, wallHeight + lift);
       const da = axis === 'x' ? p(0, b, wallHeight) : p(b, 0, wallHeight), db = axis === 'x' ? p(w, b, wallHeight) : p(b, h, wallHeight);
-      r.polygon([ra, rb, db, da], row % 2 ? '#839b90' : '#9aafa0');
-      for (let u = .3; u < (axis === 'x' ? w : h); u += fine ? .5 : 1.5) line(axis === 'x' ? p(u, a, wallHeight + lift) : p(a, u, wallHeight + lift), axis === 'x' ? p(u, b, wallHeight) : p(b, u, wallHeight), '#5e796c');
+      r.polygon([ra, rb, db, da], slate[row % 2]!);
+      for (let u = .3; u < (axis === 'x' ? w : h); u += close ? .8 : 2.4) line(axis === 'x' ? p(u, a, wallHeight + lift) : p(a, u, wallHeight + lift), axis === 'x' ? p(u, b, wallHeight) : p(b, u, wallHeight), '#6b817c');
       r.polygon(axis === 'x' ? [p(0, a, wallHeight), p(w, a, wallHeight), rb, ra] : [p(a, 0, wallHeight), p(a, h, wallHeight), rb, ra], GLASS_DARK);
-      for (let u = .5; u < (axis === 'x' ? w : h); u += 1) line(axis === 'x' ? p(u, a, wallHeight + 2) : p(a, u, wallHeight + 2), axis === 'x' ? p(u, a, wallHeight + lift - 2) : p(a, u, wallHeight + lift - 2), '#bec6ad', 2);
+      for (let u = .5; u < (axis === 'x' ? w : h); u += fine ? 1.5 : 3) line(axis === 'x' ? p(u, a, wallHeight + 2) : p(a, u, wallHeight + 2), axis === 'x' ? p(u, a, wallHeight + lift - 2) : p(a, u, wallHeight + lift - 2), '#bec6ad', 2);
       if (fine) {
         const glassA = axis === 'x' ? p(.3, a, wallHeight + 8) : p(a, .3, wallHeight + 8);
         const glassB = axis === 'x' ? p((w - .3), a, wallHeight + 18) : p(a, (h - .3), wallHeight + 18);
@@ -426,8 +450,8 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
   } else {
     quad(0, 0, w, h, wallHeight, slate[0]);
     quad(.18, .18, w - .36, h - .36, wallHeight + 1, slate[1]);
-    for (let x = .5; x < w; x += fine ? 1.15 : 3.45) line(p(x, .18, wallHeight + 2), p(x, h - .18, wallHeight + 2), '#536b5a');
-    for (let y = .5; fine && y < h; y += 1.15) line(p(.18, y, wallHeight + 2), p(w - .18, y, wallHeight + 2), '#93a18a');
+    for (let x = .5; x < w; x += close ? 1.8 : 4.5) line(p(x, .18, wallHeight + 2), p(x, h - .18, wallHeight + 2), '#60766b');
+    for (let y = .5; close && y < h; y += 1.8) line(p(.18, y, wallHeight + 2), p(w - .18, y, wallHeight + 2), '#93a18a');
     for (const [x, y, ww, hh] of [[0, 0, w, .16], [0, h - .16, w, .16], [0, .16, .16, h - .32], [w - .16, .16, .16, h - .32]]) box(x!, y!, ww!, hh!, wallHeight, wallHeight + 9, ['#8e9c87', '#647961', '#b4bda2']);
     box(w * .25, h * .36, .7, .65, wallHeight + 2, wallHeight + 17, ['#a3aea1', '#6d8374', '#d0cfb3']);
     const vent = p(w * .25 + .35, h * .36 + .32, wallHeight + 18);
@@ -441,6 +465,20 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
       quad(hx + .07, hy + .07, hw - .14, hh - .14, wallHeight + 9, P.roofShade);
       for (let y = .4; y < h - .3; y += .22) line(p(w - .25, y, wallHeight + 3), p(w - .13, y, wallHeight + 3), P.ink);
     }
+  }
+
+  const dormer = buildingRoofDormer(building);
+  if (dormer) {
+    const { x, y, width: dw, height: dh, side } = dormer;
+    const base = surface.height(x + dw, y + dh), top = base + 18;
+    r.polygon([p(x + dw, y, surface.height(x + dw, y)), p(x + dw, y + dh, base), p(x + dw, y + dh, top), p(x + dw, y, top)], palette.light);
+    r.polygon([p(x, y + dh, surface.height(x, y + dh)), p(x + dw, y + dh, base), p(x + dw, y + dh, top), p(x, y + dh, top)], palette.dark);
+    quad(x, y, dw, dh, top, slate[1]);
+    const at = (u: number, z: number) => side === 'y' ? p(x + dw * u, y + dh, z) : p(x + dw, y + dh * u, z);
+    r.polygon([at(.12, base + 2), at(.88, base + 2), at(.88, top - 2), at(.12, top - 2)], palette.trim);
+    r.polygon([at(.18, base + 4), at(.82, base + 4), at(.82, top - 4), at(.18, top - 4)], GLASS_DARK);
+    line(at(.5, base + 4), at(.5, top - 4), palette.trim, 2);
+    line(at(0, top + 1), at(1, top + 1), palette.trim, 2);
   }
 
   // Eave gutters remain narrow enough to retain the published silhouette.
