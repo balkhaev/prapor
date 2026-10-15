@@ -406,7 +406,7 @@ document.querySelector(".world-head")!.insertAdjacentHTML("beforeend", `<button 
 worldViewport.insertAdjacentHTML("afterend", '<div id="scene-hover" class="scene-hover" hidden><strong></strong><span></span></div>');
 fieldInterface = mountFieldInterface({
 	root: app, icon,
-	getState: () => ({ view: liveMode?.isActive() ? "live" : worldView, context: `${contextMode}:${selectedRoomId ?? ""}:${selectedShelterSite?.column ?? ""}:${selectedShelterSite?.row ?? ""}`, status: serverReady ? "Прогресс на сервере · база на связи" : connectionMessage }),
+	getState: () => ({ view: liveMode?.isActive() ? "live" : worldView, context: `${contextMode}:${selectedRoomId ?? ""}:${selectedShelterSite?.column ?? ""}:${selectedShelterSite?.row ?? ""}`, status: serverReady ? "Прогресс на сервере" : connectionMessage }),
 	closeContext: closeCommandContext,
 	onError: message => toast(message, false),
 });
@@ -1639,6 +1639,7 @@ function beginBuildingPlacement(type: ShelterRoomType, roomId?: string) {
 	closeInspector();
 	page = "home"; contextMode = "overview"; selectedShelterSite = null;
 	buildingPlacement = { type, ...(roomId ? { roomId } : {}), rotation: room?.rotation ?? 0, facing: room ? getRoomFacing(room) : 0, site: null, point: room ? getRoomPosition(room) : null };
+	fieldInterface?.closePanels();
 	render(); setView("base"); world?.setPanMode(false);
 	paintBuildingPlacement(); worldViewport.focus({ preventScroll: true });
 }

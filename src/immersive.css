@@ -350,6 +350,7 @@ body.immersive-game {
 .immersive-game .live-self { display: block; }
 .immersive-game .live-player-kit { margin: 8px 0 15px; }
 .immersive-game:has(.live-preparing) .field-launch { display: none; }
+.immersive-game:has(.live-preparing) .field-controls { display: none; }
 .immersive-game .live-entry-screen { inset: 184px 14px 101px; width: min(1080px, calc(100% - 28px)); margin: 0 auto; padding: 17px 22px 0; border: 1px solid #7d826188; border-radius: 4px; background: #20271ff5; box-shadow: 0 20px 70px #0006; backdrop-filter: blur(12px); }
 .immersive-game .live-entry-head { padding-bottom: 13px; }
 .immersive-game .live-entry-head h2 { margin: 4px 0; font-size: 23px; letter-spacing: -.5px; }
