@@ -47,7 +47,7 @@ describe('raid architecture visibility', () => {
       const house = { ...building, roof, roofAxis, floors: 4 as const, width: 40, height: 32, entrances: [{ x: 13, y: 12 }, { x: 13, y: 43 }] }, before = structuredClone(house);
       const surfaces = distantBuildingSurfaces(house), wall = buildingWallHeight(house) * BUILDING_EXTERIOR_HEIGHT_SCALE;
       const points = surfaces.flatMap(surface => surface.points), peak = Math.max(...points.map(point => point.z));
-      expect(surfaces.length).toBeLessThanOrEqual(72);
+      expect(surfaces.length).toBeLessThanOrEqual(160);
       expect(points.every(point => Number.isFinite(point.x + point.y + point.z))).toBe(true);
       expect(points.every(point => point.x >= house.x - .5 && point.x <= house.x + house.width - .5 && point.y >= house.y - .5 && point.y <= house.y + house.height - .5)).toBe(true);
       if (roof === 'flat') expect(peak).toBeCloseTo(wall + .12);
@@ -65,7 +65,7 @@ describe('raid architecture visibility', () => {
     for (const kind of ['apartment', 'shop', 'workshop', 'garage', 'service'] as const) {
       const house = { ...building, kind, floors: 3 as const, width: 16, height: 11, entrances: [{ x: 13, y: 22 }] }, before = structuredClone(house);
       const surfaces = distantBuildingSurfaces(house), style = buildingExteriorStyle(house), wall = buildingWallHeight(house) * BUILDING_EXTERIOR_HEIGHT_SCALE;
-      expect(surfaces.length).toBeLessThanOrEqual(72);
+      expect(surfaces.length).toBeLessThanOrEqual(160);
       expect(surfaces.some(surface => surface.color === style.joint && surface.points.every(point => point.z >= wall - .15 && point.z < wall))).toBe(true);
       const glass = surfaces.filter(surface => surface.color === '#557b81' || surface.color === '#334f55');
       expect(glass.length).toBeGreaterThanOrEqual(4);

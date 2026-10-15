@@ -2,6 +2,7 @@ import type { LiveCityBuilding, LivePoint, LiveWorld, LiveWorldProp } from './ga
 import { legacyHallEnvelopes } from './game/world-building-envelope';
 import { PIXEL_PALETTE as P, pixelSeed } from './pixel-art';
 import { buildingArchitecture, buildingArchitectureHeightAt } from './building-architecture';
+import { buildingFacadeLayout } from './building-facade-layout';
 import { pixelLandcoverBands, type LandcoverRect } from './pixel-landcover';
 import { buildingStreetSign } from './live-street-life';
 
@@ -186,38 +187,69 @@ export function buildingRoofDormer(building: LiveCityBuilding): { x: number; y: 
 /** Medium-distance architecture keeps the same stepped volumes and roof planes
  * as native sprites. Facade detail is sparse and the plan allocates no bitmap. */
 export function distantBuildingSurfaces(building: LiveCityBuilding): DistantBuildingSurface[] {
-  const w = building.width, h = building.height, plan = buildingArchitecture(building);
+  const plan = buildingArchitecture(building);
   const style = buildingExteriorStyle(building), result: DistantBuildingSurface[] = [];
   const point = (x: number, y: number, z = 0): ElevatedPoint => ({ x: building.x - .5 + x, y: building.y - .5 + y, z });
   const face = (points: ElevatedPoint[], color: string) => result.push({ points, color });
-  for (const facade of plan.facades) {
-    const { side, length, floors } = facade, wall = facade.top * BUILDING_EXTERIOR_HEIGHT_SCALE, bottom = facade.bottom * BUILDING_EXTERIOR_HEIGHT_SCALE;
+  type FacadeWindow = ReturnType<typeof buildingFacadeLayout>['windows'][number];
+  const dormer = buildingRoofDormer(building), elevation = BUILDING_EXTERIOR_HEIGHT_SCALE / 128;
+  const facades = plan.facades.map(facade => {
+    const { side, length } = facade, wall = facade.top * BUILDING_EXTERIOR_HEIGHT_SCALE, bottom = facade.bottom * BUILDING_EXTERIOR_HEIGHT_SCALE;
+    const layout = buildingFacadeLayout(building, facade), background: DistantBuildingSurface[] = [], foreground: DistantBuildingSurface[] = [];
+    let layer = background;
     const p = (u: number, z: number) => side === 'y' ? point(facade.u + u, facade.plane, z) : point(facade.plane, facade.u + u, z);
     const wallRect = (u: number, width: number, low: number, high: number, color: string) => {
       low = Math.max(bottom, low); high = Math.min(wall, high);
-      if (high > low && width > 0) face([p(u, low), p(u + width, low), p(u + width, high), p(u, high)], color);
+      const left = Math.max(0, u), right = Math.min(length, u + width);
+      if (high > low && right > left) layer.push({ points: [p(left, low), p(right, low), p(right, high), p(left, high)], color });
     };
     wallRect(0, length, bottom, wall, side === 'x' ? style.light : style.dark);
     wallRect(0, length, 0, .14, '#617369');
+    // These are the same address-specific accent piers, stairwell panels and
+    // horizontal courses as the native model, rather than a new LOD rhythm.
+    for (const band of layout.bands) wallRect(band.u, band.width, band.low * elevation, band.high * elevation, style[band.role]);
     wallRect(0, length, wall - .145, wall - .075, style.joint);
     wallRect(0, length, wall - .075, wall, style.trim);
-    for (const u of [0, length - .14]) wallRect(u, .14, .14, wall - .075, style.trim);
-    for (let floor = 1; floor < floors; floor++) wallRect(.14, length - .28, floor * .97 - .04, floor * .97 + .005, style.trim);
-    const outer = side === 'y' ? facade.plane === h : facade.plane === w;
-    const doors = outer ? building.entrances.filter(door => side === 'y' ? door.y === building.y + h - 1 : door.x === building.x + w - 1)
-      .map(door => (side === 'y' ? door.x - building.x : door.y - building.y) + 1 - facade.u).filter(u => u > 0 && u < length) : [];
-    const industrial = building.kind === 'workshop' || building.kind === 'garage';
-    const columns = Math.min(plan.volumes.length > 1 || floors > 3 ? 2 : 3, Math.max(1, Math.floor((length - .7) / (industrial ? 3.9 : building.kind === 'shop' ? 2.6 : 2.3))));
-    for (let floor = 0; floor < floors; floor++) for (let column = 0; column < columns; column++) {
-      const u = length * (column + 1) / (columns + 1);
-      if (!floor && doors.some(door => Math.abs(door - u) < 1.05)) continue;
-      const width = industrial ? 1.1 : building.kind === 'shop' && !floor ? 1.25 : .72;
-      const low = industrial ? wall - .4 : .24 + floor * .97, high = Math.min(wall - .16, low + (industrial ? .2 : building.kind === 'shop' && !floor ? .43 : .34));
-      if (low < bottom + .05 || high <= low) continue;
-      wallRect(u - width / 2 - .065, width + .13, low - .04, high + .04, style.trim);
-      wallRect(u - width / 2, width, low, high, side === 'x' ? '#557b81' : '#334f55');
+    const grouped = new Map<number, FacadeWindow[]>();
+    for (const window of layout.windows) {
+      const key = Math.round(window.u * 10000), group = grouped.get(key) ?? [];
+      group.push(window); grouped.set(key, group);
     }
-    for (const u of doors.slice(0, 2)) wallRect(Math.max(.12, u - .38), Math.min(.76, length - u + .26), 0, Math.min(wall - .14, .81), style.accentShade);
+    const bays = [...grouped.values()].sort((a, b) => a[0]!.u - b[0]!.u);
+    // Retain actual central/stairwell and edge bays. Whole vertical stacks are
+    // selected together, so reducing detail never shuffles windows or balconies.
+    const score = (bay: FacadeWindow[]) => (bay.some(window => window.style === 'tall') ? 3 : bay.some(window => window.balcony === 'glazed') ? 2 : bay.some(window => window.balcony !== 'none') ? 1 : 0) * length - Math.abs(bay[0]!.u - length / 2);
+    const central = [...bays].sort((a, b) => score(b) - score(a))[0];
+    const selected = [...new Set([central, bays[0], bays.at(-1)].filter((bay): bay is FacadeWindow[] => !!bay))];
+    const windows = selected.map(bay => {
+      const surfaces: DistantBuildingSurface[] = []; layer = surfaces;
+      const balcony = bay.filter(window => window.balcony !== 'none');
+      if (balcony.length) {
+        const width = Math.max(...balcony.map(window => window.width)) + .3;
+        wallRect(balcony[0]!.u - width / 2, width, Math.min(...balcony.map(window => window.low - 9)) * elevation,
+          Math.max(...balcony.map(window => window.high + 4)) * elevation, style.accentShade);
+      }
+      for (const window of bay) {
+        const glazed = window.balcony === 'glazed', width = window.width + (glazed ? .18 : 0), low = window.low * elevation, high = window.high * elevation;
+        const left = window.u - width / 2, rim = .055;
+        wallRect(left - rim, width + rim * 2, low - .027, high + .035, style.trim);
+        wallRect(left, width, low, high, window.variation % 11 === 0 ? '#8a7957' : side === 'x' ? '#557b81' : '#334f55');
+        if (glazed || window.style === 'paired' || window.style === 'ribbon') wallRect(window.u - .02, .04, low, high, style.trim);
+        if (window.balcony === 'solid' || window.balcony === 'open') {
+          const balconyWidth = Math.min(length - .24, window.width + .36), ledge = (window.low - 7) * elevation;
+          wallRect(window.u - balconyWidth / 2, balconyWidth, ledge, ledge + (window.balcony === 'solid' ? .16 : .045), window.balcony === 'solid' ? style.accent : style.trim);
+        }
+      }
+      return surfaces;
+    });
+    layer = foreground;
+    const doors = layout.doors;
+    const industrial = building.kind === 'workshop' || building.kind === 'garage';
+    for (const u of doors.slice(0, 2)) {
+      const width = industrial ? 1.44 : .78, high = (industrial ? 76 : 61) * elevation;
+      wallRect(u - width / 2 - .11, width + .22, 0, high + .08, style.accentShade);
+      wallRect(u - width / 2, width, 0, high, '#30463f');
+    }
     const business = buildingStreetSign(building), entrance = doors[0];
     if (business && entrance !== undefined) {
       const width = Math.min(business.label.length * .29 + .6, 3.5, length - .6, entrance * 2 - .3, (length - entrance) * 2 - .3);
@@ -229,10 +261,18 @@ export function distantBuildingSurfaces(building: LiveCityBuilding): DistantBuil
         for (const t of [.16, .4, .64]) wallRect(left + width * t, width * .11, low + .07, top - .07, business.lettering);
       }
     }
+    return { background, foreground, windows, chosen: [] as DistantBuildingSurface[][] };
+  });
+  // Reserve every wall, real portal and roof before admitting a complete bay.
+  // Sparse LOD cannot eat a roof plane or leave only half a balcony stack.
+  let remaining = 160 - plan.surfaces.length - (dormer ? 4 : 0) - facades.reduce((sum, facade) => sum + facade.background.length + facade.foreground.length, 0);
+  for (let rank = 0; rank < 3; rank++) for (const facade of facades) {
+    const bay = facade.windows[rank];
+    if (bay && bay.length <= remaining) { facade.chosen.push(bay); remaining -= bay.length; }
   }
+  for (const facade of facades) result.push(...facade.background, ...facade.chosen.flat(), ...facade.foreground);
   const materials = { roofLight: style.roof[0], roofDark: style.roof[1], wallLight: style.light, wallDark: style.dark, trim: style.trim, glass: '#334f55' };
   for (const surface of plan.surfaces) face(surface.points.map(p => point(p.x, p.y, p.z * BUILDING_EXTERIOR_HEIGHT_SCALE)), materials[surface.material]);
-  const dormer = buildingRoofDormer(building);
   if (dormer) {
     const { x, y, width: dw, height: dh, side } = dormer;
     const roofZ = (xx: number, yy: number) => buildingArchitectureHeightAt(plan, xx, yy) * BUILDING_EXTERIOR_HEIGHT_SCALE;

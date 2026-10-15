@@ -47,7 +47,7 @@ test('the distant renderer uses exactly the native architectural planes, within 
     const house = { ...home, id: `architecture-lod-${index}`, roofAxis, width: 23, height: 11, floors: 4 as const,
       facade: index % 2 ? 'panel' as const : 'plaster' as const, roof: index % 2 ? 'flat' as const : 'gable' as const };
     const plan = buildingArchitecture(house), distant = distantBuildingSurfaces(house);
-    expect(distant.length).toBeLessThanOrEqual(96);
+    expect(distant.length).toBeLessThanOrEqual(160);
     for (const surface of plan.surfaces) {
       const expected = surface.points.map(p => ({ x: house.x - .5 + p.x, y: house.y - .5 + p.y, z: p.z * BUILDING_EXTERIOR_HEIGHT_SCALE }));
       expect(distant.some(face => JSON.stringify(face.points) === JSON.stringify(expected))).toBe(true);

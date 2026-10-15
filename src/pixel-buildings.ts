@@ -1,12 +1,14 @@
 import type { LiveCityBuilding, LiveObstacle, LivePoint } from './game/live';
-import { BUILDING_EXTERIOR_HEIGHT_SCALE, buildingExteriorStyle, buildingFacadeCadence, buildingRoofDormer, buildingWallHeight } from './live-map-art';
+import { BUILDING_EXTERIOR_HEIGHT_SCALE, buildingExteriorStyle, buildingRoofDormer, buildingWallHeight } from './live-map-art';
 import { PIXEL_TILE, PIXEL_PALETTE as P, PixelRaster, pixelIso, pixelRandom, pixelSeed } from './pixel-art';
 import { BUILDING_ARCHITECTURE_HEADROOM, buildingArchitecture, buildingArchitectureHeightAt, type BuildingFacade } from './building-architecture';
 import { buildingStreetSign, streetSignLettering } from './live-street-life';
+import { buildingFacadeLayout } from './building-facade-layout';
 
 type BuildingSprite = { image: HTMLCanvasElement; anchor: LivePoint };
 type NativeTile = 32 | 64 | 128;
 type FacadeSide = 'x' | 'y';
+type FacadeWindow = ReturnType<typeof buildingFacadeLayout>['windows'][number];
 export const PIXEL_BUILDING_CACHE_BYTES = 32 * 1024 * 1024;
 const EXTERIOR_HEIGHT_SCALE = BUILDING_EXTERIOR_HEIGHT_SCALE;
 
@@ -52,7 +54,7 @@ export function pixelBuildingSpriteBytes(building: LiveCityBuilding, cutaway: bo
   const layout = buildingSpriteLayout(building, cutaway, nativeTile);
   return layout.width * layout.height * 4;
 }
-const INK = '#273b35', GLASS = '#557b81', GLASS_DARK = '#334f55', FRAME = '#d3c8aa';
+const INK = '#273b35', GLASS = '#557b81', GLASS_DARK = '#334f55';
 
 /** Raster sprites keep the published footprint and doorway cells. Detail is
  * generated lazily at the visible pixel level; retained canvases use at most 32MiB. */
@@ -168,38 +170,111 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
     if (high <= low || width <= 0) return;
     r.polygon([facePoint(side, u, low), facePoint(side, u + width, low), facePoint(side, u + width, high), facePoint(side, u, high)], color);
   };
-  const doorPositions = (side: FacadeSide): number[] => (side === 'y' ? activeFacade.plane === h : activeFacade.plane === w) ? building.entrances.filter(door => side === 'y' ? door.y === building.y + h - 1 : door.x === building.x + w - 1)
-    .map(door => (side === 'y' ? door.x - building.x : door.y - building.y) + 1 - activeFacade.u).filter(u => u > 0 && u < activeFacade.length) : [];
+  const window = (side: FacadeSide, item: FacadeWindow): void => {
+    const { u: center, width, low, high, variation, style } = item;
+    const warm = variation % 11 === 0, changedFrame = variation % 9 === 3;
+    const frame = changedFrame ? '#77968e' : material === 'brick' && variation % 3 === 0 ? '#b4aa8b' : '#a9b7a9';
+    const opening = (left: number, span: number, paired: boolean): void => {
+      const right = left + span, height = high - low;
+      // Masonry shadow surrounds a dark reveal. Thin frame strips leave the
+      // glass as the subject; a heavy pale cross never fills the whole opening.
+      faceRect(side, left - .065, span + .13, low - 3, high + 3, palette.joint);
+      faceRect(side, left - .035, span + .07, low - 1, high + 1, INK);
+      faceRect(side, left, span, low, high, warm ? '#8a7957' : side === 'x' ? GLASS : GLASS_DARK);
+      faceRect(side, left, .025, low, high, frame);
+      faceRect(side, right - .025, .025, low, high, frame);
+      line(facePoint(side, left, high), facePoint(side, right, high), frame);
+      line(facePoint(side, left, low), facePoint(side, right, low), frame);
+      if (style === 'ribbon') {
+        const panes = Math.max(2, Math.min(4, Math.round(span / .48)));
+        for (let pane = 1; pane < panes; pane++) faceRect(side, left + span * pane / panes - .012, .024, low, high, '#8b9e94');
+      } else if (!paired && (span > .62 || style === 'tall')) {
+        faceRect(side, left + span * .53, .023, low, high, frame);
+      }
+      if (style === 'tall' || variation % 4 === 0) {
+        const transom = low + height * (style === 'tall' ? .76 : .66);
+        faceRect(side, left, span, transom, transom + .9, frame);
+      }
+      if (fine) {
+        // Small reflections remain close in value to the glass, with a quiet
+        // inner curtain or occasional replaced sash instead of white X marks.
+        faceRect(side, left + span * .1, span * .31, high - height * .28, high - height * .16, warm ? '#b4a279' : '#728e8c');
+        if (variation % 6 === 1) {
+          faceRect(side, left + .035, span * .21, low + 2, high - 2, '#b8b7a0');
+          faceRect(side, right - span * .17 - .025, span * .17, low + 3, high - 3, '#9caa9b');
+        } else if (variation % 8 === 2) {
+          faceRect(side, left + .03, span - .06, low + height * .71, high - 1, '#b7b19b');
+          line(facePoint(side, left + .04, low + height * .7), facePoint(side, right - .04, low + height * .7), '#71877d');
+        }
+        if (close && variation % 13 === 4) {
+          line(facePoint(side, left + span * .38, low + 3), facePoint(side, left + span * .49, low + height * .37), '#314742');
+          line(facePoint(side, left + span * .49, low + height * .37), facePoint(side, left + span * .42, low + height * .55), '#314742');
+        }
+        if (close) faceRect(side,left+.035,.025,high-3,high-1,P.glassLight);
+      }
+      faceRect(side, left - .075, span + .15, low - 5, low - 2, palette.dark);
+      faceRect(side, left - .075, span + .15, low - 3, low - 1.5, '#bdc1a8');
+    };
+    const left = center - width / 2;
+    if (style === 'paired') {
+      const gap = .11, pane = (width - gap) / 2;
+      opening(left, pane, true); opening(left + pane + gap, pane, true);
+    } else opening(left, width, false);
+    if (fine && building.kind === 'apartment' && material !== 'panel' && style !== 'ribbon' && variation % 12 === 5) {
+      for (const edge of [left - .23, left + width + .07]) {
+        faceRect(side, edge, .16, low, high, palette.accentShade);
+        line(facePoint(side, edge, high), facePoint(side, edge + .16, high), palette.accent);
+        if (close) for (let z = low + 4; z < high - 2; z += 6) line(facePoint(side, edge + .02, z), facePoint(side, edge + .14, z), palette.accent);
+      }
+    }
+  };
 
-  const window = (side: FacadeSide, center: number, width: number, low: number, high: number, variation: number): void => {
-    const left = center - width / 2, right = center + width / 2, warm = variation % 7 === 0;
-    // Dark opening, lit outer lintel and a projecting sill make the glass sit in the wall.
-    faceRect(side, left - .08, width + .16, low - 3, high + 3, INK);
-    faceRect(side, left - .065, width + .13, low - 2, high + 3, FRAME);
-    faceRect(side, left, width, low, high, warm ? P.wood : side === 'x' ? GLASS : GLASS_DARK);
-    faceRect(side, left, .055, low, high, P.steelShade);
-    faceRect(side, right - .035, .035, low, high, P.cream);
-    line(facePoint(side, left, high), facePoint(side, right, high), INK, 2);
-    if (fine) {
-      r.polygon([facePoint(side, left + .07, high - 3), facePoint(side, center - .02, high - 3), facePoint(side, right - .09, low + 5), facePoint(side, center - .12, low + 5)], warm ? P.sand : P.glassLight);
-      if (variation % 5 === 1) faceRect(side, left + .05, width * .22, low + 2, high - 3, P.panelShade);
-      if (variation % 9 === 2) {
-        line(facePoint(side, center + .08, low + 4), facePoint(side, center + .16, low + 11), P.ink);
-        line(facePoint(side, center + .16, low + 11), facePoint(side, center + .07, low + 16), P.ink);
+  const balcony = (facade: BuildingFacade, item: FacadeWindow): void => {
+    if (item.balcony === 'none' || item.floor < 1) return;
+    const { side, length } = facade, width = Math.min(Math.max(1.08, item.width + .3), item.u * 2 - .25, (length - item.u) * 2 - .25);
+    const low = item.low - 9, top = Math.min(item.high + 6, facade.top * PIXEL_TILE - 8);
+    if (width < .8 || low - 4 < facade.bottom * PIXEL_TILE + 1) return;
+    const depth = item.balcony === 'glazed' ? .42 : .34, left = item.u - width / 2;
+    const at = (t: number, d: number, z: number): LivePoint => side === 'y' ? p(facade.u + left + width * t, facade.plane + d, z) : p(facade.plane + d, facade.u + left + width * t, z);
+    const pane = (a: number, b: number, d: number, bottom: number, high: number, color: string): void => r.polygon([at(a,d,bottom),at(b,d,bottom),at(b,d,high),at(a,d,high)],color);
+    const x = side === 'y' ? facade.u + left : facade.plane, y = side === 'y' ? facade.plane : facade.u + left;
+    const bw = side === 'y' ? width : depth, bh = side === 'y' ? depth : width;
+    box(x,y,bw,bh,low-4,low,['#89978a','#5f7268','#bbc1aa']);
+    line(at(0,depth,low+1),at(1,depth,low+1),INK);
+    if (item.balcony === 'glazed') {
+      pane(0,1,depth,low+1,low+15,item.variation % 2 ? palette.accentShade : '#82978b');
+      pane(0,1,depth,low+15,top,'#476b70');
+      r.polygon([at(1,0,low+15),at(1,depth,low+15),at(1,depth,top),at(1,0,top)],'#648184');
+      if (fine) {
+        pane(.06,.27,depth+.002,low+18,top-3,item.variation % 5 === 0 ? '#b4b59c' : '#77918b');
+        pane(.62,.91,depth+.002,top-11,top-5,'#81978e');
+      }
+      for (const t of [0,.33,.66,1]) line(at(t,depth+.005,low+13),at(t,depth+.005,top),'#a4b2a3');
+      line(at(0,depth,low+15),at(1,depth,low+15),'#9aaa9e');
+      line(at(0,depth,top),at(1,depth,top),'#c0c5ae',2);
+      quad(x,y,bw,bh,top+2,'#889b8f');
+    } else {
+      if (item.balcony === 'solid') {
+        pane(0,1,depth,low+1,low+19,item.variation % 3 === 0 ? palette.accentShade : '#8c9b88');
+        pane(.06,.94,depth+.002,low+3,low+16,item.variation % 3 === 0 ? palette.accent : '#a0ab96');
+        r.polygon([at(1,0,low+1),at(1,depth,low+1),at(1,depth,low+19),at(1,0,low+19)],'#667d6d');
+      } else {
+        for (let bar = 0; bar <= 5; bar++) line(at(bar/5,depth,low+1),at(bar/5,depth,low+20),'#40574b');
+        line(at(0,depth,low+7),at(1,depth,low+7),'#536b58');
+      }
+      line(at(0,depth,low+21),at(1,depth,low+21),'#b6bda5',2);
+      line(at(1,0,low+21),at(1,depth,low+21),'#738879');
+      if (fine && item.balcony === 'open' && item.variation % 4 === 1) {
+        line(at(.08,depth,low+24),at(.92,depth,low+24),'#c5bea0');
+        for (const [a,b,color] of [[.16,.41,'#c8bea2'],[.55,.77,'#718d87']] as const) r.polygon([at(a,depth+.005,low+24),at(b,depth+.005,low+24),at(b,depth+.005,low+8),at(a,depth+.005,low+10)],color);
+      } else if (fine && item.variation % 4 === 2) {
+        const px = side === 'y' ? x + width * .2 : x + depth, py = side === 'y' ? y + depth : y + width * .2;
+        const pw = side === 'y' ? width * .5 : .09, ph = side === 'y' ? .09 : width * .5;
+        box(px,py,pw,ph,low+16,low+21,[P.terra,P.terraShade,P.soil]);
+        quad(px,py,pw,ph,low+24,'#667e58');
+        if (close) for (const t of [.2,.6]) { const flower=p(px+pw*t,py+ph*t,low+26);r.rect(flower.x,flower.y,2,2,'#c8af8b'); }
       }
     }
-    line(facePoint(side, center, low), facePoint(side, center, high), FRAME, 2);
-    line(facePoint(side, left, low + (high - low) * .45), facePoint(side, right, low + (high - low) * .45), FRAME, 2);
-    if (building.kind === 'apartment' && (material === 'plaster' || material === 'brick') && variation % 3 === 1) {
-      for (const u of [left - .28, right + .08]) {
-        faceRect(side, u, .2, low - 1, high + 2, palette.accentShade);
-        line(facePoint(side, u + .02, high + 1), facePoint(side, u + .18, high + 1), palette.accent, 2);
-        if (fine) for (let z = low + 3; z < high; z += 6) line(facePoint(side, u + .025, z), facePoint(side, u + .17, z), palette.accent);
-      }
-    }
-    faceRect(side, left - .1, width + .2, low - 6, low - 3, palette.dark);
-    faceRect(side, left - .1, width + .2, low - 4, low - 2, P.cream);
-    line(facePoint(side, left - .06, low - 7), facePoint(side, left - .04, low - 12), palette.joint);
   };
 
   for (const facade of plan.facades) {
@@ -242,79 +317,41 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
     line(facePoint(side, 0, 12), facePoint(side, length, 12), palette.trim, 3);
     faceRect(side, 0, length, wallHeight - 12, wallHeight - 6, palette.joint);
     faceRect(side, 0, length, wallHeight - 6, wallHeight, palette.trim);
-    // Broad architectural bands stay readable when mortar and wear disappear.
-    // These are painted on the real wall, never new cover along an alley.
-    for (const u of [0, length - .15]) faceRect(side, u, .15, 12, wallHeight - 6, palette.trim);
-    for (let floor = 1; floor < floors; floor++) {
-      faceRect(side, .15, length - .3, floor * 73 - 4, floor * 73 + 1, palette.dark);
-      line(facePoint(side, .15, floor * 73 + 2), facePoint(side, length - .15, floor * 73 + 2), palette.trim, 2);
-    }
-    if (building.kind === 'shop') faceRect(side, .15, length - .3, 68, Math.min(83, wallHeight - 8), palette.accentShade);
-    else if (building.kind === 'workshop' || building.kind === 'garage') {
-      faceRect(side, .15, length - .3, 15, 23, palette.accentShade);
-      line(facePoint(side, .15, 24), facePoint(side, length - .15, 24), P.sand, 2);
-    }
-    const cadence = buildingFacadeCadence(building, length), doors = doorPositions(side);
-    const columns = Math.max(cadence.columns, Math.floor((length - .7) / (cadence.industrial ? 3.9 : building.kind === 'shop' ? 2.6 : 2.3)));
-    for (let floor = 0; floor < floors; floor++) for (let column = 0; column < columns; column++) {
-      const u = length * (column + 1) / (columns + 1), industrial = cadence.industrial;
-      if (!floor && doors.some(door => Math.abs(door - u) < (industrial ? 1.65 : 1.05))) continue;
-      const width = industrial ? 1.1 : building.kind === 'shop' && !floor ? 1.25 : .72;
-      const low = industrial ? wallHeight - 30 : 18 + floor * 73, high = Math.min(wallHeight - 12, low + (industrial ? 15 : building.kind === 'shop' && !floor ? 32 : 25));
-      if (low < facade.bottom * PIXEL_TILE + 2 || high <= low) continue;
-      window(side, u, width, low, high, column + floor + seed);
-      if (building.kind === 'apartment' && floor > 0 && (material === 'panel' || (column + seed) % 3 === 0)) {
-        const balconyWidth = material === 'panel' ? 1.16 : 1.35;
-        const z = low - 7, a = side === 'y' ? { x: facade.u + u - balconyWidth / 2, y: facade.plane } : { x: facade.plane, y: facade.u + u - balconyWidth / 2 };
-        const bw = side === 'y' ? balconyWidth : .34, bh = side === 'y' ? .34 : balconyWidth;
-        box(a.x, a.y, bw, bh, z - 4, z, ['#8c9887', '#647363', '#bbc0a6']);
-        line(p(a.x, a.y + bh, z + 16), p(a.x + bw, a.y + bh, z + 16), INK, 2);
-        line(p(a.x + bw, a.y, z + 16), p(a.x + bw, a.y + bh, z + 16), INK, 2);
-        for (let bar = 0; bar <= 4; bar++) {
-          const x = a.x + bw * bar / 4, y = a.y + bh;
-          line(p(x, y, z), p(x, y, z + 16), INK);
-        }
-        if (fine && (column + floor + seed) % 3 === 1) {
-          // Laundry is attached to an existing balcony; it introduces no actor.
-          const at = (t: number, zz: number) => side === 'y' ? p(a.x + bw * t, a.y + bh, zz) : p(a.x + bw, a.y + bh * t, zz);
-          line(at(.08, z + 17), at(.92, z + 17), P.cream);
-          for (const [start, end, color] of [[.16, .43, P.cream], [.53, .8, palette.accent]] as const) {
-            r.polygon([at(start, z + 17), at(end, z + 17), at(end, z + 4), at(start, z + 6)], color);
-          }
-        } else if (fine && (column + floor + seed) % 4 === 0) {
-          // One planted balcony is a quiet sign of occupation, attached to
-          // the existing railing rather than a new navigable object.
-          const bx = side === 'y' ? a.x + .12 : a.x + bw, by = side === 'y' ? a.y + bh : a.y + .12;
-          const pw = side === 'y' ? .62 : .1, ph = side === 'y' ? .1 : .62;
-          box(bx, by, pw, ph, z + 6, z + 11, [P.terra, P.terraShade, P.terra]);
-          quad(bx, by, pw, ph, z + 13, '#6f8358');
-          if (close) for (const t of [.15, .6]) {
-            const at = p(bx + pw * t, by + ph * t, z + 15);
-            r.rect(at.x, at.y, Math.max(1, 3 * scale), Math.max(1, 2 * scale), '#c7ae83');
-          }
-        }
-      } else if (fine && floor > 0 && (column + floor + seed) % 3 === 0) {
-        const x = side === 'y' ? facade.u + u - .25 : facade.plane, y = side === 'y' ? facade.plane : facade.u + u - .25;
-        const acWidth = side === 'y' ? .5 : .16, acHeight = side === 'y' ? .16 : .5;
-        box(x, y, acWidth, acHeight, low - 18, low - 5, [P.steel, P.steelShade, P.steelLight]);
-        const vent = p(x + acWidth, y + acHeight / 2, low - 11);
-        r.ellipse(vent.x, vent.y, Math.max(2, Math.round(4 * scale)), Math.max(2, Math.round(5 * scale)), P.ink);
-        line({ x: vent.x - 1, y: vent.y - 3 * scale }, { x: vent.x + 1, y: vent.y + 3 * scale }, P.steelLight);
-        line(facePoint(side, u + .27, low - 16), facePoint(side, u + .27, low + 1), P.cream);
+    // Large bays, stairwell strips and material bands come from the same
+    // public blueprint in the native and distant renderers.
+    const layout = buildingFacadeLayout(building, facade), doors = layout.doors;
+    for (const band of layout.bands) faceRect(side,band.u,band.width,band.low,band.high,palette[band.role]);
+    for (const item of layout.windows) {
+      const { u, low, high, variation, floor } = item;
+      if (low < facade.bottom * PIXEL_TILE + 2 || high > wallHeight - 2 || high <= low) continue;
+      window(side,item); balcony(facade,item);
+      if (fine && item.balcony === 'none' && floor > 0 && variation % 7 === 0 && low - 18 > facade.bottom * PIXEL_TILE + 2) {
+        const x = side === 'y' ? facade.u + u - .22 : facade.plane, y = side === 'y' ? facade.plane : facade.u + u - .22;
+        const acWidth = side === 'y' ? .44 : .14, acHeight = side === 'y' ? .14 : .44;
+        box(x,y,acWidth,acHeight,low-17,low-6,[P.steel,P.steelShade,P.steelLight]);
+        const vent = p(x+acWidth,y+acHeight/2,low-11);
+        r.ellipse(vent.x,vent.y,Math.max(1,Math.round(3*scale)),Math.max(1,Math.round(4*scale)),P.ink);
+        line({x:vent.x-1,y:vent.y-2*scale},{x:vent.x+1,y:vent.y+2*scale},P.steelLight);
       }
-      if (fine && building.kind === 'apartment' && floor === 0 && (column + seed) % 4 === 1) {
-        const x = side === 'y' ? facade.u + u - .3 : facade.plane, y = side === 'y' ? facade.plane : facade.u + u - .3;
-        const ww = side === 'y' ? .6 : .13, hh = side === 'y' ? .13 : .6;
-        box(x, y, ww, hh, low - 12, low - 5, [P.terra, P.terraShade, P.soil]);
-        for (let flower = 0; flower < 3; flower++) {
-          const at = side === 'y' ? p(x + .1 + flower * .19, y + hh, low - 3) : p(x + ww, y + .1 + flower * .19, low - 3);
-          r.rect(at.x - 2 * scale, at.y - 3 * scale, 5 * scale, 5 * scale, P.leafShade);
-          r.rect(at.x, at.y - 4 * scale, 2 * scale, 2 * scale, flower % 2 ? P.cream : P.red);
-        }
+      if (fine && building.kind === 'apartment' && floor === 0 && variation % 9 === 1) {
+        const x = side === 'y' ? facade.u+u-.27 : facade.plane, y = side === 'y' ? facade.plane : facade.u+u-.27;
+        const ww = side === 'y' ? .54 : .12, hh = side === 'y' ? .12 : .54;
+        box(x,y,ww,hh,low-10,low-5,[P.terra,P.terraShade,P.soil]);
+        quad(x,y,ww,hh,low-2,'#6d825a');
       }
     }
     for (const u of doors) {
       const loading = building.kind === 'workshop' || building.kind === 'garage', width = loading ? 1.8 : .76, high = loading ? 76 : 61;
+      const portal = (seed + Math.round(u * 17)) % 3;
+      if (!loading) {
+        faceRect(side,u-width/2-.22,width+.44,0,high+11,palette.accentShade);
+        faceRect(side,u-width/2-.14,width+.28,0,high+7,portal===1?palette.trim:palette.accent);
+        faceRect(side,u-width/2-.085,width+.17,0,high+4,palette.dark);
+        if (portal===2) {
+          faceRect(side,u-width/2-.2,.055,4,high+8,palette.trim);
+          faceRect(side,u+width/2+.145,.055,4,high+8,palette.trim);
+        }
+      }
       faceRect(side, u - width / 2 - .07, width + .14, 1, high + 5, palette.trim);
       faceRect(side, u - width / 2, width, 0, high, loading ? '#506965' : '#485a48');
       if (loading) {
@@ -355,8 +392,20 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
         const canopyWidth = Math.min(1.65, length - .4, u * 2 - .3, (length - u) * 2 - .3);
         const x = side === 'y' ? facade.u + u - canopyWidth / 2 : facade.plane, y = side === 'y' ? facade.plane : facade.u + u - canopyWidth / 2;
         const cw = side === 'y' ? canopyWidth : .46, ch = side === 'y' ? .46 : canopyWidth;
-        box(x, y, cw, ch, high + 4, high + 9, [palette.accent, palette.accentShade, palette.accent]);
-        line(p(x, y + ch, high + 9), p(x + cw, y + ch, high + 9), palette.trim, 2);
+        const at = (t: number,d: number,z: number) => side==='y'?p(x+cw*t,facade.plane+d,z):p(facade.plane+d,y+ch*t,z);
+        if (portal===0) {
+          box(x,y,cw,ch,high+4,high+9,[palette.accent,palette.accentShade,palette.accent]);
+          line(at(0,.46,high+9),at(1,.46,high+9),palette.trim,2);
+        } else if (portal===1) {
+          r.polygon([at(0,0,high+14),at(1,0,high+14),at(1,.46,high+5),at(0,.46,high+5)],palette.accent);
+          r.polygon([at(0,.46,high+2),at(1,.46,high+2),at(1,.46,high+5),at(0,.46,high+5)],palette.accentShade);
+          line(at(0,.46,high+5),at(1,.46,high+5),palette.trim,2);
+        } else {
+          r.polygon([at(0,0,high+7),at(.5,0,high+20),at(.5,.46,high+20),at(0,.46,high+7)],palette.accentShade);
+          r.polygon([at(.5,0,high+20),at(1,0,high+7),at(1,.46,high+7),at(.5,.46,high+20)],palette.accent);
+          line(at(0,.46,high+7),at(.5,.46,high+20),palette.trim);
+          line(at(.5,.46,high+20),at(1,.46,high+7),palette.trim);
+        }
         for (const t of [.12, .88]) {
           const ax = side === 'y' ? x + cw * t : x + cw, ay = side === 'x' ? y + ch * t : y + ch;
           line(p(ax, ay, high + 3), side === 'y' ? p(ax, facade.plane, high - 9) : p(facade.plane, ay, high - 9), INK, 2);
@@ -409,6 +458,12 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
               faceRect(side, boxes + .08 + column * .18, .05, 31, 34, P.cream);
             }
           }
+        }
+        if (!loading && (seed+Math.floor(u))%2===0) {
+          const lamp = Math.max(.2,u-width/2-.32);
+          faceRect(side,lamp,.13,high-3,high+9,'#425a50');
+          faceRect(side,lamp+.025,.08,high,high+6,'#c1b994');
+          line(facePoint(side,lamp-.025,high+10),facePoint(side,lamp+.155,high+10),P.steelShade,2);
         }
       }
     }
