@@ -149,7 +149,9 @@ describe('authoritative automatic sorties', () => {
     expect(later.entities.find(entity => entity.id === fighter.session.id)).toMatchObject(exit);
     service.close(); service = createLiveService(options());
     expect((await enter(fighter.session, { intent: 'continue' })).state.self.automation?.stage).toBe('complete');
-  });
+  // Replays 35 seconds of the full shared world for two players, including restart.
+  // Keep its assertions while allowing for slower runs of the complete suite.
+  }, 15_000);
 
   test('recall waits for the authoritative combat lock; route completion automatically makes the same finite return', async () => {
     const fighter = await enter(), exit = world.extracts[0]!;
