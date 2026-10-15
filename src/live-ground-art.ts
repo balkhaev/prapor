@@ -204,15 +204,16 @@ type RoadSegment = { path: LiveLandscapePath; a: LivePoint; b: LivePoint; dx: nu
 export type RoadIntersection = LivePoint & { a: RoadSegment; b: RoadSegment };
 export type RoadSurfacePlan = { segments: RoadSegment[]; intersections: RoadIntersection[] };
 
+const isUrbanStreet = (path: LiveLandscapePath): boolean => path.id.startsWith('city-street-') || path.id.startsWith('metro-');
 export function roadHasMarkings(path: LiveLandscapePath): boolean {
-  return path.width >= 5 && (path.id.startsWith('city-street-') || path.id === 'city-ring' || path.id.startsWith('highway-') || path.id.startsWith('arterial-'));
+  return path.width >= 5 && (isUrbanStreet(path) || path.id === 'city-ring' || path.id.startsWith('highway-') || path.id.startsWith('arterial-'));
 }
 export function cityPedestrianCrossings(plan: RoadSurfacePlan): RoadIntersection[] {
-  return plan.intersections.filter(crossing => crossing.a.path.id.startsWith('city-street-') && crossing.b.path.id.startsWith('city-street-')
+  return plan.intersections.filter(crossing => isUrbanStreet(crossing.a.path) && isUrbanStreet(crossing.b.path) && crossing.a.path.width >= 4 && crossing.b.path.width >= 4
     && Math.abs(crossing.a.dx * crossing.b.dy - crossing.a.dy * crossing.b.dx) / (crossing.a.length * crossing.b.length) > .95);
 }
 
-export const PIXEL_ASPHALT_PALETTE: readonly RGB[] = [[47, 58, 66], [55, 66, 73], [62, 74, 81], [71, 82, 87], [84, 94, 96]];
+export const PIXEL_ASPHALT_PALETTE: readonly RGB[] = [[48, 59, 66], [55, 66, 72], [62, 73, 78], [67, 78, 82], [76, 85, 85]];
 function asphaltPattern(c: CanvasRenderingContext2D, resolution: number): CanvasPattern | null {
   if (typeof document === 'undefined') return null;
   const image = document.createElement('canvas'); image.width = 128; image.height = 128;
@@ -266,8 +267,8 @@ export function paintRoadSurface(c: CanvasRenderingContext2D, world: GroundWorld
   const pathStroke = (path: LiveLandscapePath, color: string | CanvasPattern, width: number) => { c.beginPath(); path.points.forEach((point, index) => index ? c.lineTo(point.x + .5, point.y + .5) : c.moveTo(point.x + .5, point.y + .5)); c.strokeStyle = color; c.lineWidth = width; c.stroke(); };
   // Join all shoulders before asphalt. The smooth centerline, rather than raster squares,
   // determines the visible road edge; the physical mask remains an absolute safety clip.
-  for (const path of paths) pathStroke(path, path.id.startsWith('city-') ? '#a4ad98' : '#a99c7f', path.width + .35);
-  for (const path of paths) if (path.id.startsWith('city-')) pathStroke(path, '#bdc3aa', path.width + .07);
+  for (const path of paths) pathStroke(path, path.id.startsWith('city-') || isUrbanStreet(path) ? '#a4ad98' : '#a99c7f', path.width + .35);
+  for (const path of paths) if (path.id.startsWith('city-') || isUrbanStreet(path)) pathStroke(path, '#bdc3aa', path.width + .07);
   for (const path of paths) pathStroke(path, grain ?? '#3e4a51', Math.max(1, path.width - .28));
   c.lineCap = 'butt';
   // Flush maintenance details add history without suggesting loot or cover.

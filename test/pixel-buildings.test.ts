@@ -3,7 +3,7 @@ import type { LiveCityBuilding, LiveObstacle } from '../src/game/live';
 import { PIXEL_BUILDING_CACHE_BYTES, PixelBuildingArt, pixelBuildingSpriteBytes, pixelBuildingVentAnchor } from '../src/pixel-buildings';
 import { pixelIso, PIXEL_PALETTE as P } from '../src/pixel-art';
 import { generatePerimeterCore } from '../src/game/world-generation';
-import { buildingExteriorStyle, sceneBuildings } from '../src/live-map-art';
+import { buildingExteriorStyle, buildingRoofDormer, buildingWallHeight, sceneBuildings } from '../src/live-map-art';
 
 type CanvasRecord = HTMLCanvasElement & { paints: number; integerBounds: boolean; colors: Set<string>; spans: Array<[number, number, number, number, string]> };
 let restoreDocument: (() => void) | undefined;
@@ -168,5 +168,26 @@ test('distant houses preserve their large roof, masonry, corner and glass shapes
     // A distant sprite paints fewer strokes per native square cell as well as
     // fewer pixels; dense mortar grids cannot compete with an actor silhouette.
     expect(distant.paints).toBeLessThan(close.paints / 3);
+  }
+});
+
+test('old roof windows sit on the same fitted dormer at every sprite level and roof direction', () => {
+  const images = canvases(true), art = new PixelBuildingArt();
+  const id = Array.from({ length: 12 }, (_, index) => `old-house-${index}`).find(id => buildingRoofDormer({ ...building, id }))!;
+  expect(id).toBeDefined();
+  for (const roofAxis of ['x', 'y'] as const) for (const native of [32, 64, 128] as const) {
+    const house = { ...building, id, roofAxis }, dormer = buildingRoofDormer(house)!;
+    const original = structuredClone(house), sprite = art.get(house, false, native), image = images.at(-1)!;
+    const frontX = dormer.x + dormer.width, frontY = dormer.y + dormer.height;
+    const cross = roofAxis === 'x' ? frontY : frontX, span = roofAxis === 'x' ? house.height : house.width;
+    const base = Math.round(buildingWallHeight(house) * 128) + 40 * (1 - Math.abs(cross / span - .5) * 2);
+    const scale = native / 128;
+    const glass = [.28, .72].map(u => {
+      const x = dormer.side === 'y' ? dormer.x + dormer.width * u : frontX, y = dormer.side === 'x' ? dormer.y + dormer.height * u : frontY;
+      const at = pixelIso(x * scale, y * scale, (base + 9) * scale * 1.7, sprite.anchor);
+      return [...image.spans].reverse().find(span => at.x >= span[0] && at.y >= span[1] && at.x < span[0] + span[2] && at.y < span[1] + span[3])?.[4];
+    });
+    expect(glass.some(color => color === '#334f55')).toBe(true);
+    expect(image.integerBounds).toBe(true); expect(house).toEqual(original);
   }
 });

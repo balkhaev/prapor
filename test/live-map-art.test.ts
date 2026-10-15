@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { BUILDING_EXTERIOR_HEIGHT_SCALE, buildingExteriorStyle, buildingFacadeCadence, buildingNeedsCutaway, buildingPalette, buildingWallHeight, distantBuildingSurfaces, liveMapRasterPlan, mapVegetationBands, paintMapFootprints, paintPropModel, PropArtCache, sceneBuildings, SceneryIndex } from '../src/live-map-art';
+import { BUILDING_EXTERIOR_HEIGHT_SCALE, buildingExteriorStyle, buildingFacadeCadence, buildingNeedsCutaway, buildingPalette, buildingRoofDormer, buildingWallHeight, distantBuildingSurfaces, liveMapRasterPlan, mapVegetationBands, paintMapFootprints, paintPropModel, PropArtCache, sceneBuildings, SceneryIndex } from '../src/live-map-art';
 import type { LiveCityBuilding, LiveObstacle, LiveWorld, LiveWorldProp } from '../src/game/live';
 import { prefabObstacles } from '../src/game/world-prefabs';
 
@@ -45,16 +45,49 @@ describe('raid architecture visibility', () => {
       const house = { ...building, roof, roofAxis, floors: 4 as const, width: 40, height: 32, entrances: [{ x: 13, y: 12 }, { x: 13, y: 43 }] }, before = structuredClone(house);
       const surfaces = distantBuildingSurfaces(house), wall = buildingWallHeight(house) * BUILDING_EXTERIOR_HEIGHT_SCALE;
       const points = surfaces.flatMap(surface => surface.points), peak = Math.max(...points.map(point => point.z));
-      expect(surfaces.length).toBeLessThanOrEqual(44);
+      expect(surfaces.length).toBeLessThanOrEqual(72);
       expect(points.every(point => Number.isFinite(point.x + point.y + point.z))).toBe(true);
       expect(points.every(point => point.x >= house.x - .5 && point.x <= house.x + house.width - .5 && point.y >= house.y - .5 && point.y <= house.y + house.height - .5)).toBe(true);
-      if (roof === 'flat') expect(peak).toBe(wall);
+      if (roof === 'flat') expect(peak).toBeCloseTo(wall + .12);
       else { expect(peak).toBeGreaterThan(wall); expect(peak).toBeLessThan(wall + .6); }
       if (roof === 'gable') expect(surfaces.some(surface => surface.points.length === 3)).toBe(true);
       if (roof === 'sawtooth') expect(surfaces.filter(surface => surface.points.every(point => point.z >= wall)).length).toBe(12);
       expect(surfaces.some(surface => surface.color === '#334f55')).toBe(true);
       expect(house).toEqual(before);
     }
+  });
+  test('distant frontages retain framed glass, cornice shadows and shop colour rather than one flat roof', () => {
+    for (const kind of ['apartment', 'shop', 'workshop', 'garage', 'service'] as const) {
+      const house = { ...building, kind, floors: 3 as const, width: 16, height: 11 }, before = structuredClone(house);
+      const surfaces = distantBuildingSurfaces(house), style = buildingExteriorStyle(house), wall = buildingWallHeight(house) * BUILDING_EXTERIOR_HEIGHT_SCALE;
+      expect(surfaces.length).toBeLessThanOrEqual(72);
+      expect(surfaces.some(surface => surface.color === style.joint && surface.points.every(point => point.z >= wall - .15 && point.z < wall))).toBe(true);
+      const glass = surfaces.filter(surface => surface.color === '#557b81' || surface.color === '#334f55');
+      expect(glass.length).toBeGreaterThanOrEqual(4);
+      for (const pane of glass) {
+        const low = Math.min(...pane.points.map(point => point.z)), high = Math.max(...pane.points.map(point => point.z));
+        expect(surfaces.some(frame => frame.color === style.trim && Math.min(...frame.points.map(point => point.z)) < low && Math.max(...frame.points.map(point => point.z)) > high)).toBe(true);
+      }
+      if (kind === 'shop') expect(surfaces.some(surface => surface.color === style.accent)).toBe(true);
+      expect(house).toEqual(before);
+    }
+  });
+  test('fitted dormers are sparse, address-stable and remain inside real old-house roofs', () => {
+    const houses = Array.from({ length: 48 }, (_, id) => ({ ...building, id: `old-house-${id}` }));
+    const dormers = houses.map(house => buildingRoofDormer(house));
+    expect(dormers.filter(Boolean).length).toBeGreaterThan(8); expect(dormers.filter(Boolean).length).toBeLessThan(24);
+    for (const house of houses) for (const roofAxis of ['x', 'y'] as const) {
+      const placed = { ...house, roofAxis }, dormer = buildingRoofDormer(placed);
+      expect(buildingRoofDormer({ ...placed, x: 780, y: 540 })).toEqual(dormer);
+      if (dormer) {
+        expect(dormer.x).toBeGreaterThan(0); expect(dormer.y).toBeGreaterThan(0);
+        expect(dormer.x + dormer.width).toBeLessThan(house.width); expect(dormer.y + dormer.height).toBeLessThan(house.height);
+        expect(dormer.side).toBe(roofAxis === 'x' ? 'y' : 'x');
+      }
+    }
+    expect(buildingRoofDormer({ ...building, facade: 'panel' })).toBeNull();
+    expect(buildingRoofDormer({ ...building, kind: 'workshop' })).toBeNull();
+    expect(buildingRoofDormer({ ...building, roof: 'flat' })).toBeNull();
   });
   test('authored open houses own their collider segments without acquiring duplicate solid roofs', () => {
     const map = { chunkSize: 32, pois: [], citySites: [{ buildings: [building] }], obstacles: [
