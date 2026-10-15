@@ -32,7 +32,7 @@ import { paintStreetGroundDetail, streetGroundDetails, type StreetGroundDetail }
 import { paintCityRelief } from './live-city-relief';
 import { buildCityStreetGround, paintCityStreetGroundDetail, type CityStreetGroundDetail } from './live-city-streets';
 import { buildCityBuildingGroundShadows, paintCityBuildingGroundShadows, type CityBuildingGroundShadow } from './live-city-shadows';
-import { buildCityGardenGround, paintCityGardenGroundDetail, type CityGardenGroundDetail } from './live-city-gardens';
+import { buildCityGardenGround, cityGardenTrees, paintCityGardenGroundDetail, type CityGardenGroundDetail } from './live-city-gardens';
 
 type Motion = PixelMotion;
 type LabelBox = { x: number; y: number; width: number; height: number };
@@ -355,7 +355,7 @@ export class LiveScene {
     }
     for (const prop of world.props ?? []) scenery.push({ ...prop, type: 'prop', prop, depth: prop.x + prop.y + (prop.width + prop.height) / 2 });
     for (const building of buildings) scenery.push({ ...building, type: 'architecture', building, depth: building.x + building.y + building.width + building.height - 1.1 });
-    this.scenery = new SceneryIndex(scenery, world.chunkSize); this.propArt.clear(); this.buildingArt.clear(); this.obstacleArt.clear(); this.actorArt.clear(); this.containerArt.clear(); this.cutawayBuildings.clear();
+    this.propArt.clear(); this.buildingArt.clear(); this.obstacleArt.clear(); this.actorArt.clear(); this.containerArt.clear(); this.cutawayBuildings.clear();
     this.siteScenery = new SceneryIndex(world.citySites ?? [], world.chunkSize);
     this.surfaceMasks = buildSurfaceMasks(world, this.terrain, this.walkableGround, buildings);
     this.groundAmbience = new SceneryIndex(liveAmbientGround(world, this.terrain, this.walkableGround, this.surfaceMasks.indoor), world.chunkSize);
@@ -364,6 +364,9 @@ export class LiveScene {
     this.cityStreetGround = new SceneryIndex(cityStreets, world.chunkSize);
     const cityGardens = buildCityGardenGround(world, this.terrain, this.walkableGround, this.surfaceMasks.indoor);
     this.cityGardenGround = new SceneryIndex(cityGardens, world.chunkSize);
+    for (const prop of cityGardenTrees(world, cityGardens)) scenery.push({ ...prop, type: 'prop', prop,
+      depth: prop.x + prop.y + (prop.width + prop.height) / 2 });
+    this.scenery = new SceneryIndex(scenery, world.chunkSize);
     this.cityGroundShadows = new SceneryIndex(buildCityBuildingGroundShadows(world, buildings, this.terrain, this.surfaceMasks.indoor), world.chunkSize);
     this.lampProps = (world.props ?? []).filter(prop => prop.kind === 'lamp');
     this.lampScenery = new SceneryIndex(this.lampProps, world.chunkSize);

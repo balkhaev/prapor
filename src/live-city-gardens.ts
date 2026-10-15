@@ -1,4 +1,4 @@
-import type { LivePoint, LiveTerrain, LiveWorld } from './game/live';
+import type { LivePoint, LiveTerrain, LiveWorld, LiveWorldProp } from './game/live';
 import { pixelRandom, pixelSeed } from './pixel-art';
 
 type Rect = LivePoint & { width: number; height: number };
@@ -124,6 +124,37 @@ export function buildCityGardenGround(world: GardenWorld, terrain: readonly Live
     const cx = prop.x + prop.width / 2 - (horizontal || woody ? 0 : prop.width / 2 + w / 2 + .25);
     const cy = prop.y + prop.height / 2 - (!horizontal || woody ? 0 : prop.height / 2 + h / 2 + .25);
     add({ x: cx - w / 2, y: cy - h / 2, width: w, height: h }, kind, axis, prop.id, seed);
+  }
+  return result;
+}
+
+/** Open-stem garden trees are decorative planting, not solid tactical cover.
+ * Their tiny trunks stand in the already reserved low beds, outside circulation.
+ * Nothing is inserted into authoritative props, collision or save data. */
+export function cityGardenTrees(world: Pick<LiveWorld, 'citySites' | 'props'>, gardens: readonly CityGardenGroundDetail[]): LiveWorldProp[] {
+  const sites = new Map((world.citySites ?? []).filter(site => site.kind === 'courtyard' || site.kind === 'service-yard').map(site => [site.id, site]));
+  const occupied = new Set<string>(), counts = new Map<string, number>(), result: LiveWorldProp[] = [];
+  const reserve = (x: number, y: number, radius: number): void => {
+    for (let cy = Math.floor((y - radius) / 3); cy <= Math.floor((y + radius) / 3); cy++)
+      for (let cx = Math.floor((x - radius) / 3); cx <= Math.floor((x + radius) / 3); cx++) occupied.add(`${cx}:${cy}`);
+  };
+  for (const prop of world.props ?? []) if (prop.kind === 'tree') reserve(prop.x + prop.width / 2, prop.y + prop.height / 2, 2.5);
+  for (const garden of gardens) {
+    if (result.length >= 256) break;
+    const site = sites.get(garden.sourceId), count = counts.get(garden.sourceId) ?? 0;
+    if (!site || count >= (site.kind === 'courtyard' ? 2 : 1)) continue;
+    let best: LivePoint | undefined, distance = Infinity;
+    const center = { x: garden.x + garden.width / 2, y: garden.y + garden.height / 2 };
+    for (const run of garden.clip) for (let x = run.x; x < run.x + run.width; x++) {
+      const point = { x: x + .5, y: run.y + .5 };
+      if (occupied.has(`${Math.floor(point.x / 3)}:${Math.floor(point.y / 3)}`)) continue;
+      const d = (point.x - center.x) ** 2 + (point.y - center.y) ** 2;
+      if (d < distance) { best = point; distance = d; }
+    }
+    if (!best) continue;
+    result.push({ id: `garden-tree:${site.id}:${count}`, kind: 'tree', x: best.x - .375, y: best.y - .375,
+      width: .75, height: .75, orientation: 'x', variant: (garden.seed + count) % 3, blocking: false });
+    reserve(best.x, best.y, 2.5); counts.set(site.id, count + 1);
   }
   return result;
 }
