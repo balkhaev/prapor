@@ -111,7 +111,8 @@ describe('live loot and headquarters presentation',()=>{
       return response(url.endsWith('/join')?state:{...state,world:undefined,server:{...state.server,maps:state.server.maps.map(({city:_city,...map})=>map)}});
     });
     h.mode.show();await h.pump();
-    expect(h.world.children[0]!.innerHTML).toContain('class="entry-city"');
+    expect(state.world.city!.quarters.every(quarter => h.world.children[0]!.innerHTML.includes(quarter.name))).toBe(true);
+    expect(h.world.children[0]!.innerHTML.includes('data-entry-roof')).toBe(true);
     expect(h.world.children[0]!.innerHTML).toContain('Ольховск');
     h.overlay.click('join');await h.pump();
     const original=state.world.routes!.find(route=>route.purpose==='loot'&&route.districtId==='customs')!;

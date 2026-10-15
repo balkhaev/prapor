@@ -58,7 +58,8 @@ describe('authoritative multiplayer sortie preparation',()=>{
     h.mode.show();await h.settle();h.overlay.click('join');await h.settle();
     state.entities[0]!.health=0;state.self.body=createHealth(0);state.self.respawnAt=state.now+1000;
     h.firePoll();await h.settle();
-    expect(h.overlay.innerHTML).toContain('class="entry-city"');expect(h.overlay.innerHTML).toContain(route.name);
+    expect(state.world.city!.quarters.every(quarter => h.overlay.innerHTML.includes(quarter.name))).toBe(true);
+    expect(h.overlay.innerHTML.includes('data-entry-roof')).toBe(true);expect(h.overlay.innerHTML).toContain(route.name);
     expect(h.dock.innerHTML).toContain('<h2>Периметр 01</h2>');expect(h.calls.some(call=>call.path==='action')).toBe(false);
   });
   test('automatic sortie reads server intent and sends pause, resume, route and recall once without replay during polling',async()=>{
