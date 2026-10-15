@@ -26,7 +26,7 @@ class ElementStub {
   closest() { return this; }
   focus() {} remove() {}
 }
-let time: number, world: ElementStub, dock: ElementStub, exited: number, marketOpened: number, joins: number, leaves: number, failedReads: number;
+let time: number, world: ElementStub, dock: ElementStub, hud: ElementStub, exited: number, marketOpened: number, missionsOpened: number, joins: number, leaves: number, failedReads: number;
 let server: LiveSnapshot, mode: ReturnType<typeof createLiveMode> | undefined;
 let nextTimer: number, timers: Map<number, { delay: number; run: () => void }>, replacements: Map<string, PropertyDescriptor | undefined>;
 let clockSpy: ReturnType<typeof spyOn<typeof Date, 'now'>>;
@@ -36,8 +36,8 @@ function replace(key: string, value: unknown) {
   Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
 }
 const settle = async () => { for (let count = 0; count < 25; count++) await Promise.resolve(); };
-async function click(button: string) {
-  const host = button === 'join' || button.startsWith('boss-route:') ? world.children[0]! : dock;
+async function click(button: string, hostOverride?: ElementStub) {
+  const host = hostOverride ?? (button === 'join' || button.startsWith('boss-route:') ? world.children[0]! : dock);
   const target = new ElementStub('button'); target.dataset.liveButton = button; host.append(target);
   host.handlers.get('click')!({ target }); await settle();
 }
@@ -46,9 +46,9 @@ async function poll() {
   expect(pending).toBeDefined(); timers.delete(pending![0]); pending![1].run(); await settle();
 }
 beforeEach(() => {
-  time = 1_800_000_000_000; exited = 0; marketOpened = 0; joins = 0; leaves = 0; failedReads = 0;
+  time = 1_800_000_000_000; exited = 0; marketOpened = 0; missionsOpened = 0; joins = 0; leaves = 0; failedReads = 0;
   sceneRoute=[];commands=[];sceneFocus=[];
-  nextTimer = 0; timers = new Map(); replacements = new Map(); world = new ElementStub(); dock = new ElementStub();
+  nextTimer = 0; timers = new Map(); replacements = new Map(); world = new ElementStub(); dock = new ElementStub(); hud = new ElementStub();
   clockSpy = spyOn(Date, 'now').mockImplementation(() => time);
   replace('window', { devicePixelRatio: 1, setTimeout: (run: () => void, delay: number) => { timers.set(++nextTimer, { delay, run }); return nextTimer; }, clearTimeout: (id: number) => timers.delete(id) });
   replace('document', { activeElement: null, createElement: (tag: string) => new ElementStub(tag), querySelector: () => null, addEventListener() {}, removeEventListener() {} });
@@ -86,7 +86,7 @@ beforeEach(() => {
     }
     throw new Error(`Unexpected request ${url}`);
   });
-  mode = createLiveMode({ world: world as unknown as HTMLElement, dock: dock as unknown as HTMLElement, onExit: () => { exited++; }, onAccount() {}, onMarket: () => { marketOpened++; }, getAccountId: () => null, getGameId: () => server.self.gameId ?? null,
+  mode = createLiveMode({ world: world as unknown as HTMLElement, dock: dock as unknown as HTMLElement, hudRoot: hud as unknown as HTMLElement, onExit: () => { exited++; }, onAccount() {}, onMarket: () => { marketOpened++; }, onMissionBoard: () => { missionsOpened++; }, getAccountId: () => null, getGameId: () => server.self.gameId ?? null,
     sceneFactory: () => ({ show() {}, hide() {}, clear() {}, setSelected() {}, update() {}, destroy() {},setRoute(ids){sceneRoute=[...ids];},focusPoint(point){sceneFocus.push({...point});} }),
   });
 });
@@ -96,6 +96,38 @@ afterEach(() => {
 });
 
 describe('visible server-confirmed live exit', () => {
+  test('the independent raid HUD keeps vitals and recall available while the full dock is hidden', async () => {
+    mode!.show(); await settle();
+    const status = hud.children[0]!;
+    expect(status.hidden).toBe(true);
+    await click('join');
+    dock.hidden = true;
+    expect(world.contains(status)).toBe(false);
+    expect(status.hidden).toBe(false);
+    expect(status.innerHTML).toContain('data-live-button="recall"');
+    expect(status.innerHTML).toContain('data-field-panel="dock"');
+    server.entities[0]!.health = 72; server.self.ammo = 41; server.self.cargo = 360;
+    await poll();
+    expect(status.innerHTML).toContain('72<small>%</small>');
+    expect(status.innerHTML).toContain('<dt>Боезапас</dt><dd>41</dd>');
+    expect(status.innerHTML).toContain('360<small>₽</small>');
+    expect(dock.hidden).toBe(true);
+    await click('recall', status);
+    expect(commands).toEqual([{ type: 'recall' }]);
+    expect(mode!.isActive()).toBe(true);
+    expect(joins).toBe(1); expect(leaves).toBe(0);
+    await poll();
+    expect(commands).toHaveLength(1);
+  });
+  test('opening squad assignments from sortie preparation retains the live view and connection', async () => {
+    mode!.show(); await settle();
+    await click('missions');
+    expect(missionsOpened).toBe(1);
+    expect(mode!.isActive()).toBe(true);
+    expect(world.hidden).toBe(false);
+    expect(joins).toBe(0); expect(leaves).toBe(0);
+    expect([...timers.values()].some(timer => timer.delay === 2000)).toBe(true);
+  });
   test('inspecting a published courtyard keeps departure and position; walking uses a real entrance', async () => {
     const site = server.world.citySites![0]!, poi = server.world.pois.find(poi => poi.id === site.poiId)!;
     mode!.show(); await settle(); await click('join'); await click('exit');

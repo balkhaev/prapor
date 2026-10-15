@@ -23,7 +23,7 @@ import { paintCanvasSceneWeather } from './scene-weather';
 import { SceneWeatherCache } from './scene-weather-cache';
 import { paintCanvasWetSurfaces } from './scene-wet-surfaces';
 import { wetGroundCandidates, WetGroundFrameCache, type WetGroundCandidate } from './scene-wet-ground';
-import { clearFieldHudRect, fieldHudOverlaps, placeFieldHudBox, readFieldHudBounds, type FieldHudBox } from './field-hud';
+import { fieldHudOverlaps, placeFieldHudBox, readFieldHudBounds, type FieldHudBox } from './field-hud';
 
 type Motion = PixelMotion;
 type LabelBox = { x: number; y: number; width: number; height: number };
@@ -288,7 +288,7 @@ export class LiveScene {
   private refreshHudBounds(): void {
     if (!this.overlayBoundsDirty) return;
     this.overlayBounds = readFieldHudBounds(this.canvas);
-    this.fieldRect = clearFieldHudRect({ width: this.width, height: this.height }, this.overlayBounds);
+    this.fieldRect = { x: 0, y: 0, width: this.width, height: this.height };
     this.minimapLayout = null;
     this.overlayBoundsDirty = false;
   }

@@ -7,20 +7,26 @@ export function mountFieldInterface(options: {
 	icon: (name: string, size?: number) => string;
 	getState: () => FieldState;
 	closeContext: () => void;
+	/** Visibility changes must not change the selected object or world view. */
+	onVisibilityChange?: () => void;
 	onError: (message: string) => void;
 }) {
 	const { root, icon } = options;
 	const body = document.body;
 	const dock = root.querySelector<HTMLElement>("#command-dock")!;
 	const main = root.querySelector<HTMLElement>(".command-main")!;
+	const shade = root.querySelector<HTMLElement>("#context-shade")!;
 	// Keep the mobile scrim and the room panel in the same stacking context.
-	main.append(root.querySelector<HTMLElement>("#context-shade")!);
+	main.append(shade);
 	let lastContext = "";
 	let destroyed = false;
 	body.classList.add("immersive-game");
 	main.insertAdjacentHTML("beforeend", `<div class="field-location"><span class="eyebrow">УБЕЖИЩЕ 07</span><strong>Своя территория</strong><small>База на связи</small></div><button class="field-launch" data-open-live>${icon("raids", 19)}<span>Подготовить выход</span>${icon("arrow", 16)}</button><div class="field-controls" role="group" aria-label="Полевые панели"><button data-field-panel="crew" aria-controls="command-crew" aria-expanded="false" title="Люди и назначение на работу">${icon("people", 18)}<span>Люди</span></button><button data-field-panel="routes" aria-controls="command-routes" aria-expanded="false" title="Точки входа в Периметр">${icon("raids", 18)}<span>Маршруты</span></button><button data-field-panel="dock" aria-controls="command-dock" aria-expanded="false" title="Сводка и управление">${icon("contracts", 18)}<span>Сводка</span></button><button data-action="toggle-fullscreen" aria-label="Развернуть игру на весь экран" aria-pressed="false" title="На весь экран"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 9V3h6m6 0h6v6m0 6v6h-6M9 21H3v-6"/></svg></button></div>`);
 	function dockVisible() {
 		return !body.classList.contains("field-dock-collapsed") && (body.classList.contains("field-dock-open") || dock.matches(".context-open, .raid-dock, .live-dock"));
+	}
+	function isPanelOpen(panel: FieldPanel) {
+		return panel === "dock" ? dockVisible() && !dock.classList.contains("live-entry-dock") : body.classList.contains(`field-${panel}-open`);
 	}
 	function sync() {
 		if (destroyed) return;
@@ -39,25 +45,27 @@ export function mountFieldInterface(options: {
 			dock.insertAdjacentHTML("afterbegin", '<header class="field-panel-head"><strong>Полевая сводка</strong><button class="icon-button" data-field-close="dock" data-focus-key="field-close-dock" aria-label="Свернуть сводку">×</button></header>');
 		}
 		for (const panel of ["dock", "crew", "routes"] as const) {
-			const open = panel === "dock" ? dockVisible() && !dock.classList.contains("live-entry-dock") : body.classList.contains(`field-${panel}-open`);
-			const button = root.querySelector<HTMLButtonElement>(`[data-field-panel="${panel}"]`)!;
-			button.setAttribute("aria-expanded", String(open));
-			button.setAttribute("aria-label", panel === "dock" ? "Сводка" : panel === "crew" ? "Люди" : "Маршруты");
-			button.disabled = dock.classList.contains("live-entry-dock") && panel === "dock";
+			const open = isPanelOpen(panel);
+			for (const button of root.querySelectorAll<HTMLButtonElement>(`[data-field-panel="${panel}"]`)) {
+				button.setAttribute("aria-expanded", String(open));
+				button.setAttribute("aria-label", panel === "dock" ? "Сводка" : panel === "crew" ? "Люди" : "Маршруты");
+				button.disabled = dock.classList.contains("live-entry-dock") && panel === "dock";
+			}
 		}
+		if (!isPanelOpen("dock")) shade.hidden = true;
 	}
 	function closePanel(panel: FieldPanel) {
 		if (panel === "dock") {
-			if (dock.classList.contains("context-open")) options.closeContext();
 			body.classList.remove("field-dock-open");
 			body.classList.add("field-dock-collapsed");
 		} else body.classList.remove(`field-${panel}-open`);
 		sync();
+		options.onVisibilityChange?.();
 		root.querySelector<HTMLButtonElement>(`[data-field-panel="${panel}"]`)?.focus({ preventScroll: true });
 	}
 	function dismiss() {
 		for (const panel of ["routes", "crew", "dock"] as const) {
-			if (panel === "dock" ? dockVisible() : body.classList.contains(`field-${panel}-open`)) { closePanel(panel); return true; }
+			if (isPanelOpen(panel)) { closePanel(panel); return true; }
 		}
 		return false;
 	}
@@ -65,6 +73,7 @@ export function mountFieldInterface(options: {
 		body.classList.remove("field-dock-open", "field-crew-open", "field-routes-open");
 		body.classList.add("field-dock-collapsed");
 		sync();
+		options.onVisibilityChange?.();
 	}
 	function updateFullscreen() {
 		const active = document.fullscreenElement !== null;
@@ -87,7 +96,7 @@ export function mountFieldInterface(options: {
 		const panel = target.dataset.fieldPanel as FieldPanel | undefined;
 		if (panel) {
 			event.stopPropagation();
-			const open = target.getAttribute("aria-expanded") === "true";
+			const open = isPanelOpen(panel);
 			if (open) { closePanel(panel); return; }
 			body.classList.remove("field-crew-open", "field-routes-open");
 			if (panel !== "dock" && window.innerWidth <= 640) {
@@ -97,6 +106,7 @@ export function mountFieldInterface(options: {
 			body.classList.add(`field-${panel}-open`);
 			if (panel === "dock") body.classList.remove("field-dock-collapsed");
 			sync();
+			options.onVisibilityChange?.();
 			root.querySelector<HTMLElement>(`#command-${panel} button`)?.focus({ preventScroll: true });
 		} else if (target.dataset.fieldClose) { event.stopPropagation(); closePanel(target.dataset.fieldClose as FieldPanel); }
 		else if (target.dataset.action === "toggle-fullscreen") { event.stopPropagation(); void toggleFullscreen(); }
@@ -107,7 +117,7 @@ export function mountFieldInterface(options: {
 	document.addEventListener("fullscreenchange", updateFullscreen);
 	sync();
 	updateFullscreen();
-	return { sync, dismiss, closePanels, destroy() {
+	return { sync, dismiss, closePanels, closePanel, isPanelOpen, destroy() {
 		destroyed = true;
 		observer.disconnect();
 		root.removeEventListener("click", click);

@@ -163,6 +163,7 @@ export interface WorldController {
 	focusBase: () => void;
 	setBuildingPlacement: (selection: BuildingPlacement | null) => void;
 	projectShelterRect: (rect: ShelterRect) => (ClientRect & { visible: boolean }) | null;
+	projectScav: (id: string) => (ClientRect & { visible: boolean }) | null;
 }
 type ShelterCell = {
 	root: Phaser.GameObjects.Container;
@@ -636,6 +637,12 @@ export function createWorld(
 
 		projectShelterRect(rect: ShelterRect): (ClientRect & { visible: boolean }) | null {
 			return this.baseLayer && requestedView === "base" ? projectShelterRect(projectShelterBounds(rect), this.viewCamera, this.game.canvas.getBoundingClientRect(), this.viewport, this.worldBounds) : null;
+		}
+
+		projectScav(id: string): (ClientRect & { visible: boolean }) | null {
+			const actor = this.scavs.get(id)?.actor;
+			if (!this.baseLayer || requestedView !== "base" || !actor?.visible) return null;
+			return projectShelterRect({ x: actor.x - 16 * actor.scaleX, y: actor.y - 46 * actor.scaleY, width: 32 * actor.scaleX, height: 48 * actor.scaleY }, this.viewCamera, this.game.canvas.getBoundingClientRect(), this.viewport, this.worldBounds);
 		}
 
 		setBuildingPlacement(selection: BuildingPlacement | null): void {
@@ -1880,5 +1887,6 @@ export function createWorld(
 		focusBase: () => scene.focusBase(),
 		setBuildingPlacement: (selection) => scene.setBuildingPlacement(selection),
 		projectShelterRect: (rect) => scene.projectShelterRect(rect),
+		projectScav: (id) => scene.projectScav(id),
 	};
 }

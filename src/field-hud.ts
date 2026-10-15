@@ -1,14 +1,14 @@
 export interface FieldHudBox { x: number; y: number; width: number; height: number }
 export interface FieldHudSize { width: number; height: number }
 
-const HUD_SELECTORS = '.command-hud > *, .command-tools, .field-location, .field-launch, .field-controls, .command-dock, .command-crew, .command-routes, .world-head > *, .world-bottom, .live-field-hud, .live-field-legend, .live-auto-world-status, .live-camera';
+const HUD_SELECTORS = '.command-hud > *, .command-tools, .field-location, .field-launch, .field-controls, .command-dock, .command-crew, .command-routes, .world-head > *, .world-bottom, .live-field-hud, .live-field-legend, .live-auto-world-status, .live-camera, .field-raid-status, .field-object-card';
 export const fieldHudOverlaps = (a: FieldHudBox, b: FieldHudBox): boolean => a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
 
 /** Only painted HUD islands reserve space; their transparent fullscreen wrappers do not. */
 export function readFieldHudBounds(canvas: HTMLElement): FieldHudBox[] {
   const viewport = canvas.getBoundingClientRect();
   if (viewport.width <= 0 || viewport.height <= 0) return [];
-  const root = canvas.closest?.('.command-shell') ?? canvas.parentElement ?? canvas;
+  const root = canvas.closest?.('#app') ?? canvas.closest?.('.command-shell') ?? canvas.parentElement ?? canvas;
   return [...root.querySelectorAll<HTMLElement>(HUD_SELECTORS)].flatMap(element => {
     if (element.hidden) return [];
     const rect = element.getBoundingClientRect();
