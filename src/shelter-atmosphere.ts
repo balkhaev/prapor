@@ -21,6 +21,7 @@ export interface ShelterFlame extends ShelterPoint { width: number; height: numb
 export interface ShelterEmber extends ShelterPoint { alpha: number; color: number }
 export interface ShelterBird extends ShelterPoint { size: number; wing: number; alpha: number }
 export interface ShelterLightGlow extends AtmosphereEllipse { color: number; coreAlpha: number }
+export interface ShelterGroundLight extends AtmosphereEllipse { color: number }
 export interface ShelterAtmosphereFrame {
 	wind: ShelterWind;
 	clouds: AtmosphereEllipse[];
@@ -29,6 +30,7 @@ export interface ShelterAtmosphereFrame {
 	embers: ShelterEmber[];
 	birds: ShelterBird[];
 	glows: ShelterLightGlow[];
+	groundLights: ShelterGroundLight[];
 	mist: AtmosphereEllipse[];
 }
 export interface ShelterAtmosphereInput {
@@ -41,6 +43,9 @@ export interface ShelterAtmosphereInput {
 	/** Keep these outside the occupied yard; only their soft edge is visible. */
 	mistZones?: readonly ShelterRect[];
 	reducedMotion?: boolean;
+	/** Shared scene profile: multiplier, independent of the atmosphere clock. */
+	lightStrength?: number;
+	shadowStrength?: number;
 }
 
 export const SHELTER_ATMOSPHERE_LIMITS = Object.freeze({ smokeEmitters: 24, puffsPerEmitter: 3, embersPerFire: 3, flames: 24, lights: 32, birds: 6, clouds: 3, mist: 6 });
@@ -74,14 +79,15 @@ export function sampleShelterWind(timeMs: number, reducedMotion = false): Shelte
 /** Visual time only: no persistent particles, random calls, or game-state mutations. */
 export function sampleShelterAtmosphere(input: ShelterAtmosphereInput): ShelterAtmosphereFrame {
 	const t = time(input.timeMs, input.reducedMotion), area = bounds(input.groundBounds), wind = sampleShelterWind(t, input.reducedMotion);
-	const frame: ShelterAtmosphereFrame = { wind, clouds: [], smoke: [], flames: [], embers: [], birds: [], glows: [], mist: [] };
+	const lightStrength = clamp(finite(input.lightStrength ?? 1, 1), 0, 2), shadowStrength = clamp(finite(input.shadowStrength ?? 1, 1), 0, 2);
+	const frame: ShelterAtmosphereFrame = { wind, clouds: [], smoke: [], flames: [], embers: [], birds: [], glows: [], groundLights: [], mist: [] };
 	for (let i = 0; i < SHELTER_ATMOSPHERE_LIMITS.clouds; i++) {
 		const p = phase(t / (76000 + i * 9000) + .18 + i * .29);
 		frame.clouds.push({
 			x: area.x + area.width * p,
 			y: area.y + area.height * (.25 + i * .25) + Math.sin(p * TAU + i) * Math.min(12, area.height * .05),
 			width: Math.min(230, area.width * .3 + 20), height: Math.min(72, area.height * .15 + 8),
-			alpha: .028 * envelope(p, .2),
+			alpha: .028 * envelope(p, .2) * shadowStrength,
 		});
 	}
 	const emitters = input.smokeEmitters ?? [];
@@ -121,10 +127,16 @@ export function sampleShelterAtmosphere(input: ShelterAtmosphereInput): ShelterA
 		const light = lights[i]!;
 		if (!validPoint(light)) continue;
 		const fire = light.kind === "fire", pulse = input.reducedMotion ? 1 : 1 + Math.sin(t / (fire ? 4100 : 13000) * TAU + i * .83) * (fire ? .07 : .025);
+		const height = clamp(finite(light.height ?? (fire ? 7 : 21)), 0, 100), color = pigment(fire ? P.woodLight : P.yellow);
+		// Input x/y stays on the real ground projection. Raising the light moves
+		// its glowing bulb only; it never lifts the illumination off the yard.
+		const width = (fire ? 66 : 38 + height * 1.2) * pulse;
+		frame.groundLights.push({ x: clamp(light.x, -1e6, 1e6), y: clamp(light.y, -1e6, 1e6),
+			width, height: width * .5, alpha: (fire ? .24 : .19) * pulse * lightStrength, color });
 		frame.glows.push({
-			x: clamp(light.x, -1e6, 1e6), y: clamp(light.y, -1e6, 1e6) - clamp(finite(light.height ?? (fire ? 7 : 21)), 0, 100),
+			x: clamp(light.x, -1e6, 1e6), y: clamp(light.y, -1e6, 1e6) - height,
 			width: (fire ? 22 : 16) * pulse, height: (fire ? 15 : 12) * pulse,
-			alpha: (fire ? .13 : .1) * pulse, coreAlpha: (fire ? .7 : .57) * pulse, color: pigment(fire ? P.woodLight : P.yellow),
+			alpha: (fire ? .13 : .1) * pulse * lightStrength, coreAlpha: Math.min(1, (fire ? .7 : .57) * pulse * lightStrength), color,
 		});
 	}
 	if (input.birdBounds && !input.reducedMotion) {
@@ -163,6 +175,18 @@ export function paintShelterAtmosphereGround(g: Phaser.GameObjects.Graphics, fra
 	for (const cloud of frame.clouds) {
 		g.fillStyle(pigment(P.ink), cloud.alpha);
 		patch(g, cloud.x, cloud.y, cloud.width, cloud.height);
+	}
+}
+
+/** Additive pools sit above the terrain and below people, roofs and furniture.
+ * Three quiet bands keep a clear 2:1 footprint without a blurred vector halo. */
+export function paintShelterAtmosphereGroundLights(g: Phaser.GameObjects.Graphics, frame: ShelterAtmosphereFrame): void {
+	g.clear();
+	for (const light of frame.groundLights) {
+		for (const [size, opacity] of [[1, .17], [.74, .29], [.45, .5]]) {
+			g.fillStyle(light.color, light.alpha * opacity!);
+			patch(g, light.x, light.y, light.width * size!, light.height * size!);
+		}
 	}
 }
 

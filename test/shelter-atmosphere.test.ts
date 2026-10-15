@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	SHELTER_ATMOSPHERE_LIMITS, sampleShelterAtmosphere, sampleShelterWind,
-	paintShelterAtmosphereGround, paintShelterAtmosphereAir, paintShelterAtmosphereGlows,
+	paintShelterAtmosphereGround, paintShelterAtmosphereGroundLights, paintShelterAtmosphereAir, paintShelterAtmosphereGlows,
 	type ShelterAtmosphereInput,
 } from "../src/shelter-atmosphere";
 import type Phaser from "phaser";
@@ -22,6 +22,37 @@ function allNumbers(value: unknown): number[] {
 }
 
 describe("shelter atmosphere", () => {
+	test("real elevated lamps illuminate the ground below while their bulb stays at fixture height", () => {
+		const lights = [{ x: 100.5, y: 170.25, kind: 'lamp' as const, height: 30 }, { x: -10, y: 55, kind: 'lamp' as const, height: 12 }, { x: 80, y: 100, kind: 'fire' as const, height: 4 }];
+		const frame = sampleShelterAtmosphere({ ...input, lights, reducedMotion: true });
+		expect(frame.groundLights).toHaveLength(lights.length);
+		for (let i = 0; i < lights.length; i++) {
+			const pool = frame.groundLights[i]!, glow = frame.glows[i]!, source = lights[i]!;
+			expect({ x: pool.x, y: pool.y }).toEqual({ x: source.x, y: source.y });
+			expect({ x: glow.x, y: glow.y }).toEqual({ x: source.x, y: source.y - source.height });
+			expect(pool.width).toBeGreaterThan(45); expect(pool.height).toBe(pool.width * .5); expect(pool.alpha).toBeGreaterThan(.15);
+		}
+		expect(frame.groundLights[0]!.width).toBeGreaterThan(frame.groundLights[1]!.width);
+		expect(sampleShelterAtmosphere({ ...input, lights: [] }).groundLights).toEqual([]);
+	});
+
+	test("lighting strength changes a frozen atmosphere immediately without moving or inventing sources", () => {
+		const dim = sampleShelterAtmosphere({ ...input, reducedMotion: true, lightStrength: .2 });
+		const bright = sampleShelterAtmosphere({ ...input, reducedMotion: true, lightStrength: 1.4, timeMs: 900000 });
+		expect(bright.groundLights.length).toBe(dim.groundLights.length);
+		for (let i = 0; i < dim.groundLights.length; i++) {
+			const a = dim.groundLights[i]!, b = bright.groundLights[i]!;
+			expect({ x: a.x, y: a.y, width: a.width, height: a.height }).toEqual({ x: b.x, y: b.y, width: b.width, height: b.height });
+			expect(b.alpha).toBeGreaterThan(a.alpha * 6);
+		}
+		for (const strength of [-10, 0, NaN, Infinity, 100]) {
+			const frame = sampleShelterAtmosphere({ ...input, lightStrength: strength, shadowStrength: strength });
+			expect(allNumbers(frame).every(Number.isFinite)).toBe(true);
+			expect(frame.glows.every(glow => glow.alpha >= 0 && glow.coreAlpha >= 0 && glow.coreAlpha <= 1)).toBe(true);
+			expect(frame.groundLights.every(pool => pool.alpha >= 0 && pool.alpha < 1)).toBe(true);
+		}
+	});
+
 	test("only existing fires emit bounded fading embers, and reduced motion removes them", () => {
 		const fire = { x: 160, y: 325, kind: "fire" as const }, chimney = { x: 50, y: 50, kind: "chimney" as const };
 		for (const timeMs of [0, 1000, 10000000]) {
@@ -42,8 +73,8 @@ describe("shelter atmosphere", () => {
 		const g = { clear() { return g; }, fillStyle(color: number) { colors.push(color); return g; }, lineStyle(_width: number, color: number) { colors.push(color); return g; },
 			fillRect(...values: number[]) { rectangles.push(values); return g; }, lineBetween(...values: number[]) { lines.push(values); return g; } };
 		const frame = sampleShelterAtmosphere(input);
-		for (const paint of [paintShelterAtmosphereGround, paintShelterAtmosphereAir, paintShelterAtmosphereGlows]) paint(g as unknown as Phaser.GameObjects.Graphics, frame);
-		expect(rectangles.length).toBeGreaterThan(20); expect(rectangles.length).toBeLessThan(200);
+		for (const paint of [paintShelterAtmosphereGround, paintShelterAtmosphereGroundLights, paintShelterAtmosphereAir, paintShelterAtmosphereGlows]) paint(g as unknown as Phaser.GameObjects.Graphics, frame);
+		expect(rectangles.length).toBeGreaterThan(60); expect(rectangles.length).toBeLessThan(250);
 		expect([...rectangles, ...lines].every(values => values.every(Number.isInteger))).toBe(true);
 		expect(rectangles.every(([, , width, height]) => width! > 0 && height! > 0)).toBe(true);
 		const palette = new Set(Object.values(PIXEL_PALETTE).map(hex => Number.parseInt(hex.slice(1), 16)));
@@ -81,7 +112,7 @@ describe("shelter atmosphere", () => {
 				lights: [{ x: Infinity, y: 40, kind: "lamp" }, { x: -Number.MAX_VALUE, y: Number.MAX_VALUE, kind: "fire", height: -Infinity }],
 			});
 			expect(allNumbers(frame).every(Number.isFinite)).toBe(true);
-			const geometry = [...frame.clouds, ...frame.smoke, ...frame.flames, ...frame.birds, ...frame.glows, ...frame.mist].map(({ x, y }) => ({ x, y }));
+			const geometry = [...frame.clouds, ...frame.smoke, ...frame.flames, ...frame.birds, ...frame.glows, ...frame.groundLights, ...frame.mist].map(({ x, y }) => ({ x, y }));
 			expect(allNumbers(geometry).every(value => Math.abs(value) <= 1e6 + 10000)).toBe(true);
 			expect(frame.smoke).toHaveLength(3);
 			expect(frame.glows).toHaveLength(1);
@@ -96,6 +127,7 @@ describe("shelter atmosphere", () => {
 			const frame = sampleShelterAtmosphere({ ...input, timeMs, smokeEmitters: emitters, lights, mistZones });
 			expect(frame.smoke).toHaveLength(SHELTER_ATMOSPHERE_LIMITS.smokeEmitters * SHELTER_ATMOSPHERE_LIMITS.puffsPerEmitter);
 			expect(frame.glows).toHaveLength(SHELTER_ATMOSPHERE_LIMITS.lights);
+			expect(frame.groundLights).toHaveLength(SHELTER_ATMOSPHERE_LIMITS.lights);
 			expect(frame.clouds).toHaveLength(SHELTER_ATMOSPHERE_LIMITS.clouds);
 			expect(frame.birds).toHaveLength(SHELTER_ATMOSPHERE_LIMITS.birds);
 			expect(frame.mist).toHaveLength(SHELTER_ATMOSPHERE_LIMITS.mist);

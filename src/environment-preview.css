@@ -19,6 +19,7 @@ h1 { font-size: clamp(25px, 3vw, 37px); letter-spacing: -.035em; line-height: 1.
 .environment-camera { display: flex; gap: 5px; }
 .environment-camera button { min-height: 38px; min-width: 38px; padding: 7px 12px; border: 1px solid var(--game-line); border-radius: var(--game-radius-control); background: var(--game-panel-raised); color: var(--game-text); cursor: pointer; font-size: 11px; }
 .environment-camera button:hover { background: var(--game-hover); border-color: var(--game-brass); }
+.environment-camera button:disabled { opacity: .35; cursor: default; }
 #environment-location { margin-left: auto; padding-bottom: 11px; font: 10px 'IBM Plex Mono', monospace; color: var(--game-brass-light); text-transform: uppercase; letter-spacing: .07em; }
 .environment-stage { height: clamp(420px, 67vh, 760px); width: 100%; overflow: hidden; background: var(--game-inset); border-block: 1px solid var(--game-line); touch-action: none; }
 .environment-stage canvas { display: block; image-rendering: pixelated; }

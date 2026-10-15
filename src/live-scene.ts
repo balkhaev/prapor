@@ -16,6 +16,8 @@ import { PIXEL_TILE, PIXEL_PALETTE as P } from './pixel-art';
 import { PIXEL_SCENE_THEME as T } from './pixel-scene-theme';
 import { buildSurfaceMasks, paintRoadSurface, paintTerrainTexture, terrainTextureResolution, type SurfaceMasks } from './live-ground-art';
 import { paintPropAtmosphere, paintBuildingAtmosphere, type EnvironmentPixel } from './pixel-environment';
+import { fitMinimap, minimapPoint, minimapViewport } from './minimap-presentation';
+import { SceneLightBuffer, propLampSources } from './pixel-lighting';
 
 type Motion = PixelMotion;
 type LabelBox = { x: number; y: number; width: number; height: number };
@@ -74,6 +76,8 @@ export class LiveScene {
   private cutawayBuildings = new Set<string>();
   private surfaceMasks: SurfaceMasks = { road: new Uint8Array(), indoor: new Uint8Array(), roadRuns: [] };
   private environmentAt = 0;
+  private lightBuffer = new SceneLightBuffer();
+  private lampProps: LiveWorldProp[] = [];
   private reducedMotion = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
 
   constructor(private host: HTMLElement, _command: (command: LiveCommand) => void, private select: (id: string) => void) {
@@ -140,7 +144,7 @@ export class LiveScene {
     this.snapshot = snapshot;
     if (!this.active) this.paint();
   }
-  destroy(): void { this.hide(); this.observer.disconnect(); this.overlayObserver.disconnect(); this.canvas.removeEventListener('click', this.click); this.canvas.removeEventListener('pointerdown', this.pointerDown); this.canvas.removeEventListener('pointermove', this.pointerMove); this.canvas.removeEventListener('pointerup', this.pointerUp); this.canvas.removeEventListener('pointercancel', this.pointerCancel); this.canvas.removeEventListener('wheel', this.wheel); this.controls.removeEventListener('click', this.zoomClick); this.canvas.remove(); this.controls.remove(); }
+  destroy(): void { this.hide(); this.lightBuffer.clear(); this.lampProps = []; this.observer.disconnect(); this.overlayObserver.disconnect(); this.canvas.removeEventListener('click', this.click); this.canvas.removeEventListener('pointerdown', this.pointerDown); this.canvas.removeEventListener('pointermove', this.pointerMove); this.canvas.removeEventListener('pointerup', this.pointerUp); this.canvas.removeEventListener('pointercancel', this.pointerCancel); this.canvas.removeEventListener('wheel', this.wheel); this.controls.removeEventListener('click', this.zoomClick); this.canvas.remove(); this.controls.remove(); }
 
   private resize(): void {
     const box = this.host.getBoundingClientRect();
@@ -178,7 +182,7 @@ export class LiveScene {
     this.canvas.focus({ preventScroll: true });
     const rect = this.canvas.getBoundingClientRect(), x = event.clientX - rect.left, y = event.clientY - rect.top;
     const mini = this.minimapBounds(this.snapshot);
-    if (x >= mini.x - 8 && x <= mini.x + mini.width + 8 && y >= mini.y - 8 && y <= mini.y + mini.height + 21) {
+    if (x >= mini.x - 8 && x <= mini.x + mini.width + 8 && y >= mini.y - 18 && y <= mini.y + mini.height + 22) {
       if (x >= mini.x && x <= mini.x + mini.width && y >= mini.y && y <= mini.y + mini.height) this.focusPoint({ x: clamp((x - mini.x) / mini.scale, 0, this.snapshot.world.width - 1), y: clamp((y - mini.y) / mini.scale, 0, this.snapshot.world.height - 1) });
       return;
     }
@@ -301,6 +305,7 @@ export class LiveScene {
       map.restore();
     }
     this.minimapTerrain = minimap;
+    this.lampProps = (world.props ?? []).filter(prop => prop.kind === 'lamp');
     const overview = document.createElement('canvas'); overview.width = (world.width + world.height) * 4; overview.height = (world.width + world.height) * 2;
     const overviewContext = overview.getContext('2d');
     if (overviewContext) { overviewContext.save(); overviewContext.transform(4, 2, -4, 2, world.height * 4, 0); overviewContext.drawImage(texture, 0, 0, world.width, world.height); overviewContext.restore(); }
@@ -567,11 +572,21 @@ export class LiveScene {
       objects.push({ depth: point.x + point.y + activityDepth + .1, paint: () => this.paintEntity(entity, now) });
     }
     objects.sort((a, b) => a.depth - b.depth).forEach(object => object.paint());
+    this.paintLighting();
     this.paintIntent(snapshot, now);
     this.paintLandmarks(world);
     this.paintWaypoints(world);
     this.paintCombat(now);
     this.minimap(snapshot);
+  }
+  private paintLighting(): void {
+    const scale = this.tile / PIXEL_TILE;
+    const lamps = this.lampProps.flatMap(prop => {
+      const origin = this.project({ x: prop.x - .5, y: prop.y - .5 });
+      return propLampSources(prop).map(lamp => ({ x: origin.x + lamp.x * scale, y: origin.y + lamp.y * scale, headY: origin.y + lamp.headY * scale, radius: lamp.radius * scale }));
+    });
+    this.lightBuffer.paint(this.width, this.height, lamps);
+    this.context.drawImage(this.lightBuffer.canvas, 0, 0, this.width, this.height);
   }
   private paintLandmarks(world: LiveWorld): void {
     const c = this.context, small = this.overview || this.tile < 12;
@@ -776,30 +791,71 @@ export class LiveScene {
     this.hitTargets.push({ entity, x: p.x, y: p.y, bounds });
   }
   private minimapBounds(snapshot: LiveSnapshot): { x: number; y: number; width: number; height: number; scale: number } {
-    const scale = Math.min(this.width < 480 ? 2.1 : 2.5, (this.width * .28) / snapshot.world.width, (this.height * .22) / snapshot.world.height);
-    const width = snapshot.world.width * scale, height = snapshot.world.height * scale;
-    return { x: this.width - width - 16, y: 62, width, height, scale };
+    const areaWidth = Math.min(this.width < 480 ? 112 : 164, this.width * .34), areaHeight = Math.min(138, this.height * .23);
+    const fitted = fitMinimap(snapshot.world, { x: 0, y: 0, width: areaWidth, height: areaHeight });
+    return { ...fitted, x: this.width - fitted.width - 16, y: 78 };
   }
   private minimap(snapshot: LiveSnapshot): void {
-    const c = this.context, { x, y, scale, width, height } = this.minimapBounds(snapshot);
-    c.fillStyle = `${T.panel}e6`; c.fillRect(x - 8, y - 8, width + 16, height + 29); c.strokeStyle = `${T.border}66`; c.strokeRect(x - 8, y - 8, width + 16, height + 29);
+    const c = this.context, layout = this.minimapBounds(snapshot), { x, y, width, height } = layout;
+    const at = (point: LivePoint) => minimapPoint(layout, point);
+    const diamond = (point: LivePoint, size: number, color: string) => {
+      c.beginPath(); c.moveTo(point.x, point.y - size); c.lineTo(point.x + size, point.y); c.lineTo(point.x, point.y + size); c.lineTo(point.x - size, point.y); c.closePath();
+      c.fillStyle = color; c.fill(); c.strokeStyle = T.panel; c.lineWidth = 1.5; c.stroke();
+    };
+    c.save();
+    c.fillStyle = `${T.panel}f2`; c.fillRect(x - 8, y - 18, width + 16, height + 40);
+    c.strokeStyle = `${T.border}aa`; c.lineWidth = 1; c.strokeRect(x - 8, y - 18, width + 16, height + 40);
+    c.font = '700 8px "IBM Plex Mono", monospace'; c.textAlign = 'left'; c.fillStyle = T.muted; c.fillText('КАРТА', x, y - 6);
+    c.textAlign = 'right'; c.fillStyle = T.text; c.fillText('С ↑', x + width, y - 6);
+    c.save(); c.beginPath(); c.rect(x, y, width, height); c.clip();
     if (this.minimapTerrain ?? this.terrainTexture) c.drawImage((this.minimapTerrain ?? this.terrainTexture)!, x, y, width, height);
-    for (const extract of snapshot.world.extracts) { c.fillStyle = T.extract; c.fillRect(x + extract.x * scale - 2, y + extract.y * scale - 2, 4, 4); }
-    for (const poi of snapshot.world.pois) { c.fillStyle = poi.danger === 3 ? T.hostile : T.loot; c.fillRect(x + (poi.x + poi.width / 2) * scale - 1, y + (poi.y + poi.height / 2) * scale - 1, 2, 2); }
+    const corners = minimapViewport(snapshot.world, [this.unproject(0, 0), this.unproject(this.width, 0), this.unproject(this.width, this.height), this.unproject(0, this.height)], layout);
+    if (corners.length > 2) {
+      c.beginPath(); corners.forEach((point, i) => i ? c.lineTo(point.x, point.y) : c.moveTo(point.x, point.y)); c.closePath();
+      c.fillStyle = `${T.text}12`; c.fill(); c.strokeStyle = `${T.text}aa`; c.lineWidth = 1; c.stroke();
+    }
+    for (const poi of snapshot.world.pois) { const point = at({ x: poi.x + poi.width / 2, y: poi.y + poi.height / 2 }); c.fillStyle = `${T.loot}aa`; c.fillRect(point.x - 1, point.y - 1, 2, 2); }
     for (const [index, id] of this.routePoiIds.entries()) {
       const point = snapshot.world.pois.find(poi => poi.id === id)?.entrances[0];
       if (!point) continue;
-      const px = x + point.x * scale, py = y + point.y * scale;
-      c.fillStyle = T.self; c.beginPath(); c.arc(px, py, 3.5, 0, Math.PI * 2); c.fill(); c.fillStyle = T.panel; c.textAlign = 'center'; c.font = '700 6px Manrope, sans-serif'; c.fillText(String(index + 1), px, py + 2);
+      const p = at(point); c.fillStyle = T.route; c.beginPath(); c.arc(p.x, p.y, 3.5, 0, Math.PI * 2); c.fill();
+      c.fillStyle = T.panel; c.textAlign = 'center'; c.font = '700 6px Manrope, sans-serif'; c.fillText(String(index + 1), p.x, p.y + 2);
     }
-    c.save(); c.beginPath(); c.rect(x, y, width, height); c.clip();
-    const corners = [this.unproject(0, 0), this.unproject(this.width, 0), this.unproject(this.width, this.height), this.unproject(0, this.height)];
-    c.beginPath(); corners.forEach((point, index) => index ? c.lineTo(x + point.x * scale, y + point.y * scale) : c.moveTo(x + point.x * scale, y + point.y * scale)); c.closePath(); c.fillStyle = `${T.text}0f`; c.fill(); c.strokeStyle = `${T.text}aa`; c.lineWidth = .8; c.stroke();
+    // This is the already confirmed interpolation path, never a guessed route to an order.
+    const motion = this.motions.get(snapshot.selfId);
+    if (motion) {
+      const remaining = samplePixelMotion(motion, performance.now()).remaining.map(at);
+      if (remaining.length > 1) {
+        c.beginPath(); remaining.forEach((p, i) => i ? c.lineTo(p.x, p.y) : c.moveTo(p.x, p.y));
+        c.strokeStyle = T.route; c.lineWidth = 1.5; c.stroke();
+      }
+    }
+    for (const extract of snapshot.world.extracts) {
+      const point = at(extract); c.fillStyle = T.panel; c.fillRect(point.x - 3, point.y - 3, 6, 6);
+      c.strokeStyle = T.extract; c.lineWidth = 1.5; c.strokeRect(point.x - 3, point.y - 3, 6, 6); c.fillStyle = T.extract; c.fillRect(point.x, point.y - 1, 2, 2);
+    }
     const target = snapshot.self.automation?.target;
-    if (target) { c.strokeStyle = snapshot.self.automation?.stage === 'extract' ? T.extract : T.self; c.lineWidth = 1; c.strokeRect(x + target.x * scale - 3, y + target.y * scale - 3, 6, 6); }
+    if (target) diamond(at(target), 4.5, snapshot.self.automation?.stage === 'extract' ? T.extract : T.self);
+    for (const entity of snapshot.entities) {
+      if (entity.id === snapshot.selfId) continue;
+      const point = at(entity), color = entity.bossId ? T.boss : entity.kind === 'player' ? T.ally : entity.faction === 'raiders' ? T.hostile : T.scav;
+      if (entity.bossId) diamond(point, 3, color);
+      else { c.fillStyle = color; c.beginPath(); c.arc(point.x, point.y, 1.8, 0, Math.PI * 2); c.fill(); }
+      if (entity.id === this.selected) { c.strokeStyle = T.text; c.lineWidth = 1; c.beginPath(); c.arc(point.x, point.y, 4, 0, Math.PI * 2); c.stroke(); }
+    }
+    const self = snapshot.entities.find(entity => entity.id === snapshot.selfId);
+    if (self) {
+      const point = at(self); c.fillStyle = T.panel; c.beginPath(); c.arc(point.x, point.y, 4.5, 0, Math.PI * 2); c.fill();
+      c.fillStyle = T.self; c.beginPath(); c.arc(point.x, point.y, 3, 0, Math.PI * 2); c.fill(); c.strokeStyle = T.text; c.lineWidth = 1; c.stroke();
+    }
     c.restore();
-    for (const entity of snapshot.entities) { c.fillStyle = entity.id === snapshot.selfId ? T.self : entity.bossId?T.boss:entity.kind === 'player' ? T.ally : entity.faction === 'raiders' ? T.hostile : T.scav; c.beginPath(); const px=x+entity.x*scale,py=y+entity.y*scale;if(entity.bossId){c.moveTo(px,py-3);c.lineTo(px+3,py);c.lineTo(px,py+3);c.lineTo(px-3,py);c.closePath();}else c.arc(px,py,entity.id===snapshot.selfId?2.8:1.6,0,Math.PI*2);c.fill(); }
-    this.label(snapshot.world.name.toUpperCase(), x + width / 2, y + height + 14, T.muted, 8);
-    c.font = '600 8px "IBM Plex Mono", monospace'; c.textAlign = 'right'; c.fillStyle = T.text; c.fillText('С ↑', x + width - 3, y + 10);
+    c.font = '700 8px Manrope, sans-serif'; c.textAlign = 'left';
+    for (const [index, name, color] of [[0, 'Ты', T.self], [1, 'Цель', T.self], [2, 'Выход', T.extract]] as const) {
+      const px = x + index * width / 3;
+      if (index === 1) diamond({ x: px + 3, y: y + height + 12 }, 2.5, color);
+      else { c.fillStyle = color; c.fillRect(px + 1, y + height + 10, 4, 4); }
+      c.fillStyle = T.text; c.fillText(name, px + 9, y + height + 15);
+    }
+    c.restore();
   }
 }

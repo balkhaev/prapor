@@ -12,9 +12,11 @@ import { PixelContainerArt } from './pixel-containers';
 import { PixelRaster, PIXEL_PALETTE as P } from './pixel-art';
 import { paintPropAtmosphere, paintBuildingAtmosphere } from './pixel-environment';
 import { raidGroundArt } from './raid-ground-art';
+import { SceneLightBuffer, propLampSources } from './pixel-lighting';
 import type { LiveCityBuilding, LiveWorldProp } from './game/live';
 import { raidPixelBuilding, raidPixelFrame, raidPixelProp } from './pixel-raid-presentation';
 import { PIXEL_SCENE_THEME as T, pixelSceneTint as tintColor } from './pixel-scene-theme';
+import { fitMinimap, minimapPoint, minimapViewport, raidMinimapTrail } from './minimap-presentation';
 import type { BossId } from './game/bosses';
 import { getHostileVisualLoadout, getRaidVisualLoadout } from "./scav-loadout";
 import type { ShelterCamera, ShelterViewport } from "./shelter-camera";
@@ -30,7 +32,7 @@ export interface RaidStreetSnapshot { raids: Raid[]; selectedRaidId?: string | n
 type Pawn = { root: Phaser.GameObjects.Container; body: Phaser.GameObjects.Container; actor: PixelPhaserActor; point: Point | null; appearance: number; direction: PixelFacing; firedAt?: number; bossBadge?: Phaser.GameObjects.Text };
 type Occluder = { object: Phaser.GameObjects.Container; x: number; y: number; width: number; height: number };
 let nextSceneryTexture = 0;
-const MINI = { width: 136, height: 102, inset: 9, innerWidth: 118, innerHeight: 78 };
+const MINI = { width: 148, height: 120, inset: 9, top: 21, innerWidth: 130, innerHeight: 78 };
 const clamp = Phaser.Math.Clamp;
 const mix = (a: number, b: number, amount: number) => {
 	const c = (shift: number) => Math.round((a >> shift & 255) * (1 - amount) + (b >> shift & 255) * amount);
@@ -60,6 +62,7 @@ export class RaidStreetRenderer {
 	private hudTop = 43;
 	private hudBottomInset = 30;
 	private mini: Phaser.GameObjects.Graphics;
+	private miniGuide: Phaser.GameObjects.Container;
 	private progress: Phaser.GameObjects.Graphics;
 	private viewport: ShelterViewport;
 	private camera: ShelterCamera = { zoom: 1.8, x: 0, y: 0 };
@@ -92,12 +95,20 @@ export class RaidStreetRenderer {
 	private sceneryTextures = new Set<string>();
 	private environment: { art: Phaser.GameObjects.Graphics; prop?: LiveWorldProp; building?: LiveCityBuilding }[] = [];
 	private environmentAt = 0;
+	private lightBuffer = new SceneLightBuffer();
+	private lightTexture: Phaser.Textures.CanvasTexture;
+	private lightImage: Phaser.GameObjects.Image;
+	private lightKey: string;
 
 	constructor(private scene: Phaser.Scene, viewport: ShelterViewport, private reducedMotion: boolean, _requestScavAtlas: (appearance: number) => void = () => {}) {
 		this.viewport = { ...viewport };
 		this.world = scene.add.container(0, 0);
 		this.hud = scene.add.container(0, 0);
 		this.layer = scene.add.container(0, 0, [this.world, this.hud]).setVisible(false);
+		this.lightKey = `raid-light-${nextSceneryTexture++}`;
+		this.lightTexture = scene.textures.createCanvas(this.lightKey, 1, 1)!;
+		this.lightImage = scene.add.image(0, 0, this.lightKey).setOrigin(0).setVisible(false);
+		this.layer.addAt(this.lightImage, 1);
 		this.effects = scene.add.graphics().setDepth(10000);
 		this.world.add(this.effects);
 		this.hudPlate = scene.add.graphics();
@@ -108,7 +119,9 @@ export class RaidStreetRenderer {
 		this.alertPlate = scene.add.graphics(); this.alertText = this.text(13, 9, "", 12).setWordWrapWidth(310, true);
 		this.alertRoot = scene.add.container(23, 0, [this.alertPlate, this.alertText]).setVisible(false);
 		this.mini = scene.add.graphics(); this.groundMinimap = scene.add.graphics(); this.progress = scene.add.graphics();
-		this.hud.add([this.hudPlate, this.title, this.actionBadge, this.caption, this.detail, this.groundMinimap, this.mini, this.progress, this.alertRoot]);
+		this.miniGuide = scene.add.container(0, 0, [this.text(9, 5, "УЛИЦЫ", 8, T.muted), this.text(MINI.width - 9, 5, "С ↑", 8).setOrigin(1, 0),
+			this.text(17, 104, "Боец", 8), this.text(62, 104, "Цель", 8), this.text(109, 104, "Связь", 8)]).setVisible(false);
+		this.hud.add([this.hudPlate, this.title, this.actionBadge, this.caption, this.detail, this.groundMinimap, this.mini, this.miniGuide, this.progress, this.alertRoot]);
 		this.resize(viewport);
 	}
 
@@ -119,9 +132,10 @@ export class RaidStreetRenderer {
 	private quad(x: number, y: number, width = 1, height = 1, z = 0): Point[] { return [{ x, y, z }, { x: x + width, y, z }, { x: x + width, y: y + height, z }, { x, y: y + height, z }].map((p) => this.project(p)); }
 	selectRaid(id: string | null): void { if (id !== this.selectedId) { this.selectedId = id; this.cachedRaid = null; this.cachedGroup = []; this.squadFrame = null; this.carriedWeapon = null; this.report = null; this.following = true; this.pendingCamera = null; this.feedback = null; this.alertRoot.setVisible(false); } }
 	reset(): void {
+		this.lightImage.setVisible(false); this.lightBuffer.clear();
 		this.world.removeAll(true); this.clearScenery(); this.plan = null; this.planInput = ""; this.builtRaidId = null; this.selectedId = null; this.cachedRaid = null; this.carriedWeapon = null; this.report = null; this.pawn = null; this.enemies = []; this.loot.clear(); this.occluders = []; this.pendingCamera = null;
 		this.squadPawns.clear(); this.squadLabels.clear(); this.squadFrame = null; this.cachedGroup = [];
-		this.groundMinimap.clear(); this.mini.clear(); this.progress.clear(); this.title.setText("УЛИЦЫ · НАБЛЮДЕНИЕ");
+		this.groundMinimap.clear(); this.mini.clear(); this.miniGuide.setVisible(false); this.progress.clear(); this.title.setText("УЛИЦЫ · НАБЛЮДЕНИЕ");
 		this.feedback = null; this.alertRoot.setVisible(false); this.actionBadge.setText(""); this.detail.setText("");
 		this.paintHudPlate();
 	}
@@ -153,8 +167,9 @@ export class RaidStreetRenderer {
 		const headInset = head ? Math.max(0, head.bottom - rect.top) : 0;
 		this.hudTop = this.compactHud ? (headInset + 8) * inverseScale : Math.max(43, (headInset + 8) * inverseScale);
 		this.hudBottomInset = ((bottom ? Math.max(0, rect.bottom - bottom.top) : 0) + 8) * inverseScale;
-		const right = Math.max(17, 8 * inverseScale), miniY = viewport.height - MINI.height - this.hudBottomInset;
-		this.groundMinimap.setPosition(viewport.width - MINI.width - right, miniY); this.mini.setPosition(viewport.width - MINI.width - right, miniY);
+		const miniScale = (this.compactHud ? .9 : 1) * inverseScale;
+		const right = Math.max(17, 8 * inverseScale), miniY = viewport.height - MINI.height * miniScale - this.hudBottomInset;
+		for (const item of [this.groundMinimap, this.mini, this.miniGuide]) item.setPosition(viewport.width - MINI.width * miniScale - right, miniY).setScale(miniScale);
 		this.title.setVisible(!this.compactHud).setPosition(27, this.hudTop + 11);
 		this.caption.setVisible(!this.compactHud).setPosition(27, this.hudTop + 58);
 		this.detail.setVisible(!this.compactHud).setPosition(27, this.hudTop + 95);
@@ -314,6 +329,22 @@ export class RaidStreetRenderer {
 			if (item.building) paintBuildingAtmosphere(item.building, this.environmentAt, plot, this.reducedMotion);
 		}
 	}
+	private paintLighting(): void {
+		const zoom = this.camera.zoom;
+		const lamps = (this.plan?.props ?? []).flatMap(prop => {
+			if (prop.kind !== 'lamp') return [];
+			const native = raidPixelProp(prop), origin = this.project({ x: prop.x - native.width / 2, y: prop.y - native.height / 2 });
+			return propLampSources(native).map(light => ({ x: (origin.x + light.x * .5 - this.camera.x) * zoom, y: (origin.y + light.y * .5 - this.camera.y) * zoom,
+				headY: (origin.y + light.headY * .5 - this.camera.y) * zoom, radius: light.radius * .5 * zoom }));
+		});
+		if (this.lightBuffer.paint(this.viewport.width, this.viewport.height, lamps)) {
+			const canvas = this.lightBuffer.canvas;
+			this.lightTexture.setSize(canvas.width, canvas.height);
+			const context = this.lightTexture.getContext(); context.clearRect(0, 0, canvas.width, canvas.height); context.drawImage(canvas, 0, 0);
+			this.lightTexture.refresh(); this.lightImage.setDisplaySize(this.viewport.width, this.viewport.height);
+		}
+		this.lightImage.setVisible(true);
+	}
 
 	private makePawn(appearance: number, _hostile: boolean): Pawn {
 		const body = this.scene.add.container(0, 0), actor = new PixelPhaserActor(this.scene, body);
@@ -408,27 +439,51 @@ export class RaidStreetRenderer {
 	private drawMiniGround(): void {
 		if (!this.plan) return;
 		const g = this.groundMinimap, plan = this.plan; g.clear();
-		g.fillStyle(tintColor(T.panel), .85).fillRoundedRect(0, 0, MINI.width, MINI.height, 6).lineStyle(1, tintColor(T.border), .45).strokeRoundedRect(0, 0, MINI.width, MINI.height, 6);
-		const sx = MINI.innerWidth / plan.width, sy = MINI.innerHeight / plan.height;
-		for (const tile of plan.tiles) g.fillStyle(tile.kind === "street" ? tintColor(P.concreteShade) : tile.kind === "sidewalk" ? tintColor(P.concrete) : tintColor(P.leafShade), .65).fillRect(MINI.inset + tile.x * sx, MINI.inset + tile.y * sy, sx, sy);
-		for (const building of plan.buildings) g.fillStyle(tintColor(P.ink)).fillRect(MINI.inset + building.x * sx, MINI.inset + building.y * sy, building.width * sx, building.height * sy);
+		this.miniGuide.setVisible(true);
+		g.fillStyle(tintColor(T.panel), .94).fillRoundedRect(0, 0, MINI.width, MINI.height, 3).lineStyle(1, tintColor(T.border), .65).strokeRoundedRect(0, 0, MINI.width, MINI.height, 3);
+		const layout = fitMinimap(plan, { x: MINI.inset, y: MINI.top, width: MINI.innerWidth, height: MINI.innerHeight });
+		g.fillStyle(tintColor(P.ink)).fillRect(layout.x, layout.y, layout.width, layout.height);
+		for (const tile of plan.tiles) {
+			const p = minimapPoint(layout, tile);
+			g.fillStyle(tile.kind === "street" ? tintColor(P.concreteShade) : tile.kind === "sidewalk" ? tintColor(P.concrete) : tintColor(P.leafShade), .65).fillRect(p.x, p.y, layout.scale, layout.scale);
+		}
+		for (const building of plan.buildings) { const p = minimapPoint(layout, building); g.fillStyle(tintColor(P.ink)).fillRect(p.x, p.y, building.width * layout.scale, building.height * layout.scale); }
+		g.lineStyle(1, tintColor(T.border), .6).strokeRect(layout.x, layout.y, layout.width, layout.height);
+		g.fillStyle(tintColor(T.self)).fillCircle(11, 109, 2.5);
+		polygon(g, [{ x: 55, y: 106 }, { x: 58, y: 109 }, { x: 55, y: 112 }, { x: 52, y: 109 }], tintColor(T.self));
+		g.lineStyle(1, tintColor(T.extract)).strokeRect(101, 106, 5, 5);
 	}
 	private updateMini(frame: Frame): void {
 		if (!this.plan) return;
-		const g = this.mini, sx = MINI.innerWidth / this.plan.width, sy = MINI.innerHeight / this.plan.height; g.clear();
-		const current = this.plan.segments[frame.segmentIndex], travelled = this.plan.segments.slice(0, frame.segmentIndex).flatMap((segment) => segment.path);
-		if (current) travelled.push(...current.path.slice(0, Math.floor((current.path.length - 1) * frame.segmentProgress) + 1));
-		travelled.push(frame.position);
-		if (travelled.length > 1) line(g, travelled.map((point) => ({ x: 9 + point.x * sx, y: 9 + point.y * sy })), tintColor(T.route), 1.5, .7);
-		for (const spot of this.plan.lootSpots) if (frame.visitedLootIds.includes(spot.id)) g.fillStyle(tintColor(T.healthy)).fillRect(7 + spot.x * sx, 7 + spot.y * sy, 3, 3);
-		for (const enemy of frame.enemyPositions) g.fillStyle(tintColor(T.hostile)).fillCircle(9 + enemy.x * sx, 9 + enemy.y * sy, 2.2);
+		const g = this.mini, plan = this.plan, layout = fitMinimap(plan, { x: MINI.inset, y: MINI.top, width: MINI.innerWidth, height: MINI.innerHeight }); g.clear();
+		const at = (point: Point) => minimapPoint(layout, point);
+		const cameraCorner = (x: number, y: number) => {
+			const px = (this.camera.x + x / this.camera.zoom - this.projection.originX) / (this.projection.tileWidth / 2);
+			const py = (this.camera.y + y / this.camera.zoom - this.projection.originY) / (this.projection.tileHeight / 2);
+			return { x: (px + py) / 2, y: (py - px) / 2 };
+		};
+		const view = minimapViewport(plan, [cameraCorner(0, 0), cameraCorner(this.viewport.width, 0), cameraCorner(this.viewport.width, this.viewport.height), cameraCorner(0, this.viewport.height)], layout);
+		if (view.length > 2) { polygon(g, view, tintColor(T.text), .07); g.lineStyle(1, tintColor(T.text), .6).strokePoints(view, true); }
+		const travelled = raidMinimapTrail(plan, frame).map(at);
+		if (travelled.length > 1) line(g, travelled, tintColor(T.route), 1.4, .85);
+		const preview = getRaidRoutePreview(plan, frame);
+		if (preview.length > 1) line(g, preview.map(at), tintColor(T.self), 1, .6);
+		const current = plan.segments[frame.segmentIndex];
+		const search = frame.action === 'search' ? plan.lootSpots.find(spot => spot.id === current?.targetId && frame.visibleLootIds.includes(spot.id)) : undefined;
+		const target = search ?? preview.at(-1);
+		if (target) { const p = at(target); polygon(g, [{ x: p.x, y: p.y - 4 }, { x: p.x + 4, y: p.y }, { x: p.x, y: p.y + 4 }, { x: p.x - 4, y: p.y }], tintColor(T.self)); }
+		for (const spot of plan.lootSpots) if (frame.visitedLootIds.includes(spot.id)) { const p = at(spot); g.fillStyle(tintColor(T.healthy)).fillRect(p.x - 1.5, p.y - 1.5, 3, 3); }
+		const checkpoint = at(plan.checkpoint);
+		g.fillStyle(tintColor(T.panel)).fillRect(checkpoint.x - 3, checkpoint.y - 3, 6, 6).lineStyle(1.5, tintColor(T.extract)).strokeRect(checkpoint.x - 3, checkpoint.y - 3, 6, 6);
+		for (const enemy of frame.enemyPositions) { const p = at(enemy); g.fillStyle(tintColor(T.panel)).fillCircle(p.x, p.y, 3).fillStyle(tintColor(T.hostile)).fillCircle(p.x, p.y, 2); }
 		if (this.squadFrame) for (const [index, member] of this.squadFrame.members.entries()) {
+			const p = at(member.position);
 			const tint = member.lostScav ? tintColor(T.hostile) : index === 0 ? tintColor(T.self) : index === 1 ? tintColor(T.healthy) : tintColor(T.ally);
-			g.fillStyle(tint).fillCircle(9 + member.position.x * sx, 9 + member.position.y * sy, member.lostScav ? 1.7 : 2.3);
-			if (member.helpingId) g.lineStyle(1, tint, .7).strokeCircle(9 + member.position.x * sx, 9 + member.position.y * sy, 4);
+			g.fillStyle(tintColor(T.panel)).fillCircle(p.x, p.y, 3.6).fillStyle(tint).fillCircle(p.x, p.y, member.lostScav ? 1.7 : 2.5);
+			if (!index || member.helpingId) g.lineStyle(1, !index ? tintColor(T.text) : tint, .8).strokeCircle(p.x, p.y, 4);
 		} else {
-			g.fillStyle(tintColor(T.self)).fillCircle(9 + frame.position.x * sx, 9 + frame.position.y * sy, 3);
-			g.lineStyle(1, tintColor(T.text), .5).strokeCircle(9 + frame.position.x * sx, 9 + frame.position.y * sy, 5);
+			const p = at(frame.position); g.fillStyle(tintColor(T.panel)).fillCircle(p.x, p.y, 4.5).fillStyle(tintColor(T.self)).fillCircle(p.x, p.y, 3);
+			g.lineStyle(1, tintColor(T.text), .9).strokeCircle(p.x, p.y, 4.5);
 		}
 	}
 
@@ -493,7 +548,7 @@ export class RaidStreetRenderer {
 		if (id !== this.selectedId) this.selectRaid(id);
 		const activeRaid = snapshot.raids.find((raid) => raid.id === id);
 		const raid = activeRaid ?? (this.cachedRaid?.id === id ? this.cachedRaid : null);
-		if (!raid) { this.world.setVisible(false); this.mini.clear(); this.groundMinimap.clear(); this.progress.clear(); this.title.setText("УЛИЦЫ · НАБЛЮДЕНИЕ"); this.caption.setText("Отправь бойца в рейд и выбери «Наблюдать»"); this.actionBadge.setText(""); this.detail.setText(""); this.feedback = null; this.alertRoot.setVisible(false); this.paintHudPlate(); return; }
+		if (!raid) { this.world.setVisible(false); this.mini.clear(); this.groundMinimap.clear(); this.miniGuide.setVisible(false); this.progress.clear(); this.title.setText("УЛИЦЫ · НАБЛЮДЕНИЕ"); this.caption.setText("Отправь бойца в рейд и выбери «Наблюдать»"); this.actionBadge.setText(""); this.detail.setText(""); this.feedback = null; this.alertRoot.setVisible(false); this.paintHudPlate(); return; }
 		this.world.setVisible(true);
 		this.cachedRaid = raid;
 		this.report = activeRaid ? null : snapshot.history?.find((report) => report.raidId === id || report.squad?.leaderRaidId === id) ?? (this.report?.raidId === id ? this.report : null);
@@ -578,7 +633,7 @@ export class RaidStreetRenderer {
 		if (!this.reducedMotion && plan.theme.weather === "rain") for (let n = 0; n < 25; n++) { const x = this.camera.x + ((n * 137 + now / 60) % (this.viewport.width / this.camera.zoom)), y = this.camera.y + ((n * 91 + now / 10) % (this.viewport.height / this.camera.zoom)); line(this.effects, [{ x, y }, { x: x - 2, y: y + 6 }], tintColor(P.steelLight), .7, .17); }
 		if (this.pendingCamera) this.applyRestoredCamera();
 		else if (this.following) this.follow(delta, firstFrame);
-		this.applyCamera(); this.world.sort("depth"); this.updateMini(frame);
+		this.applyCamera(); this.world.sort("depth"); this.paintLighting(); this.updateMini(frame);
 		const status = this.report ? this.report.success ? "РЕЙД ЗАВЕРШЁН · ДОБЫЧА НА БАЗЕ" : "РЕЙД ЗАВЕРШЁН · СМОТРИ ОТЧЁТ"
 			: objective.settling ? "КОНТРОЛЬНАЯ ТОЧКА · ОЖИДАЕТСЯ СВОДКА" : frame.paused ? "ЖДЁТ ПРИКАЗА · ДОБЫЧА ПРИ НЁМ"
 			: `${objective.label}${frame.action === "search" ? ` · ${Math.floor(frame.segmentProgress * 100)}%` : frame.enemyPositions.length ? ` · КОНТАКТ ${frame.enemyPositions.length}` : ""}`;
@@ -593,5 +648,5 @@ export class RaidStreetRenderer {
 		this.updateAlert();
 		this.progress.clear(); this.progress.fillStyle(tintColor(T.panel), .92).fillRoundedRect(0, 0, Math.min(350, this.viewport.width - 224), 10, 3).fillStyle(tintColor(T.self)).fillRoundedRect(0, 0, Math.min(350, this.viewport.width - 224) * frame.progress, 10, 3);
 	}
-	destroy(): void { this.layer.destroy(true); this.clearScenery(); this.loot.clear(); this.hostileLoadouts.clear(); this.bossLoadouts.clear(); this.squadPawns.clear(); this.squadLabels.clear(); this.squadFrame = null; this.cachedGroup = []; this.enemies = []; this.occluders = []; this.pawn = null; this.cachedRaid = null; this.visualLoadout = null; }
+	destroy(): void { this.layer.destroy(true); this.scene.textures.remove(this.lightKey); this.lightBuffer.clear(); this.clearScenery(); this.loot.clear(); this.hostileLoadouts.clear(); this.bossLoadouts.clear(); this.squadPawns.clear(); this.squadLabels.clear(); this.squadFrame = null; this.cachedGroup = []; this.enemies = []; this.occluders = []; this.pawn = null; this.cachedRaid = null; this.visualLoadout = null; }
 }

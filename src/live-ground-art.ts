@@ -26,6 +26,19 @@ export function terrainTextureResolution(width: number, height: number): number 
   return Math.max(1, Math.min(longest <= 256 ? 16 : 12, Math.floor(4096 / longest)));
 }
 
+/** Bits point only to real land neighbours. A map edge never invents a bank. */
+export function waterBankEdges(width: number, height: number, terrain: readonly LiveTerrain[]): Uint8Array {
+  const edges = new Uint8Array(width * height);
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    if (terrain[y * width + x] !== 'water') continue;
+    if (x > 0 && terrain[y * width + x - 1] !== 'water') edges[y * width + x]! |= 1;
+    if (x + 1 < width && terrain[y * width + x + 1] !== 'water') edges[y * width + x]! |= 2;
+    if (y > 0 && terrain[(y - 1) * width + x] !== 'water') edges[y * width + x]! |= 4;
+    if (y + 1 < height && terrain[(y + 1) * width + x] !== 'water') edges[y * width + x]! |= 8;
+  }
+  return edges;
+}
+
 function pixelMotifTone(material: LiveTerrain, px: number, py: number, resolution: number, seed: number, style = 0): number {
   const cluster = hash(Math.floor((px + hash(py >> 3, seed) % 5) / 12), Math.floor(py / 10) ^ seed);
   let tone = cluster % 9 === 0 ? 1 : cluster % 11 === 0 ? 3 : 2;
@@ -104,6 +117,7 @@ export function paintTerrainTexture(c: CanvasRenderingContext2D, world: GroundWo
     }
   }
   const bandHeight = Math.min(textureHeight, resolution * 8), pixels = c.createImageData(textureWidth, bandHeight);
+  const banks = waterBankEdges(width, height, terrain), bankShade = packed(blend(pigment(P.glass), pigment(P.leafShade), .35)), bankLight = packed(blend(pigment(P.glassLight), pigment(P.sand), .28));
   const data = new Uint32Array(pixels.data.buffer, pixels.data.byteOffset, pixels.data.byteLength / 4), atlasRows = new Uint32Array(atlases.length);
   for (let bandY = 0; bandY < textureHeight; bandY += bandHeight) {
     const rows = Math.min(bandHeight, textureHeight - bandY);
@@ -120,6 +134,11 @@ export function paintTerrainTexture(c: CanvasRenderingContext2D, world: GroundWo
         }
         const atlas = atlases[material]!;
         data[py * textureWidth + px] = atlas.pixels[atlasRows[material]! + px % atlas.width]!;
+        if (banks[cell]) {
+          const bank = banks[cell]!, distance = Math.min(bank & 1 ? localX : resolution, bank & 2 ? resolution - 1 - localX : resolution, bank & 4 ? localY : resolution, bank & 8 ? resolution - 1 - localY : resolution);
+          if (distance === 0) data[py * textureWidth + px] = bankShade;
+          else if (distance === 1 && hash(px >> 1, textureY >> 1) % 3 === 0) data[py * textureWidth + px] = bankLight;
+        }
       }
     }
     c.putImageData(pixels, 0, bandY, 0, 0, textureWidth, rows);
