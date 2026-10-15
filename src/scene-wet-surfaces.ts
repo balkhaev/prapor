@@ -137,7 +137,10 @@ export function sampleWetSurfaces(input: WetSurfaceInput): WetSurfaceFrame {
       }
       const nearby = lights > 0 ? nearestLamp(patch, lamps) : null;
       if (nearby) {
-        const { lamp, proximity } = nearby, strength = water * proximity * clamp(lights / 1.5, 0, 1.15) * (soil ? .48 : 1);
+        // Specular water glints fall off more slowly than diffuse ground light,
+        // while still reaching zero at the same real lamp-pool boundary.
+        const { lamp, proximity } = nearby, strength = water * Math.sqrt(proximity) * clamp(lights / 1.5, 0, 1.15) * (soil ? .48 : 1);
+        const stripeHeight = Math.max(1, Math.round(Math.min(2, lamp.height / 100)));
         // A reflected lamp is a narrow vertical column below its real ground anchor.
         // Sideways puddles do not invent a second copy of the lamp at their centre.
         for (let stripe = 0; stripe < 7; stripe++) {
@@ -148,7 +151,7 @@ export function sampleWetSurfaces(input: WetSurfaceInput): WetSurfaceFrame {
           const x = lamp.x + wave * 1.2;
           const width = Math.max(1, Math.round((2 + stripe * .7 + unit(seed, stripe + 79) * 2) * (.65 + water * .35)));
           const alpha = strength * (.27 + unit(seed, stripe + 89) * .12) * (1 - wave * .07);
-          highlight({ x: Math.round(x - width / 2), y, width, height: 1 }, 'reflection', stripe % 3 ? colors.warm : colors.warmLight, alpha);
+          highlight({ x: Math.round(x - width / 2), y, width, height: stripeHeight }, 'reflection', stripe % 3 ? colors.warm : colors.warmLight, alpha);
         }
       }
     }
