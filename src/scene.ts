@@ -966,7 +966,7 @@ export function createWorld(
 		private syncBackdrop(): void {
 			if (!this.backdropGround || !this.backdropTrees) return;
 			const coverage = getShelterBackdropCoverage(this.viewCamera, this.viewport, this.worldBounds);
-			const signature = `${coverage.x}:${coverage.y}:${coverage.width}:${coverage.height}|${this.worldBounds.x}:${this.worldBounds.y}:${this.worldBounds.width}:${this.worldBounds.height}`;
+			const signature = `${coverage.x}:${coverage.y}:${coverage.width}:${coverage.height}|${this.layoutSignature}`;
 			if (signature === this.backdropSignature) return;
 			this.backdropSignature = signature; this.backdropCoverage = coverage; this.lastAtmospherePaint = -1000;
 			// Keep TileSprite's backing canvas at 512² even when a portrait camera sees
@@ -974,8 +974,9 @@ export function createWorld(
 			this.backdropGround.setPosition(coverage.x, coverage.y).setDisplaySize(coverage.width, coverage.height)
 				.setTileScale(SHELTER_BACKDROP_TILE / coverage.width, SHELTER_BACKDROP_TILE / coverage.height).setTilePosition(coverage.x, coverage.y);
 			this.backdropTrees.clear();
-			const forest = getShelterBackdropDecorations(coverage, this.worldBounds);
-			paintShelterBackdropTerrain(this.backdropTrees, coverage, forest);
+			const lots = this.landscape?.lots ?? [], reserved = this.landscape?.forestReserved ?? [];
+			const forest = getShelterBackdropDecorations(coverage, this.worldBounds, lots, reserved);
+			paintShelterBackdropTerrain(this.backdropTrees, coverage, forest, lots, reserved);
 			for (const decoration of forest) paintShelterDecoration(this.backdropTrees, decoration);
 		}
 

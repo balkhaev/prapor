@@ -5,6 +5,8 @@ import { projectShelterPoint, shelterRoomPosition, SHELTER_COLUMN_STRIDE, SHELTE
 import type { ShelterPoint } from "./shelter-motion";
 import { PIXEL_PALETTE as P } from "./pixel-art";
 import { paintShelterAccessRoad } from "./shelter-road";
+import { getShelterForestDecorations, getShelterForestNearBounds } from "./shelter-forest";
+import { paintShelterForestShrub, paintShelterForestTree } from "./shelter-forest-art";
 
 export interface ShelterLandscapeEdge extends ShelterCorridorSegment { side: "north" | "south" | "east" | "west" }
 export interface ShelterLandscapeDecoration {
@@ -13,11 +15,14 @@ export interface ShelterLandscapeDecoration {
 	seed: number;
 	radius: number;
 	owned: boolean;
+	species?: "spruce" | "pine" | "birch" | "deciduous";
+	scale?: number;
 }
 export interface ShelterLandscapeApron { points: ShelterPoint[]; seed: number }
 export interface ShelterLandscape {
 	sites: ShelterLayoutSite[];
 	lots: ShelterRect[];
+	forestReserved?: ShelterRect[];
 	perimeter: ShelterLandscapeEdge[];
 	paths: ShelterCorridorSegment[];
 	aprons: ShelterLandscapeApron[];
@@ -33,12 +38,6 @@ const C = {
 	leaf: pigment(P.leaf), leafLight: pigment(P.leafLight),
 };
 
-/** Flat clusters keep leaves readable at the same pixel scale as the actors. */
-function foliage(g: Phaser.GameObjects.Graphics, x: number, y: number, width: number, height: number, color: number, alpha = 1): void {
-	const left = Math.round(x - width / 2), top = Math.round(y - height / 2), w = Math.max(2, Math.round(width)), h = Math.max(2, Math.round(height));
-	g.fillStyle(color, alpha).fillRect(left + 2, top, Math.max(1, w - 4), h);
-	g.fillRect(left, top + Math.max(1, Math.round(h / 4)), w, Math.max(1, Math.round(h / 2)));
-}
 const key = (site: ShelterLayoutSite) => `${site.column}:${site.row}`;
 const hash = (x: number, y: number, salt = 0): number => ((Math.imul(x + 1357, 73856093) ^ Math.imul(y + 2461, 19349663) ^ Math.imul(salt + 17, 83492791)) >>> 0);
 const random = (seed: number) => {
@@ -158,7 +157,7 @@ export function getShelterLandscape(inputSites: readonly ShelterLayoutSite[], bu
 	const freePlacement = buildings.some((building) => building.position || building.facing !== undefined);
 	const corridors = freePlacement ? [] : getShelterCorridorSegments(sites, buildings);
 	const clearings = freePlacement ? getShelterOpenGroundPoints(sites, buildings) : sites.map((site) => { const p = shelterRoomPosition(site.column, site.row); return { x: p.x + 83, y: p.y + 80 }; });
-	const canPlace = (point: ShelterPoint, radius: number, inside: boolean) => {
+	const canPlace = (point: ShelterPoint, radius: number, inside: boolean, separated = true) => {
 		if (inside !== ownedAt(point, owned)) return false;
 		if ([-radius, radius].some((dx) => [-radius, radius].some((dy) => ownedAt({ x: point.x + dx, y: point.y + dy }, owned) !== inside))) return false;
 		if (rects.some((rect) => intersects(point, radius + 12, rect))) return false;
@@ -166,7 +165,7 @@ export function getShelterLandscape(inputSites: readonly ShelterLayoutSite[], bu
 		if ([...corridors, ...paths].some((segment) => distanceToSegment(point, segment) < radius + 12)) return false;
 		// The unassigned squad gathers in the centre of free land and enters through its south side.
 		if (inside && clearings.some((p) => intersects(point, radius + 7, { x: p.x - 31, y: p.y - 30, width: 62, height: 60 }))) return false;
-		return !decorations.some((d) => Math.hypot(d.point.x - point.x, d.point.y - point.y) < d.radius + radius + 8);
+		return !separated || !decorations.some((d) => Math.hypot(d.point.x - point.x, d.point.y - point.y) < d.radius + radius + 8);
 	};
 	const add = (kind: ShelterLandscapeDecoration["kind"], point: ShelterPoint, radius: number, inside: boolean, seed: number) => {
 		if (canPlace(point, radius, inside)) decorations.push({ kind, point, radius, owned: inside, seed });
@@ -192,23 +191,12 @@ export function getShelterLandscape(inputSites: readonly ShelterLayoutSite[], bu
 			add("fern", { x: p.x + 19 + seed % 10, y: p.y + 97 }, 8, true, seed + 6);
 		}
 	}
-	const frontier = new Map<string, ShelterLayoutSite>();
-	for (const site of sites) for (const [dx, dy] of [[-1, 0], [1, 0], [0, 1]]) {
-		const candidate = { column: site.column + dx!, row: site.row + dy! }; if (!owned.has(key(candidate))) frontier.set(key(candidate), candidate);
+	// The woods share the distant terrain's world-anchored grove field. They
+	// recede from the lived-in clearing instead of outlining each vacant lot.
+	for (const decoration of getShelterForestDecorations(getShelterForestNearBounds(lots), lots, reserved, 160)) {
+		if (canPlace(decoration.point, decoration.radius, false, false)) decorations.push(decoration);
 	}
-	for (const site of [...frontier.values()].sort((a, b) => a.row - b.row || a.column - b.column)) {
-		const p = shelterRoomPosition(site.column, site.row), seed = hash(site.column, site.row, 1);
-		if (decorations.filter((d) => !d.owned).length >= 96) break;
-		add("tree", { x: p.x + 34 + seed % 31, y: p.y + 27 + seed % 19 }, 19, false, seed);
-		add(seed % 2 ? "bush" : "tree", { x: p.x + 123 + seed % 23, y: p.y + 73 }, 17, false, seed + 1);
-		add("rock", { x: p.x + 101, y: p.y + 31 }, 9, false, seed + 2);
-		add("fern", { x: p.x + 19, y: p.y + 90 + seed % 11 }, 8, false, seed + 3);
-		add("bush", { x: p.x + 87, y: p.y + 103 }, 12, false, seed + 4);
-		if (seed % 3 === 0) add("logs", { x: p.x + 146, y: p.y + 30 }, 15, false, seed + 5);
-		else add("stump", { x: p.x + 149, y: p.y + 27 }, 8, false, seed + 5);
-		if (seed % 4 === 0) add("puddle", { x: p.x + 89, y: p.y + 77 }, 18, false, seed + 6);
-	}
-	return { sites, lots, perimeter, paths, aprons, decorations };
+	return { sites, lots, forestReserved: reserved, perimeter, paths, aprons, decorations };
 }
 
 class LandscapePainter {
@@ -263,7 +251,7 @@ export function paintShelterLandscape(g: Phaser.GameObjects.Graphics, landscape:
 		}
 	}
 	// Forest floor and fall leaves collect beneath plants, rather than tinting every square equally.
-	for (const decoration of landscape.decorations) if (["tree", "bush", "stump", "logs"].includes(decoration.kind)) {
+	for (const decoration of landscape.decorations) if (decoration.owned && ["tree", "bush", "stump", "logs"].includes(decoration.kind)) {
 		const r = random(decoration.seed + 73), points = blob(decoration.point, decoration.radius + 11, decoration.radius + 7, decoration.seed + 74, 16);
 		if (points.every((point) => ownedAt(point, owned) === decoration.owned)) a.face(points, decoration.owned ? C.soil : 0x364b34, decoration.owned ? .17 : .5);
 		for (let i = 0; i < 13; i++) {
@@ -339,76 +327,17 @@ export function paintShelterLandscape(g: Phaser.GameObjects.Graphics, landscape:
 
 /** Upright silhouettes are separate depth-sorted objects; all positions still use the shared projection. */
 export function paintShelterDecoration(g: Phaser.GameObjects.Graphics, decoration: ShelterLandscapeDecoration, wind = 0): void {
-	const a = new LandscapePainter(g), p = decoration.point, seed = decoration.seed, r = random(seed), at = a.point(p), sway = Math.max(-1.6, Math.min(1.6, wind));
-	if (decoration.kind !== "puddle" && decoration.kind !== "camp") {
-		const tree = decoration.kind === "tree", upright = tree || decoration.kind === "lamp" || decoration.kind === "gate";
-		a.ellipse({ x: p.x + (upright ? 13 : 5), y: p.y + (upright ? 16 : 6) }, tree ? 26 : decoration.radius * .95 + 2, tree ? 16 : decoration.radius * .5 + 1, 0x173d2e, tree ? .24 : .18);
+	const a = new LandscapePainter(g), p = decoration.point, seed = decoration.seed, at = a.point(p), sway = Math.max(-1.6, Math.min(1.6, wind));
+	if (decoration.kind !== "puddle" && decoration.kind !== "camp" && decoration.kind !== "tree" && decoration.kind !== "bush") {
+		const upright = decoration.kind === "lamp" || decoration.kind === "gate";
+		a.ellipse({ x: p.x + (upright ? 13 : 5), y: p.y + (upright ? 16 : 6) }, decoration.radius * .95 + 2, decoration.radius * .5 + 1, 0x173d2e, .18);
 	}
 	switch (decoration.kind) {
-		case "tree": {
-			const height = 43 + seed % 12, birch = seed % 3 === 1, pine = seed % 3 === 0;
-			for (const [dx, dy] of [[-10, 2], [8, 4], [-2, 10], [4, -7]]) {
-				a.face([p, { x: p.x + dx! * .55 - 1, y: p.y + dy! * .55 }, { x: p.x + dx!, y: p.y + dy! }, { x: p.x + dx! * .55 + 2, y: p.y + dy! * .55 }], C.bark, .9, .7);
-				a.line([{ x: p.x + dx! * .15, y: p.y + dy! * .15 }, { x: p.x + dx! * .75, y: p.y + dy! * .75 }], C.wood, 1, .7, 1.2);
-			}
-			for (let i = 0; i < 7; i++) {
-				const angle = i * 2.4, leaf = a.point({ x: p.x + Math.cos(angle) * (7 + i % 3), y: p.y + Math.sin(angle) * (6 + i % 3) });
-				g.fillStyle(i % 2 ? C.litter : C.grassDark, .8).fillRect(Math.round(leaf.x), Math.round(leaf.y), 2, 1);
-			}
-			for (const [dx, dy] of [[-7, 2], [6, 2], [1, 7]]) a.line([p, { x: p.x + dx!, y: p.y + dy! }], birch ? 0xada689 : 0x5d5b40, 1.4, .75);
-			g.lineStyle(birch ? 3 : 4, birch ? 0xc1c1a3 : 0x6a5943).lineBetween(at.x, at.y, at.x - 1, at.y - height + 10);
-			g.lineStyle(1, birch ? 0xe0dcca : 0xa58a60, .65).lineBetween(at.x - 1, at.y - 3, at.x - 2, at.y - 26);
-			if (birch) for (let z = 5; z < height - 10; z += 7) g.lineStyle(1.1, 0x5a6151, .8).lineBetween(at.x - 1.5, at.y - z, at.x + .8, at.y - z + .7);
-			g.lineStyle(1.8, birch ? 0x999c7e : 0x6a5943).lineBetween(at.x - 1, at.y - 17, at.x - 11 + sway * .4, at.y - 30);
-			g.lineStyle(1.5, birch ? 0xaaa88d : 0x6a5943).lineBetween(at.x - 1, at.y - 22, at.x + 11 + sway * .4, at.y - 35);
-			for (let z = 6; z < 30; z += 7) {
-				g.lineStyle(1, birch ? C.ink : C.wood, .75).lineBetween(Math.round(at.x - 1), Math.round(at.y - z), Math.round(at.x + 1), Math.round(at.y - z - 2));
-			}
-			if (pine) {
-				// Long tiered boughs make a ragged spruce silhouette, with clear sky between the tiers.
-				for (const [z, width] of [[20, 19], [31, 16], [41, 12]]) {
-					const tip = at.y - Math.min(height, z! + 15), base = at.y - z! + 7, cx = at.x + sway * z! / height;
-					const points = [{ x: cx, y: tip }, { x: cx - width! * .45, y: base - 7 }, { x: cx - width!, y: base }, { x: cx - width! * .7, y: base + 1 }, { x: cx - 4, y: base - 1 }, { x: cx + 4, y: base + 2 }, { x: cx + width! * .85, y: base + 1 }, { x: cx + width!, y: base - 1 }, { x: cx + width! * .45, y: base - 9 }];
-					g.fillStyle(C.forestLight).fillPoints(points.map(point => ({ x: Math.round(point.x), y: Math.round(point.y) })), true);
-					g.fillStyle(C.grassDark).fillPoints([points[0]!, points[1]!, { x: cx - width! * .7, y: base - 1 }, { x: cx - 1, y: base - 5 }], true);
-					g.lineStyle(1, C.grass, .8).lineBetween(Math.round(cx - 3), Math.round(base - 8), Math.round(cx - width! * .55), Math.round(base - 3));
-					for (const tip of [-.65, -.3, .18, .52]) {
-						const lx = Math.round(cx + width! * tip), ly = Math.round(base - (1 - Math.abs(tip)) * 7);
-						g.fillStyle(tip < 0 ? C.grassLight : C.grass).fillRect(lx, ly, 3, 1);
-						g.fillStyle(C.forestLight).fillRect(lx + 1, ly + 2, 2, 1);
-					}
-				}
-			} else {
-				const centre = { x: at.x + sway, y: at.y - height + 20 }, width = birch ? 16 : 22, depth = birch ? 19 : 17;
-				// Overlapping lobes have stepped edges and solid lit/shaded planes,
-				// instead of a translucent smooth vector crown.
-				for (let i = 0; i < 9; i++) {
-					const angle = i / 9 * Math.PI * 2, cx = centre.x + Math.cos(angle) * width * .58, cy = centre.y + Math.sin(angle) * depth * .57;
-					foliage(g, cx, cy, width * .95, depth * .85, C.forestLight);
-				}
-				for (const [dx, dy, spread] of [[-.4, -.55, .75], [.15, -.65, .66], [-.55, -.05, .7], [.1, -.1, .78], [.55, .16, .5], [-.2, .48, .55]]) {
-					const cx = centre.x + width * dx!, cy = centre.y + depth * dy!;
-					foliage(g, cx, cy, width * spread!, depth * spread! * .8, C.leaf);
-					foliage(g, cx - 2, cy - 2, width * spread! * .55, depth * spread! * .32, C.leafLight);
-				}
-				for (let i = 0; i < 9; i++) {
-					const x = Math.round(centre.x - width * .6 + r() * width * 1.1), y = Math.round(centre.y - depth * .6 + r() * depth);
-					g.fillStyle(C.leafLight, .85).fillRect(x, y, 2 + i % 2, 1);
-					g.fillStyle(C.forestLight, .9).fillRect(x + 2, y + 2, 2, 1);
-				}
-			}
+		case "tree":
+			paintShelterForestTree(g, at, decoration, sway);
 			break;
-		}
 		case "bush":
-			for (const dx of [-7, 0, 6]) {
-				g.lineStyle(1, C.bark).lineBetween(Math.round(at.x), Math.round(at.y), Math.round(at.x + dx), Math.round(at.y - 9));
-			}
-			for (let i = 0; i < 5; i++) {
-				const dx = Math.cos(i * 2.7) * 7, dy = Math.sin(i * 2.7) * 3;
-				foliage(g, at.x + dx + sway * .35, at.y - 5 + dy, 15, 12, C.forestLight);
-				foliage(g, at.x + dx - 2 + sway * .55, at.y - 8 + dy, 9, 5, C.grass);
-			}
-			for (let i = 0; i < 4; i++) g.fillStyle(seed % 2 ? C.litter : C.pale).fillRect(Math.round(at.x + r() * 22 - 11 + sway * .55), Math.round(at.y - 4 - r() * 8), 1, 1);
+			paintShelterForestShrub(g, at, decoration, sway);
 			break;
 		case "fern": {
 			for (let i = 0; i < 7; i++) {
