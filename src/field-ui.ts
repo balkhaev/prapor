@@ -85,6 +85,10 @@ export function mountFieldInterface(options: {
 			const open = target.getAttribute("aria-expanded") === "true";
 			if (open) { closePanel(panel); return; }
 			body.classList.remove("field-crew-open", "field-routes-open");
+			if (panel !== "dock" && window.innerWidth <= 640) {
+				body.classList.remove("field-dock-open");
+				body.classList.add("field-dock-collapsed");
+			}
 			body.classList.add(`field-${panel}-open`);
 			if (panel === "dock") body.classList.remove("field-dock-collapsed");
 			sync();
