@@ -1,5 +1,6 @@
 import './scene-light-control.css';
 import { readSceneClimate, readSceneLightMode, readSceneWeatherMode, setSceneLightMode, setSceneWeatherMode, setSceneClimatePreviewSpeed, resetSceneClimatePreview, type SceneLightMode, type SceneWeatherMode } from './scene-climate';
+import { settledSurfaceWetness } from './scene-wetness';
 
 export function mountSceneLightControl(host: Element, options: { preview?: boolean } = {}): () => void {
   const control = document.createElement('details'); control.className = 'scene-light-control';
@@ -8,7 +9,7 @@ export function mountSceneLightControl(host: Element, options: { preview?: boole
   const status = control.querySelector<HTMLOutputElement>('output')!;
   const update = () => {
     light.value = readSceneLightMode(); weather.value = readSceneWeatherMode();
-    if (control.open) { const climate = readSceneClimate(); status.textContent = `${climate.clockLabel} · ${climate.phaseLabel} · ${climate.weatherLabel}`; }
+    if (control.open) { const climate = readSceneClimate(), target = settledSurfaceWetness(climate.rain); const surface = climate.wetness < target - .025 ? ' · Земля намокает' : climate.wetness > target + .025 && climate.wetness > .08 ? ' · Земля сохнет' : ''; status.textContent = `${climate.clockLabel} · ${climate.phaseLabel} · ${climate.weatherLabel}${surface}`; }
   };
   light.addEventListener('change', () => setSceneLightMode(light.value as SceneLightMode));
   weather.addEventListener('change', () => setSceneWeatherMode(weather.value as SceneWeatherMode));

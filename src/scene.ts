@@ -20,6 +20,9 @@ import { getShelterLandscape, paintShelterLandscape, paintShelterDecoration, typ
 import { sampleShelterAtmosphere, sampleShelterWind, paintShelterAtmosphereGround, paintShelterAtmosphereGroundLights, paintShelterAtmosphereAir, paintShelterAtmosphereGlows, type ShelterSmokeEmitter, type ShelterAtmosphereLight } from "./shelter-atmosphere";
 import { readSceneClimate } from './scene-climate';
 import { sampleSceneWeather, paintSceneWeather } from './scene-weather';
+import { sampleWetSurfaces, paintWetSurfaces, type WetSurfacePatch } from './scene-wet-surfaces';
+import { getShelterWetPatches } from './shelter-wet-patches';
+import type { SceneLamp } from './pixel-lighting';
 import { getShelterRoutine, restoreShelterRoutine, type ShelterRoutine } from "./shelter-routines";
 import { getShelterActivityPose } from "./shelter-activity";
 import type { ShelterPersonView } from "./territory-life";
@@ -308,6 +311,9 @@ export function createWorld(
 		private ambient!: Phaser.GameObjects.Graphics;
 		private atmosphereGround!: Phaser.GameObjects.Graphics;
 		private atmosphereGroundLights!: Phaser.GameObjects.Graphics;
+		private wetGround!: Phaser.GameObjects.Graphics;
+		private wetPatches: WetSurfacePatch[] = [];
+		private wetLamps: SceneLamp[] = [];
 		private atmosphereShade!: Phaser.GameObjects.Graphics;
 		private atmosphereAir!: Phaser.GameObjects.Graphics;
 		private atmosphereGlows!: Phaser.GameObjects.Graphics;
@@ -393,6 +399,7 @@ export function createWorld(
 				if (this.viewportFrame) cancelAnimationFrame(this.viewportFrame);
 				this.nativeEvents.abort();
 				this.baseWeather?.destroy();
+				this.wetGround?.destroy(); this.wetPatches = []; this.wetLamps = [];
 				this.raidActors.clear();
 				this.places.clear();
 				this.cells.clear();
@@ -407,7 +414,7 @@ export function createWorld(
 			interactions.onHover?.(null);
 			if (!this.baseLayer) return;
 			this.baseLayer.setVisible(view === "base");
-			if (view !== "base") this.baseWeather.clear();
+			if (view !== "base") { this.baseWeather.clear(); this.wetGround.clear(); }
 			else this.lastAtmospherePaint = -1000;
 			this.mapLayer.setVisible(view === "map");
 			this.raidStreet.layer.setVisible(view === "raid");
@@ -997,12 +1004,13 @@ export function createWorld(
 		private paintBunker(): void {
 			this.terrain = this.add.graphics().setDepth(-1_000_000_000); this.baseLayer.add(this.terrain);
 			this.atmosphereGround = this.add.graphics().setDepth(-999_999_998);
-			this.atmosphereGroundLights = this.add.graphics().setDepth(-999_999_997).setBlendMode(Phaser.BlendModes.ADD);
+			this.wetGround = this.add.graphics().setDepth(-999_999_997);
+			this.atmosphereGroundLights = this.add.graphics().setDepth(-999_999_996).setBlendMode(Phaser.BlendModes.ADD);
 			this.atmosphereShade = this.add.graphics().setDepth(999_998);
 			this.atmosphereGlows = this.add.graphics().setDepth(999_999).setBlendMode(Phaser.BlendModes.ADD);
 			this.atmosphereAir = this.add.graphics().setDepth(1_000_002);
 			this.baseWeather = this.add.graphics().setDepth(2_000_000);
-			this.baseLayer.add([this.atmosphereGround, this.atmosphereGroundLights, this.atmosphereShade, this.atmosphereGlows, this.atmosphereAir]);
+			this.baseLayer.add([this.atmosphereGround, this.wetGround, this.atmosphereGroundLights, this.atmosphereShade, this.atmosphereGlows, this.atmosphereAir]);
 			this.baseLayer.add(this.baseWeather);
 			this.ambient = this.add.graphics().setDepth(1_000_000); this.baseLayer.add(this.ambient);
 			this.dragGhost = this.add.graphics().setDepth(100_000_000); this.baseLayer.add(this.dragGhost);
@@ -1053,6 +1061,12 @@ export function createWorld(
 					this.atmosphereLights.push({ ...point, kind: "fire", height: 4 });
 				} else if (decoration.kind === "lamp") this.atmosphereLights.push({ x: point.x + 7, y: point.y, kind: "lamp", height: 30 });
 			}
+			this.wetLamps = this.atmosphereLights.slice(0, 32).map(light => {
+				const height = light.height ?? (light.kind === 'fire' ? 7 : 21);
+				return { x: light.x, y: light.y, headY: light.y - height, radius: (light.kind === 'fire' ? 66 : 38 + height * 1.2) / 2 };
+			});
+			this.wetPatches = getShelterWetPatches(landscape, buildings, this.wetLamps);
+			this.wetGround.clear();
 			for (const fence of this.perimeterFences) fence.destroy(); this.perimeterFences = [];
 			for (const edge of landscape.perimeter) {
 				const start = projectShelterPoint(edge.from), end = projectShelterPoint(edge.to), height = 19;
@@ -1425,6 +1439,9 @@ export function createWorld(
 					return { x: at.x - 48, y: at.y - 12, width: 96, height: 20 };
 				}), reducedMotion });
 			this.atmosphereGround.clear(); paintShelterAtmosphereGround(this.atmosphereGround, frame);
+			this.wetGround.clear();
+			paintWetSurfaces(this.wetGround, sampleWetSurfaces({ patches: this.wetPatches, lamps: this.wetLamps,
+				timeMs: climate.timeMs, wetness: climate.wetness, rain: climate.rain, lights: profile.lights, reducedMotion }));
 			paintShelterAtmosphereGroundLights(this.atmosphereGroundLights, frame);
 			this.atmosphereAir.clear(); paintShelterAtmosphereAir(this.atmosphereAir, frame);
 			this.atmosphereGlows.clear(); paintShelterAtmosphereGlows(this.atmosphereGlows, frame);
