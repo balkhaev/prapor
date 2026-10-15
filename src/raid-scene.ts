@@ -29,7 +29,7 @@ import { getSquadRaidFieldFrame, type SquadRaidFieldFrame, type SquadRaidFieldSh
 import type { ScavVisualLoadout } from "./scav-loadout";
 import { getBoss } from './game/bosses';
 import { bossVisualLoadout } from './boss-ui';
-import { clearFieldHudRect, fieldHudOverlaps, placeFieldHudBox, readFieldHudBounds, type FieldHudBox } from './field-hud';
+import { fieldHudOverlaps, placeFieldHudBox, readFieldHudBounds, type FieldHudBox } from './field-hud';
 
 type Point = { x: number; y: number };
 type Plan = ReturnType<typeof getRaidFieldPlan>;
@@ -223,7 +223,7 @@ export class RaidStreetRenderer {
 		this.progress.setVisible(Boolean(progress)).setPosition(progress?.x ?? 0, progress?.y ?? 0);
 		this.hudBottomInset = progress ? viewport.height - progress.y - 10 : 30;
 		this.canvasHudBounds = reserved;
-		this.fieldRect = clearFieldHudRect(viewport, reserved);
+		this.fieldRect = { x: 0, y: 0, ...viewport };
 		this.paintHudPlate();
 		if (this.compactHud) this.alertRoot.setVisible(false);
 		this.hudLayoutDirty = false;

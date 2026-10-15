@@ -29,6 +29,8 @@ const citySiteKinds = { courtyard: 'Жилой двор', arcade: 'Сквозн�
 export interface LiveModeOptions {
   world: HTMLElement;
   dock: HTMLElement;
+  /** A sibling of auxiliary windows keeps raid controls available above them. */
+  hudRoot?: HTMLElement;
   onExit: () => void;
   onAccount: () => void;
   getAccountId: () => string | null;
@@ -64,8 +66,11 @@ export function createLiveMode(options: LiveModeOptions) {
   world.classList.add('live-world');
   world.hidden = true;
   const overlay = document.createElement('div'); overlay.className = 'live-world-overlay';
+  const raidStatus = document.createElement('section'); raidStatus.className = 'field-raid-status'; raidStatus.hidden = true;
+  raidStatus.setAttribute('aria-label', 'Боец на Периметре: состояние и возвращение');
   const scene = (options.sceneFactory ?? ((host, command, select) => new LiveScene(host, command, select)))(world, command => void send(command), id => { selectedId = id; render(); });
   world.append(overlay);
+  (options.hudRoot ?? world).append(raidStatus);
   const identity = (): LiveIdentity => ({ accountId: identityAccount, gameId: identityGame, ...(snapshot ? { playerId: snapshot.selfId, worldVersion: snapshot.worldVersion } : {}) });
   const isCurrent = (version: number, account: string | null, game: string | null) => active && !destroyed && version === generation && account === options.getAccountId() && game === options.getGameId();
   const identityChanged = () => identityAccount !== options.getAccountId() || identityGame !== options.getGameId();
@@ -239,7 +244,7 @@ export function createLiveMode(options: LiveModeOptions) {
     if (!active) return true;
     if (!force && snapshot && !destroyed && !identityChanged()) { void leave(); return false; }
     const leaving = snapshot ? identity() : null;
-    active = false; generation++; stopRequest(); clearSession(); reconnectPresence = false; world.hidden = true; scene.hide(); overlay.innerHTML = '';
+    active = false; generation++; stopRequest(); clearSession(); reconnectPresence = false; world.hidden = true; scene.hide(); overlay.innerHTML = ''; raidStatus.hidden = true; raidStatus.innerHTML = '';
     dock.classList.remove('live-dock', 'live-entry-dock'); world.classList.remove('live-preparing');
     if (leaving) connection = connection.then(() => liveRequest('leave', leaving, value => value, undefined, undefined, undefined, options.fetch)).catch(() => {});
     return true;
@@ -265,7 +270,9 @@ export function createLiveMode(options: LiveModeOptions) {
     const shade = document.querySelector<HTMLElement>('#context-shade'); if (shade) shade.hidden = true;
     const scroll = dock.querySelector<HTMLElement>('.live-dock-scroll')?.scrollTop ?? 0;
     const entryScroll = overlay.querySelector<HTMLElement>('.live-entry-scroll')?.scrollTop ?? 0;
-    const focused = dock.contains(document.activeElement) || overlay.contains(document.activeElement) ? (document.activeElement as HTMLElement).getAttribute('data-live-button') : null;
+    const focusHost = raidStatus.contains(document.activeElement) ? raidStatus : dock.contains(document.activeElement) ? dock : overlay.contains(document.activeElement) ? overlay : null;
+    const focused = focusHost ? (document.activeElement as HTMLElement).getAttribute('data-live-button') : null;
+    const focusedFieldPanel = focusHost ? (document.activeElement as HTMLElement).getAttribute('data-field-panel') : null;
     const eventsOpen = dock.querySelector<HTMLDetailsElement>('.live-events')?.open ?? false;
     const bossRosterOpen=dock.querySelector<HTMLDetailsElement>('.live-boss-roster')?.open??false;
     const entryBossRosterOpen=overlay.querySelector<HTMLDetailsElement>('.live-boss-roster')?.open??false;
@@ -278,6 +285,15 @@ export function createLiveMode(options: LiveModeOptions) {
     const server = !snapshot || preparingDowned ? entry?.server ?? snapshot?.server ?? status : snapshot.server;
     const map = server?.maps[0], city = snapshot?.world.city ?? map?.city;
     const gameReady = !!options.getGameId() && options.isGameReady?.() !== false;
+    raidStatus.hidden = !snapshot;
+    if (snapshot) {
+      const self = snapshot.entities.find(entity => entity.id === snapshot!.selfId)!;
+      const auto = liveAutobattleStatus(snapshot);
+      const seconds = Math.max(0, Math.ceil((snapshot.self.leaveAt - snapshot.now - Math.max(0, Date.now() - receivedAt)) / 1000));
+      const stage = offline ? 'Связь потеряна · восстанавливаем' : exitIntent ? snapshot.self.leaveAt ? seconds > 0 ? `Выход через ${seconds} сек.` : 'Завершаем выход…' : 'Выходим с Периметра…' : auto.label;
+      const blocked = actionBusy || offline || !!snapshot.self.launchPending || exitIntent || self.health <= 0;
+      raidStatus.innerHTML = `<div class="field-raid-stage stage-${auto.stage}"><i aria-hidden="true"></i><span>${escape(stage)}</span><strong>${escape(auto.goal)}</strong></div><dl class="field-raid-vitals"><div><dt>Здоровье</dt><dd>${Math.ceil(self.health)}<small>%</small></dd></div><div><dt>Боезапас</dt><dd>${integer(snapshot.self.ammo)}</dd></div><div><dt>Груз</dt><dd>${integer(snapshot.self.cargo)}<small>₽</small></dd></div></dl><div class="field-raid-actions"><button data-field-panel="dock" aria-controls="command-dock" aria-expanded="false" aria-label="Сводка">Сводка</button>${auto.complete ? `<button data-live-button="exit" ${blocked ? 'disabled' : ''}>В убежище →</button>` : `<button class="field-raid-recall" data-live-button="recall" ${blocked || auto.stage === 'extract' ? 'disabled' : ''}>${auto.stage === 'extract' ? 'Возвращается →' : 'Вернуть бойца →'}</button>`}</div>`;
+    } else raidStatus.innerHTML = '';
     const header = `<header class="live-dock-head"><div><span class="live-eyebrow">ПЕРИМЕТР · АВТОБАТТЛЕР</span><h2>${snapshot && !preparingDowned ? 'В рейде' : 'Периметр 01'}</h2></div><span class="live-online ${offline ? 'lost' : ''}" title="Игроков на общем сервере"><i></i>${server ? `${server.online}/${server.capacity}` : `—/${LIVE_CAPACITY}`}</span><button class="icon-button field-live-close" data-field-close="dock" data-live-button="field-close" aria-label="Свернуть панель рейда">×</button></header>`;
     const notice = message ? `<p class="live-notice ${offline ? 'lost' : ''}" role="status">${escape(message)}</p>` : '';
     const lobbyRoute = server?.routes?.find(route => route.districtId === selectedDistrict && route.purpose === selectedPurpose);
@@ -339,7 +355,7 @@ export function createLiveMode(options: LiveModeOptions) {
       }).join('')}</div><p class="live-medical-effects">${effects.movement < 1 ? `Ход ${Math.round(effects.movement * 100)}% · ` : ''}${effects.aim < 1 ? `Точность ${Math.round(effects.aim * 100)}% · ` : ''}${body.painUntil > serverNow ? 'Обезболивание действует' : 'Движение и огонь прерывают лечение'}</p>${treatment ? `<div class="live-treatment" role="status"><strong>${TREATMENT_LABELS[treatment.type]} · ${BODY_PART_LABELS[treatment.part]}</strong><span>${treatmentSeconds > 0 ? `${treatmentSeconds} сек.` : 'Завершаем…'}</span><button class="text-button" data-live-button="cancelTreatment" ${actionBusy || offline ? 'disabled' : ''}>Отменить</button></div>` : urgent && !downed ? `<button class="button live-urgent-treatment" data-live-button="treat:${urgent.type}:${urgent.part}" ${!canAct ? 'disabled' : ''}>Срочно: ${TREATMENT_LABELS[urgent.type]} · ${BODY_PART_LABELS[urgent.part]}</button>` : ''}<div class="live-medicines">${(['bandage', 'tourniquet', 'medkit', 'splint', 'painkiller', 'surgery'] as TreatmentType[]).map(type => `<button data-live-button="treat:${type}:${selectedPart}" ${!canAct || treatment || !canTreat(body, medicine, type, selectedPart, serverNow).ok ? 'disabled' : ''}><strong>${TREATMENT_LABELS[type]}</strong><span>${medicine[type]}${type === 'medkit' ? ' HP' : ' прим.'} · ${Math.ceil(TREATMENT_DURATION_MS[type] * effects.treatment / 1000)} сек.</span></button>`).join('')}</div><p class="live-medical-help">${BODY_PART_LABELS[selectedPart]} выбрана. Аптечка лечит живую зону. Хирургия возвращает выбитую конечность или живот к 1 HP и уменьшает её максимум.</p></section>`;
       const purpose = purposes[snapshot.self.purpose];
       const auto = liveAutobattleStatus(snapshot);
-      overlay.innerHTML = `<div class="live-field-hud"><span class="live-world-signal ${offline ? 'lost' : ''}"><i></i>${offline ? 'НЕТ СВЯЗИ' : auto.complete ? 'РЕЙД ЗАВЕРШЁН' : auto.enabled ? 'АВТОБОЙ · ПРЯМОЙ ЭФИР' : 'АВТОБОЙ · ОЖИДАНИЕ'}</span><strong>${escape(locationName)} <span>${Math.ceil(self.health)}%</span></strong><p>${escape(currentBuilding?.name ?? currentSite?.name ?? quarter?.name ?? zone?.name ?? locationName)} <span class="live-danger danger-${danger}">${'●'.repeat(danger)}${'○'.repeat(3 - danger)}</span></p></div><div class="live-auto-world-status"><i class="${auto.stage}"></i><span>${auto.label}</span><strong>${escape(auto.goal)}</strong></div><div class="live-field-legend"><span><i class="own"></i>Твой боец</span><span><i class="player"></i>Игрок</span><span><i class="scav"></i>Дикий</span><span><i class="raider"></i>Рейдер</span><span><i class="extract"></i>Выход</span></div>`;
+      overlay.innerHTML = `<div class="live-field-hud"><span class="live-world-signal ${offline ? 'lost' : ''}"><i></i>${offline ? 'НЕТ СВЯЗИ' : auto.complete ? 'РЕЙД ЗАВЕРШЁН' : auto.enabled ? 'АВТОБОЙ · ПРЯМОЙ ЭФИР' : 'АВТОБОЙ · ОЖИДАНИЕ'}</span><strong>${escape(locationName)} <span>${Math.ceil(self.health)}%</span></strong><p>${escape(currentBuilding?.name ?? currentSite?.name ?? quarter?.name ?? zone?.name ?? locationName)} <span class="live-danger danger-${danger}">${'●'.repeat(danger)}${'○'.repeat(3 - danger)}</span></p></div><div class="live-field-legend"><span><i class="own"></i>Твой боец</span><span><i class="player"></i>Игрок</span><span><i class="scav"></i>Дикий</span><span><i class="raider"></i>Рейдер</span><span><i class="extract"></i>Выход</span></div>`;
       scene.setSelected(selectedId);
       const players = nearby.filter(entity => entity.kind === 'player'), scavs = nearby.filter(entity => entity.kind === 'scav').slice(0, 8);
       const suggested = snapshot.world.pois.filter(poi => poi.tags.some(tag => purpose.tags.includes(tag))).sort((a, b) => {
@@ -369,7 +385,8 @@ export function createLiveMode(options: LiveModeOptions) {
     const preparationScroll=overlay.querySelector<HTMLElement>('.live-entry-scroll'); if(preparationScroll)preparationScroll.scrollTop=entryScroll;
     const preparationBosses=overlay.querySelector<HTMLDetailsElement>('.live-boss-roster');if(preparationBosses)preparationBosses.open=selectedPurpose==='boss'||entryBossRosterOpen;
     const events = dock.querySelector<HTMLDetailsElement>('.live-events'); if (events) events.open = eventsOpen;
-    if (focused) [...Array.from(dock.querySelectorAll<HTMLElement>('[data-live-button]')),...Array.from(overlay.querySelectorAll<HTMLElement>('[data-live-button]'))].find(button => button.dataset.liveButton === focused)?.focus({ preventScroll: true });
+    if (focused) [...Array.from(focusHost!.querySelectorAll<HTMLElement>('[data-live-button]')),...Array.from(raidStatus.querySelectorAll<HTMLElement>('[data-live-button]')),...Array.from(dock.querySelectorAll<HTMLElement>('[data-live-button]')),...Array.from(overlay.querySelectorAll<HTMLElement>('[data-live-button]'))].find(button => button.dataset.liveButton === focused)?.focus({ preventScroll: true });
+    else if (focusedFieldPanel) focusHost!.querySelector<HTMLElement>(`[data-field-panel="${focusedFieldPanel}"]`)?.focus({ preventScroll: true });
     else if (focusedSummary) dock.querySelector<HTMLElement>(`${focusedSummary} > summary`)?.focus({ preventScroll: true });
     else if (eventsFocused) dock.querySelector<HTMLElement>('.live-events summary')?.focus({ preventScroll: true });
   }
@@ -383,7 +400,7 @@ export function createLiveMode(options: LiveModeOptions) {
   const click = (event: MouseEvent): void => {
     if (!active) return;
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-live-button]');
-    if (!button || !(dock.contains(button) || overlay.contains(button)) || button.disabled) return;
+    if (!button || !(dock.contains(button) || overlay.contains(button) || raidStatus.contains(button)) || button.disabled) return;
     const [action, ...arguments_] = (button.dataset.liveButton ?? '').split(':');
     const id = arguments_.join(':'), dy = arguments_[1];
     if (action === 'join') void join();
@@ -398,7 +415,7 @@ export function createLiveMode(options: LiveModeOptions) {
     else if (action === 'poi-view' && snapshot) { const poi = snapshot.world.pois.find(poi=>poi.id===id); if(poi) scene.focusPoint?.(poi); }
     else if (action === 'exit') void leave();
     else if (action === 'account') options.onAccount();
-    else if (action === 'missions' && !snapshot && !actionBusy) { hide(); options.onMissionBoard?.(); }
+    else if (action === 'missions' && !snapshot && !actionBusy) options.onMissionBoard?.();
     else if (action === 'market') void leave(true);
     else if (action === 'select' && id) { selectedId = id; scene.setSelected(id); render(); }
     else if (action === 'attack' && id && snapshot) void send({ type: 'engage', targetId: snapshot.self.targetId === id ? null : id });
@@ -433,8 +450,8 @@ export function createLiveMode(options: LiveModeOptions) {
     else if (action === 'respawn') void send({ type: 'respawn', districtId: selectedDistrict, purpose: selectedPurpose, kitId: selectedKit });
     else if (action === 'heal' || action === 'extract' || action === 'resupply' || action === 'cancelTreatment') void send({ type: action });
   };
-  dock.addEventListener('click', click); overlay.addEventListener('click', click);
-  return { show, hide, refreshPanel, resetIdentity, setEntrySelection, isActive: () => active, isActionPending: () => actionBusy || exitIntent, destroy: () => { hide(true); destroyed = true; generation++; dock.removeEventListener('click', click); overlay.removeEventListener('click', click); scene.destroy(); overlay.remove(); } };
+  dock.addEventListener('click', click); overlay.addEventListener('click', click); raidStatus.addEventListener('click', click);
+  return { show, hide, refreshPanel, resetIdentity, setEntrySelection, isActive: () => active, isActionPending: () => actionBusy || exitIntent, destroy: () => { hide(true); destroyed = true; generation++; dock.removeEventListener('click', click); overlay.removeEventListener('click', click); raidStatus.removeEventListener('click', click); scene.destroy(); overlay.remove(); raidStatus.remove(); } };
 }
 
 
