@@ -89,6 +89,10 @@ export function readGameCommand(value: unknown): GameCommand {
   return value as unknown as GameCommand;
 }
 function execute(state: engine.GameState, command: GameCommand, now: number): engine.ActionResult {
+  if (command.type === 'dispatchRaid' || command.type === 'dispatchSquadRaid' || command.type === 'continueExpedition'
+    || command.type === 'setAutoRaid' && command.args[1] !== null) {
+    return { ok: false, message: 'Все новые рейды проходят на большом общем Периметре. Подготовь выход на общей карте.' };
+  }
   if (command.type === 'listMarketItem' || command.type === 'buyMarketListing' || command.type === 'cancelMarketListing' || command.type === 'claimMarketSale') throw new Error('Market commands require the authoritative escrow transaction');
   if (command.type === 'markAchievementsSeen') {
     engine.markAchievementsSeen(state, command.args[0] as engine.AchievementId[]);
@@ -232,6 +236,10 @@ export function createGameService(options: GameOptions): GameService {
   };
   const advanceRow = (row: GameRow, identity: Identity): { snapshot: GameSnapshot; before: string } => {
     const state = engine.parseSave(row.state); if (!state) throw new Error('Invalid stored authoritative game');
+    // Retire repeat orders before offline advancement can start a new paid sortie.
+    // The already paid current stage and its physical cargo still settle normally.
+    for (const scav of state.scavs) { scav.autoRaid.enabled = false; scav.autoRaid.waitingReason = null; }
+    for (const raid of state.raids) if (raid.isAuto && raid.expedition) raid.expedition.autoDepth = raid.expedition.stage;
     engine.setGameOutcomeSeedSource(state, options.outcomeSeed ?? (() => randomInt(1, 4294967296)));
     const time = Math.max(state.lastUpdated, now()); engine.advance(state, time);
     return { snapshot: { state, revision: row.revision, serverNow: time, identity: { id: row.id, kind: identity.kind, name: identity.name } }, before: row.state };

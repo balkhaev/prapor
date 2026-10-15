@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createGameService, readGameCommand, readGameOptions, type GameService } from '../server/game';
-import { advance, createGame, getModuleSaleValue, getRaidQuote, parseSave, saveGame } from '../src/game/engine';
+import { advance, createGame, dispatchRaid, dispatchSquadRaid, getModuleSaleValue, getRaidQuote, parseSave, saveGame, setAutoRaid, setAutoRaidDepth, setGameOutcomeSeedSource, setRaidPlan, type GameState } from '../src/game/engine';
 import { MAP_BY_ID } from '../src/game/data';
 import { getLootModel, getLootTraderPrice } from '../src/game/loot';
 import { Database } from 'bun:sqlite';
@@ -38,6 +38,23 @@ async function action(service: GameService, client: Client, command: GameCommand
 async function state(service: GameService, client: Client) {
   const response = (await service.fetch(request('state', 'GET', undefined, client), 'test-ip'))!; expect(response.status).toBe(200);
   client.snapshot = await response.json() as GameSnapshot; return client.snapshot;
+}
+
+/** Fixture a historical server save; retired public commands are never used to create it. */
+function storeLegacy(path: string, client: Client, arrange: (value: GameState) => void, seed = 698906565): void {
+  const db = new Database(path);
+  try {
+    const row = db.query<{state: string}, [string]>('SELECT state FROM authoritative_games WHERE id=?').get(client.snapshot.identity.id)!;
+    const saved = parseSave(row.state)!;
+    setGameOutcomeSeedSource(saved, () => seed); arrange(saved);
+    expect(parseSave(saveGame(saved))).not.toBeNull();
+    db.query('UPDATE authoritative_games SET state=? WHERE id=?').run(saveGame(saved), client.snapshot.identity.id);
+  } finally { db.close(); }
+}
+async function legacySetup() {
+  const folder = await mkdtemp(join(tmpdir(), 'prapor-paid-return-')); folders.push(folder);
+  const path = join(folder, 'game.sqlite'), h = setup({dbPath: path}), client = await joinClient(h.service);
+  return {...h, path, client};
 }
 
 describe('authoritative game state and commands', () => {
@@ -121,8 +138,9 @@ describe('authoritative game state and commands', () => {
   });
 
   test('raid settlement and reward extraction are driven by the server and not replayable', async () => {
-    const { service, setTime } = setup(), client = await joinClient(service), scavId = client.snapshot.state.scavs[0]!.id;
-    const started = await action(service, client, { type: 'dispatchRaid', args: [scavId, 'courtyard'] }); expect(started.body.result.ok).toBe(true);
+    const { service, setTime, path, client } = await legacySetup();
+    storeLegacy(path, client, saved => { expect(dispatchRaid(saved, saved.scavs[0]!.id, 'courtyard', NOW).ok).toBe(true); });
+    await state(service, client);
     const raid = client.snapshot.state.raids[0]!; expect(raid.startedAt).toBe(NOW);
     const expected = structuredClone(client.snapshot.state); expected.raids[0]!.outcomeSeed = 698906565; advance(expected, raid.endsAt);
     for (const active of expected.raids) delete active.outcomeSeed;
@@ -138,22 +156,19 @@ describe('authoritative game state and commands', () => {
     expect(client.snapshot.state.money).toBe(money + cargo); expect(client.snapshot.state.history).toHaveLength(1);
   });
 
-  test('raid objectives and paid scouting are server orders with frozen costs and one settlement', async () => {
-    const { service, setTime } = setup(), client = await joinClient(service), scavId = client.snapshot.state.scavs[0]!.id;
-    const planned = await action(service, client, { type: 'setRaidPlan', args: [scavId, 'intel', 'scouted'] });
-    expect(planned.body.result.ok).toBe(true);
-    expect(client.snapshot.state.scavs[0]!.raidPlan).toEqual({ objective: 'intel', preparation: 'scouted' });
-    const quote = getRaidQuote(client.snapshot.state, client.snapshot.state.scavs[0]!, MAP_BY_ID.courtyard!);
-    expect(quote.preparationMoney).toBe(20); expect(quote.preparationIntel).toBe(2);
-    const money = client.snapshot.state.money, intel = client.snapshot.state.supplies.intel;
-    const before = client.snapshot.revision;
-    await action(service, client, { type: 'dispatchRaid', args: [scavId, 'courtyard'] });
-    expect(client.snapshot.state.money).toBe(money - quote.money);
-    expect(client.snapshot.state.supplies.intel).toBe(intel - quote.intel);
-    const raid = structuredClone(client.snapshot.state.raids[0]!);
-    const duplicate = await action(service, client, { type: 'dispatchRaid', args: [scavId, 'courtyard'] }, before);
-    expect(duplicate.response.status).toBe(409);
-    expect(client.snapshot.state.money).toBe(money - quote.money);
+  test('saved paid scouting retains frozen costs and settles once after migration', async () => {
+    const { service, setTime, path, client } = await legacySetup(), scavId = client.snapshot.state.scavs[0]!.id;
+    storeLegacy(path, client, saved => {
+      expect(setRaidPlan(saved, scavId, 'intel', 'scouted').ok).toBe(true);
+      const quote = getRaidQuote(saved, saved.scavs[0]!, MAP_BY_ID.courtyard!);
+      expect(quote.preparationMoney).toBe(20); expect(quote.preparationIntel).toBe(2);
+      expect(dispatchRaid(saved, scavId, 'courtyard', NOW).ok).toBe(true);
+    });
+    await state(service, client);
+    const money = client.snapshot.state.money, raid = structuredClone(client.snapshot.state.raids[0]!);
+    const duplicate = await action(service, client, { type: 'dispatchRaid', args: [scavId, 'courtyard'] });
+    expect(duplicate.body.result.ok).toBe(false);
+    expect(client.snapshot.state.money).toBe(money);
     await action(service, client, { type: 'setRaidPlan', args: [scavId, 'ammo', 'none'] });
     expect(client.snapshot.state.raids[0]!.strategy).toEqual(raid.strategy);
     setTime(raid.endsAt); await state(service, client);
@@ -163,6 +178,50 @@ describe('authoritative game state and commands', () => {
     await action(service, client, { type: 'extractRaid', args: [raid.id] });
     expect(client.snapshot.state.sectorIntel!.courtyard).toEqual({ knowledge: 1, pressure: 1 });
     expect(() => readGameCommand({ type: 'setRaidPlan', args: [scavId, 'free-cash', 'scouted'] })).toThrow();
+  });
+
+  test('retired solo, squad and automatic entry cannot create or charge a small raid', async () => {
+    const {service} = setup(), client = await joinClient(service), before = structuredClone(client.snapshot);
+    const ids = client.snapshot.state.scavs.slice(0, 2).map(scav => scav.id);
+    const attempts: GameCommand[] = [
+      {type: 'dispatchRaid', args: [ids[0]!, 'courtyard']},
+      {type: 'dispatchSquadRaid', args: [ids, 'courtyard']},
+      {type: 'setAutoRaid', args: [ids[0]!, 'courtyard', 70]},
+    ];
+    for (const command of attempts.slice(0, 3)) {
+      const result = await action(service, client, command);
+      expect(result.response.status).toBe(200); expect(result.body.result.ok).toBe(false);
+      expect(result.body.result.message).toContain('общем Периметре');
+      expect(client.snapshot.revision).toBe(before.revision);
+      expect(client.snapshot.state).toEqual(before.state);
+    }
+    expect((await action(service, client, {type: 'setAutoRaid', args: [ids[0]!, null, 70]})).body.result.ok).toBe(true);
+  });
+
+  test('old repeat orders stop before offline catchup and the already paid stage returns its physical cargo once', async () => {
+    const {service, setTime, path, client} = await legacySetup();
+    let endsAt = 0, raidId = '', lootId = '';
+    storeLegacy(path, client, saved => {
+      expect(setAutoRaidDepth(saved, saved.scavs[0]!.id, 3).ok).toBe(true);
+      expect(setAutoRaid(saved, saved.scavs[0]!.id, 'courtyard', 70, NOW).ok).toBe(true);
+      const raid = saved.raids[0]!; endsAt = raid.endsAt; raidId = raid.id;
+      raid.expedition!.cargo.money = 73;
+      lootId = `loot-${saved.nextId++}`;
+      raid.expedition!.cargo.lootItems = [{id: lootId, modelId: 'old-watch', foundAt: NOW}];
+    });
+    setTime(endsAt + 8 * 60 * 60_000);
+    const returned = (await state(service, client)).state;
+    expect(returned.scavs.every(scav => !scav.autoRaid.enabled)).toBe(true);
+    expect(returned.raids).toHaveLength(0);
+    expect(returned.history).toHaveLength(1);
+    expect(returned.history[0]!.raidId).toBe(raidId);
+    expect(returned.history[0]!.depth).toBe(1);
+    expect(returned.history[0]!.success).toBe(true);
+    expect(returned.history[0]!.money).toBeGreaterThanOrEqual(73);
+    expect(returned.history[0]!.lootItems?.some(item => item.id === lootId)).toBe(true);
+    expect((returned.lootItems ?? []).some(item => item.id === lootId)).toBe(true);
+    const settled = structuredClone(returned);
+    expect((await state(service, client)).state).toEqual(settled);
   });
 
   test('expanded ammunition is accepted through the real ammo enum and invalid ammo is rejected', async () => {
@@ -184,7 +243,7 @@ describe('authoritative game state and commands', () => {
     expect(restored.snapshot).toEqual(saved);
   });
 
-  test('private entropy is stored but never disclosed, and a continued stage uses fresh entropy', async () => {
+  test('saved paid stage entropy stays private and new stage continuation is refused', async () => {
     const folder = await mkdtemp(join(tmpdir(), 'prapor-secrets-')); folders.push(folder);
     const path = join(folder, 'game.sqlite'); let seed = 698906565;
     const { service, setTime } = setup({ dbPath: path, outcomeSeed: () => seed }), client = await joinClient(service);
@@ -193,7 +252,8 @@ describe('authoritative game state and commands', () => {
       const freshInternal = parseSave(originalDb.query<{ state: string }, []>('SELECT state FROM authoritative_games LIMIT 1').get()!.state)!;
       expect(freshInternal.rng).not.toBe(createGame(client.snapshot.serverNow).rng);
     } finally { originalDb.close(); }
-    await action(service, client, { type: 'dispatchRaid', args: [client.snapshot.state.scavs[0]!.id, 'courtyard'] });
+    storeLegacy(path, client, saved => { expect(dispatchRaid(saved, saved.scavs[0]!.id, 'courtyard', NOW).ok).toBe(true); }, seed);
+    await state(service, client);
     const publicRaid = client.snapshot.state.raids[0]!;
     expect(publicRaid.outcomeSeed).toBeUndefined(); expect(client.snapshot.state.rng).toBe(1);
     const db = new Database(path, { readonly: true });
@@ -204,9 +264,13 @@ describe('authoritative game state and commands', () => {
       expect(internal.rng).not.toBe(1);
       setTime(publicRaid.endsAt); await state(service, client); expect(client.snapshot.state.raids[0]!.expedition!.status).toBe('choice');
       seed = 123456789;
+      const cargo = structuredClone(client.snapshot.state.raids[0]!.expedition!.cargo), revision = client.snapshot.revision;
       const next = await action(service, client, { type: 'continueExpedition', args: [publicRaid.id, 'scavenge', client.snapshot.state.raids[0]!.expedition!.offers[0]!] });
-      expect(next.body.result.ok).toBe(true);
-      expect(readStored().raids[0]!.outcomeSeed).toBe(seed);
+      expect(next.body.result.ok).toBe(false);
+      expect(next.body.revision).toBe(revision);
+      expect(readStored().raids[0]!.outcomeSeed).toBe(698906565);
+      expect(client.snapshot.state.raids[0]!.expedition!.cargo).toEqual(cargo);
+      expect(client.snapshot.state.raids[0]!.expedition!.status).toBe('choice');
       expect(JSON.stringify(client.snapshot)).not.toContain('outcomeSeed');
       expect(client.snapshot.state.raids[0]!.seed).toBe(publicRaid.seed);
     } finally { db.close(); }
@@ -216,8 +280,8 @@ describe('authoritative game state and commands', () => {
     const folder = await mkdtemp(join(tmpdir(), 'prapor-squad-secrets-')); folders.push(folder);
     const path = join(folder, 'game.sqlite');
     const { service, setTime } = setup({ dbPath: path, outcomeSeed: () => 123456789 }), client = await joinClient(service);
-    const started = await action(service, client, { type: 'dispatchSquadRaid', args: [client.snapshot.state.scavs.slice(0, 2).map(scav => scav.id), 'courtyard'] });
-    expect(started.body.result.ok).toBe(true);
+    storeLegacy(path, client, saved => { expect(dispatchSquadRaid(saved, saved.scavs.slice(0, 2).map(scav => scav.id), 'courtyard', NOW).ok).toBe(true); }, 123456789);
+    await state(service, client);
     const raid = client.snapshot.state.raids[0]!;
     expect(raid.squad!.actions).toEqual([]);
     expect(JSON.stringify(client.snapshot)).not.toContain('outcomeSeed');

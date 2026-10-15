@@ -37,6 +37,20 @@ export function getShelterBackdropDecorations(coverage: ShelterRect, worldBounds
 /** One small repeated texture supplies coherent ground detail at every world coordinate. */
 export function paintShelterBackdropTile(g: Phaser.GameObjects.Graphics): void {
   g.fillStyle(pigment(P.ink)).fillRect(0, 0, SHELTER_BACKDROP_TILE, SHELTER_BACKDROP_TILE);
+  // Uneven meadow patches break up the repeated forest floor. Their quieter
+  // perimeter leaves the inhabited clearing and its paths visually dominant.
+  for (let row = 0; row < 4; row++) for (let column = 0; column < 4; column++) {
+    const seed = hash(column + 81, row + 23), x = column * 128 + 24 + seed % 22, y = row * 128 + 32 + (seed >>> 8) % 20;
+    const width = 43 + seed % 39, height = 14 + (seed >>> 12) % 16;
+    g.fillStyle(pigment(seed % 3 ? P.leafShade : P.soil), .15).fillRect(x, y, width, height);
+    g.fillRect(x + 11, y - 4, width - 21, height + 9);
+    g.fillStyle(pigment(P.leaf), .11).fillRect(x + 7, y + 3, width - 13, 3);
+    for (let blade = 0; blade < 7; blade++) {
+      const px = x + 5 + (seed >>> blade % 12) % Math.max(6, width - 10), py = y + 3 + blade * 3 % height;
+      g.fillStyle(pigment(P.leaf), .45).fillRect(px, py, 1, 3).fillRect(px - 2, py + 1, 2, 1);
+      if ((seed + blade) % 9 === 0) g.fillStyle(pigment(P.sand), .42).fillRect(px, py - 1, 2, 1);
+    }
+  }
   for (let row = 0; row < 16; row++) for (let column = 0; column < 16; column++) {
     const seed = hash(column, row), x = column * 32 + seed % 13, y = row * 32 + (seed >>> 7) % 15;
     const width = 11 + seed % 17;

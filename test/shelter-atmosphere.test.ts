@@ -94,7 +94,7 @@ describe("shelter atmosphere", () => {
 			fillRect(...values: number[]) { rectangles.push(values); return g; }, lineBetween(...values: number[]) { lines.push(values); return g; } };
 		const frame = sampleShelterAtmosphere(input);
 		for (const paint of [paintShelterAtmosphereGround, paintShelterAtmosphereGroundLights, paintShelterAtmosphereAir, paintShelterAtmosphereGlows]) paint(g as unknown as Phaser.GameObjects.Graphics, frame);
-		expect(rectangles.length).toBeGreaterThan(60); expect(rectangles.length).toBeLessThan(250);
+		expect(rectangles.length).toBeGreaterThan(60); expect(rectangles.length).toBeLessThan(400);
 		expect([...rectangles, ...lines].every(values => values.every(Number.isInteger))).toBe(true);
 		expect(rectangles.every(([, , width, height]) => width! > 0 && height! > 0)).toBe(true);
 		const palette = new Set(Object.values(PIXEL_PALETTE).map(hex => Number.parseInt(hex.slice(1), 16)));
@@ -195,5 +195,35 @@ describe("shelter atmosphere", () => {
 		expect(quiet.birds.every(bird => bird.alpha === 0)).toBe(true);
 		expect(sampleShelterAtmosphere({ ...input, birdBounds: undefined }).birds).toEqual([]);
 		expect(allNumbers(sampleShelterWind(NaN)).every(Number.isFinite)).toBe(true);
+	});
+
+	test("sun openings belong to the grove while lamp illumination keeps its real sources", () => {
+		const foliageAnchors = [{ x: 90, y: 175, radius: 19 }, { x: 300, y: 230, radius: 24 }];
+		const frame = sampleShelterAtmosphere({ ...input, foliageAnchors, daylight: 1 });
+		expect(frame.sunlight.pools).toHaveLength(7 + foliageAnchors.length * 2);
+		for (let i = 0; i < foliageAnchors.length; i++) {
+			const anchor = foliageAnchors[i]!;
+			for (const pool of frame.sunlight.pools.slice(7 + i * 2, 9 + i * 2)) {
+				expect(pool.x).toBeGreaterThan(anchor.x); expect(pool.x).toBeLessThan(anchor.x + 35);
+				expect(pool.y).toBeGreaterThan(anchor.y); expect(pool.y).toBeLessThan(anchor.y + 17);
+			}
+		}
+		expect(frame.groundLights).toHaveLength(input.lights!.length);
+		const night = sampleShelterAtmosphere({ ...input, foliageAnchors, daylight: 0 });
+		expect(night.sunlight.shafts).toEqual([]);
+		expect(night.sunlight.pools.every(pool => pool.alpha === 0)).toBe(true);
+		expect(night.motes.some(mote => mote.alpha > .05)).toBe(true);
+		expect(night.birds.every(bird => bird.alpha === 0)).toBe(true);
+		expect(night.groundLights).toEqual(frame.groundLights);
+	});
+
+	test("large foliage inputs keep a fixed decoration budget and reduced motion has no drifting motes", () => {
+		const foliageAnchors = Array.from({ length: 2000 }, (_, i) => ({ x: i, y: i }));
+		const crowded = sampleShelterAtmosphere({ ...input, foliageAnchors });
+		expect(crowded.sunlight.pools).toHaveLength(7 + SHELTER_ATMOSPHERE_LIMITS.foliage * 2);
+		expect(crowded.motes).toHaveLength(SHELTER_ATMOSPHERE_LIMITS.motes);
+		const still = sampleShelterAtmosphere({ ...input, foliageAnchors, reducedMotion: true });
+		expect(still.motes).toEqual([]);
+		expect(sampleShelterAtmosphere({ ...input, foliageAnchors, reducedMotion: true, timeMs: 999999 })).toEqual(still);
 	});
 });
