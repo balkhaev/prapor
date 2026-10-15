@@ -2428,7 +2428,7 @@ document.addEventListener("click", async (event) => {
 	if (target.dataset.watchRaid) { watchRaid(target.dataset.watchRaid); return; }
 	if (target.hasAttribute('data-live-close')) { setView("base"); document.querySelector<HTMLButtonElement>('[data-view="base"]')?.focus({ preventScroll: true }); return; }
 	if (target.dataset.raidOrders) { const raid = state.raids.find(item => item.id === target.dataset.raidOrders); if (raid) openInspector(raid.scavId); return; }
-	if (target.dataset.scav) { if (page === "home" && worldView === "base" && !liveMode?.isActive() && world?.projectScav(target.dataset.scav)) { selectedScav = target.dataset.scav; fieldObjects?.show({ kind: "scav", id: target.dataset.scav }); } else openInspector(target.dataset.scav); return; }
+	if (target.dataset.scav) { if (page === "home" && worldView === "base" && !liveMode?.isActive() && world?.projectScav(target.dataset.scav)) { selectedScav = target.dataset.scav; fieldInterface?.closePanels(); fieldObjects?.show({ kind: "scav", id: target.dataset.scav }); } else openInspector(target.dataset.scav); return; }
 	if (target.dataset.ammoPick && target.dataset.ammoScav) { act(await gameAction({ type: "setLoadoutOption", args: [target.dataset.ammoScav, "ammoType", target.dataset.ammoPick] })); return; }
 	if (target.dataset.camera) { cameraAction(target.dataset.camera); return; }
 	if (target.dataset.cameraRoom) { inspectRoomView(target.dataset.cameraRoom); return; }
@@ -3281,8 +3281,8 @@ world = createWorld(
 		onAssignScav: assignPlacedWorker,
 		onDragState: onWorldDragState,
 		onRoom: (room) => { if (canWorldInteract()) openRoom(room); },
-		onScav: (id) => { if (canWorldInteract()) { selectedScav = id; fieldObjects?.show({ kind: "scav", id }); } },
-		onShelterRoom: (id) => { if (canWorldInteract()) { selectedRoomId = id; fieldObjects?.show({ kind: "room", id }); } },
+		onScav: (id) => { if (canWorldInteract()) { selectedScav = id; fieldInterface?.closePanels(); fieldObjects?.show({ kind: "scav", id }); } },
+		onShelterRoom: (id) => { if (canWorldInteract()) { selectedRoomId = id; fieldInterface?.closePanels(); fieldObjects?.show({ kind: "room", id }); } },
 		onBuildSite: ({ column, row }) => { if (canWorldInteract()) openShelterSite(column, row); } }
 );
 territoryLife = createTerritoryLife({ getHost: () => page === "base" ? document.querySelector<HTMLElement>("[data-territory-plan]") : null,
