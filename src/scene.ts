@@ -3,14 +3,14 @@ import { getRaidPhase, type Raid, type RaidReport, type RoomInstance, type Weapo
 import { getRoomFootprint, getRoomPosition, getRoomBounds, getRoomFacing, getRoomLocalPoint, getRoomEntrance, getShelterRoomAtPoint } from "./game/shelter";
 import { type BaseRoom } from "./game/data";
 import type { GearItem, Loadout } from "./game/systems";
-import { ScavEquipment } from "./scav-equipment";
-import { SCAV_EQUIPMENT_ATLASES } from "./scav-gear-art";
+import { PixelPhaserActor } from './pixel-phaser-actor';
+import { PIXEL_PALETTE } from './pixel-art';
 import { getScavVisualLoadout } from "./scav-loadout";
 import { advanceShelterRoute, clientToShelterPoint } from "./shelter-motion";
 import { clampShelterCamera, getMinShelterZoom, shelterOverviewCamera, focusShelterRect, panShelterCamera, projectShelterRect, resizeShelterCamera, shelterViewportForSize, viewportToShelter, zoomShelterCamera, type ShelterCamera, type ShelterRect, type ShelterViewport, type ClientRect } from "./shelter-camera";
 import { getShelterTerritoryCell, getShelterCorridorSegments, getShelterOpenGroundPoints, getShelterBuildingRect, isShelterPointInTerritory, getShelterWalkingRoute, getShelterWorldBounds, type ShelterLayoutBuilding } from "./shelter-layout";
 import { advanceScavAnimation, createScavAnimation, type ScavAnimationState } from "./shelter-animation";
-import { SCAV_DIRECTIONS, SCAV_ORIGIN, SCAV_REFERENCE_HEIGHT, scavAppearance, scavAttachment, scavAvailableAppearance, scavDirection, scavFrame, scavPreloadAppearances, scavTexture, scavTorsoAnchor, scavHeadAnchor, type ScavDirection, type ScavPose } from "./scav-isometric";
+import { SCAV_DIRECTIONS, scavAppearance, scavAttachment, scavDirection, scavPixelGear, scavPixelFrame, type ScavDirection } from "./scav-isometric";
 import { advanceShelterStationClock, getShelterProductionPresentation, type ProductionPresentation } from "./shelter-production";
 import { projectShelterPoint, unprojectShelterPoint, projectShelterBounds, shelterBuildingDepth, shelterBuildingHitPolygon, shelterRectPolygon, shelterRoomPolygon, shelterRoomPosition, shelterRoomRect } from "./shelter-isometric";
 import { paintIsometricRoom, paintIsometricProduction, getShelterChimney, getShelterPorchLamp } from "./shelter-isometric-art";
@@ -73,7 +73,7 @@ type ScavActor = {
 	animation: ScavAnimationState;
 	appearance: number;
 	direction: ScavDirection;
-	equipment: ScavEquipment;
+	pixel: PixelPhaserActor;
 	visualLoadout: ReturnType<typeof getScavVisualLoadout>;
 	tool: Phaser.GameObjects.Graphics;
 	label: Phaser.GameObjects.Text;
@@ -204,34 +204,27 @@ const roomRect = getRoomBounds;
 const roomBuildings = (rooms: readonly RoomInstance[]): ShelterLayoutBuilding[] => rooms.map((room) => ({ column: room.column, row: room.row, position: getRoomPosition(room), facing: getRoomFacing(room), ...getRoomFootprint(room) }));
 const cellPolygon = (cell: ShelterCell) => cell.room ? shelterRectPolygon(roomRect(cell.room)) : shelterRoomPolygon(cell.column, cell.row);
 const roomCellKey = (id: string) => `room:${id}`;
+const pigment = (hex: string): number => Number.parseInt(hex.slice(1), 16);
 const ROOM_STYLE: Record<string, { label: string; color: number; light: number; wall: number }> = {
-	workshop: { label: "МАСТЕРСКАЯ", color: 0xd7a368, light: 0xffcc88, wall: 0x594438 },
-	ammo: { label: "ПАТРОНЫ", color: 0xd4d889, light: 0xf1e4a5, wall: 0x515038 },
-	recycler: { label: "РАЗБОРКА", color: 0xdd9373, light: 0xffbd99, wall: 0x613e34 },
-	medbay: { label: "МЕДБЛОК", color: 0x89d6d0, light: 0xc7f8ef, wall: 0x355c5c },
-	radio: { label: "РАДИО", color: 0x8cd4d5, light: 0xace9d7, wall: 0x294b50 },
-	storage: { label: "СКЛАД", color: 0xb6c694, light: 0xe6e9b3, wall: 0x465546 },
-	dormitory: { label: "ЖИЛЬЁ", color: 0xd0b8ea, light: 0xf1d9f4, wall: 0x55495b },
-	hangar: { label: "АНГАР", color: 0x87a0ad, light: 0xb0cfda, wall: 0x405961 },
-};
-const blend = (a: number, b: number, amount: number): number => {
-	const channel = (shift: number) => Math.round(((a >> shift) & 255) * (1 - amount) + ((b >> shift) & 255) * amount);
-	return (channel(16) << 16) | (channel(8) << 8) | channel(0);
+	workshop: { label: "МАСТЕРСКАЯ", color: pigment(PIXEL_PALETTE.yellow), light: pigment(PIXEL_PALETTE.cream), wall: pigment(PIXEL_PALETTE.woodShade) },
+	ammo: { label: "ПАТРОНЫ", color: pigment(PIXEL_PALETTE.leafLight), light: pigment(PIXEL_PALETTE.sand), wall: pigment(PIXEL_PALETTE.leafShade) },
+	recycler: { label: "РАЗБОРКА", color: pigment(PIXEL_PALETTE.rust), light: pigment(PIXEL_PALETTE.woodLight), wall: pigment(PIXEL_PALETTE.brickShade) },
+	medbay: { label: "МЕДБЛОК", color: pigment(PIXEL_PALETTE.red), light: pigment(PIXEL_PALETTE.cream), wall: pigment(PIXEL_PALETTE.plasterShade) },
+	radio: { label: "РАДИО", color: pigment(PIXEL_PALETTE.blue), light: pigment(PIXEL_PALETTE.steelLight), wall: pigment(PIXEL_PALETTE.steelShade) },
+	storage: { label: "СКЛАД", color: pigment(PIXEL_PALETTE.sand), light: pigment(PIXEL_PALETTE.plaster), wall: pigment(PIXEL_PALETTE.shadow) },
+	dormitory: { label: "ЖИЛЬЁ", color: pigment(PIXEL_PALETTE.woodLight), light: pigment(PIXEL_PALETTE.cream), wall: pigment(PIXEL_PALETTE.woodShade) },
+	hangar: { label: "АНГАР", color: pigment(PIXEL_PALETTE.steel), light: pigment(PIXEL_PALETTE.steelLight), wall: pigment(PIXEL_PALETTE.steelShade) },
 };
 const FONT = '"IBM Plex Mono", "Courier New", monospace';
 const C = {
-	void: 0x111510,
-	ink: 0x111710,
-	wall: 0x353930,
-	edge: 0x59604b,
-	gold: 0xe1b576,
-	light: 0xffd896,
-	sage: 0x879579,
-	red: 0x974f3c,
-};
-const tint = (hex: string, fallback = C.gold): number => {
-	const parsed = Number.parseInt(hex.replace(/^#/, ""), 16);
-	return Number.isFinite(parsed) ? parsed : fallback;
+	void: pigment(PIXEL_PALETTE.black),
+	ink: pigment(PIXEL_PALETTE.ink),
+	wall: pigment(PIXEL_PALETTE.rubber),
+	edge: pigment(PIXEL_PALETTE.shadow),
+	gold: pigment(PIXEL_PALETTE.yellow),
+	light: pigment(PIXEL_PALETTE.cream),
+	sage: pigment(PIXEL_PALETTE.panelShade),
+	red: pigment(PIXEL_PALETTE.red),
 };
 function random(seed: number): () => number {
 	let n = seed >>> 0;
@@ -369,37 +362,12 @@ export function createWorld(
 		>();
 		private raidActors = new Map<string, RaidMarker>();
 		private scavs = new Map<string, ScavActor>();
-		private requestedScavAtlases = new Set<number>();
 		private lastSync = 0;
 		private lastSelection = "";
 		private hq: Point = { x: 110, y: 357 };
 
 		constructor() {
 			super("PraporWorld");
-		}
-
-		preload(): void {
-			this.load.spritesheet("shelter-room-atlas", "/art/shelter-rooms.png", { frameWidth: 768, frameHeight: 256 });
-			for (const appearance of scavPreloadAppearances(snapshot().scavs)) this.queueScavAtlas(appearance);
-			this.load.atlas("raid-props", "/art/raid-props.png", "/art/raid-props.json");
-			for (const atlas of SCAV_EQUIPMENT_ATLASES) this.load.atlas(atlas.key, `/art/${atlas.basename}.png`, `/art/${atlas.basename}.json`);
-		}
-
-		private queueScavAtlas(appearance: number): void {
-			if (this.requestedScavAtlases.has(appearance) || this.textures.exists(scavTexture(appearance))) return;
-			this.requestedScavAtlases.add(appearance);
-			this.load.atlas(scavTexture(appearance), `/art/scav-isometric-${appearance}.png`, `/art/scav-isometric-${appearance}.json`);
-		}
-
-		private requestScavAtlas(appearance: number): void {
-			this.queueScavAtlas(appearance);
-			if (!this.load.isLoading() && this.load.list.size > 0) this.load.start();
-		}
-
-		private refreshScavAtlases(): void {
-			if (!this.presentationReady) return;
-			this.syncPeople(snapshot());
-			if (requestedView === "raid") this.raidStreet.update(snapshot(), Date.now(), 0);
 		}
 
 		create(): void {
@@ -409,8 +377,7 @@ export function createWorld(
 			this.mapLayer = this.add.container(0, 30);
 			this.paintBunker();
 			this.paintMap();
-			this.raidStreet = new RaidStreetRenderer(this, this.viewport, reducedMotion, (appearance) => this.requestScavAtlas(appearance));
-			this.load.on(Phaser.Loader.Events.COMPLETE, this.refreshScavAtlases, this);
+			this.raidStreet = new RaidStreetRenderer(this, this.viewport, reducedMotion);
 			this.raidStreet.selectRaid(requestedRaidId);
 			this.installDragListeners();
 			this.installViewportObserver();
@@ -427,8 +394,6 @@ export function createWorld(
 				this.viewportObserver?.disconnect();
 				if (this.viewportFrame) cancelAnimationFrame(this.viewportFrame);
 				this.nativeEvents.abort();
-				this.load.off(Phaser.Loader.Events.COMPLETE, this.refreshScavAtlases, this);
-				this.requestedScavAtlases.clear();
 				this.raidActors.clear();
 				this.places.clear();
 				this.cells.clear();
@@ -489,6 +454,8 @@ export function createWorld(
 				if (!slot?.actor.visible || scav.status === "raiding" || slot.assignment !== assignment || slot.status !== scav.status) return [];
 				return [{ id: scav.id, name: scav.name ?? "Дикий", point: { ...slot.position }, direction: slot.direction,
 					walking: slot.walking, working: slot.working, walkPhase: slot.animation.stride,
+					visualLoadout: slot.visualLoadout,
+					pixelFrame: scavPixelFrame(slot.direction, slot.animation.stride, slot.animation.idleSeconds * 1000, slot.walking, reducedMotion),
 					activity: slot.routine?.activity ?? slot.role, label: this.personActivityLabel(slot), role: slot.role, appearance: slot.appearance,
 					elapsedMs: this.time.now, activityPhase: slot.phase, health: slot.health,
 					...(slot.routine?.cargo ? { cargo: slot.routine.cargo } : {}) }];
@@ -1019,16 +986,14 @@ export function createWorld(
 		}
 
 		private makeGlow(): void {
-			const texture = this.textures.createCanvas("prapor-light", 256, 256);
+			const texture = this.textures.createCanvas("prapor-light", 64, 64);
 			if (!texture) return;
 			const context = texture.getContext();
-			const gradient = context.createRadialGradient(128, 128, 0, 128, 128, 128);
-			gradient.addColorStop(0, "rgba(255,255,255,.65)");
-			gradient.addColorStop(0.2, "rgba(255,255,255,.33)");
-			gradient.addColorStop(0.6, "rgba(255,255,255,.09)");
-			gradient.addColorStop(1, "rgba(255,255,255,0)");
-			context.fillStyle = gradient;
-			context.fillRect(0, 0, 256, 256);
+			for (const [size, alpha] of [[56, .04], [40, .07], [24, .13], [8, .35]]) {
+				context.fillStyle = `rgba(218,208,172,${alpha})`;
+				context.fillRect(32 - size! / 2, 32 - size! / 2, size!, size!);
+			}
+			texture.setFilter(Phaser.Textures.FilterMode.NEAREST);
 			texture.refresh();
 		}
 
@@ -1134,7 +1099,7 @@ export function createWorld(
 			const status = this.text(front.x, front.y - 4, "", 8, "#c1d8bd").setOrigin(.5).setFontFamily("Manrope, sans-serif").setLetterSpacing(0).setBackgroundColor("#10221ded").setPadding(3, 2);
 			const productLabel = this.text(at.x, at.y - 39, "", 9, "#f4e4bb").setOrigin(.5).setLetterSpacing(0).setBackgroundColor("#10231e").setPadding(4, 2).setVisible(false);
 			const feedback = this.text(front.x, front.y - 23, "", 12, "#e6ffce").setOrigin(.5).setLetterSpacing(0).setBackgroundColor("#163023").setPadding(5, 3).setVisible(false);
-			const lamp = this.add.image(at.x, at.y + 5, "prapor-light").setScale(.30, .18).setAlpha(.08).setBlendMode(Phaser.BlendModes.ADD);
+			const lamp = this.add.image(at.x, at.y + 5, "prapor-light").setScale(1.2, .72).setAlpha(.08).setBlendMode(Phaser.BlendModes.ADD);
 			const bounds = projectShelterBounds(lot);
 			const zone = this.add.zone(bounds.x, bounds.y, bounds.width, bounds.height).setOrigin(0);
 			zone.setInteractive(new Phaser.Geom.Polygon(corners.map((point) => ({ x: point.x - bounds.x, y: point.y - bounds.y }))), Phaser.Geom.Polygon.Contains);
@@ -1237,38 +1202,19 @@ export function createWorld(
 			const legA = this.add.rectangle(-3, 0, 4, 10, 0x526359).setOrigin(.5, 1).setStrokeStyle(.8, 0x07141b);
 			const legB = this.add.rectangle(3, 0, 4, 10, 0x354f4a).setOrigin(.5, 1).setStrokeStyle(.8, 0x07141b);
 			const hand = this.add.rectangle(6, -21, 4, 13, 0xc7ac86).setStrokeStyle(.7, 0x183433).setOrigin(.5, .15);
-			const graphic = this.add.graphics();
-			const coats = [0xbec49a, 0xd1ac78, 0x88c3bd, 0xba9ab7, 0xd08f77];
-			const coat = coats[index % coats.length]!;
-			graphic.fillStyle(0x0a1720).fillRoundedRect(-7, -29, 14, 19, 2);
-			graphic.fillStyle(coat).fillRect(-6, -27, 12, 16);
-			graphic.fillStyle(blend(coat, 0x163337, .45)).fillRect(-4, -24, 8, 10);
-			graphic.fillStyle(0xe5c895).fillRect(-3, -22, 2, 5).fillRect(1, -22, 2, 5);
-			graphic.fillStyle(blend(coat, 0xffeed6, .45)).fillRect(-6, -27, 11, 2);
-			graphic.fillStyle(0x08161b).fillRect(-5, -41, 10, 14);
-			graphic.fillStyle(index % 3 ? 0xd8b790 : 0xe4c7a2).fillRect(-4, -39, 8, 11);
-			graphic.fillStyle(index % 2 ? 0x876e4e : 0x608b83).fillRoundedRect(-6, -43, 12, 6, 2);
-			graphic.fillStyle(index % 2 ? 0xc7ab77 : 0xb5cfb9).fillRect(-5, -42, 9, 1);
-			graphic.fillStyle(0x15252b).fillRect(1, -35, 2, 2).fillRect(0, -30, 3, 1);
 			const tool = this.add.graphics().setPosition(6, -21);
 			const scav = snapshot().scavs?.find((candidate) => candidate.id === scavId);
-			const requestedAppearance = scavAppearance(scav?.personality, index, scav?.appearance);
-			const appearance = scavAvailableAppearance(requestedAppearance, (texture) => this.textures.exists(texture));
-			const texture = scavTexture(appearance);
-			const atlasData = this.textures.get(texture).customData as { meta?: { characterHeight?: number } };
-			const characterHeight = Number(atlasData.meta?.characterHeight) || SCAV_REFERENCE_HEIGHT;
-			const makePose = (pose: ScavPose) => this.add.image(0, 0, texture, scavFrame(pose, "se")).setOrigin(SCAV_ORIGIN.x, SCAV_ORIGIN.y).setScale(48 / characterHeight);
-			const poses = this.textures.exists(texture) ? { idle: makePose("idle"), walkA: makePose("walk-a").setVisible(false), walkB: makePose("walk-b").setVisible(false), work: makePose("work").setVisible(false) } : null;
-			const sprite = poses?.idle ?? null;
-			if (sprite) { legA.setVisible(false); legB.setVisible(false); graphic.setVisible(false); hand.setVisible(false); tool.setPosition(13, -21); }
-			body.add([legA, legB, graphic, ...(poses ? [poses.idle, poses.walkA, poses.walkB, poses.work] : []), hand, tool]);
-			const equipment = new ScavEquipment(this, body);
+			const appearance = scavAppearance(scav?.personality, index, scav?.appearance);
+			legA.setVisible(false); legB.setVisible(false); hand.setVisible(false);
+			body.add([legA, legB, hand]);
+			const pixel = new PixelPhaserActor(this, body), sprite = pixel.image, poses = null;
+			body.add(tool); tool.setPosition(13, -21);
 			const visualLoadout = getScavVisualLoadout(scav ?? {}, snapshot().gearItems ?? [], snapshot().weapons ?? []);
-			equipment.update(visualLoadout, "se", { mode: "slung" });
+			pixel.update({ appearance }, scavPixelFrame('se', 0, 0, false), visualLoadout.weapon, scavPixelGear(visualLoadout));
 			const label = this.text(0, -64, "", 16, "#ffedc7").setOrigin(.5).setFontFamily("Manrope, sans-serif").setFontStyle("bold").setLetterSpacing(0).setBackgroundColor("#0b1b20").setPadding(7, 4).setVisible(false);
 			const order = this.add.circle(-10, -34, 3.5, C.sage).setStrokeStyle(1, 0x10242b).setVisible(false);
 			const hit = this.add.zone(0, -21, 32, 46).setInteractive({ useHandCursor: true });
-			const slot: ScavActor = { actor, body, legA, legB, hand, sprite, poses, animation: createScavAnimation(index * .37), appearance, direction: "se", equipment, visualLoadout, tool, label, order, selection, hovered: false, gearSignature: "", routine: null, position: { ...at }, anchor: { ...at }, route: [], goal: "", assignment: null, role: "idle", dwellUntil: this.time.now + 2000 + index * 800, visit: 0, facing: 1, climbing: false, status: "ready", health: 100, working: false, walking: false, walkSpan: 0, phase: index * 1.71 };
+			const slot: ScavActor = { actor, body, legA, legB, hand, sprite, poses, animation: createScavAnimation(index * .37), appearance, direction: "se", pixel, visualLoadout, tool, label, order, selection, hovered: false, gearSignature: "", routine: null, position: { ...at }, anchor: { ...at }, route: [], goal: "", assignment: null, role: "idle", dwellUntil: this.time.now + 2000 + index * 800, visit: 0, facing: 1, climbing: false, status: "ready", health: 100, working: false, walking: false, walkSpan: 0, phase: index * 1.71 };
 			hit.on("pointerover", (pointer: Phaser.Input.Pointer) => { if (this.acceptsPointer(pointer, "base")) { slot.hovered = true; selection.setVisible(true); label.setVisible(true); actor.setDepth(1_000_001); } });
 			hit.on("pointerout", () => { slot.hovered = false; const selected = snapshot().selectedScavId === scavId; selection.setVisible(selected); label.setVisible(selected); actor.setDepth(actor.y); });
 			// Native pointer-up distinguishes a deliberate tap from a drag before opening the inspector.
@@ -1279,13 +1225,6 @@ export function createWorld(
 		}
 
 		private setScavAppearance(slot: ScavActor, appearance: number): void {
-			if (slot.appearance === appearance || !slot.poses) return;
-			const texture = scavTexture(appearance);
-			const atlasData = this.textures.get(texture).customData as { meta?: { characterHeight?: number } };
-			const height = Number(atlasData.meta?.characterHeight) || SCAV_REFERENCE_HEIGHT;
-			for (const [key, pose] of [["idle", "idle"], ["walkA", "walk-a"], ["walkB", "walk-b"], ["work", "work"]] as const) {
-				slot.poses[key].setTexture(texture, scavFrame(pose, slot.direction)).setOrigin(SCAV_ORIGIN.x, SCAV_ORIGIN.y).setScale(48 / height);
-			}
 			slot.appearance = appearance;
 		}
 
@@ -1381,18 +1320,15 @@ export function createWorld(
 			const free = people.filter((scav) => scav.status !== "raiding" && !rooms.some((room) => room.id === scav.assignment && room.workerIds.includes(scav.id)));
 			people.forEach((scav, index) => {
 				const requestedAppearance = scavAppearance(scav.personality, index, scav.appearance);
-				this.requestScavAtlas(requestedAppearance);
 				const room = rooms.find((candidate) => candidate.id === scav.assignment && candidate.workerIds.includes(scav.id));
 				const presentation = room ? this.cells.get(roomCellKey(room.id))?.production ?? null : null;
 				const rank = Math.max(0, room?.workerIds.indexOf(scav.id) ?? 0);
 				const station = room?.type === "workshop" && presentation?.active ? presentation.stage === "assembly" ? 104 : 51 : 86;
 				const at = room ? getRoomLocalPoint(room, station + rank * 24, 80) : this.homePosition(Math.max(0, free.indexOf(scav)), free.length);
 				const slot = this.scavs.get(scav.id) ?? this.createScav(scav.id, index, at);
-				this.setScavAppearance(slot, scavAvailableAppearance(requestedAppearance, (texture) => this.textures.exists(texture)));
+				this.setScavAppearance(slot, requestedAppearance);
 				slot.visualLoadout = getScavVisualLoadout(scav, state.gearItems ?? [], state.weapons ?? []);
-				const torso = scavTorsoAnchor(Object.values(slot.poses ?? {}).map((image) => ({ weight: image.visible ? image.alpha : 0, torso: (image.frame.customData as { custom?: { torso?: Point } }).custom?.torso })));
-				const head = scavHeadAnchor(Object.values(slot.poses ?? {}).map((image) => ({ weight: image.visible ? image.alpha : 0, head: (image.frame.customData as { custom?: { head?: Point } }).custom?.head })));
-				slot.equipment.update(slot.visualLoadout, slot.direction, { working: slot.working, mode: "slung", bodyAngle: slot.body.angle, torso, head });
+				slot.pixel.update({ appearance: slot.appearance, limping: scav.status === 'wounded' }, scavPixelFrame(slot.direction, slot.animation.stride, slot.animation.idleSeconds * 1000, slot.walking, reducedMotion), slot.working ? null : slot.visualLoadout.weapon, scavPixelGear(slot.visualLoadout));
 				const previousStatus = slot.status, previousAssignment = slot.assignment;
 				slot.assignment = room?.id ?? null; slot.status = scav.status; slot.health = scav.health;
 				if (room || scav.status !== "ready") slot.routine = null;
@@ -1530,20 +1466,11 @@ export function createWorld(
 				const activityPose = getShelterActivityPose({ activity: slot.routine?.activity, elapsedMs: time, phase: slot.phase,
 					walking: slot.walking, facing: slot.direction[1] === "e" ? 1 : -1, cargo: slot.routine?.cargo, reducedMotion });
 				const ambientWork = !slot.walking && !slot.assignment && (activityPose.stance === "work" || activityPose.stance === "carry");
-				const weights = ambientWork ? { idle: .25, walkA: 0, walkB: 0, work: .75 } : pose.weights;
-				if (slot.poses) for (const [key, frame] of [["idle", "idle"], ["walkA", "walk-a"], ["walkB", "walk-b"], ["work", "work"]] as const) {
-					const image = slot.poses[key], nextFrame = scavFrame(frame, slot.direction);
-					if (image.frame.name !== nextFrame) image.setFrame(nextFrame);
-					image.setVisible(weights[key] > .001).setAlpha(weights[key]);
-				}
 				// All visual transforms pivot at the common feet baseline. Physics,
 				// hit zones and drag coordinates use the same projected feet position.
-				const relaxed = Boolean(slot.routine && !slot.walking && !slot.working && slot.status === "ready");
-				const breath = relaxed && !reducedMotion ? Math.sin(time / 4300 * Math.PI * 2 + slot.phase) * .42 : 0;
-				slot.body.setPosition(0, activityPose.bodyLift).setScale(slot.sprite ? 1 : pose.scaleX, pose.scaleY).setAngle(pose.angle * (slot.direction[1] === "e" ? 1 : -1) + breath + activityPose.bodyTilt);
-				const torso = scavTorsoAnchor(Object.values(slot.poses ?? {}).map((image) => ({ weight: image.visible ? image.alpha : 0, torso: (image.frame.customData as { custom?: { torso?: Point } }).custom?.torso })));
-				const head = scavHeadAnchor(Object.values(slot.poses ?? {}).map((image) => ({ weight: image.visible ? image.alpha : 0, head: (image.frame.customData as { custom?: { head?: Point } }).custom?.head })));
-				slot.equipment.update(slot.visualLoadout, slot.direction, { working: slot.working, mode: "slung", bodyAngle: slot.body.angle, torso, head });
+				slot.body.setPosition(0, Math.round(activityPose.bodyLift)).setScale(1).setAngle(slot.working ? pose.angle + activityPose.bodyTilt : activityPose.bodyTilt);
+				slot.pixel.update({ appearance: slot.appearance, limping: slot.status === 'wounded' }, scavPixelFrame(slot.direction, slot.animation.stride, slot.animation.idleSeconds * 1000, slot.walking || walkedDistance > 0, reducedMotion),
+					slot.working || ambientWork ? null : slot.visualLoadout.weapon, scavPixelGear(slot.visualLoadout));
 				const stride = (slot.animation.stride % 1) * Math.PI * 2;
 				slot.legA.setAngle(Math.sin(stride) * 9 * slot.animation.walkBlend);
 				slot.legB.setAngle(-Math.sin(stride) * 9 * slot.animation.walkBlend);
@@ -1605,11 +1532,11 @@ export function createWorld(
 		private paintMap(): void {
 			const g = this.add.graphics();
 			this.mapLayer.add(g);
-			g.fillStyle(0x1e2921).fillRect(0, 0, WIDTH, HEIGHT);
-			g.fillStyle(0x26352a).fillRoundedRect(20, 20, 800, 420, 2);
+			g.fillStyle(C.void).fillRect(0, 0, WIDTH, HEIGHT);
+			g.fillStyle(C.ink).fillRect(20, 20, 800, 420);
 			const rng = random(4731);
 			for (let n = 0; n < 1300; n++)
-				g.fillStyle(n % 2 ? 0xc3bc87 : 0x07120b, 0.035).fillRect(
+				g.fillStyle(n % 2 ? pigment(PIXEL_PALETTE.sand) : C.void, 0.035).fillRect(
 					20 + rng() * 800,
 					20 + rng() * 420,
 					1 + rng() * 3,
@@ -1622,7 +1549,7 @@ export function createWorld(
 						{ x, y: 20 },
 						{ x, y: 440 },
 					],
-					0x738563,
+					pigment(PIXEL_PALETTE.steelShade),
 					1,
 					0.13
 				);
@@ -1633,7 +1560,7 @@ export function createWorld(
 						{ x: 20, y },
 						{ x: 820, y },
 					],
-					0x738563,
+					pigment(PIXEL_PALETTE.steelShade),
 					1,
 					0.13
 				);
@@ -1653,11 +1580,11 @@ export function createWorld(
 							Math.sin(angle * 4 + ring * 0.2) * 0.11 +
 							Math.sin(angle * 7) * 0.035;
 						points.push({
-							x: hill.x + ((Math.cos(angle) * hill.rx * ring) / 5) * wave,
-							y: hill.y + ((Math.sin(angle) * hill.ry * ring) / 5) * wave,
+							x: Math.round(hill.x + ((Math.cos(angle) * hill.rx * ring) / 5) * wave),
+							y: Math.round(hill.y + ((Math.sin(angle) * hill.ry * ring) / 5) * wave),
 						});
 					}
-					line(g, points, 0x7d8a64, 1, 0.18);
+					line(g, points, C.sage, 1, 0.18);
 				}
 			}
 			const river: Point[] = [];
@@ -1666,9 +1593,9 @@ export function createWorld(
 					x: 454 + Math.sin(y / 61) * 47 + Math.sin(y / 24) * 11,
 					y,
 				});
-			line(g, river, 0x101f1e, 17);
-			line(g, river, 0x587c76, 9, 0.55);
-			line(g, river, 0x87a49a, 1, 0.4);
+			line(g, river, C.void, 17);
+			line(g, river, pigment(PIXEL_PALETTE.glass), 9, 0.55);
+			line(g, river, pigment(PIXEL_PALETTE.glassLight), 1, 0.4);
 			for (let n = 0; n < 75; n++) {
 				const x = 72 + rng() * 690,
 					y = 65 + rng() * 330;
@@ -1681,7 +1608,7 @@ export function createWorld(
 						{ x: x - 4, y },
 						{ x: x + 4, y },
 					],
-					0x14241b,
+					C.wall,
 					0.8
 				);
 				line(
@@ -1690,7 +1617,7 @@ export function createWorld(
 						{ x, y: y - h + 2 },
 						{ x, y: y + 3 },
 					],
-					0x6c7954,
+					C.sage,
 					1,
 					0.2
 				);
@@ -1703,20 +1630,20 @@ export function createWorld(
 			]) {
 				for (let row = 0; row < district.h; row++)
 					for (let col = 0; col < district.w; col++) {
-						g.fillStyle(0x7e8161, 0.26).fillRect(
+						g.fillStyle(pigment(PIXEL_PALETTE.panelShade), 0.26).fillRect(
 							district.x + col * 18,
 							district.y + row * 14,
 							11,
 							8
 						);
-						g.lineStyle(1, 0xa5a17b, 0.22).strokeRect(
+						g.lineStyle(1, pigment(PIXEL_PALETTE.steel), 0.22).strokeRect(
 							district.x + col * 18,
 							district.y + row * 14,
 							11,
 							8
 						);
 					}
-				g.lineStyle(1, 0xa59d72, 0.2).strokeRect(
+				g.lineStyle(1, C.sage, 0.2).strokeRect(
 					district.x - 7,
 					district.y - 7,
 					district.w * 18 + 2,
@@ -1728,16 +1655,16 @@ export function createWorld(
 			for (const place of places) {
 				const p = position(place);
 				const elbow = { x: p.x * 0.56 + previous.x * 0.44, y: previous.y - 20 };
-				line(g, [previous, elbow, p], 0x111d13, 7, 0.8);
-				line(g, [previous, elbow, p], 0x8b8968, 3, 0.48);
-				dashed(g, previous, elbow, 0xc9b68a, 1, 0.35);
-				dashed(g, elbow, p, 0xc9b68a, 1, 0.35);
-				dashed(g, this.hq, p, 0xa59467, 1, 0.2);
+				line(g, [previous, elbow, p], C.void, 7, 0.8);
+				line(g, [previous, elbow, p], C.gold, 3, 0.48);
+				dashed(g, previous, elbow, C.gold, 1, 0.35);
+				dashed(g, elbow, p, C.gold, 1, 0.35);
+				dashed(g, this.hq, p, C.gold, 1, 0.2);
 				previous = p;
 			}
 			// Headquarters, compass and marginal field annotations.
-			g.fillStyle(0xa6a279).fillRect(this.hq.x - 7, this.hq.y - 6, 14, 12);
-			g.lineStyle(1, 0xc9bd8b).strokeRect(
+			g.fillStyle(C.gold).fillRect(this.hq.x - 7, this.hq.y - 6, 14, 12);
+			g.lineStyle(1, C.light).strokeRect(
 				this.hq.x - 12,
 				this.hq.y - 11,
 				24,
@@ -1750,7 +1677,7 @@ export function createWorld(
 					{ x: compass.x, y: compass.y - 15 },
 					{ x: compass.x, y: compass.y + 15 },
 				],
-				0xafb08a,
+				pigment(PIXEL_PALETTE.steelLight),
 				1
 			);
 			line(
@@ -1759,7 +1686,7 @@ export function createWorld(
 					{ x: compass.x - 12, y: compass.y },
 					{ x: compass.x + 12, y: compass.y },
 				],
-				0xafb08a,
+				pigment(PIXEL_PALETTE.steelLight),
 				1
 			);
 			polygon(
@@ -1771,11 +1698,11 @@ export function createWorld(
 				],
 				C.gold
 			);
-			this.mapLayer.add(this.text(777, 38, "С", 12, "#dacf9f").setOrigin(0.5));
+			this.mapLayer.add(this.text(777, 38, "С", 12, PIXEL_PALETTE.cream).setOrigin(0.5));
 			this.mapLayer.add(
-				this.text(33, 32, "ОПЕРАТИВНАЯ КАРТА", 15, "#ddd6b4")
+				this.text(33, 32, "ОПЕРАТИВНАЯ КАРТА", 15, PIXEL_PALETTE.cream)
 			);
-			this.operationsCaption = this.text(33, 58, "", 12, "#bdc5a4");
+			this.operationsCaption = this.text(33, 58, "", 12, PIXEL_PALETTE.steelLight);
 			this.mapLayer.add(this.operationsCaption);
 			this.mapLayer.add(
 				this.text(
@@ -1783,14 +1710,14 @@ export function createWorld(
 					420,
 					"НАЖМИ НА РАЙОН, ЧТОБЫ ВЫБРАТЬ МАРШРУТ",
 					12,
-					"#b9bda0"
+					PIXEL_PALETTE.panel
 				)
 			);
 			this.mapLayer.add(
-				this.text(774, 421, "1:25 000", 11, "#b4a783").setOrigin(1, 0)
+				this.text(774, 421, "1:25 000", 11, PIXEL_PALETTE.sand).setOrigin(1, 0)
 			);
 			this.mapLayer.add(
-				this.text(this.hq.x, this.hq.y + 23, "БАЗА", 13, "#d4caa5").setOrigin(
+				this.text(this.hq.x, this.hq.y + 23, "БАЗА", 13, PIXEL_PALETTE.cream).setOrigin(
 					0.5
 				)
 			);
@@ -1807,11 +1734,11 @@ export function createWorld(
 				p.y + 28,
 				place.name.toUpperCase(),
 				16,
-				"#e1dbc0"
+				PIXEL_PALETTE.cream
 			).setOrigin(0.5);
-			label.setBackgroundColor("#14251b").setPadding(9, 5);
-			const detail = this.text(p.x, p.y + 57, "", 12, "#c0c3a0").setOrigin(0.5)
-				.setBackgroundColor("#1b2b20").setPadding(5, 3);
+			label.setBackgroundColor(PIXEL_PALETTE.black).setPadding(9, 5);
+			const detail = this.text(p.x, p.y + 57, "", 12, PIXEL_PALETTE.steelLight).setOrigin(0.5)
+				.setBackgroundColor(PIXEL_PALETTE.ink).setPadding(5, 3);
 			const zone = this.add
 				.zone(p.x, p.y + 22, Math.max(label.width + 14, 136), 110)
 				.setInteractive({ useHandCursor: true });
@@ -1864,7 +1791,7 @@ export function createWorld(
 					active = state.level >= place.level;
 				const selected = active && state.selectedMapId === place.id;
 				const highlighted = selected || (active && item.hovered);
-				const color = highlighted ? C.light : active ? tint(place.accent) : 0x899279;
+				const color = highlighted ? C.light : active ? pigment(PIXEL_PALETTE.steelLight) : C.sage;
 				item.active = active;
 				if (item.zone.input) item.zone.input.cursor = active ? "pointer" : "not-allowed";
 				item.dot.clear();
@@ -1872,7 +1799,7 @@ export function createWorld(
 				item.dot
 					.lineStyle(highlighted ? 2 : 1, color, active ? 0.75 : 0.35)
 					.strokeCircle(p.x, p.y, highlighted ? 24 : 20);
-				item.dot.fillStyle(0x14231a).fillCircle(p.x, p.y, 11);
+				item.dot.fillStyle(C.void).fillCircle(p.x, p.y, 11);
 				item.dot
 					.lineStyle(2, color, active ? 1 : 0.55)
 					.strokeCircle(p.x, p.y, 11);
@@ -1899,9 +1826,9 @@ export function createWorld(
 						0.7
 					);
 				}
-				item.label.setColor(highlighted ? "#ffdfa4" : active ? "#e1dbc0" : "#a2ae93")
-					.setBackgroundColor(highlighted ? "#3b3c2a" : "#14251b");
-				item.detail.setColor(active ? "#c0c3a0" : "#a2ae93");
+				item.label.setColor(highlighted ? PIXEL_PALETTE.yellow : active ? PIXEL_PALETTE.cream : PIXEL_PALETTE.panelShade)
+					.setBackgroundColor(highlighted ? PIXEL_PALETTE.rubber : PIXEL_PALETTE.black);
+				item.detail.setColor(active ? PIXEL_PALETTE.steelLight : PIXEL_PALETTE.panelShade);
 				const raiding = state.raids.filter(
 					(raid) => raid.mapId === place.id
 				).length;
@@ -2055,8 +1982,8 @@ export function createWorld(
 		width: initialViewport.width,
 		height: initialViewport.height,
 		backgroundColor: "#10120f",
-		antialias: true,
-		pixelArt: false,
+		antialias: false,
+		pixelArt: true,
 		roundPixels: true,
 		scale: {
 			mode: Phaser.Scale.FIT,

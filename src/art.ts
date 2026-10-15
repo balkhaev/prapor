@@ -1,7 +1,6 @@
 import { CATEGORY_LABELS, type WeaponCategory } from "./game/data";
 import { scavAppearance } from "./scav-isometric";
-import { SCAV_APPEARANCES } from "./game/scav-appearances";
-import { SCAV_PORTRAIT_DATA } from "./scav-portrait-data";
+import { pixelPortraitUrl } from './pixel-portrait';
 
 const escapeAttribute = (value: string) =>
 	value.replace(/[&<>"']/g, (character) => ({
@@ -146,25 +145,9 @@ export function gunArt(category: WeaponCategory, color: string): string {
 	return `<svg class="gun-art" viewBox="0 0 300 116" role="img" aria-label="${CATEGORY_LABELS[category]} · боковой вид"><ellipse cx="150" cy="103" rx="115" ry="5" fill="#0a130b" opacity=".4"/><g stroke="#142319" stroke-width="1.2" stroke-linejoin="round">${illustration}</g></svg>`;
 }
 
-const PORTRAIT_POSITIONS: Record<string, string> = {
-	veteran: "0% 0%",
-	collector: "100% 0%",
-	runner: "0% 100%",
-	careful: "100% 100%",
-};
-
 /** Roster portraits use the same character's native head and shoulder crop. */
 export function scavPortrait(personality: string, name: string, appearance?: number): string {
-	const identity = scavAppearance(personality, 0, appearance), crop = SCAV_PORTRAIT_DATA[identity];
+	const identity = scavAppearance(personality, 0, appearance);
 	const label = escapeAttribute(name);
-	if (crop) {
-		const size = `${crop.sheetWidth / crop.size * 100}% ${crop.sheetHeight / crop.size * 100}%`;
-		const position = `${crop.sheetWidth === crop.size ? 0 : crop.x / (crop.sheetWidth - crop.size) * 100}% ${crop.sheetHeight === crop.size ? 0 : crop.y / (crop.sheetHeight - crop.size) * 100}%`;
-		return `<span class="scav-portrait" role="img" aria-label="Портрет дикого ${label}" style="display:block;width:100%;height:100%;border-radius:inherit;background-image:url('/art/scav-isometric-${identity}.png');background-size:${size};background-position:${position}"></span>`;
-	}
-	const portraitPersonality = SCAV_APPEARANCES[identity]?.personality ?? personality;
-	const position = Object.hasOwn(PORTRAIT_POSITIONS, portraitPersonality)
-		? PORTRAIT_POSITIONS[portraitPersonality]!
-		: "0% 0%";
-	return `<span class="scav-portrait" role="img" aria-label="Портрет дикого ${label}" style="display:block;width:100%;height:100%;border-radius:inherit;background-image:url('/art/scav-portraits.png');background-size:200% 200%;background-position:${position}"></span>`;
+	return `<span class="scav-portrait" data-appearance="${identity}" role="img" aria-label="Портрет дикого ${label}" style="display:block;width:100%;height:100%;border-radius:inherit;background-image:url(&quot;${escapeAttribute(pixelPortraitUrl(identity))}&quot;);background-size:cover;background-position:center;image-rendering:pixelated"></span>`;
 }

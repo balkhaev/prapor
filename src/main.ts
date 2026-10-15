@@ -175,6 +175,7 @@ import { readLootHunt, lootHuntHint, type LootHuntSelection } from './loot-decis
 import { productionLootReceipt, productionRefundLabel, productionOutputSnapshot } from './loot-materials-ui';
 import { getTradeInventory, getTradeQuote, LOOT_MODEL_BY_ID } from './game/engine';
 import { MARKET_MAX_ACTIVE } from './game/flea';
+import './game-theme.css';
 
 type Page = "home" | "raids" | "arsenal" | "base" | "contracts" | "journal" | "recruits" | "squad" | "achievements" | "flea";
 const e = (value: unknown) =>

@@ -1,5 +1,6 @@
 import type { LiveCityBuilding, LivePoint, LiveWorld, LiveWorldProp } from './game/live';
 import { legacyHallEnvelopes } from './game/world-building-envelope';
+import { PIXEL_PALETTE as P } from './pixel-art';
 
 export type SceneryBounds = LivePoint & { width: number; height: number };
 
@@ -76,10 +77,10 @@ export function sceneBuildings(world: LiveWorld): LiveCityBuilding[] {
 
 export function buildingPalette(building: LiveCityBuilding): readonly [string, string, string] {
   const palettes = {
-    brick: ['#9c7963', '#715647', '#a9a092'],
-    plaster: ['#c3b397', '#938570', '#8c8e7a'],
-    panel: ['#a3aaa1', '#768379', '#808c84'],
-    metal: ['#889a9b', '#586e71', '#93a3a2'],
+    brick: [P.brick, P.brickShade, P.roof],
+    plaster: [P.plaster, P.plasterShade, P.roof],
+    panel: [P.panel, P.panelShade, P.roof],
+    metal: [P.steel, P.steelShade, P.steelLight],
   } as const;
   return palettes[building.facade ?? (building.kind === 'workshop' || building.kind === 'garage' ? 'metal' : building.kind === 'apartment' ? 'plaster' : 'brick')];
 }

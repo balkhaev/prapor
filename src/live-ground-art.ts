@@ -1,22 +1,17 @@
 import type { LiveLandscapePath, LivePoint, LiveTerrain, LiveWorld } from './game/live';
+import { PIXEL_PALETTE as P } from './pixel-art';
 
 type RGB = readonly [number, number, number];
+const pigment = (hex: string): RGB => [1, 3, 5].map(at => Number.parseInt(hex.slice(at, at + 2), 16)) as unknown as RGB;
+const blend = (a: RGB, b: RGB, ratio: number): RGB => a.map((channel, i) => Math.round(channel * (1 - ratio) + b[i]! * ratio)) as unknown as RGB;
 export const TERRAIN_PIGMENTS: Record<LiveTerrain, RGB> = {
-  road: [113, 117, 106], concrete: [145, 149, 135], forest: [47, 73, 43], water: [35, 75, 90],
-  yard: [118, 113, 90], grass: [81, 114, 61], path: [151, 123, 81], rail: [107, 110, 100], sand: [173, 155, 111],
+  road: blend(pigment(P.concrete), pigment(P.ink), .4), concrete: pigment(P.concrete), forest: pigment(P.leafShade), water: pigment(P.glass),
+  yard: blend(pigment(P.soil), pigment(P.concrete), .3), grass: pigment(P.leaf), path: pigment(P.wood),
+  rail: blend(pigment(P.concreteShade), pigment(P.steel), .3), sand: pigment(P.sand),
 };
 /** Opaque colour steps shared by large ground patches and their tiny pixel motifs. */
-export const PIXEL_TERRAIN_PALETTES: Record<LiveTerrain, readonly RGB[]> = {
-  grass: [[54, 82, 41], [66, 96, 49], TERRAIN_PIGMENTS.grass, [93, 125, 67], [113, 141, 78], [134, 156, 88]],
-  forest: [[29, 48, 33], [38, 60, 38], TERRAIN_PIGMENTS.forest, [58, 84, 47], [74, 99, 57], [91, 113, 66]],
-  water: [[23, 49, 65], [28, 62, 77], TERRAIN_PIGMENTS.water, [46, 92, 104], [70, 121, 129], [103, 147, 151]],
-  road: [[91, 97, 88], [102, 107, 97], TERRAIN_PIGMENTS.road, [121, 125, 114], [134, 137, 125], [144, 147, 134]],
-  concrete: [[101, 108, 99], [123, 130, 117], TERRAIN_PIGMENTS.concrete, [155, 161, 144], [170, 176, 157], [184, 189, 168]],
-  yard: [[82, 84, 72], [100, 99, 79], TERRAIN_PIGMENTS.yard, [129, 123, 97], [146, 138, 111], [160, 152, 128]],
-  path: [[112, 89, 59], [133, 107, 70], TERRAIN_PIGMENTS.path, [164, 136, 92], [178, 150, 108], [127, 127, 108]],
-  rail: [[70, 81, 80], [89, 98, 91], TERRAIN_PIGMENTS.rail, [121, 124, 110], [137, 138, 124], [153, 150, 132]],
-  sand: [[139, 124, 90], [156, 139, 100], TERRAIN_PIGMENTS.sand, [187, 169, 124], [201, 182, 137], [214, 198, 157]],
-};
+export const PIXEL_TERRAIN_PALETTES = Object.fromEntries(Object.entries(TERRAIN_PIGMENTS).map(([material, base]) =>
+  [material, [-32, -16, 0, 12, 25, 38].map(offset => base.map(channel => Math.max(0, Math.min(255, channel + offset))) as unknown as RGB)])) as unknown as Record<LiveTerrain, readonly RGB[]>;
 const organic = new Set<LiveTerrain>(['grass', 'forest', 'yard', 'path', 'sand']);
 const hash = (x: number, y: number): number => {
   let value = Math.imul(x + 721, 374761393) ^ Math.imul(y + 191, 668265263);

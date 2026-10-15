@@ -97,7 +97,7 @@ describe("directional isometric scav presentation", () => {
 		expect(portrait).not.toContain("Infinity");
 	});
 
-	test("generated portraits crop the exact same model atlas within its native sheet", () => {
+	test("legacy crop metadata stays valid while roster portraits use each native pixel identity", () => {
 		expect(Object.keys(SCAV_PORTRAIT_DATA).map(Number).sort((a, b) => a - b)).toEqual(SCAV_APPEARANCES.map((look) => look.id));
 		for (const [rawAppearance, crop] of Object.entries(SCAV_PORTRAIT_DATA)) {
 			const appearance = Number(rawAppearance);
@@ -107,7 +107,9 @@ describe("directional isometric scav presentation", () => {
 			expect(crop!.x + crop!.size).toBeLessThanOrEqual(crop!.sheetWidth);
 			expect(crop!.y + crop!.size).toBeLessThanOrEqual(crop!.sheetHeight);
 			const portrait = scavPortrait("careful", "Свой", appearance);
-			expect(portrait).toContain(`/art/scav-isometric-${appearance}.png`);
+			expect(portrait).toContain(`data-appearance="${appearance}"`);
+			expect(portrait).toContain('data:image/svg+xml,');
+			expect(portrait).toContain('image-rendering:pixelated');
 			expect(portrait).not.toContain("NaN"); expect(portrait).not.toContain("Infinity");
 		}
 	});

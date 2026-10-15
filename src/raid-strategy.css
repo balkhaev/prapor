@@ -1,33 +1,33 @@
-.raid-plan-editor { margin: 16px 0; padding: 14px; border: 1px solid #84946669; border-radius: 8px; background: #243b2a80; }
-.raid-plan-heading, .sector-intel-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
-.raid-plan-heading > small { color: #c2ccaa; font-size: 10px; text-align: right; }
-.raid-plan-fields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; margin-top: 12px; }
-.raid-plan-fields .field-label { font-size: 11px; }
-.raid-plan-fields select { min-width: 0; font-size: 12px; }
-.raid-plan-editor p { margin: 10px 0 0; font-size: 11px; line-height: 1.7; color: #c4d2b1; }
-.raid-plan-editor .raid-plan-preparation { color: #e0d8a8; }
-.raid-plan-note { display: block; margin-top: 9px; color: #afbf9b; font-size: 10px; line-height: 1.7; }
-.raid-plan-summary { display: block; color: #e2d69f; font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
-.raid-plan-brief { display: block; color: #ded5a4; font-size: 10px; line-height: 1.6; }
-.sector-intel { margin: 14px 0 20px; padding: 15px 18px; border: 1px solid #87936365; border-radius: 8px; background: #25382a99; }
-.sector-intel-heading > strong { color: #dbe0b7; font-size: 12px; }
-.sector-intel-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 18px; margin-top: 12px; }
-.sector-intel-grid > div { display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; align-items: center; }
-.sector-intel-grid span { color: #c2cfaa; font-size: 11px; }
-.sector-intel-grid strong { color: #e7ddaa; font: 600 13px 'IBM Plex Mono',monospace; }
-.sector-intel-grid meter { grid-column: 1 / -1; display: block; width: 100%; height: 8px; background: #15251b; border: 0; border-radius: 3px; accent-color: #b3b875; }
-.sector-intel-grid meter::-webkit-meter-bar { background: #15251b; border: 0; }
-.sector-intel-grid meter::-webkit-meter-optimum-value { background: #adb773; }
-.sector-intel-grid meter::-moz-meter-bar { background: #adb773; }
-.sector-intel-grid small { grid-column: 1 / -1; color: #b5c49d; font-size: 10px; }
-.sector-intel-pressure strong, .sector-intel-pressure small { color: #e5b096; }
-.sector-intel-pressure meter::-webkit-meter-optimum-value { background: #c78f68; }
-.sector-intel-pressure meter::-moz-meter-bar { background: #c78f68; }
-.sector-intel p { margin: 12px 0 5px; max-width: 850px; color: #bac8a3; font-size: 11px; line-height: 1.7; }
-.sector-intel > small { color: #a9ba97; font-size: 10px; line-height: 1.6; }
-.raid-strategy-results { margin: 12px 0; padding: 12px; background: #20382788; border: 1px solid #7f94625c; border-radius: 7px; }
-.raid-strategy-results p { display: flex; flex-direction: column; gap: 3px; margin: 9px 0 0; color: #c7d4b2; font-size: 11px; line-height: 1.7; }
-.raid-strategy-results p > strong { color: #eadfb3; font-size: 11px; }
-.raid-strategy-sector-result { display: block; margin-top: 11px; color: #b6c59e; font-size: 10px; line-height: 1.7; }
-.raid-plan-editor :is(select,button):focus-visible { outline: 2px solid #e3d895; outline-offset: 3px; }
-@media(max-width:520px) { .raid-plan-fields { grid-template-columns: minmax(0,1fr); gap: 11px; } .raid-plan-fields select { min-height: 44px; } .raid-plan-heading { align-items: start; } .sector-intel { padding: 14px; } .sector-intel-grid { gap: 12px; } .sector-intel-heading { flex-wrap: wrap; } .sector-intel-grid span { font-size: 10px; } }
+.raid-plan-editor { margin:16px 0; padding:14px; border:1px solid color-mix(in srgb, var(--game-line) 41%, transparent); border-radius:var(--game-radius-panel); background:color-mix(in srgb, var(--game-panel-raised) 50%, transparent); }
+.raid-plan-heading, .sector-intel-heading { display:flex; justify-content:space-between; align-items:baseline; gap:10px; }
+.raid-plan-heading > small { color:var(--game-muted); font-size:10px; text-align:right; }
+.raid-plan-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:12px; }
+.raid-plan-fields .field-label { font-size:11px; }
+.raid-plan-fields select { min-width:0; font-size:12px; }
+.raid-plan-editor p { margin:10px 0 0; font-size:11px; line-height:1.7; color:var(--game-muted); }
+.raid-plan-editor .raid-plan-preparation { color:var(--game-brass-light); }
+.raid-plan-note { display:block; margin-top:9px; color:var(--game-muted); font-size:10px; line-height:1.7; }
+.raid-plan-summary { display:block; color:var(--game-brass-light); font-size:10px; line-height:1.5; overflow-wrap:anywhere; }
+.raid-plan-brief { display:block; color:var(--game-brass-light); font-size:10px; line-height:1.6; }
+.sector-intel { margin:14px 0 20px; padding:15px 18px; border:1px solid color-mix(in srgb, var(--game-line) 40%, transparent); border-radius:var(--game-radius-panel); background:color-mix(in srgb, var(--game-panel-raised) 60%, transparent); }
+.sector-intel-heading > strong { color:var(--game-text); font-size:12px; }
+.sector-intel-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; margin-top:12px; }
+.sector-intel-grid > div { display:grid; grid-template-columns:1fr auto; gap:6px 12px; align-items:center; }
+.sector-intel-grid span { color:var(--game-muted); font-size:11px; }
+.sector-intel-grid strong { color:var(--game-text); font:600 13px 'IBM Plex Mono',monospace; }
+.sector-intel-grid meter { grid-column:1 / -1; display:block; width:100%; height:8px; background:var(--game-panel); border:0; border-radius:var(--game-radius-small); accent-color:var(--game-brass); }
+.sector-intel-grid meter::-webkit-meter-bar { background:var(--game-panel); border:0; }
+.sector-intel-grid meter::-webkit-meter-optimum-value { background:var(--game-friendly); }
+.sector-intel-grid meter::-moz-meter-bar { background:var(--game-friendly); }
+.sector-intel-grid small { grid-column:1 / -1; color:var(--game-muted); font-size:10px; }
+.sector-intel-pressure strong, .sector-intel-pressure small { color:var(--game-brass); }
+.sector-intel-pressure meter::-webkit-meter-optimum-value { background:var(--game-brass); }
+.sector-intel-pressure meter::-moz-meter-bar { background:var(--game-brass); }
+.sector-intel p { margin:12px 0 5px; max-width:850px; color:var(--game-muted); font-size:11px; line-height:1.7; }
+.sector-intel > small { color:var(--game-muted); font-size:10px; line-height:1.6; }
+.raid-strategy-results { margin:12px 0; padding:12px; background:color-mix(in srgb, var(--game-panel) 53%, transparent); border:1px solid color-mix(in srgb, var(--game-line) 36%, transparent); border-radius:var(--game-radius-control); }
+.raid-strategy-results p { display:flex; flex-direction:column; gap:3px; margin:9px 0 0; color:var(--game-text); font-size:11px; line-height:1.7; }
+.raid-strategy-results p > strong { color:var(--game-text); font-size:11px; }
+.raid-strategy-sector-result { display:block; margin-top:11px; color:var(--game-muted); font-size:10px; line-height:1.7; }
+.raid-plan-editor :is(select,button):focus-visible { outline:2px solid var(--game-brass); outline-offset:3px; }
+@media(max-width:520px) { .raid-plan-fields { grid-template-columns:minmax(0,1fr); gap:11px; } .raid-plan-fields select { min-height:44px; } .raid-plan-heading { align-items:start; } .sector-intel { padding:14px; } .sector-intel-grid { gap:12px; } .sector-intel-heading { flex-wrap:wrap; } .sector-intel-grid span { font-size:10px; } }

@@ -1,4 +1,5 @@
 import type { ShelterRoomType } from "./game/shelter";
+import { pixelRoomArt } from './pixel-room-art';
 
 // Pass a different prefix when the same illustration appears twice on a page.
 // All artwork is local, scales with its card and shares the shelter's palette.
@@ -141,71 +142,6 @@ export function sectorArt(mapId: string, idPrefix = `sector-${mapId}`): string {
 	return frame(id, SECTOR_LABELS[map]!, SECTOR_BODIES[map]!(id), map === "forest" ? "#485b43" : map === "bunker" ? "#40493e" : "#3b4841");
 }
 
-function roomShell(id: string, content: string, tint: string): string {
-	return `<rect x="9" y="10" width="222" height="104" rx="3" fill="#101d18"/>
-		<path d="M14 15h212v73H14" fill="url(#${id}-wall)"/><rect x="14" y="15" width="212" height="73" fill="${tint}" opacity=".17"/>
-		<path d="M14 17h212v7H14" fill="#1b2b23"/><path d="M14 30h212M14 59h212M55 24v64M107 24v64M160 24v64M212 24v64" stroke="#7c836a" stroke-opacity=".2" stroke-width=".8"/>
-		<path d="M14 88h212l5 20H9z" fill="#505c48"/><path d="M20 92h200M17 101h206M65 88l-5 20M120 88v20M175 88l5 20" stroke="#25382b" stroke-width="1"/>
-		<path d="M15 20h211M20 24v20h11" fill="none" stroke="#727e68" stroke-width="2"/><path d="M37 23h23v3H37M183 23h23v3h-23" fill="#dfc58b"/><ellipse cx="50" cy="58" rx="39" ry="39" fill="url(#${id}-light)"/><ellipse cx="194" cy="58" rx="39" ry="39" fill="url(#${id}-light)"/>
-		${content}<path d="M11 10v102M229 10v102M11 112h218" fill="none" stroke="#83907a" stroke-width="3"/><path d="M11 11h218" stroke="#b1b49a" stroke-width="3"/>`;
-}
-
-function roomContent(type: ShelterRoomType, id: string): string {
-	switch (type) {
-		case "workshop":
-			return `<rect x="43" y="36" width="101" height="32" rx="2" fill="#273b2d" stroke="#879579"/><path d="M48 44h88M48 51h88M48 59h88" stroke="#4c5d43" stroke-dasharray="2 5"/><path d="M54 41v17l5 3M77 40v18M77 40h7M99 41l-6 10M116 40v18l6 4" fill="none" stroke="#b4b194" stroke-width="2"/>
-				<path d="M31 75h150v7H31" fill="#b29b6a"/><path d="M34 81h144v7H34" fill="#354931"/><path d="M38 81v18M174 81v18" stroke="#263d2a" stroke-width="5"/>
-				<path d="M61 70h46v-3h32v5h-25l-7 7H91l-2-6H71l-10 5z" fill="#24382a"/><path d="M78 68h17v5H78" fill="#8e7550"/><rect x="146" y="65" width="19" height="10" fill="#4c6150" stroke="#a8b495"/><path d="M153 62v8M160 62v8" stroke="#9fa88b" stroke-width="2"/>
-				<rect x="189" y="45" width="25" height="42" fill="url(#${id}-metal)"/><path d="M195 52h13v5h-13M195 64h13v5h-13M195 76h13v5h-13" fill="#172c20"/><circle cx="200" cy="53" r="1.7" fill="#d1b878"/>`;
-		case "ammo":
-			return `<path d="M38 80h131v7H38M43 87v13M165 87v13" fill="none" stroke="#929274" stroke-width="5"/>
-				<path d="M61 39h24v7H61M69 44v29h8V44M59 73h28v7H59" fill="#7e8f72" stroke="#273e2d" stroke-width="1.5"/><path d="M78 47l18-14M94 30l6 8" stroke="#c6b182" stroke-width="3"/><path d="M105 39h24v7h-24M113 44v29h8V44M103 73h28v7h-28" fill="#7e8f72" stroke="#273e2d" stroke-width="1.5"/><path d="M122 47l18-14M138 30l6 8" stroke="#c6b182" stroke-width="3"/>
-				<path d="M46 71v8M52 71v8M58 71v8M138 71v8M144 71v8M150 71v8" stroke="#d0af67" stroke-width="3"/>
-				${crate(177, 73, 29, 19, "#8a8157")}${crate(181, 56, 24, 17, "#807951")}<path d="M188 61h11M188 65h11" stroke="#b5a96f"/><path d="M158 43h-16v8h16z" fill="#455e42" stroke="#a3ac87"/>`;
-		case "recycler":
-			return `<path d="M44 39h65l-12 18v29H57V57z" fill="url(#${id}-metal)" stroke="#9ca68b"/><path d="M54 48h44l-8 10H64z" fill="#243c29"/><rect x="58" y="69" width="40" height="7" fill="url(#${id}-stripes)"/><circle cx="75" cy="63" r="4" fill="#9ca583"/><path d="M57 86v12M97 86v12" stroke="#223c29" stroke-width="5"/>
-				<path d="M99 79h51l21-15h28v8h-24l-22 15H99" fill="#364f36" stroke="#7b8f6c" stroke-width="2"/><path d="M108 81h7M124 81h7M143 81h7M161 75l6-4M181 68h7" stroke="#a1aa82" stroke-width="2"/>
-				<path d="M151 37h39v21h-39" fill="#2c4230" stroke="#7e8f70"/><circle cx="162" cy="48" r="4" fill="#a8b477"/><circle cx="178" cy="48" r="4" fill="#b49a6d"/>
-				<path d="M44 99l-9-11 6-6 12 6M24 87l6-13 12 5M178 97l10-13 10 8 7-7 8 15" fill="#737961" stroke="#a0a589"/>`;
-		case "medbay":
-			return `<rect x="39" y="34" width="31" height="42" rx="2" fill="#a5b3a1" stroke="#546b54"/><rect x="45" y="40" width="18" height="24" fill="#526d58"/><path d="M49 45h10M49 52h10M49 59h10" stroke="#a1b09a"/><path d="M51 68h7M45 76v13M65 76v13" stroke="#758b70" stroke-width="2"/>
-				<path d="M83 75h105v11H83" fill="#c1c2a5"/><path d="M83 78h30v8H83" fill="#ddd5b5"/><path d="M113 77h69v10h-69" fill="#74947d"/><path d="M85 68v28M187 68v28M85 91h102" stroke="#9eaf94" stroke-width="3"/>
-				<rect x="154" y="32" width="40" height="27" rx="2" fill="#49634b" stroke="#849f7c"/><path d="M174 37v17M166 45h17" stroke="#c0c8ab" stroke-width="5"/>
-				<path d="M205 44v53M200 44h10M203 49h5v12h-5" stroke="#bec6ad" stroke-width="2" fill="#89a18e"/><path d="M206 61q-13 10-18 20" fill="none" stroke="#7ea390" stroke-width="1"/>`;
-		case "radio":
-			return `<path d="M37 79h173v7H37M42 86v13M205 86v13" stroke="#8c9e87" stroke-width="4" fill="#465f47"/>
-				<rect x="48" y="42" width="48" height="34" rx="3" fill="#2a4436" stroke="#819d85"/><rect x="54" y="47" width="34" height="22" rx="2" fill="#829f84"/><path d="M57 59h7l4-8 5 14 4-9 5 3h4" fill="none" stroke="#d0d6aa" stroke-width="1.4"/><rect x="104" y="44" width="28" height="31" fill="url(#${id}-metal)"/><path d="M109 51h17M109 55h17M109 59h17" stroke="#1b3727"/><circle cx="113" cy="67" r="3" fill="#b4c0a2"/><circle cx="125" cy="67" r="3" fill="#b4c0a2"/>
-				<rect x="153" y="35" width="48" height="32" fill="#3f5e47" stroke="#8ea38b"/><path d="M159 59l8-16 12 13 7-12 9 14M157 45h36M174 39v24" fill="none" stroke="#a8b790" stroke-width=".8"/><path d="M149 74h33" stroke="#c2c5a7" stroke-width="3"/>
-				<path d="M71 40V28h72v12M138 39h11" fill="none" stroke="#78907b" stroke-width="1.5"/><ellipse cx="70" cy="57" rx="31" ry="25" fill="url(#${id}-blue)"/><path d="M116 82v11h16v-11M120 93v10M128 93v10" fill="#283f30" stroke="#809374" stroke-width="2"/>`;
-		case "storage":
-			return `<path d="M35 35v64M95 35v64M143 35v64M204 35v64M35 39h60M35 64h60M35 90h60M143 39h61M143 64h61M143 90h61" stroke="#8d9d80" stroke-width="3"/>
-				${crate(40, 48, 21, 13, "#8a865c")}${crate(66, 47, 22, 14, "#667b59")}${crate(41, 72, 43, 15, "#7b7855")}${crate(149, 47, 20, 14, "#789165")}${crate(175, 47, 22, 14, "#888360")}${crate(149, 72, 43, 15, "#6c825d")}
-				<path d="M111 45v47M107 49h8M107 56h8M107 63h8M107 70h8M107 77h8M107 84h8" stroke="#9b9f7c" stroke-width="2"/>${crate(107, 93, 25, 13, "#8c835c")}`;
-		case "dormitory":
-			return `<path d="M33 38v61M92 38v61M33 47h59M33 81h59" stroke="#8f9b80" stroke-width="3"/><path d="M36 40h53v7H36M36 74h53v7H36" fill="#aaa88a"/><path d="M48 41h41v7H48M48 75h41v7H48" fill="#697d66"/><path d="M97 40v57M108 40v57M97 49h11M97 61h11M97 73h11M97 85h11" stroke="#8d9a7c" stroke-width="2"/>
-				<path d="M156 39v60M215 39v60M156 47h59M156 81h59" stroke="#8f9b80" stroke-width="3"/><path d="M159 40h53v7h-53M159 74h53v7h-53" fill="#aaa88a"/><path d="M172 41h40v7h-40M172 75h40v7h-40" fill="#75826a"/>
-				<rect x="119" y="59" width="25" height="34" fill="#5b7054" stroke="#9aaa87"/><path d="M131 62v29" stroke="#314e35"/><circle cx="128" cy="77" r="1.3" fill="#c7c8a4"/><circle cx="135" cy="77" r="1.3" fill="#c7c8a4"/><path d="M126 50h12v8h-12" fill="#c3b37a"/><ellipse cx="132" cy="48" rx="22" ry="17" fill="url(#${id}-light)"/>`;
-		case "hangar":
-			return `<path d="M25 95V48q0-26 95-26t95 26v47" fill="#2c403b" stroke="#8b9d98" stroke-width="3"/><path d="M32 47q0-18 88-18t88 18M52 36v54M88 30v60M125 29v61M162 32v58M198 39v51" fill="none" stroke="#667f77" stroke-width="2"/>
-				<path d="M37 49v42M93 49v42M37 52h56M37 71h56M37 91h56M153 49v42M208 49v42M153 52h55M153 71h55M153 91h55" stroke="#9aab91" stroke-width="3"/>
-				${crate(42, 56, 20, 12)}${crate(67, 56, 20, 12, "#8b8060")}${crate(42, 76, 44, 12)}${crate(158, 56, 20, 12, "#8b8060")}${crate(183, 56, 19, 12)}${crate(158, 76, 43, 12, "#74765b")}
-				<path d="M101 89h34v12h-34zM130 77h5v25h-5M134 99h16v3h-16" fill="#b5a16b" stroke="#3d4c3e"/><path d="M104 87V72h18v17M104 73h18" fill="none" stroke="#7e9484" stroke-width="2"/><circle cx="107" cy="101" r="4" fill="#17281f"/><circle cx="130" cy="101" r="4" fill="#17281f"/><path d="M100 108h51" stroke="#d5bd7e" stroke-width="2" stroke-dasharray="6 4"/>`;
-	}
-}
-
-const ROOM_ART: Record<ShelterRoomType, { label: string; tint: string }> = {
-	workshop: { label: "Оружейная мастерская: верстак, инструменты и станок", tint: "#bba26c" },
-	ammo: { label: "Патронный цех: снаряжательные прессы и коробки патронов", tint: "#b1b881" },
-	recycler: { label: "Разборочная: дробилка, конвейер и сортировка деталей", tint: "#9c9970" },
-	medbay: { label: "Медблок: лечебная койка и медицинское оборудование", tint: "#94b7a1" },
-	radio: { label: "Радиорубка: радиостанция, зелёный монитор и карта", tint: "#82aaa4" },
-	storage: { label: "Склад: металлические стеллажи и ящики с припасами", tint: "#9ca678" },
-	dormitory: { label: "Жилой блок: двухъярусные кровати и шкафчики", tint: "#b4a88b" },
-	hangar: { label: "Ангар: просторные складские ряды и погрузчик", tint: "#87a0ad" },
-};
-
-export function roomMiniArt(type: ShelterRoomType, idPrefix = `room-${type}`): string {
-	const id = prefix(idPrefix);
-	const room = ROOM_ART[type];
-	return frame(id, room.label, roomShell(id, roomContent(type, id), room.tint), "#263c2d");
+export function roomMiniArt(type: ShelterRoomType, _idPrefix = `room-${type}`): string {
+	return pixelRoomArt(type);
 }
