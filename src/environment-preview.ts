@@ -36,7 +36,8 @@ function snapshot(): WorldSnapshot {
 const world = createWorld(stage, snapshot, () => {}, { canInteract: () => false, canDrag: () => false, canCamera: () => true });
 function showScene(): void {
   prepare(); world.selectRaid(state.raids[0]?.id ?? null); world.setView(choice.value === 'map' ? 'map' : choice.value === 'base' ? 'base' : 'raid');
-  for (const button of document.querySelectorAll<HTMLButtonElement>('.environment-camera button')) button.disabled = choice.value === 'map';
+  document.querySelector<HTMLElement>('.environment-camera')!.hidden = choice.value === 'map';
+  document.querySelector<HTMLElement>('.scene-light-control')!.hidden = choice.value === 'map';
   world.setPanMode(true); world.setRaidFollow(true);
   locationLabel.textContent = choice.selectedOptions[0]?.textContent ?? 'Окружение';
   const url = new URL(location.href); url.searchParams.set('scene', choice.value); history.replaceState(null, '', url);
