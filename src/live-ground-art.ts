@@ -1,5 +1,6 @@
 import type { LiveLandscapePath, LivePoint, LiveTerrain, LiveWorld } from './game/live';
 import { PIXEL_PALETTE as P } from './pixel-art';
+import { pixelLandcoverBands, segmentTouchesRect, type LandcoverRect } from './pixel-landcover';
 
 export type GroundWorld = Pick<LiveWorld, 'width' | 'height' | 'seed' | 'paths' | 'city' | 'citySites'>;
 
@@ -19,6 +20,41 @@ const hash = (x: number, y: number): number => {
   let value = Math.imul(x + 721, 374761393) ^ Math.imul(y + 191, 668265263);
   value = Math.imul(value ^ value >>> 13, 1274126177); return (value ^ value >>> 16) >>> 0;
 };
+
+/** A bounded three-cell ecotone, propagated only through adjacent organic ground. */
+function groundTransitions(classes: Uint8Array, width: number, height: number, indoor: Uint8Array, kinds: readonly LiveTerrain[]): Uint16Array {
+  const edges = new Uint16Array(width * height), soft = kinds.map(kind => organic.has(kind));
+  for (let distance = 1; distance <= 3; distance++) for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    const cell = y * width + x, material = classes[cell]!;
+    if (!soft[material] || indoor[cell] || edges[cell]) continue;
+    const start = hash(x >> 2, y >> 2) % 4;
+    for (let n = 0; n < 4; n++) {
+      const side = (start + n) % 4;
+      if (side === 0 && !x || side === 1 && x === width - 1 || side === 2 && !y || side === 3 && y === height - 1) continue;
+      const next = cell + (side === 0 ? -1 : side === 1 ? 1 : side === 2 ? -width : width), neighbor = classes[next]!;
+      if (!soft[neighbor] || indoor[next]) continue;
+      const other = distance === 1 ? neighbor : (edges[next]! & 15) - 1;
+      if (other < 0 || other === material || distance > 1 && edges[next]! >> 4 !== distance - 1) continue;
+      edges[cell] = distance << 4 | other + 1; break;
+    }
+  }
+  return edges;
+}
+
+/** Scuffed courtyard ground follows real passages; no rectangular district colour wash. */
+export function courtyardGroundMarks(site: Pick<NonNullable<LiveWorld['citySites']>[number], 'id' | 'kind' | 'courtyard' | 'passages'>): Array<LandcoverRect & { color: string }> {
+  const marks: Array<LandcoverRect & { color: string }> = [], court = site.courtyard;
+  const seed = [...site.id].reduce((value, char) => Math.imul(value, 31) + char.charCodeAt(0), 17) >>> 0;
+  for (let patch = 0; patch < 5; patch++) {
+    const value = hash(seed + patch * 71, patch * 13), width = court.width * (.22 + (value % 17) / 100), height = court.height * (.27 + (value >>> 4) % 19 / 100);
+    const x = court.x + (court.width - width) * ((value >>> 8) % 101) / 100, y = court.y + (court.height - height) * ((value >>> 16) % 101) / 100;
+    for (const band of pixelLandcoverBands({ x, y, width, height }, `${site.id}:${patch}`, 7)) {
+      if (site.passages.some(path => path.slice(1).some((point, i) => segmentTouchesRect(path[i]!, point, band, .8)))) continue;
+      marks.push({ ...band, color: site.kind === 'workyard' ? patch % 2 ? '#747b702b' : '#93857232' : patch % 2 ? '#7b865727' : '#b1a37d2b' });
+    }
+  }
+  return marks;
+}
 
 /** Detailed ground stays within a 4096px texture side, including G10's million cells. */
 export function terrainTextureResolution(width: number, height: number): number {
@@ -87,11 +123,13 @@ export function paintTerrainTexture(c: CanvasRenderingContext2D, world: GroundWo
   const seed = [...world.seed].reduce((value, char) => (Math.imul(value, 31) + char.charCodeAt(0)) | 0, 0);
   const kinds = Object.keys(PIXEL_TERRAIN_PALETTES) as LiveTerrain[], concrete = kinds.indexOf('concrete');
   const materialIds = new Map(kinds.map((kind, index) => [kind, index]));
-  const classes = Uint8Array.from(terrain, material => materialIds.get(material)!);
-  for (const quarter of world.city?.quarters ?? []) {
-    const style = quarter.id === 'old-center' ? 1 : quarter.id === 'station' ? 2 : 0;
+  const classes = Uint8Array.from(terrain, material => materialIds.get(material)!), indoor = new Uint8Array(width * height);
+  for (const site of world.citySites ?? []) for (const building of site.buildings) {
+    for (let y = Math.max(0, building.y); y < Math.min(height, building.y + building.height); y++) indoor.fill(1, y * width + Math.max(0, building.x), y * width + Math.min(width, building.x + building.width));
+    const style = building.kind === 'workshop' || building.kind === 'garage' ? 2 : building.kind === 'service' || building.kind === 'shop' || building.facade === 'brick' ? 1 : 0;
     if (!style) continue;
-    for (let y = Math.max(0, quarter.y); y < Math.min(height, quarter.y + quarter.height); y++) for (let x = Math.max(0, quarter.x); x < Math.min(width, quarter.x + quarter.width); x++) if (classes[y * width + x] === concrete) classes[y * width + x] = kinds.length + style - 1;
+    // Masonry belongs to actual door/frontage pads, never an administrative quarter boundary.
+    for (let y = Math.max(0, building.y - 1); y < Math.min(height, building.y + building.height + 1); y++) for (let x = Math.max(0, building.x - 1); x < Math.min(width, building.x + building.width + 1); x++) if (classes[y * width + x] === concrete) classes[y * width + x] = kinds.length + style - 1;
   }
   const littleEndian = new Uint8Array(new Uint32Array([255]).buffer)[0] === 255;
   const packed = (color: RGB): number => littleEndian ? color[0] | color[1] << 8 | color[2] << 16 | 255 << 24 : color[0] << 24 | color[1] << 16 | color[2] << 8 | 255;
@@ -101,21 +139,16 @@ export function paintTerrainTexture(c: CanvasRenderingContext2D, world: GroundWo
     const tileH = style === 1 ? Math.max(3, Math.round(resolution * .5)) : style === 2 ? Math.max(4, Math.round(resolution * .75)) : tileW;
     // Paving repeats on whole masonry blocks, never half of a slab at an atlas edge.
     const w = material === 'concrete' ? tileW * (style ? 16 : 8) : 128, h = material === 'concrete' ? tileH * (style ? 16 : 8) : 128;
-    const pixels = new Uint32Array(w * h), palette = PIXEL_TERRAIN_PALETTES[material as LiveTerrain].map(packed);
-    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) pixels[y * w + x] = palette[pixelMotifTone(material as LiveTerrain, x, y, resolution, seed, style)]!;
-    return { pixels, width: w, height: h };
+    const pixels = new Uint32Array(w * h), tones = new Uint8Array(w * h), palette = PIXEL_TERRAIN_PALETTES[material as LiveTerrain].map(packed);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const tone = pixelMotifTone(material as LiveTerrain, x, y, resolution, seed, style); pixels[y * w + x] = palette[tone]!; tones[y * w + x] = tone; }
+    return { pixels, tones, width: w, height: h };
   });
-  const organicIds = new Set(kinds.map((kind, id) => organic.has(kind) ? id : -1));
-  const edges = new Uint16Array(width * height);
-  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
-    const cell = y * width + x, material = classes[cell]!;
-    if (!organicIds.has(material)) continue;
-    for (const [side, nx, ny] of [[0, x - 1, y], [1, x + 1, y], [2, x, y - 1], [3, x, y + 1]]) {
-      if (nx! < 0 || ny! < 0 || nx! >= width || ny! >= height) continue;
-      const neighbor = classes[ny! * width + nx!]!;
-      if (neighbor !== material && organicIds.has(neighbor)) edges[cell] = edges[cell]! | (neighbor + 1) << (side! * 4);
-    }
-  }
+  const edges = groundTransitions(classes, width, height, indoor, kinds);
+  const transitionColors = kinds.flatMap(material => kinds.map(neighbor => {
+    const green = (kind: LiveTerrain) => kind === 'grass' || kind === 'forest';
+    const strength = green(material) === green(neighbor) ? 1 : .65;
+    return [ .45, .23, .08 ].flatMap(ratio => PIXEL_TERRAIN_PALETTES[material].map((color, tone) => packed(blend(color, PIXEL_TERRAIN_PALETTES[neighbor][tone]!, ratio * strength))));
+  }));
   const bandHeight = Math.min(textureHeight, resolution * 8), pixels = c.createImageData(textureWidth, bandHeight);
   const banks = waterBankEdges(width, height, terrain), bankShade = packed(blend(pigment(P.glass), pigment(P.leafShade), .35)), bankLight = packed(blend(pigment(P.glassLight), pigment(P.sand), .28));
   const data = new Uint32Array(pixels.data.buffer, pixels.data.byteOffset, pixels.data.byteLength / 4), atlasRows = new Uint32Array(atlases.length);
@@ -126,14 +159,15 @@ export function paintTerrainTexture(c: CanvasRenderingContext2D, world: GroundWo
       for (let atlas = 0; atlas < atlases.length; atlas++) atlasRows[atlas] = textureY % atlases[atlas]!.height * atlases[atlas]!.width;
       for (let px = 0; px < textureWidth; px++) {
         const cx = Math.floor(px / resolution), localX = px % resolution, cell = cy * width + cx;
-        let material = classes[cell]!;
-        if (edges[cell]) {
-          const side = localX === 0 ? 0 : localX === resolution - 1 ? 1 : localY === 0 ? 2 : localY === resolution - 1 ? 3 : -1;
-          const neighbor = side >= 0 ? edges[cell]! >> (side * 4) & 15 : 0;
-          if (neighbor && hash(px, textureY ^ seed) % 4 === 0) material = neighbor - 1;
-        }
+        const material = classes[cell]!;
         const atlas = atlases[material]!;
-        data[py * textureWidth + px] = atlas.pixels[atlasRows[material]! + px % atlas.width]!;
+        const sample = atlasRows[material]! + px % atlas.width;
+        let color = atlas.pixels[sample]!;
+        if (edges[cell]) {
+          const neighbor = (edges[cell]! & 15) - 1, distance = Math.min(3, (edges[cell]! >> 4) + Number(hash(px >> 1, (textureY >> 1) ^ seed) % 5 === 0));
+          color = transitionColors[material * kinds.length + neighbor]![(distance - 1) * 6 + atlas.tones[sample]!]!;
+        }
+        data[py * textureWidth + px] = color;
         if (banks[cell]) {
           const bank = banks[cell]!, distance = Math.min(bank & 1 ? localX : resolution, bank & 2 ? resolution - 1 - localX : resolution, bank & 4 ? localY : resolution, bank & 8 ? resolution - 1 - localY : resolution);
           if (distance === 0) data[py * textureWidth + px] = bankShade;

@@ -3,7 +3,7 @@ import { PixelCombatAnimation, pixelFacing, samplePixelMotion, stopPixelMotion, 
 import { liveDropLabel, liveLootTotals } from './live-loot-ui';
 import { getBoss } from './game/bosses';
 import { WEAPON_BY_ID } from './game/data';
-import { buildingNeedsCutaway, buildingPalette, liveMapRasterPlan, paintMapFootprints, sceneBuildings, SceneryIndex } from './live-map-art';
+import { buildingNeedsCutaway, buildingPalette, liveMapRasterPlan, mapVegetationBands, paintMapFootprints, sceneBuildings, SceneryIndex } from './live-map-art';
 import { PixelRaidRenderer, pixelSpriteRect, type PixelDetail } from './pixel-renderer';
 import { PixelContainerArt } from './pixel-containers';
 import { PixelActorArt, PIXEL_ACTOR_ANCHOR, PIXEL_ACTOR_NATIVE_SIZE } from './pixel-actors';
@@ -14,7 +14,8 @@ import { PixelPropArt } from './pixel-props';
 import { PixelObstacleArt } from './pixel-obstacles';
 import { PIXEL_TILE, PIXEL_PALETTE as P, pixelIso } from './pixel-art';
 import { PIXEL_SCENE_THEME as T } from './pixel-scene-theme';
-import { buildSurfaceMasks, paintRoadSurface, paintTerrainTexture, terrainTextureResolution, type SurfaceMasks } from './live-ground-art';
+import { buildSurfaceMasks, courtyardGroundMarks, paintRoadSurface, paintTerrainTexture, terrainTextureResolution, type SurfaceMasks } from './live-ground-art';
+import type { LandcoverRect } from './pixel-landcover';
 import { paintPropAtmosphere, paintBuildingAtmosphere, type EnvironmentPixel } from './pixel-environment';
 import { fitMinimap, minimapPoint, minimapViewport } from './minimap-presentation';
 import { SceneLightBuffer, propLampSources, type SceneLamp } from './pixel-lighting';
@@ -80,6 +81,7 @@ export class LiveScene {
   private scenery = new SceneryIndex<StaticScenery>([]);
   private lampScenery = new SceneryIndex<LiveWorldProp>([]);
   private siteScenery = new SceneryIndex<NonNullable<LiveWorld['citySites']>[number]>([]);
+  private vegetationBands = new Map<string, LandcoverRect[]>();
   private propArt = new PixelPropArt();
   private buildingArt = new PixelBuildingArt();
   private buildingDetail: PixelDetail = 64;
@@ -182,6 +184,7 @@ export class LiveScene {
     this.surfaceMasks = { road: new Uint8Array(), indoor: new Uint8Array(), roadRuns: [] };
     this.scenery = new SceneryIndex<StaticScenery>([]); this.lampScenery = new SceneryIndex<LiveWorldProp>([]);
     this.siteScenery = new SceneryIndex<NonNullable<LiveWorld['citySites']>[number]>([]);
+    this.vegetationBands.clear();
     this.buildingForObstacle.clear(); this.buildingWalls.clear(); this.cutawayBuildings.clear();
     this.propArt.clear(); this.buildingArt.clear(); this.obstacleArt.clear(); this.actorArt.clear(); this.containerArt.clear();
     this.clearWetGround(); this.lampProps = [];
@@ -432,10 +435,8 @@ export class LiveScene {
     c.clip();
     const floorColors: Record<LiveCityBuilding['kind'], string> = { apartment: '#b8a68eaa', shop: '#a6ae94aa', workshop: '#879ca0b8', garage: '#87908aba', service: '#babda9b8' };
     for (const site of sites) {
-      const courtyard = site.courtyard;
-      c.fillStyle = site.kind === 'workyard' ? '#91877860' : site.kind === 'service-yard' ? '#a5ad8b50' : '#b6ab8750';
-      c.fillRect(courtyard.x, courtyard.y, courtyard.width, courtyard.height);
-      c.lineJoin = 'round'; c.lineCap = 'round'; c.strokeStyle = '#d3c79855'; c.lineWidth = .65;
+      for (const mark of courtyardGroundMarks(site)) { c.fillStyle = mark.color; c.fillRect(mark.x, mark.y, mark.width, mark.height); }
+      c.lineJoin = 'round'; c.lineCap = 'round'; c.strokeStyle = '#b1a37d38'; c.lineWidth = .45;
       for (const path of site.passages) { c.beginPath(); path.forEach((point, index) => index ? c.lineTo(point.x + .5, point.y + .5) : c.moveTo(point.x + .5, point.y + .5)); c.stroke(); }
       for (const building of site.buildings) {
         c.fillStyle = floorColors[building.kind]; c.fillRect(building.x, building.y, building.width, building.height);
@@ -468,7 +469,12 @@ export class LiveScene {
   private paintProp(prop: LiveWorldProp): void {
     if (this.tile < 14) {
       if (!prop.blocking && !['tree', 'shrub', 'garden', 'playground'].includes(prop.kind)) return;
-      this.polygon(this.quad(prop.x - .5, prop.y - .5, prop.width, prop.height), ['tree', 'shrub', 'garden'].includes(prop.kind) ? P.leafShade : P.panelShade); return;
+      if (['tree', 'shrub', 'garden', 'planter'].includes(prop.kind)) {
+        let bands = this.vegetationBands.get(prop.id);
+        if (!bands) { bands = mapVegetationBands(prop); this.vegetationBands.set(prop.id, bands); }
+        for (const band of bands) this.polygon(this.quad(band.x - .5, band.y - .5, band.width, band.height), P.leafShade);
+      } else this.polygon(this.quad(prop.x - .5, prop.y - .5, prop.width, prop.height), P.panelShade);
+      return;
     }
     const anchor = this.project({ x: prop.x - .5, y: prop.y - .5 });
     const extent = (prop.width + prop.height) * this.tile / 2;

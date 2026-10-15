@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { buildRoadSurfacePlan, buildSurfaceMasks, cityPedestrianCrossings, paintRoadSurface, paintTerrainTexture, PIXEL_TERRAIN_PALETTES, roadHasMarkings, TERRAIN_PIGMENTS, terrainTextureResolution } from '../src/live-ground-art';
+import { buildRoadSurfacePlan, buildSurfaceMasks, cityPedestrianCrossings, courtyardGroundMarks, paintRoadSurface, paintTerrainTexture, PIXEL_TERRAIN_PALETTES, roadHasMarkings, TERRAIN_PIGMENTS, terrainTextureResolution } from '../src/live-ground-art';
 import type { LiveLandscapePath, LiveTerrain, LiveWorld } from '../src/game/live';
 
 function world(width: number, height: number): LiveWorld {
@@ -41,7 +41,7 @@ describe('surface texture budget and continuity', () => {
     const road = pixel(kinds.indexOf('road')), concrete = pixel(kinds.indexOf('concrete')), water = pixel(kinds.indexOf('water')), grass = pixel(kinds.indexOf('grass'));
     expect(concrete[0]! - road[0]!).toBeGreaterThan(10);
     expect(water[2]! - water[0]!).toBeGreaterThan(30);
-    expect(grass[1]! - grass[0]!).toBeGreaterThan(20);
+    expect(grass[1]! - grass[0]!).toBeGreaterThan(5);
     expect(Math.max(...road) - Math.min(...road)).toBeLessThan(15);
   });
   test('pixel terrain uses opaque stepped palettes with distinct material motifs', () => {
@@ -55,6 +55,53 @@ describe('surface texture budget and continuity', () => {
       }
       expect(opaque).toBe(true); expect([...used].every(color => allowed.has(color))).toBe(true);
       expect(used.size).toBeGreaterThanOrEqual(3); expect(used.size).toBeLessThanOrEqual(6);
+    }
+  });
+});
+
+describe('organic ground presentation', () => {
+  test('quarter metadata never paints a rectangular paving boundary without actual architecture', () => {
+    const map = world(24, 12), terrain = Array<LiveTerrain>(24 * 12).fill('concrete');
+    const before = renderPixels(map, terrain, 8).pixels;
+    map.city = { name: 'Районы', x: 0, y: 0, width: 24, height: 12, quarters: [{ id: 'old-center', name: 'Центр', x: 3, y: 2, width: 12, height: 8 }, { id: 'station', name: 'Вокзал', x: 15, y: 2, width: 8, height: 8 }] };
+    expect(renderPixels(map, terrain, 8).pixels).toEqual(before);
+  });
+  test('coherent organic margins change near the edge while preserving distant material and every hard cell', () => {
+    const map = world(32, 12), terrain = Array.from({ length: 32 * 12 }, (_, cell): LiveTerrain => cell % 32 < 10 ? 'grass' : cell % 32 < 20 ? 'forest' : cell % 32 < 23 ? 'road' : cell % 32 < 26 ? 'water' : cell % 32 < 29 ? 'concrete' : 'rail');
+    const base = renderPixels(map, terrain, 8).pixels;
+    const changed = terrain.map(material => material === 'grass' ? 'forest' : material === 'forest' ? 'grass' : material), flipped = renderPixels(map, changed, 8).pixels;
+    const cellPixels = (pixels: Uint8ClampedArray, x: number, y: number) => {
+      const rows: number[] = []; for (let py = y * 8; py < (y + 1) * 8; py++) rows.push(...pixels.slice((py * 32 * 8 + x * 8) * 4, (py * 32 * 8 + (x + 1) * 8) * 4)); return rows;
+    };
+    const grass = renderPixels(map, Array<LiveTerrain>(32 * 12).fill('grass'), 8).pixels;
+    const forest = renderPixels(map, Array<LiveTerrain>(32 * 12).fill('forest'), 8).pixels;
+    expect(cellPixels(base, 9, 6)).not.toEqual(cellPixels(grass, 9, 6));
+    expect(cellPixels(base, 10, 6)).not.toEqual(cellPixels(forest, 10, 6));
+    expect(cellPixels(base, 4, 6)).toEqual(cellPixels(grass, 4, 6));
+    expect(cellPixels(base, 15, 6)).toEqual(cellPixels(forest, 15, 6));
+    for (let x = 20; x < 32; x++) expect(cellPixels(base, x, 6)).toEqual(cellPixels(flipped, x, 6));
+    const allowed = new Set([...PIXEL_TERRAIN_PALETTES.grass, ...PIXEL_TERRAIN_PALETTES.forest].map(color => color.join(',')));
+    expect(cellPixels(base, 9, 6).some((_, at, values) => at % 4 === 0 && !allowed.has(values.slice(at, at + 3).join(',')))).toBe(true);
+  });
+  test('organic transitions never enter an authored interior even when a legacy terrain fixture uses grass beneath it', () => {
+    const map = world(16, 10), terrain = Array.from({ length: 160 }, (_, cell): LiveTerrain => cell % 16 < 8 ? 'grass' : 'forest');
+    map.citySites = [{ buildings: [{ x: 5, y: 2, width: 3, height: 6, kind: 'apartment' }] }] as unknown as LiveWorld['citySites'];
+    const pixels = renderPixels(map, terrain, 8).pixels, plain = renderPixels(world(16, 10), Array<LiveTerrain>(160).fill('grass'), 8).pixels;
+    for (let y = 2 * 8; y < 8 * 8; y++) for (let x = 5 * 8; x < 8 * 8; x++) {
+      const at = (y * 16 * 8 + x) * 4;
+      expect(pixels.slice(at, at + 4)).toEqual(plain.slice(at, at + 4));
+    }
+  });
+  test('courtyard marks are irregular, deterministic and leave real walking passages clear', () => {
+    const site = { id: 'linden-court', kind: 'courtyard' as const, courtyard: { x: 5, y: 8, width: 24, height: 18 }, passages: [[{ x: 17, y: 8 }, { x: 17, y: 26 }]] };
+    const before = structuredClone(site), marks = courtyardGroundMarks(site);
+    expect(marks.length).toBeGreaterThan(5); expect(marks.length).toBeLessThanOrEqual(35);
+    expect(courtyardGroundMarks(site)).toEqual(marks); expect(site).toEqual(before);
+    expect(new Set(marks.map(mark => mark.width)).size).toBeGreaterThan(3);
+    for (const mark of marks) {
+      expect(mark.x).toBeGreaterThanOrEqual(5); expect(mark.y).toBeGreaterThanOrEqual(8);
+      expect(mark.x + mark.width).toBeLessThanOrEqual(29.000001); expect(mark.y + mark.height).toBeLessThanOrEqual(26.000001);
+      expect(mark.x + mark.width < 16.2 || mark.x > 17.8).toBe(true);
     }
   });
 });

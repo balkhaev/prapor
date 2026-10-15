@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { buildingFacadeCadence, buildingNeedsCutaway, buildingPalette, buildingWallHeight, liveMapRasterPlan, paintMapFootprints, paintPropModel, PropArtCache, sceneBuildings, SceneryIndex } from '../src/live-map-art';
+import { buildingFacadeCadence, buildingNeedsCutaway, buildingPalette, buildingWallHeight, liveMapRasterPlan, mapVegetationBands, paintMapFootprints, paintPropModel, PropArtCache, sceneBuildings, SceneryIndex } from '../src/live-map-art';
 import type { LiveCityBuilding, LiveObstacle, LiveWorld, LiveWorldProp } from '../src/game/live';
 import { prefabObstacles } from '../src/game/world-prefabs';
 
@@ -89,6 +89,16 @@ describe('static map culling', () => {
 });
 
 describe('bounded city navigation art', () => {
+  test('distant green canopies retain the physical footprint with varied stepped edges', () => {
+    const prop = { id: 'linden-14', kind: 'tree' as const, x: 781, y: 244, width: 3, height: 2 };
+    const bands = mapVegetationBands(prop);
+    expect(bands).toEqual(mapVegetationBands(prop)); expect(bands.length).toBeLessThanOrEqual(9);
+    expect(new Set(bands.map(band => band.width)).size).toBeGreaterThan(3);
+    for (const band of bands) {
+      expect(band.x).toBeGreaterThanOrEqual(prop.x); expect(band.y).toBeGreaterThanOrEqual(prop.y);
+      expect(band.x + band.width).toBeLessThanOrEqual(prop.x + prop.width + 1e-6); expect(band.y + band.height).toBeLessThanOrEqual(prop.y + prop.height + 1e-6);
+    }
+  });
   test('1024-cell world keeps navigation bitmaps under 12 MiB with a correct isometric origin', () => {
     for (const [width, height] of [[256, 256], [512, 512], [1024, 1024], [1024, 512], [512, 1024]] as const) {
       const { minimap, overview } = liveMapRasterPlan(width, height);

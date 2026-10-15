@@ -10,6 +10,7 @@ import { getLiveMap, isLiveWalkable } from '../src/game/live-maps';
 import { createHealth, createMedicalInventory, type HealthState } from '../src/game/health';
 import type { LivePoint, LiveSnapshot } from '../src/game/live';
 import { LIVE_WORLD_OFFSET, LIVE_GENERATOR_VERSION } from '../src/game/world-generation';
+import { createLiveSortie } from '../server/live-autobattle';
 
 const ORIGIN = 'https://game.delopusk.ru';
 const G4_ANCHOR = /^poi-(?:[0-9]|10|11)-[0-3]-[a-z]+-\d+$/;
@@ -89,6 +90,59 @@ beforeEach(async () => {
   service = createLiveService(options());
 });
 afterEach(async () => { service.close(); await rm(directory, { recursive: true, force: true }); });
+
+test('same-frame city revision invalidates offline return coordinates while preserving physical cycles, wounds and receipts through two restarts', async () => {
+  const first = await enter(), observer = await enter(), anchors = map.containers.filter(anchor => anchor.id.startsWith('metro-'));
+  const known = anchors[0]!, depleted = anchors[1]!, cycleId = randomUUID(), deadline = time + 60_000;
+  expect(known).toBeDefined(); expect(depleted).toBeDefined();
+  const carried = item('coffee'), secret = item('gold-ring'), pendingItem = item('local-map'), body = stableBody();
+  const medicine = createMedicalInventory({ medkit: 27, bandage: 1, tourniquet: 0, splint: 1, painkiller: 0, surgery: 0 });
+  const parcel: LiveDelivery = { id: randomUUID(), owner: first.session.owner, gameId: first.session.gameId, createdAt: time - 5000, items: [pendingItem], money: 11 };
+  const plan = createLiveSortie(map, 'customs', 'loot', time - 1000);
+  Object.assign(plan.sortie, { recalling: true, extractTarget: { x: 0, y: 0 }, blockedExtractKeys: map.extracts.map(exit => `${exit.x},${exit.y}`), blockedAt: time - 999,
+    visitedContainerIds: [depleted.id], skippedDropIds: [cycleId] });
+  let cycle: StoredDrop;
+  blocked = true;
+  restart(db => {
+    const saved = world(); saved.geometryVersion = 'perimeter-g10-previous-street-layout'; Object.assign(saved, { coordinateExpansionVersion: 10 });
+    saved.drops = saved.drops.filter(drop => drop.containerId !== known.id && drop.containerId !== depleted.id);
+    // A previous street layout placed this durable content slot elsewhere in
+    // the same coordinate frame. It must move without rolling another item.
+    cycle = { id: cycleId, source: 'supply', mapId: 'perimeter', x: known.x + 3, y: known.y + 3,
+      amount: 17, items: [secret], containerId: known.id, containerKind: known.kind, expiresAt: time + 123_456 };
+    saved.drops.push(cycle); saved.lootCooldowns.push([`container:${depleted.id}`, deadline]);
+    db.query('UPDATE live_world SET state=? WHERE id=1').run(JSON.stringify(saved));
+    updatePlayer(db, first.session, { x: known.x, y: known.y, body, medicine, healthAt: time, ammo: 11, cargo: 17, stash: 3, kills: 2,
+      lootItems: [carried], searchedDropIds: [cycleId], safeUntil: time + 120_000, ...structuredClone(plan) });
+    updatePlayer(db, observer.session, structuredClone(plan));
+    db.query('INSERT INTO live_economy_outbox(id,identity,kind,payload,message) VALUES(?,?,?,?,?)').run(parcel.id, first.session.owner, 'delivery', JSON.stringify(parcel), 'Нет места');
+  });
+  expect(LIVE_WORLD_OFFSET).toBe(384);
+  for (const session of [first.session, observer.session]) {
+    expect(player(session).sortie).toEqual({ ...plan.sortie, extractTarget: null, blockedExtractKeys: [], blockedAt: 0 });
+  }
+  expect(player(first.session)).toMatchObject({ x: known.x, y: known.y, body, medicine, ammo: 11, cargo: 17, stash: 3, kills: 2, lootItems: [carried], searchedDropIds: [cycleId] });
+  const restored = (await enter(first.session)).snapshot;
+  expect(restored.self).toMatchObject({ body, medicine, ammo: 11, lootItems: [carried] });
+  expect(Object.hasOwn(restored.self, 'searchedDropIds')).toBe(false);
+  expect(restored.drops.find(drop => drop.id === cycleId)).toMatchObject({ searched: true, amount: 17, items: [secret] });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const saved = world();
+    expect(saved.drops.filter(drop => drop.containerId === known.id)).toEqual([{ ...cycle!, x: known.x, y: known.y }]);
+    expect(saved.drops.some(drop => drop.containerId === depleted.id)).toBe(false);
+    expect(saved.lootCooldowns).toContainEqual([`container:${depleted.id}`, deadline]);
+    expect(read(db => JSON.parse(db.query<{ payload: string }, [string]>('SELECT payload FROM live_economy_outbox WHERE id=?').get(parcel.id)!.payload))).toEqual(parcel);
+    expect(deliveries.size).toBe(0);
+    if (!attempt) restart(db => {
+      // Fresh coordinates from this exact hash remain valid across an ordinary restart.
+      const current = player(first.session), sortie = current.sortie as Record<string, unknown>;
+      Object.assign(sortie, { extractTarget: map.extracts[0], blockedExtractKeys: ['fresh-plan'], blockedAt: 77 });
+      updatePlayer(db, first.session, { sortie });
+    });
+  }
+  expect((player(first.session).sortie as Record<string, unknown>).extractTarget).toEqual(map.extracts[0]);
+  expect((player(first.session).sortie as Record<string, unknown>).blockedExtractKeys).toEqual(['fresh-plan']);
+});
 
 describe('verified courtyard progress in expanded city architecture', () => {
   test.each([5, 8])('all 72 G%s courtyard slots retain cycles, depleted timers and private discoveries while a wounded fighter moves out of a new wall', async previousVersion => {

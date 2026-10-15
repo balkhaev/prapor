@@ -1,12 +1,22 @@
 import { describe, expect, test } from 'bun:test';
 import { MAPS } from '../src/game/data';
 import { PIXEL_PALETTE } from '../src/pixel-art';
-import { operationsMapBridges, operationsMapCoordinate, operationsMapRiver, operationsMapRoads, paintOperationsMap, paintOperationsDistrictSymbol, type OperationsPoint } from '../src/operations-map-art';
+import { operationsDistrictBuildings, operationsMapBridges, operationsMapCoordinate, operationsMapRiver, operationsMapRoads, paintOperationsMap, paintOperationsDistrictSymbol, type OperationsPoint } from '../src/operations-map-art';
 
 const headquarters = { x: 110, y: 357 };
 const sites = MAPS.map(place => ({ id: place.id, point: { x: 70 + place.position.x * 700, y: 62 + place.position.y * 330 } }));
 
 describe('operations sheet geometry', () => {
+  test('decorative houses vary their plots and setbacks around unchanged route anchors', () => {
+    const before = structuredClone(sites);
+    for (const site of sites.filter(site => site.id !== 'forest')) {
+      const buildings = operationsDistrictBuildings(site);
+      expect(buildings).toEqual(operationsDistrictBuildings(site)); expect(buildings.length).toBeLessThanOrEqual(12);
+      expect(new Set(buildings.map(building => building.width)).size).toBeGreaterThan(1);
+      expect(new Set(buildings.map(building => building.x % 30)).size).toBeGreaterThan(1);
+    }
+    expect(sites).toEqual(before);
+  });
   test('roads preserve every existing destination and never mutate game map coordinates', () => {
     const before = structuredClone(sites), roads = operationsMapRoads(sites, headquarters);
     expect(roads).toHaveLength(MAPS.length);

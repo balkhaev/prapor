@@ -11,7 +11,7 @@ import { generateMetropolis } from './world-metropolis';
 import { METROPOLIS_CITY, METROPOLIS_SIZE, METROPOLIS_CORE_SHIFT } from './world-metropolis-plan';
 import { LIVE_WORLD_LIMITS } from './live-world-limits';
 
-export const LIVE_GENERATOR_VERSION = 10;
+export const LIVE_GENERATOR_VERSION = 11;
 export const LIVE_WORLD_SEED = 'perimeter-alpha-01';
 export const LIVE_CHUNK_SIZE = 32;
 export const LIVE_WORLD_SIZE = METROPOLIS_SIZE;
