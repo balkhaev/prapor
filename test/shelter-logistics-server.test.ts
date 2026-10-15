@@ -1,12 +1,17 @@
 import { afterEach, describe, expect, test } from 'bun:test';
+import { Database } from 'bun:sqlite';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createGameService, readGameCommand, type GameService } from '../server/game';
-import { getFieldKitStock, getProductionReserve, getRoomProductionState, type ShelterCost } from '../src/game/engine';
+import { dispatchRaid, getFieldKitStock, getProductionReserve, getRaidQuote, getRoomProductionState, parseSave, saveGame, setGameOutcomeSeedSource, type ShelterCost } from '../src/game/engine';
 import { readAuthoritativeAction, readAuthoritativeSnapshot } from '../src/authoritative-client';
+import { MAP_BY_ID } from '../src/game/data';
 import type { GameActionSnapshot, GameCommand, GameSnapshot } from '../src/game/commands';
 
 const NOW = 1_792_000_000_000, ORIGIN = 'http://shelter.test';
-const services: GameService[] = [];
-afterEach(() => { for (const service of services.splice(0)) service.close(); });
+const services: GameService[] = [], folders: string[] = [];
+afterEach(async () => { for (const service of services.splice(0)) service.close(); for (const folder of folders.splice(0)) await rm(folder, { recursive: true, force: true }); });
 const cost = (money = 0, changes: Partial<ShelterCost['supplies']> = {}): ShelterCost =>
   ({ money, supplies: { ammo: 0, medicine: 0, scrap: 0, intel: 0, ...changes } });
 function setup(extra: Partial<Parameters<typeof createGameService>[0]> = {}) {
@@ -105,8 +110,10 @@ describe('authoritative shelter logistics commands', () => {
     expect(client.snapshot.state.supplies.scrap).toBe(beforeResume.scrap - 2);
   });
 
-  test('duplicate production and dispatch requests cannot spend or issue two kits; the snapshot stays frozen through extraction', async () => {
-    const { service, setTime } = setup(), one = await joinClient(service), workerId = one.snapshot.state.scavs[1]!.id, scavId = one.snapshot.state.scavs[0]!.id;
+  test('duplicate production issues one kit, retired dispatch cannot spend it and a saved paid kit stays frozen through extraction', async () => {
+    const folder = await mkdtemp(join(tmpdir(), 'prapor-kit-return-')); folders.push(folder);
+    const path = join(folder, 'game.sqlite');
+    const { service, setTime } = setup({ dbPath: path }), one = await joinClient(service), workerId = one.snapshot.state.scavs[1]!.id, scavId = one.snapshot.state.scavs[0]!.id;
     expect((await action(service, one, { type: 'assignWorker', args: [workerId, 'room-workshop'] })).body.result.ok).toBe(true);
     const two = await joinClient(service, one.cookie), before = { money: one.snapshot.state.money, scrap: one.snapshot.state.supplies.scrap };
     const command: GameCommand = { type: 'queueFieldKitProduction', args: ['room-workshop', 'maintenance'] };
@@ -124,7 +131,41 @@ describe('authoritative shelter logistics commands', () => {
     expect(getFieldKitStock(one.snapshot.state).maintenance).toBe(1);
     expect((await action(service, one, { type: 'setFieldKit', args: [scavId, 'maintenance'] })).body.result.ok).toBe(true);
     const departureRevision = one.snapshot.revision;
-    expect((await action(service, one, { type: 'dispatchRaid', args: [scavId, 'courtyard'] })).body.result.ok).toBe(true);
+    const ready = structuredClone(one.snapshot);
+    await state(service, two);
+    const blocked = await Promise.all([
+      action(service, one, { type: 'dispatchRaid', args: [scavId, 'courtyard'] }, departureRevision),
+      action(service, two, { type: 'dispatchRaid', args: [scavId, 'courtyard'] }, departureRevision),
+    ]);
+    for (const result of blocked) {
+      expect(result.response.status).toBe(200);
+      expect(result.body.result.ok).toBe(false);
+      expect(result.body.result.message).toContain('общем Периметре');
+      expect(result.body.revision).toBe(departureRevision);
+      expect(result.body.state).toEqual(ready.state);
+      expect(getFieldKitStock(result.body.state).maintenance).toBe(1);
+      expect(result.body.state.raids).toHaveLength(0);
+    }
+    // Restore an already paid pre-migration server save, with a private outcome.
+    // It cannot be manufactured through the retired public dispatch API.
+    const db = new Database(path);
+    let issuedMoney = 0, retainedId = '';
+    try {
+      const row = db.query<{state: string}, [string]>('SELECT state FROM authoritative_games WHERE id=?').get(one.snapshot.identity.id)!;
+      const saved = parseSave(row.state)!;
+      setGameOutcomeSeedSource(saved, () => 698906565);
+      const quote = getRaidQuote(saved, saved.scavs.find(scav => scav.id === scavId)!, MAP_BY_ID.courtyard!);
+      issuedMoney = saved.money - quote.money;
+      expect(dispatchRaid(saved, scavId, 'courtyard', ready.serverNow).ok).toBe(true);
+      expect(saved.money).toBe(issuedMoney);
+      expect(getFieldKitStock(saved).maintenance).toBe(0);
+      retainedId = `loot-${saved.nextId++}`;
+      saved.raids[0]!.expedition!.cargo.lootItems = [{ id: retainedId, modelId: 'old-watch', foundAt: ready.serverNow }];
+      expect(parseSave(saveGame(saved))).not.toBeNull();
+      db.query('UPDATE authoritative_games SET state=?,revision=revision+1 WHERE id=?').run(saveGame(saved), one.snapshot.identity.id);
+    } finally { db.close(); }
+    await state(service, one);
+    expect(one.snapshot.state.money).toBe(issuedMoney);
     const paidRaid = structuredClone(one.snapshot.state.raids[0]!), paidMoney = one.snapshot.state.money;
     expect(paidRaid.fieldKit).toBe('maintenance'); expect(paidRaid.outcomeSeed).toBeUndefined();
     expect(getFieldKitStock(one.snapshot.state).maintenance).toBe(0);
@@ -133,16 +174,22 @@ describe('authoritative shelter logistics commands', () => {
     expect(one.snapshot.state.money).toBe(paidMoney);
     expect(one.snapshot.state.raids).toHaveLength(1);
     expect((await action(service, one, { type: 'setFieldKit', args: [scavId, 'trauma'] })).body.result.ok).toBe(true);
-    expect(one.snapshot.state.raids[0]!.fieldKit).toBe('maintenance');
+    expect(one.snapshot.state.raids[0]).toEqual(paidRaid);
     setTime(paidRaid.endsAt); await state(service, one);
     expect(one.snapshot.state.raids[0]!.expedition!.status).toBe('choice');
     const extractionRevision = one.snapshot.revision;
     expect((await action(service, one, { type: 'extractRaid', args: [paidRaid.id] })).body.result.ok).toBe(true);
     expect(one.snapshot.state.history).toHaveLength(1);
     expect(one.snapshot.state.history[0]!.fieldKit).toBe('maintenance');
+    expect(one.snapshot.state.history[0]!.lootItems).toContainEqual({ id: retainedId, modelId: 'old-watch', foundAt: ready.serverNow });
+    expect((one.snapshot.state.lootItems ?? []).filter(item => item.id === retainedId)).toHaveLength(1);
     const final = structuredClone(one.snapshot.state);
     expect((await action(service, one, { type: 'extractRaid', args: [paidRaid.id] }, extractionRevision)).response.status).toBe(409);
     expect(one.snapshot.state).toEqual(final);
+    const repeated = await action(service, one, { type: 'extractRaid', args: [paidRaid.id] });
+    expect(repeated.body.result.ok).toBe(false);
+    expect(one.snapshot.state).toEqual(final);
+    expect(getFieldKitStock(final).maintenance).toBe(0);
     expect(JSON.stringify(one.snapshot)).not.toContain('outcomeSeed');
   });
 
