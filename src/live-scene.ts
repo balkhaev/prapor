@@ -11,9 +11,9 @@ import { pixelActorWalkCycleDistance } from './pixel-actor-config';
 import { pixelActorDetail } from './pixel-actor-clarity';
 import { pixelActorLoadout } from './pixel-loadout';
 import { PixelBuildingArt, pixelBuildingSpriteBytes, pixelBuildingWallHeight } from './pixel-buildings';
-import { PixelPropArt } from './pixel-props';
+import { PixelPropArt, pixelPropHeight } from './pixel-props';
 import { PixelObstacleArt } from './pixel-obstacles';
-import { PIXEL_TILE, PIXEL_PALETTE as P, pixelIso } from './pixel-art';
+import { PIXEL_TILE, PIXEL_PALETTE as P, pixelIso, pixelSeed } from './pixel-art';
 import { PIXEL_SCENE_THEME as T } from './pixel-scene-theme';
 import { buildSurfaceMasks, courtyardGroundMarks, paintRoadSurface, paintTerrainTexture, terrainTextureResolution, type SurfaceMasks } from './live-ground-art';
 import type { LandcoverRect } from './pixel-landcover';
@@ -26,12 +26,15 @@ import { SceneWeatherCache } from './scene-weather-cache';
 import { paintCanvasWetSurfaces } from './scene-wet-surfaces';
 import { wetGroundCandidates, WetGroundFrameCache, type WetGroundCandidate } from './scene-wet-ground';
 import { fieldHudOverlaps, placeFieldHudBox, readFieldHudBounds, type FieldHudBox } from './field-hud';
+import { liveAmbientBirds, liveAmbientGround, liveAmbientGroundMarks, liveCloudShadows, type LiveAmbientGround } from './live-world-ambience';
+import { sampleWorldSunlight, type WorldBird } from './world-ambience';
 
 type Motion = PixelMotion;
 type LabelBox = { x: number; y: number; width: number; height: number };
 type StaticScenery = LivePoint & { width: number; height: number; depth: number } & ({ type: 'obstacle'; index: number; obstacle: LiveObstacle } | { type: 'prop'; prop: LiveWorldProp } | { type: 'architecture'; building: LiveCityBuilding });
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const siteKinds = { courtyard: 'ДВОР', arcade: 'СКВОЗНОЙ ПРОХОД', workyard: 'МАСТЕРСКИЕ', 'service-yard': 'СЛУЖЕБНЫЙ ДВОР' } as const;
+const cloudShadowEdge = [[.05,.25],[.2,.25],[.2,.1],[.42,.1],[.42,0],[.7,0],[.7,.12],[.9,.12],[.9,.32],[1,.32],[1,.65],[.84,.65],[.84,.86],[.6,.86],[.6,1],[.3,1],[.3,.87],[.1,.87],[.1,.63],[0,.63],[0,.4],[.05,.4]] as const;
 
 /** A presentation only: interpolation ends at the last confirmed server position. */
 export class LiveScene {
@@ -83,12 +86,15 @@ export class LiveScene {
   private lampScenery = new SceneryIndex<LiveWorldProp>([]);
   private siteScenery = new SceneryIndex<NonNullable<LiveWorld['citySites']>[number]>([]);
   private vegetationBands = new Map<string, LandcoverRect[]>();
+  private groundAmbience = new SceneryIndex<LiveAmbientGround>([]);
   private propArt = new PixelPropArt();
   private buildingArt = new PixelBuildingArt();
   private buildingDetail: PixelDetail = 64;
   private cutawayBuildings = new Set<string>();
   private surfaceMasks: SurfaceMasks = { road: new Uint8Array(), indoor: new Uint8Array(), roadRuns: [] };
   private environmentAt = 0;
+  private environmentSun = 0;
+  private environmentWind = 0;
   private lightBuffer = new SceneLightBuffer();
   private weatherCache = new SceneWeatherCache();
   private wetGround = new SceneryIndex<WetGroundCandidate>([]);
@@ -186,6 +192,7 @@ export class LiveScene {
     this.scenery = new SceneryIndex<StaticScenery>([]); this.lampScenery = new SceneryIndex<LiveWorldProp>([]);
     this.siteScenery = new SceneryIndex<NonNullable<LiveWorld['citySites']>[number]>([]);
     this.vegetationBands.clear();
+    this.groundAmbience = new SceneryIndex<LiveAmbientGround>([]);
     this.buildingForObstacle.clear(); this.buildingWalls.clear(); this.cutawayBuildings.clear();
     this.propArt.clear(); this.buildingArt.clear(); this.obstacleArt.clear(); this.actorArt.clear(); this.containerArt.clear();
     this.clearWetGround(); this.lampProps = [];
@@ -337,6 +344,7 @@ export class LiveScene {
     this.scenery = new SceneryIndex(scenery, world.chunkSize); this.propArt.clear(); this.buildingArt.clear(); this.obstacleArt.clear(); this.actorArt.clear(); this.containerArt.clear(); this.cutawayBuildings.clear();
     this.siteScenery = new SceneryIndex(world.citySites ?? [], world.chunkSize);
     this.surfaceMasks = buildSurfaceMasks(world, this.terrain, this.walkableGround, buildings);
+    this.groundAmbience = new SceneryIndex(liveAmbientGround(world, this.terrain, this.walkableGround, this.surfaceMasks.indoor), world.chunkSize);
     this.lampProps = (world.props ?? []).filter(prop => prop.kind === 'lamp');
     this.lampScenery = new SceneryIndex(this.lampProps, world.chunkSize);
     this.wetLamps = this.lampProps.flatMap(prop => {
@@ -482,6 +490,18 @@ export class LiveScene {
     if (anchor.x + prop.width * this.tile / 2 < -8 || anchor.x - prop.height * this.tile / 2 > this.width + 8 || anchor.y + extent / 2 < -8 || anchor.y - this.tile * 2.5 > this.height + 8) return;
     this.renderer.sprite(this.propArt.get(prop), anchor, this.tile / PIXEL_TILE, this.width, this.height);
     this.paintAtmosphere(anchor, plot => paintPropAtmosphere(prop, this.environmentAt, plot, this.reducedMotion?.matches));
+    if (this.environmentSun > .05 && ['tree', 'shrub', 'planter', 'garden'].includes(prop.kind)) {
+      const center = pixelIso(prop.width / 2, prop.height / 2), seed = pixelSeed(prop.id), height = pixelPropHeight(prop.kind);
+      const time = this.reducedMotion?.matches ? 0 : this.environmentAt;
+      this.paintAtmosphere(anchor, plot => {
+        for (let i = 0; i < 4; i++) {
+          const gust = this.reducedMotion?.matches ? 0 : Math.sin(time / 2100 + seed % 19 + i * .6) * this.environmentWind * 2;
+          const x = center.x - 16 + (seed >>> i * 4) % 32 + gust;
+          const y = center.y - height * (prop.kind === 'tree' ? .65 : .5) + (seed >>> i * 5) % 12;
+          plot(x, y, 3 + i % 2 * 2, 1, P.cream, this.environmentSun * .16);
+        }
+      });
+    }
   }
   private paintAtmosphere(origin: LivePoint, paint: (plot: EnvironmentPixel) => void): void {
     const c = this.context, scale = this.tile / PIXEL_TILE;
@@ -583,7 +603,7 @@ export class LiveScene {
 
   private paint(): void {
     const c = this.context, now = performance.now(), climate = readSceneClimate();
-    this.environmentAt = now;
+    this.environmentAt = climate.timeMs;
     c.clearRect(0, 0, this.width, this.height);
     c.fillStyle = T.background; c.fillRect(0, 0, this.width, this.height);
     c.imageSmoothingEnabled = false;
@@ -601,6 +621,11 @@ export class LiveScene {
     const minY = clamp(Math.floor(Math.min(...corners.map(point => point.y))), 0, world.height - 1), maxY = clamp(Math.ceil(Math.max(...corners.map(point => point.y))), 0, world.height - 1);
     const distant = this.tile < 6;
     const area = { x: minX - 7, y: minY - 7, width: maxX - minX + 14, height: maxY - minY + 14 };
+    const daylight = clamp(1 - (climate.profile.lights - .18) / 1.32, 0, 1), reducedMotion = this.reducedMotion?.matches ?? false;
+    this.environmentSun = daylight * (1 - climate.rain) * (1 - climate.fog);
+    this.environmentWind = climate.wind;
+    const birds = this.overview || this.tile < 20 ? [] : liveAmbientBirds(world.seed, area,
+      { timeMs: climate.timeMs, daylight, rain: climate.rain, fog: climate.fog, reducedMotion });
     if (this.overviewTerrain && distant) {
       const anchor = this.project({ x: -.5, y: -.5 });
       c.drawImage(this.overviewTerrain, anchor.x - world.height * this.tile / 2, anchor.y, (world.width + world.height) * this.tile / 2, (world.width + world.height) * this.tile / 4);
@@ -614,6 +639,8 @@ export class LiveScene {
       }
       c.restore();
     }
+    this.paintAmbientGround(world, area, climate, daylight);
+    this.paintBirdShadows(birds);
     this.paintWetGround(climate, { x: minX - 1, y: minY - 1, width: maxX - minX + 3, height: maxY - minY + 3 });
     this.paintDoorways(world, area);
     for (const [index, extract] of world.extracts.entries()) {
@@ -654,6 +681,7 @@ export class LiveScene {
       objects.push({ depth: point.x + point.y + activityDepth + .1, paint: () => this.paintEntity(entity, now) });
     }
     objects.sort((a, b) => a.depth - b.depth).forEach(object => object.paint());
+    this.paintBirds(birds);
     this.paintLighting(climate, area, distant);
     paintCanvasSceneWeather(c, this.weatherCache.get({ width: this.width, height: this.height, timeMs: climate.timeMs,
       rain: climate.rain, fog: climate.fog, wind: climate.wind, reducedMotion: this.reducedMotion?.matches }));
@@ -662,6 +690,63 @@ export class LiveScene {
     this.paintWaypoints(world);
     this.paintCombat(now);
     this.minimap(snapshot);
+  }
+  private paintAmbientGround(world: LiveWorld, area: LabelBox, climate: ReturnType<typeof readSceneClimate>, daylight: number): void {
+    if (this.overview || this.tile < 16) return;
+    const c = this.context, reducedMotion = this.reducedMotion?.matches ?? false, scale = this.tile / PIXEL_TILE;
+    const sun = sampleWorldSunlight({ timeMs: climate.timeMs, bounds: { x: 0, y: 0, width: 840, height: 520 },
+      dayPhase: climate.dayPhase, daylight, rain: climate.rain, fog: climate.fog, reducedMotion });
+    c.save();
+    // Broad, stepped silhouettes pass over the street rather than acting as a
+    // moving screen filter. Model and interaction geometry stays untouched.
+    c.fillStyle = '#344a49';
+    for (const shadow of liveCloudShadows(world.seed, area, climate.timeMs, climate.wind, sun.intensity, 0, 0, reducedMotion)) {
+      for (const inset of [0, .13]) {
+        c.globalAlpha = shadow.alpha * (inset ? .5 : .34);
+        this.polygon(cloudShadowEdge.map(([x, y]) => this.project({ x: shadow.x + shadow.width * (inset + x * (1 - inset * 2)),
+          y: shadow.y + shadow.height * (inset + y * (1 - inset * 2)) })), '#344a49');
+      }
+    }
+    const accents = this.groundAmbience.visible(area).sort((a, b) => Math.hypot(a.x - this.camera.x, a.y - this.camera.y) - Math.hypot(b.x - this.camera.x, b.y - this.camera.y)).slice(0, 48);
+    for (const accent of accents) {
+      const p = this.project(accent);
+      if (p.x < -12 || p.x > this.width + 12 || p.y < -12 || p.y > this.height + 12) continue;
+      for (const mark of liveAmbientGroundMarks(accent, climate.timeMs, climate.wind, daylight, climate.rain, reducedMotion)) {
+        c.fillStyle = mark.color; c.globalAlpha = mark.alpha;
+        c.fillRect(Math.round(p.x + mark.x * scale), Math.round(p.y + mark.y * scale), Math.max(1, Math.round(mark.width * scale)), Math.max(1, Math.round(mark.height * scale)));
+      }
+    }
+    c.restore();
+  }
+  private paintBirdShadows(birds: readonly WorldBird[]): void {
+    const c = this.context, scale = this.tile / PIXEL_TILE;
+    c.save(); c.fillStyle = '#273b35';
+    for (const bird of birds) {
+      const p = this.project({ x: bird.shadowX, y: bird.shadowY });
+      if (p.x < -12 || p.x > this.width + 12 || p.y < -12 || p.y > this.height + 12) continue;
+      c.globalAlpha = bird.shadowAlpha;
+      c.fillRect(Math.round(p.x - bird.size * scale * 1.4), Math.round(p.y), Math.max(2, Math.round(bird.size * scale * 2.8)), Math.max(1, Math.round(scale)));
+    }
+    c.restore();
+  }
+  private paintBirds(birds: readonly WorldBird[]): void {
+    const c = this.context, scale = this.tile / PIXEL_TILE;
+    c.save(); c.fillStyle = '#35443d';
+    for (const bird of birds) {
+      const p = this.project(bird, this.tile * .9);
+      if (p.x < -16 || p.x > this.width + 16 || p.y < -16 || p.y > this.height + 16) continue;
+      const size = bird.size * scale * 1.4, wing = bird.wing * scale * 1.4, pixel = Math.max(1, Math.round(scale));
+      c.globalAlpha = bird.alpha;
+      c.fillRect(Math.round(p.x), Math.round(p.y - size * .4), pixel, Math.max(2, Math.round(size)));
+      // The two stepped wings have separate lifts; long glides avoid a field
+      // of synchronized V glyphs while retaining a very small draw budget.
+      for (const side of [-1, 1]) for (let step = 1; step <= 3; step++) {
+        const x = p.x + side * size * step / 3, y = p.y + (wing + side * bird.bank) * step / 3 + step * .2;
+        c.fillRect(Math.round(x), Math.round(y), pixel, pixel);
+      }
+      c.fillRect(Math.round(p.x - bird.heading * pixel), Math.round(p.y - size * .5), pixel, pixel);
+    }
+    c.restore();
   }
   private paintLighting(climate: ReturnType<typeof readSceneClimate>, area: LabelBox, distant: boolean): void {
     const scale = this.tile / PIXEL_TILE;

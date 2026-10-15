@@ -1,12 +1,11 @@
 import Phaser from "phaser";
-import { getRaidPhase, type Raid, type RaidReport, type RoomInstance, type WeaponInstance, getShelterSites, getShelterFrontier, type ShelterSite, type ShelterExpansion, ROOM_DEFINITIONS, getRoomWorkerCapacity } from "./game/engine";
+import { type Raid, type RaidReport, type RoomInstance, type WeaponInstance, getShelterSites, getShelterFrontier, type ShelterSite, type ShelterExpansion, ROOM_DEFINITIONS, getRoomWorkerCapacity } from "./game/engine";
 import { getRoomFootprint, getRoomPosition, getRoomBounds, getRoomFacing, getRoomLocalPoint, getRoomEntrance, getShelterRoomAtPoint } from "./game/shelter";
 import { type BaseRoom } from "./game/data";
 import type { GearItem, Loadout } from "./game/systems";
 import { PixelPhaserActor } from './pixel-phaser-actor';
 import { applyPhaserFramebuffer, planPhaserFramebuffer } from './phaser-framebuffer';
 import { PIXEL_PALETTE } from './pixel-art';
-import { OPERATIONS_GRID, operationsMapCoordinate, paintOperationsMap, paintOperationsDistrictSymbol } from './operations-map-art';
 import { getScavVisualLoadout } from "./scav-loadout";
 import { advanceShelterRoute, clientToShelterPoint } from "./shelter-motion";
 import { clampShelterCamera, getMinShelterZoom, shelterOverviewCamera, focusShelterRect, panShelterCamera, projectShelterRect, resizeShelterCamera, shelterViewportForSize, viewportToShelter, zoomShelterCamera, type ShelterCamera, type ShelterRect, type ShelterViewport, type ClientRect } from "./shelter-camera";
@@ -16,7 +15,6 @@ import { SCAV_DIRECTIONS, scavAppearance, scavAttachment, scavDirection, scavPix
 import { advanceShelterStationClock, getShelterProductionPresentation, type ProductionPresentation } from "./shelter-production";
 import { projectShelterPoint, unprojectShelterPoint, projectShelterBounds, shelterBuildingDepth, shelterBuildingHitPolygon, shelterRectPolygon, shelterRoomPolygon, shelterRoomPosition, shelterRoomRect } from "./shelter-isometric";
 import { paintIsometricRoom, paintIsometricProduction, getShelterChimney, getShelterPorchLamp } from "./shelter-isometric-art";
-import { RaidStreetRenderer } from "./raid-scene";
 import { getShelterLandscape, paintShelterLandscape, paintShelterDecoration, type ShelterLandscape, type ShelterLandscapeDecoration } from "./shelter-landscape";
 import { sampleShelterAtmosphere, sampleShelterWind, paintShelterAtmosphereGround, paintShelterAtmosphereGroundLights, paintShelterAtmosphereAir, paintShelterAtmosphereGlows, type ShelterSmokeEmitter, type ShelterAtmosphereLight } from "./shelter-atmosphere";
 import { readSceneClimate } from './scene-climate';
@@ -67,9 +65,8 @@ export interface WorldSnapshot {
 }
 
 type Point = { x: number; y: number };
-export type WorldView = "base" | "map" | "raid";
+export type WorldView = "base";
 type View = WorldView;
-type MapPlace = WorldSnapshot["maps"][number];
 type ScavActor = {
 	actor: Phaser.GameObjects.Container;
 	body: Phaser.GameObjects.Container;
@@ -145,8 +142,6 @@ export interface BuildingPlacement {
 export interface WorldController {
 	game: Phaser.Game;
 	setView: (view: View) => void;
-	selectRaid: (id: string | null) => void;
-	setRaidFollow: (enabled: boolean) => void;
 	getPresentationState: () => unknown;
 	getShelterPeople: () => ShelterPersonView[];
 	restorePresentationState: (value: unknown) => void;
@@ -198,13 +193,6 @@ type ShelterCell = {
 type DragSession = { scavId: string; roomId: string | null; reason: string | null; cellKey: string | null; point: Point | null; canvas: boolean; shelter: WorldSnapshot["shelter"]; scav: NonNullable<WorldSnapshot["scavs"]>[number] };
 type CanvasGesture = { scavId: string; pointerId: number; clientX: number; clientY: number; active: boolean };
 type BuildingGesture = BuildingDragState & { pointerId: number; clientX: number; clientY: number; offset: Point; source: Point; identityKey?: string; room: RoomInstance };
-type RaidMarker = {
-	actor: Phaser.GameObjects.Container;
-	ring: Phaser.GameObjects.Ellipse;
-	label: Phaser.GameObjects.Text;
-	phase: Phaser.GameObjects.Text;
-	hovered: boolean;
-};
 const WIDTH = 840;
 const HEIGHT = 520;
 const cellPosition = shelterRoomPosition;
@@ -251,53 +239,14 @@ function line(
 ): void {
 	g.lineStyle(width, color, alpha).strokePoints(points, false);
 }
-function dashed(
-	g: Phaser.GameObjects.Graphics,
-	a: Point,
-	b: Point,
-	color: number,
-	width = 1,
-	alpha = 1
-): void {
-	const distance = Math.hypot(b.x - a.x, b.y - a.y);
-	for (let t = 0; t < distance; t += 12) {
-		const end = Math.min(t + 6, distance);
-		line(
-			g,
-			[
-				{
-					x: a.x + ((b.x - a.x) * t) / distance,
-					y: a.y + ((b.y - a.y) * t) / distance,
-				},
-				{
-					x: a.x + ((b.x - a.x) * end) / distance,
-					y: a.y + ((b.y - a.y) * end) / distance,
-				},
-			],
-			color,
-			width,
-			alpha
-		);
-	}
-}
-function position(place: MapPlace): Point {
-	const { x, y } = place.position;
-	if (Math.abs(x) <= 1 && Math.abs(y) <= 1)
-		return { x: 70 + x * 700, y: 62 + y * 330 };
-	if (Math.abs(x) <= 100 && Math.abs(y) <= 100)
-		return { x: 70 + x * 7, y: 62 + y * 3.3 };
-	return { x: Phaser.Math.Clamp(x, 70, 770), y: Phaser.Math.Clamp(y, 62, 400) };
-}
-
-/** Procedural artwork: the room is painted once; only actors, lamps and raid markers animate. */
+/** Procedural artwork: the room is painted once; only residents, lighting and outdoor life animate. */
 export function createWorld(
 	parent: HTMLElement,
 	snapshot: () => WorldSnapshot,
-	onMap: (id: string) => void,
+	_onMap: (id: string) => void,
 	interactions: WorldInteractions = {}
 ): WorldController {
 	let requestedView: View = "base";
-	let requestedRaidId: string | null = null;
 	const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 	const stageRect = parent.getBoundingClientRect();
 	const initialViewport = shelterViewportForSize(stageRect.width, stageRect.height);
@@ -305,11 +254,7 @@ export function createWorld(
 
 	class PraporWorld extends Phaser.Scene {
 		private baseLayer!: Phaser.GameObjects.Container;
-		private mapLayer!: Phaser.GameObjects.Container;
-		private raidStreet!: RaidStreetRenderer;
 		private baseCaption!: Phaser.GameObjects.Text;
-		private operationsCaption!: Phaser.GameObjects.Text;
-		private selectedRoute!: Phaser.GameObjects.Graphics;
 		private cells = new Map<string, ShelterCell>();
 		private shelterCaption!: Phaser.GameObjects.Text;
 		private ambient!: Phaser.GameObjects.Graphics;
@@ -327,6 +272,7 @@ export function createWorld(
 		private smokeEmitters: ShelterSmokeEmitter[] = [];
 		private atmosphereLights: ShelterAtmosphereLight[] = [];
 		private windProps: { art: Phaser.GameObjects.Graphics; decoration: ShelterLandscapeDecoration }[] = [];
+		private foliageAnchors: { x: number; y: number; radius: number }[] = [];
 		private lastAtmospherePaint = -1000;
 		private lastWindPaint = -1000;
 		private dragGhost!: Phaser.GameObjects.Graphics;
@@ -363,22 +309,9 @@ export function createWorld(
 		private panGesture: { pointerId: number; clientX: number; clientY: number } | null = null;
 		private cameraTouches = new Map<number, Point>();
 		private pinchGesture: { ids: [number, number]; distance: number; midpoint: Point } | null = null;
-		private places = new Map<
-			string,
-			{
-				dot: Phaser.GameObjects.Graphics;
-				label: Phaser.GameObjects.Text;
-				detail: Phaser.GameObjects.Text;
-				active: boolean;
-				hovered: boolean;
-				zone: Phaser.GameObjects.Zone;
-			}
-		>();
-		private raidActors = new Map<string, RaidMarker>();
 		private scavs = new Map<string, ScavActor>();
 		private lastSync = 0;
 		private lastSelection = "";
-		private hq: Point = { x: 110, y: 357 };
 
 		constructor() {
 			super("PraporWorld");
@@ -387,11 +320,7 @@ export function createWorld(
 		create(): void {
 			this.cameras.main.setBackgroundColor(C.void);
 			this.baseLayer = this.add.container(0, 0);
-			this.mapLayer = this.add.container(0, 30);
 			this.paintBunker();
-			this.paintMap();
-			this.raidStreet = new RaidStreetRenderer(this, this.viewport, reducedMotion);
-			this.raidStreet.selectRaid(requestedRaidId);
 			this.installDragListeners();
 			this.installViewportObserver();
 			this.syncSnapshot();
@@ -403,15 +332,12 @@ export function createWorld(
 				this.cancelScavDrag();
 				this.cancelBuildingDrag();
 				this.cancelCameraGesture();
-				this.raidStreet.destroy();
 				this.viewportObserver?.disconnect();
 				if (this.viewportFrame) cancelAnimationFrame(this.viewportFrame);
 				this.nativeEvents.abort();
 				this.baseWeather?.destroy();
 				this.wetGround?.destroy(); this.wetPatches = []; this.wetLamps = [];
 				this.textures.remove(this.backdropTextureKey);
-				this.raidActors.clear();
-				this.places.clear();
 				this.cells.clear();
 				this.scavs.clear();
 				this.presentationReady = false;
@@ -426,18 +352,13 @@ export function createWorld(
 			this.baseLayer.setVisible(view === "base");
 			if (view !== "base") { this.baseWeather.clear(); this.wetGround.clear(); }
 			else this.lastAtmospherePaint = -1000;
-			this.mapLayer.setVisible(view === "map");
-			this.raidStreet.layer.setVisible(view === "raid");
 			this.input.setDefaultCursor("default");
 			this.scavs.forEach((actor) => { actor.hovered = false; });
-			this.places.forEach((place) => { place.hovered = false; });
 			this.syncSnapshot();
-			if (view === "raid") this.raidStreet.update(snapshot(), Date.now(), 0);
 			this.applyCamera();
-			if (view === "raid") this.raidStreet.resize(this.viewport);
 		}
 
-		getCameraState(): WorldCameraState { return { ...(requestedView === "raid" && this.raidStreet ? this.raidStreet.getCameraState() : this.viewCamera), panMode: this.panMode, view: requestedView, minZoom: requestedView === "raid" ? .7 : getMinShelterZoom(this.viewport, this.worldBounds), maxZoom: 4 }; }
+		getCameraState(): WorldCameraState { return { ...this.viewCamera, panMode: this.panMode, view: requestedView, minZoom: getMinShelterZoom(this.viewport, this.worldBounds), maxZoom: 4 }; }
 		getPresentationState(): unknown {
 			if (!this.presentationReady || this.restoringPresentation) return this.pendingPresentation;
 			const actual = snapshot();
@@ -455,7 +376,6 @@ export function createWorld(
 				return Boolean(scav && scav.status !== "raiding" && assignment === slot.assignment);
 			});
 			return { version: 1, layout: "surface", camera: { ...this.viewCamera }, viewport: { ...this.viewport }, panMode: this.panMode,
-				raidId: requestedRaidId, raidCamera: this.raidStreet?.getCameraState(),
 				actors: actors.map(([id, slot]) => ({ id, x: slot.position.x, y: slot.position.y,
 					assignment: slot.assignment, role: slot.role, goal: slot.goal, anchor: { ...slot.anchor },
 					routine: slot.routine ? { point: { ...slot.routine.point }, activity: slot.routine.activity } : null,
@@ -554,16 +474,12 @@ export function createWorld(
 				const animation = object(saved.animation);
 				if (animation) { const next = { ...slot.animation }; for (const key of Object.keys(next) as (keyof ScavAnimationState)[]) if (key !== "observedJob" && finite(animation[key]) && Math.abs(animation[key]) < 1e7) (next as unknown as Record<string, unknown>)[key] = animation[key]; next.observedJob = typeof animation.observedJob === "string" ? animation.observedJob : null; slot.animation = next; }
 			}
-			if (typeof data.raidId === "string" && data.raidId === requestedRaidId && (state.raids.some((raid) => raid.id === data.raidId) || state.history?.some((report) => report.raidId === data.raidId))) { this.selectRaid(data.raidId); this.raidStreet.restoreCamera(data.raidCamera); }
 			this.applyCamera();
 			} finally { this.restoringPresentation = false; this.pendingPresentation = null; }
 		}
 
-		selectRaid(id: string | null): void { requestedRaidId = id; this.raidStreet?.selectRaid(id); if (requestedView === "raid" && this.raidStreet) this.raidStreet.update(snapshot(), Date.now(), 0); this.applyCamera(); }
-		setRaidFollow(enabled: boolean): void { this.raidStreet?.setFollow(enabled); this.applyCamera(); }
-
 		private cameraAllowed(): boolean {
-			return Boolean(this.baseLayer && this.scene.isActive() && (requestedView === "base" || requestedView === "raid") && !document.hidden && !this.drag && !this.gesture && !this.buildingGesture && interactions.canCamera?.() !== false);
+			return Boolean(this.baseLayer && this.scene.isActive() && requestedView === "base" && !document.hidden && !this.drag && !this.gesture && !this.buildingGesture && interactions.canCamera?.() !== false);
 		}
 
 		private applyCamera(): void {
@@ -572,8 +488,7 @@ export function createWorld(
 			this.baseLayer?.setScale(this.viewCamera.zoom).setPosition(-this.viewCamera.x * this.viewCamera.zoom, -this.viewCamera.y * this.viewCamera.zoom);
 			// Weather uses CSS pixels despite both the yard camera and FIT scaling.
 			this.baseWeather?.setPosition(this.viewCamera.x, this.viewCamera.y).setScale(1 / (this.viewCamera.zoom * this.weatherDisplayScale));
-			this.mapLayer?.setPosition((this.viewport.width - WIDTH) / 2, (this.viewport.height - HEIGHT) / 2 + 30);
-			this.input?.setDefaultCursor(this.buildingGesture?.active ? "grabbing" : this.panMode || this.spacePressed || requestedView === "raid" ? "grab" : "default");
+			this.input?.setDefaultCursor(this.buildingGesture?.active ? "grabbing" : this.panMode || this.spacePressed ? "grab" : "default");
 			if (this.panMode || this.spacePressed || requestedView !== "base") interactions.onHover?.(null);
 			interactions.onCameraChange?.(this.getCameraState());
 		}
@@ -607,7 +522,6 @@ export function createWorld(
 			if (changed) this.scale.setGameSize(framebuffer.width, framebuffer.height);
 			else this.scale.refresh();
 			applyPhaserFramebuffer(this.cameras.main, framebuffer);
-			this.raidStreet?.resize(next);
 			this.applyCamera();
 		}
 
@@ -615,12 +529,11 @@ export function createWorld(
 			if (!this.cameraAllowed() || !Number.isFinite(factor) || factor <= 0) return;
 			const anchor = clientX !== undefined && clientY !== undefined ? clientToShelterPoint(clientX, clientY, this.game.canvas.getBoundingClientRect(), this.viewport.width, this.viewport.height) : { x: this.viewport.width / 2, y: this.viewport.height / 2 };
 			if (!anchor) return;
-			if (requestedView === "raid") { this.raidStreet.zoomBy(factor, clientX !== undefined && clientY !== undefined ? anchor : undefined); this.applyCamera(); return; }
 			this.viewCamera = zoomShelterCamera(this.viewCamera, this.viewCamera.zoom * factor, anchor, this.viewport, this.worldBounds); this.applyCamera();
 		}
 
-		panBy(dx: number, dy: number): void { if (this.cameraAllowed()) { if (requestedView === "raid") this.raidStreet.panBy(dx, dy); else this.viewCamera = panShelterCamera(this.viewCamera, dx, dy, this.viewport, this.worldBounds); this.applyCamera(); } }
-		resetCamera(): void { if (this.cameraAllowed()) { if (requestedView === "raid") this.raidStreet.resetCamera(); else this.viewCamera = shelterOverviewCamera(this.viewport, this.worldBounds); this.applyCamera(); } }
+		panBy(dx: number, dy: number): void { if (this.cameraAllowed()) { this.viewCamera = panShelterCamera(this.viewCamera, dx, dy, this.viewport, this.worldBounds); this.applyCamera(); } }
+		resetCamera(): void { if (this.cameraAllowed()) { this.viewCamera = shelterOverviewCamera(this.viewport, this.worldBounds); this.applyCamera(); } }
 		setPanMode(enabled: boolean): void { this.panMode = Boolean(enabled); this.cancelPan(); if (enabled) { this.cancelScavDrag(); this.cancelBuildingDrag(); } this.applyCamera(); }
 		focusBase(): void {
 			if (!this.cameraAllowed() || requestedView !== "base") return;
@@ -869,8 +782,8 @@ export function createWorld(
 			const canvas = this.game.canvas, options = { signal: this.nativeEvents.signal };
 			canvas.style.touchAction = "none";
 			canvas.addEventListener("pointerdown", (event) => {
-				if (event.target !== canvas || requestedView !== "base" && requestedView !== "raid") return;
-				if (event.pointerType === "touch" && (this.panMode || requestedView === "raid") && this.cameraAllowed()) {
+				if (event.target !== canvas || requestedView !== "base") return;
+				if (event.pointerType === "touch" && this.panMode && this.cameraAllowed()) {
 					this.cameraTouches.set(event.pointerId, { x: event.clientX, y: event.clientY });
 					if (this.cameraTouches.size === 2 && this.cameraAllowed()) {
 						const entries = [...this.cameraTouches], a = entries[0]!, b = entries[1]!;
@@ -878,7 +791,7 @@ export function createWorld(
 						canvas.setPointerCapture(event.pointerId); event.preventDefault(); return;
 					}
 				}
-				if (event.button === 1 || this.panMode || this.spacePressed || requestedView === "raid" && event.button === 0) {
+				if (event.button === 1 || this.panMode || this.spacePressed) {
 					if (this.panGesture || !this.cameraAllowed()) return;
 					event.preventDefault();
 					this.panGesture = { pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY };
@@ -924,8 +837,8 @@ export function createWorld(
 					if (!a || !b || rect.width <= 0 || rect.height <= 0) return;
 					const distance = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), midpoint = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
 					const anchor = { x: (pinch.midpoint.x - rect.left) * this.viewport.width / rect.width, y: (pinch.midpoint.y - rect.top) * this.viewport.height / rect.height };
-					if (requestedView === "raid") { this.raidStreet.zoomBy(distance / pinch.distance, anchor); this.raidStreet.panBy((pinch.midpoint.x - midpoint.x) * this.viewport.width / rect.width, (pinch.midpoint.y - midpoint.y) * this.viewport.height / rect.height); }
-					else { this.viewCamera = zoomShelterCamera(this.viewCamera, this.viewCamera.zoom * distance / pinch.distance, anchor, this.viewport, this.worldBounds); this.viewCamera = panShelterCamera(this.viewCamera, (pinch.midpoint.x - midpoint.x) * this.viewport.width / rect.width, (pinch.midpoint.y - midpoint.y) * this.viewport.height / rect.height, this.viewport, this.worldBounds); }
+					this.viewCamera = zoomShelterCamera(this.viewCamera, this.viewCamera.zoom * distance / pinch.distance, anchor, this.viewport, this.worldBounds);
+					this.viewCamera = panShelterCamera(this.viewCamera, (pinch.midpoint.x - midpoint.x) * this.viewport.width / rect.width, (pinch.midpoint.y - midpoint.y) * this.viewport.height / rect.height, this.viewport, this.worldBounds);
 					pinch.distance = distance; pinch.midpoint = midpoint; event.preventDefault(); this.applyCamera(); return;
 				}
 				const pan = this.panGesture;
@@ -1080,7 +993,7 @@ export function createWorld(
 			for (const room of shelter.rooms) if (!this.cells.has(roomCellKey(room.id))) this.createCell(room.column, room.row, room);
 			const landscape = getShelterLandscape(sites, buildings, expansions);
 			this.landscape = landscape; this.lastAtmospherePaint = -1000; this.lastWindPaint = -1000;
-			this.smokeEmitters = []; this.atmosphereLights = []; this.windProps = [];
+			this.smokeEmitters = []; this.atmosphereLights = []; this.windProps = []; this.foliageAnchors = [];
 			for (const room of shelter.rooms) if (room.status === "ready") {
 				const chimney = getShelterChimney(room);
 				if (chimney && ["workshop", "medbay", "dormitory"].includes(room.type)) this.smokeEmitters.push({ ...projectShelterPoint(chimney.point), height: chimney.height, kind: "chimney", strength: .65 });
@@ -1097,6 +1010,7 @@ export function createWorld(
 				this.baseLayer.add(art); this.exteriorProps.push(art);
 				if (["tree", "bush", "fern"].includes(decoration.kind)) this.windProps.push({ art, decoration });
 				const point = projectShelterPoint(decoration.point);
+				if (decoration.kind === 'tree' || decoration.kind === 'bush') this.foliageAnchors.push({ ...point, radius: decoration.radius });
 				if (decoration.kind === "camp") {
 					this.smokeEmitters.push({ ...point, kind: "fire", height: 7 });
 					this.atmosphereLights.push({ ...point, kind: "fire", height: 4 });
@@ -1286,7 +1200,6 @@ export function createWorld(
 		private syncShelter(state: WorldSnapshot): void {
 			if (this.viewState && (state.identityKey !== this.viewState.identityKey || !state.identityKey && state.shelter !== this.viewState.shelter)) {
 				this.cancelScavDrag(); this.cancelBuildingDrag(); this.cancelCameraGesture();
-				this.raidStreet?.reset();
 				for (const slot of this.scavs.values()) slot.actor.destroy(true);
 				this.scavs.clear();
 				for (const cell of this.cells.values()) { cell.lastCycles = null; cell.completedAt = -10000; cell.feedback.setVisible(false); }
@@ -1475,9 +1388,11 @@ export function createWorld(
 			this.atmosphereShade.clear().fillStyle(pigment(profile.ambient), profile.ambientAlpha)
 				.fillRect(Math.floor(shadeBounds.x) - 1, Math.floor(shadeBounds.y) - 1, Math.ceil(shadeBounds.width) + 2, Math.ceil(shadeBounds.height) + 2);
 			const frame = sampleShelterAtmosphere({ timeMs: climate.timeMs, groundBounds: this.worldBounds, smokeEmitters: this.smokeEmitters, lights: this.atmosphereLights,
-				lightStrength: profile.lights, shadowStrength: profile.shadowAlpha,
+				lightStrength: profile.lights, shadowStrength: profile.shadowAlpha / .17,
+				dayPhase: climate.dayPhase, daylight: Math.max(0, Math.min(1, 1 - (profile.lights - .18) / 1.32)),
+				foliageAnchors: this.foliageAnchors,
 				weatherRain: climate.rain, weatherFog: climate.fog, weatherWind: climate.wind,
-				birdBounds: { x: this.worldBounds.x + 60, y: this.worldBounds.y + 25, width: Math.max(100, this.worldBounds.width - 120), height: 55 },
+				birdBounds: { x: this.worldBounds.x + 25, y: this.worldBounds.y + this.worldBounds.height * .13, width: Math.max(100, this.worldBounds.width - 50), height: this.worldBounds.height * .34 },
 				mistZones: this.windProps.filter(prop => prop.decoration.kind === "tree" && !prop.decoration.owned).slice(-3).map(prop => {
 					const at = projectShelterPoint(prop.decoration.point);
 					return { x: at.x - 48, y: at.y - 12, width: 96, height: 20 };
@@ -1600,230 +1515,11 @@ export function createWorld(
 				paintIsometricProduction(g, cell.column, cell.row, cell.room, cell.production, cell.stationClock, reducedMotion);
 			}
 		}
-		private paintMap(): void {
-			const g = this.add.graphics();
-			this.mapLayer.add(g);
-			const places = snapshot().maps;
-			paintOperationsMap(g, places.map(place => ({ id: place.id, point: position(place) })), this.hq);
-			this.mapLayer.add(this.text(34, 32, "ОПЕРАТИВНАЯ КАРТА", 16, PIXEL_PALETTE.cream));
-			this.operationsCaption = this.text(34, 59, "", 12, PIXEL_PALETTE.steelLight);
-			this.mapLayer.add(this.operationsCaption);
-			this.mapLayer.add(this.text(778, 27, "С", 11, PIXEL_PALETTE.cream).setOrigin(.5, 0));
-			for (let column = 0; column < OPERATIONS_GRID.columns; column++) {
-				this.mapLayer.add(this.text(
-					OPERATIONS_GRID.x + (column + .5) * OPERATIONS_GRID.width / OPERATIONS_GRID.columns,
-					81, String(column + 1), 10, PIXEL_PALETTE.panelShade
-				).setOrigin(.5, 0));
-			}
-			for (let row = 0; row < OPERATIONS_GRID.rows; row++) {
-				this.mapLayer.add(this.text(
-					32, OPERATIONS_GRID.y + (row + .5) * OPERATIONS_GRID.height / OPERATIONS_GRID.rows,
-					String.fromCharCode(65 + row), 11, PIXEL_PALETTE.panelShade
-				).setOrigin(.5));
-			}
-			this.mapLayer.add(this.text(this.hq.x, this.hq.y + 22, "БАЗА", 13, PIXEL_PALETTE.cream)
-				.setOrigin(.5).setBackgroundColor(PIXEL_PALETTE.ink).setPadding(5, 3));
-			for (const entry of [
-				{ x: 36, label: "БАЗА", paint: PIXEL_PALETTE.yellow, style: "base" },
-				{ x: 184, label: "ДОСТУПНО", paint: PIXEL_PALETTE.steelLight, style: "open" },
-				{ x: 382, label: "ЗАКРЫТО", paint: PIXEL_PALETTE.panelShade, style: "closed" },
-				{ x: 562, label: "НАПРАВЛЕНИЕ", paint: PIXEL_PALETTE.yellow, style: "route" },
-			]) {
-				const ink = pigment(entry.paint);
-				if (entry.style === "route") {
-					line(g, [{ x: entry.x, y: 453 }, { x: entry.x + 18, y: 453 }], ink, 2);
-					polygon(g, [{ x: entry.x + 21, y: 453 }, { x: entry.x + 15, y: 449 }, { x: entry.x + 15, y: 457 }], ink);
-				} else {
-					g.lineStyle(1, ink).strokeRect(entry.x, 447, 12, 12);
-					if (entry.style === "closed") line(g, [{ x: entry.x + 2, y: 457 }, { x: entry.x + 10, y: 449 }], ink);
-					else g.fillStyle(ink).fillRect(entry.x + 4, 451, 4, 4);
-				}
-				this.mapLayer.add(this.text(entry.x + (entry.style === "route" ? 29 : 21), 446, entry.label, 12, entry.paint));
-			}
-			this.selectedRoute = this.add.graphics();
-			this.mapLayer.add(this.selectedRoute);
-			for (const place of places) this.mapPlace(place);
-		}
-
-		private mapPlace(place: MapPlace): void {
-			const p = position(place);
-			const dot = this.add.graphics();
-			const label = this.text(
-				p.x,
-				p.y + 28,
-				place.name.toUpperCase(),
-				17,
-				PIXEL_PALETTE.cream
-			).setOrigin(0.5);
-			label.setBackgroundColor(PIXEL_PALETTE.black).setPadding(9, 5);
-			const detail = this.text(p.x, p.y + 57, "", 12, PIXEL_PALETTE.steelLight).setOrigin(0.5)
-				.setBackgroundColor(PIXEL_PALETTE.ink).setPadding(5, 3);
-			const zone = this.add
-				.zone(p.x, p.y + 22, Math.max(label.width + 14, 136), 110)
-				.setInteractive({ useHandCursor: true });
-			zone.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
-				if (!this.acceptsPointer(pointer, "map")) return;
-				const current = snapshot();
-				const candidate = current.maps.find((entry) => entry.id === place.id);
-				if (
-					requestedView === "map" &&
-					candidate &&
-					current.level >= candidate.level
-				) {
-					this.clickFeedback(p, this.mapLayer);
-					onMap(place.id);
-					this.syncSnapshot();
-				}
-			});
-			zone.on("pointerover", (pointer: Phaser.Input.Pointer) => {
-				const item = this.places.get(place.id);
-				if (!this.acceptsPointer(pointer, "map") || !item) return;
-				item.hovered = true;
-				this.syncSnapshot();
-			});
-			zone.on("pointerout", () => {
-				const item = this.places.get(place.id);
-				if (item) item.hovered = false;
-				this.syncSnapshot();
-			});
-			this.mapLayer.add([dot, label, detail, zone]);
-			this.places.set(place.id, { dot, label, detail, zone, active: false, hovered: false });
-		}
-
 		private syncSnapshot(): void {
 			if (!this.baseCaption) return;
 			const state = snapshot();
 			this.lastSelection = `${state.selectedScavId ?? ""}:${state.selectedMapId ?? ""}:${state.selectedRoomId ?? ""}:${state.selectedSite?.column ?? ""}:${state.selectedSite?.row ?? ""}`;
 			this.syncShelter(state);
-			this.operationsCaption.setText(`В РЕЙДЕ: ${state.raids.length}  ·  ЖДУТ ПРИКАЗ: ${state.raids.filter((raid) => raid.expedition?.status === "choice").length}`);
-			this.selectedRoute.clear();
-			const selectedPlace = state.maps.find((place) => place.id === state.selectedMapId && state.level >= place.level);
-			if (selectedPlace) {
-				const selectedPoint = position(selectedPlace);
-				const distance = Math.max(1, Math.hypot(selectedPoint.x - this.hq.x, selectedPoint.y - this.hq.y));
-				const direction = { x: (selectedPoint.x - this.hq.x) / distance, y: (selectedPoint.y - this.hq.y) / distance };
-				const start = { x: this.hq.x + direction.x * 18, y: this.hq.y + direction.y * 18 };
-				const end = { x: selectedPoint.x - direction.x * 31, y: selectedPoint.y - direction.y * 31 };
-				line(this.selectedRoute, [start, end], C.void, 6, .9);
-				dashed(this.selectedRoute, start, end, C.gold, 2, .95);
-				const arrow = { x: start.x + (end.x - start.x) * .72, y: start.y + (end.y - start.y) * .72 };
-				polygon(this.selectedRoute, [arrow,
-					{ x: arrow.x - direction.x * 9 - direction.y * 4, y: arrow.y - direction.y * 9 + direction.x * 4 },
-					{ x: arrow.x - direction.x * 9 + direction.y * 4, y: arrow.y - direction.y * 9 - direction.x * 4 },
-				], C.gold);
-			}
-			for (const place of state.maps) {
-				const item = this.places.get(place.id);
-				if (!item) continue;
-				const p = position(place),
-					active = state.level >= place.level;
-				const selected = active && state.selectedMapId === place.id;
-				const highlighted = selected || (active && item.hovered);
-				const color = highlighted ? C.gold : active ? pigment(PIXEL_PALETTE.steelLight) : C.sage;
-				item.active = active;
-				if (item.zone.input) item.zone.input.cursor = active ? "pointer" : "not-allowed";
-				item.dot.clear();
-				if (selected) {
-					item.dot.fillStyle(C.gold, .08).fillRect(p.x - 62, p.y - 32, 124, 101);
-					for (const dx of [-1, 1]) for (const dy of [-1, 1]) {
-						const corner = { x: p.x + dx * 62, y: p.y + (dy < 0 ? -32 : 69) };
-						line(item.dot, [{ x: corner.x - dx * 13, y: corner.y }, corner, { x: corner.x, y: corner.y - dy * 9 }], C.gold, 2, .85);
-					}
-				}
-				item.dot.fillStyle(C.void).fillRect(p.x - 19, p.y - 19, 38, 38);
-				item.dot.lineStyle(highlighted ? 2 : 1, color, active ? 1 : .7).strokeRect(p.x - 19, p.y - 19, 38, 38);
-				if (highlighted) item.dot.lineStyle(1, color, .55).strokeRect(p.x - 23, p.y - 23, 46, 46);
-				paintOperationsDistrictSymbol(item.dot, place.id, p, highlighted ? PIXEL_PALETTE.yellow : active ? PIXEL_PALETTE.steelLight : PIXEL_PALETTE.panelShade);
-				item.label.setColor(highlighted ? PIXEL_PALETTE.yellow : active ? PIXEL_PALETTE.cream : PIXEL_PALETTE.panelShade)
-					.setBackgroundColor(highlighted ? PIXEL_PALETTE.rubber : PIXEL_PALETTE.black);
-				item.detail.setColor(active ? PIXEL_PALETTE.steelLight : PIXEL_PALETTE.panelShade);
-				const raiding = state.raids.filter(
-					(raid) => raid.mapId === place.id
-				).length;
-				item.detail.setText(
-					`${operationsMapCoordinate(p)} · ` + (active
-						? raiding
-							? `В РЕЙДЕ: ${raiding}`
-							: selected ? "НАПРАВЛЕНИЕ ВЫБРАНО" : "ВЫБРАТЬ ↗"
-						: `ЗАКРЫТО · УР. ${place.level}`)
-				);
-			}
-			const live = new Set(state.raids.map((raid) => raid.id));
-			for (const [id, marker] of this.raidActors)
-				if (!live.has(id)) {
-					this.tweens.killTweensOf(marker.ring);
-					marker.actor.destroy(true);
-					this.raidActors.delete(id);
-				}
-			for (const raid of state.raids)
-				if (!this.raidActors.has(raid.id)) {
-					const marker = this.add.container(this.hq.x, this.hq.y);
-					const color = pigment(raid.isAuto ? PIXEL_PALETTE.glassLight : PIXEL_PALETTE.yellow);
-					const ring = this.add
-						.ellipse(0, 0, 20, 20)
-						.setStrokeStyle(1, color, 0.6);
-					const dot = this.add.rectangle(0, 0, 8, 8, color).setAngle(45);
-					const label = this.text(
-						0,
-						-26,
-						raid.scavName.toLocaleUpperCase("ru-RU"),
-						14,
-						PIXEL_PALETTE.cream
-					).setOrigin(0.5);
-					const phase = this.text(0, 22, "", 12, PIXEL_PALETTE.yellow).setOrigin(0.5);
-					label
-						.setBackgroundColor(PIXEL_PALETTE.black)
-						.setPadding(3, 2)
-						.setVisible(false);
-					phase
-						.setBackgroundColor(PIXEL_PALETTE.black)
-						.setPadding(3, 2)
-						.setVisible(false);
-					marker.setSize(44, 44).setInteractive({ useHandCursor: true });
-					marker.on("pointerover", (pointer: Phaser.Input.Pointer) => {
-						const item = this.raidActors.get(raid.id);
-						if (!this.acceptsPointer(pointer, "map") || !item) return;
-						item.hovered = true;
-						label.setVisible(true);
-						phase.setVisible(true);
-					});
-					marker.on("pointerout", () => {
-						const item = this.raidActors.get(raid.id);
-						if (item) item.hovered = false;
-						const selected = snapshot().selectedScavId === raid.scavId;
-						const waiting = snapshot().raids.find((item) => item.id === raid.id)?.expedition?.status === "choice";
-						label.setVisible(selected);
-						phase.setVisible(selected || waiting);
-					});
-					marker.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
-						if (!this.acceptsPointer(pointer, "map")) return;
-						this.clickFeedback({ x: marker.x, y: marker.y }, this.mapLayer);
-						interactions.onScav?.(raid.scavId);
-					});
-					marker.add([ring, dot, label, phase]);
-					this.mapLayer.add(marker);
-					this.raidActors.set(raid.id, { actor: marker, ring, label, phase, hovered: false });
-					if (!reducedMotion) this.tweens.add({
-						targets: ring,
-						scale: 1.65,
-						alpha: 0.08,
-						duration: 1400,
-						repeat: -1,
-					});
-				}
-			for (const raid of state.raids) {
-				const marker = this.raidActors.get(raid.id);
-				if (!marker) continue;
-				const selected = state.selectedScavId === raid.scavId;
-				const waiting = raid.expedition?.status === "choice";
-				marker.label.setVisible(selected || marker.hovered);
-				marker.phase.setVisible(selected || marker.hovered || waiting).setText(
-					waiting && !selected && !marker.hovered ? "!" : `${raid.isAuto ? "↻ " : ""}${getRaidPhase(raid, Date.now()).label.toLocaleUpperCase("ru-RU")}`
-				);
-				marker.phase.setColor(waiting ? PIXEL_PALETTE.cream : PIXEL_PALETTE.yellow);
-				marker.actor.setDepth(selected ? 2000 : 0);
-			}
-			this.mapLayer.sort("depth");
 		}
 
 		update(time: number, delta: number): void {
@@ -1838,47 +1534,6 @@ export function createWorld(
 			if (requestedView === "base" && !document.hidden) {
 				this.animateShelter(time, delta);
 				this.baseLayer.sort("depth");
-			} else if (requestedView === "raid" && !document.hidden) {
-				this.raidStreet.update(selection, Date.now(), delta);
-			} else if (requestedView === "map" && !document.hidden) {
-				const state = snapshot(),
-					now = Date.now();
-				for (const raid of state.raids) {
-					const marker = this.raidActors.get(raid.id),
-						place = state.maps.find((candidate) => candidate.id === raid.mapId);
-					if (!marker || !place) continue;
-					const p = position(place);
-					const progress = Phaser.Math.Clamp(
-						(now - raid.startedAt) / Math.max(1, raid.endsAt - raid.startedAt),
-						0,
-						1
-					);
-					// Travel out, search locally, then return; completed raids wait at headquarters.
-					let travel: number;
-					if (raid.expedition?.status === "choice") travel = 1;
-					else if (progress < 0.22) travel = progress / 0.22;
-					else if (progress > 0.8) travel = (1 - progress) / 0.2;
-					else travel = 1;
-					const search = progress >= 0.22 && progress <= 0.8;
-					const siblings = state.raids.filter(
-						(candidate) => candidate.mapId === raid.mapId
-					);
-					const rank = siblings.findIndex(
-						(candidate) => candidate.id === raid.id
-					);
-					const offset = (rank - (siblings.length - 1) / 2) * 13;
-					marker.actor.setPosition(
-						this.hq.x +
-							(p.x - this.hq.x) * travel +
-							(search ? Math.sin(time / 1800 + raid.startedAt) * 14 : 0) +
-							offset,
-						this.hq.y +
-							(p.y - this.hq.y) * travel +
-							(search
-								? Math.cos(time / 2300 + raid.startedAt) * 10
-								: -Math.sin(travel * Math.PI) * 20)
-					);
-				}
 			}
 		}
 	}
@@ -1905,8 +1560,6 @@ export function createWorld(
 	});
 	return {
 		game, setView: (view) => scene.show(view),
-		selectRaid: (id) => scene.selectRaid(id),
-		setRaidFollow: (enabled) => scene.setRaidFollow(enabled),
 		getPresentationState: () => scene.getPresentationState(),
 		getShelterPeople: () => scene.getShelterPeople(),
 		restorePresentationState: (value) => scene.restorePresentationState(value),

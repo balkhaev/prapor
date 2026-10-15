@@ -1,9 +1,8 @@
 import './environment-preview.css';
 import { mountSceneLightControl } from './scene-light-control';
 import { createWorld, type WorldSnapshot } from './scene';
-import { createGame, dispatchRaid } from './game/engine';
+import { createGame } from './game/engine';
 import { MAPS } from './game/data';
-import { getRaidFieldPlan } from './raid-field';
 import { LiveScene } from './live-scene';
 import { cityPreviewFocus, createCityPreviewSnapshot } from './metropolis-preview';
 import type { LiveSnapshot } from './game/live';
@@ -14,10 +13,8 @@ const locationLabel = document.querySelector<HTMLElement>('#environment-location
 const toolbar = document.querySelector<HTMLElement>('.environment-toolbar')!;
 mountSceneLightControl(toolbar, { preview: true });
 choice.add(new Option('Ольховск · большой город', 'metropolis'));
-for (const map of MAPS) choice.add(new Option(map.name, map.id));
-choice.add(new Option('Карта маршрутов', 'map'));
 const requested = new URLSearchParams(location.search).get('scene');
-choice.value = requested === 'metropolis' || requested === 'base' || requested === 'map' || MAPS.some(map => map.id === requested) ? requested! : 'base';
+choice.value = requested === 'base' ? 'base' : requested ? 'metropolis' : 'base';
 
 const quarterLabel = document.createElement('label'); quarterLabel.className = 'environment-quarter'; quarterLabel.hidden = true;
 quarterLabel.append('Район');
@@ -28,27 +25,18 @@ legacyHost.className = cityHost.className = 'environment-render-host';
 cityHost.hidden = true; loading.className = 'environment-loading'; loading.hidden = true; loading.setAttribute('role', 'status');
 stage.append(legacyHost, cityHost, loading);
 
-let state: ReturnType<typeof createGame> | null = null, beganAt = performance.now(), duration = 60000;
+let state: ReturnType<typeof createGame> | null = null;
 let world: ReturnType<typeof createWorld> | null = null, worldReady = false;
 let cityScene: LiveScene | null = null, citySnapshot: LiveSnapshot | null = null, cityPromise: Promise<LiveSnapshot> | null = null;
 let sceneRequest = 0, disposed = false;
 function prepare(): void {
   state = createGame(Date.now()); state.level = 9; state.xp = 5760; state.money = 5000;
   state.supplies = { ammo: 200, medicine: 6, scrap: 40, intel: 100 };
-  if (choice.value !== 'base' && choice.value !== 'map' && choice.value !== 'metropolis') {
-    dispatchRaid(state, state.scavs[0]!.id, choice.value, Date.now());
-    const raid = state.raids[0];
-    if (raid) { raid.seed = 698906565; duration = Math.max(60000, raid.endsAt - raid.startedAt); }
-  }
-  beganAt = performance.now();
 }
 function snapshot(): WorldSnapshot {
   const current = state!;
-  const raid = current.raids[0];
-  if (raid) { const now = Date.now(), elapsed = (performance.now() - beganAt) % duration; raid.startedAt = now - elapsed; raid.endsAt = raid.startedAt + duration; }
   return { identityKey: `environment-${choice.value}`, base: current.base, shelter: current.shelter, scavs: current.scavs,
-    raids: current.raids, selectedRaidId: raid?.id ?? null, weapons: current.weapons, gearItems: current.gearItems,
-    maps: MAPS, level: current.level, selectedMapId: choice.value === 'base' || choice.value === 'map' ? 'courtyard' : choice.value };
+    raids: [], weapons: current.weapons, gearItems: current.gearItems, maps: MAPS, level: current.level };
 }
 function ensureWorld(): void {
   if (world) return;
@@ -61,11 +49,9 @@ function cityFocus(): void {
 async function showScene(): Promise<void> {
   const request = ++sceneRequest, city = choice.value === 'metropolis';
   cityScene?.hide(); legacyHost.hidden = city; cityHost.hidden = !city; quarterLabel.hidden = !city;
-  document.querySelector<HTMLElement>('.environment-camera')!.hidden = choice.value === 'map';
-  document.querySelector<HTMLElement>('.scene-light-control')!.hidden = choice.value === 'map';
   document.querySelector<HTMLElement>('.environment-footer span')!.textContent = city
     ? 'Обзор без входа в рейд · выберите район или нажмите на карту · потяните для перемещения'
-    : choice.value === 'map' ? 'Оперативная схема · координаты районов и направления от базы' : 'Потяните сцену для обзора · колесо мыши меняет масштаб';
+    : 'Потяните сцену для обзора · колесо мыши меняет масштаб';
   locationLabel.textContent = choice.selectedOptions[0]?.textContent ?? 'Окружение';
   const url = new URL(location.href); url.searchParams.set('scene', choice.value); history.replaceState(null, '', url);
   if (city) {
@@ -94,9 +80,7 @@ async function showScene(): Promise<void> {
   }
   loading.hidden = true; prepare(); ensureWorld();
   if (!worldReady || !world) return;
-  world.game.loop.wake(); world.selectRaid(state!.raids[0]?.id ?? null);
-  world.setView(choice.value === 'map' ? 'map' : choice.value === 'base' ? 'base' : 'raid');
-  world.setPanMode(true); world.setRaidFollow(true);
+  world.game.loop.wake(); world.setView('base'); world.setPanMode(true);
 }
 choice.addEventListener('change', () => { void showScene(); });
 quarterChoice.addEventListener('change', () => { if (quarterChoice.value) cityFocus(); else cityScene?.showOverview(true); });
@@ -105,17 +89,11 @@ document.querySelector('#environment-in')!.addEventListener('click', () => { if 
 document.querySelector('#environment-overview')!.addEventListener('click', () => {
   if (choice.value === 'metropolis') { cityScene?.showOverview(true); quarterChoice.value = ''; return; }
   if (!world) return;
-  if (choice.value === 'base') { world.resetCamera(); return; }
-  const raid = state?.raids[0]; if (!raid) return;
-  const plan = getRaidFieldPlan(raid);
-  world.setRaidFollow(false); world.zoomBy(.7 / world.getCameraState().zoom);
-  const camera = world.getCameraState(), canvas = world.game.canvas;
-  const center = { x: plan.height * 32 + 160 + (plan.width - plan.height) * 16, y: 110 + (plan.width + plan.height) * 8 };
-  world.panBy((center.x - canvas.width / camera.zoom / 2 - camera.x) * camera.zoom, (center.y - canvas.height / camera.zoom / 2 - camera.y) * camera.zoom);
+  world.resetCamera();
 });
 document.querySelector('#environment-focus')!.addEventListener('click', () => {
   if (choice.value === 'metropolis') { cityFocus(); return; }
-  if (choice.value === 'base') world?.focusBase(); else if (world) { world.setRaidFollow(true); world.zoomBy(1.8 / world.getCameraState().zoom); }
+  world?.focusBase();
 });
 window.addEventListener('pagehide', event => {
   cityScene?.hide();
