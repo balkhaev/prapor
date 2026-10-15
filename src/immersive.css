@@ -355,6 +355,7 @@ body.immersive-game {
 .immersive-game .live-entry-head { padding-bottom: 13px; }
 .immersive-game .live-entry-head h2 { margin: 4px 0; font-size: 23px; letter-spacing: -.5px; }
 .immersive-game .live-entry-head p { font-size: 11px; }
+.immersive-game .live-entry-back { flex: none; min-height: 34px; padding: 6px 10px; font-size: 10px; white-space: nowrap; }
 .immersive-game .live-entry-scroll { overflow-y: auto; min-height: 0; padding-top: 14px; }
 .immersive-game .live-entry-map-layout { grid-template-columns: minmax(0, 1fr) minmax(230px, .8fr); }
 .immersive-game .live-entry-map { max-width: 540px; }
@@ -375,7 +376,7 @@ body.immersive-game {
 @media (max-width: 850px) {
   .immersive-game .command-hud { inset: 10px 10px auto; gap: 14px; padding: 8px 10px; height: 54px; }
   .immersive-game .command-brand { display: none; }
-  .immersive-game .command-hud .level { min-width: 85px; max-width: 100px; }
+  .immersive-game .command-hud .level { display: none; }
   .immersive-game .command-hud .resources { gap: 12px; justify-content: space-between; }
   .immersive-game .command-hud .resource { min-width: 0; gap: 5px; }
   .immersive-game .command-hud .resource strong { font-size: 13px; }
@@ -515,6 +516,7 @@ body.immersive-game {
   .immersive-game .live-entry-head h2 { font-size: 20px; margin: 4px 0; }
   .immersive-game .live-entry-head p { font-size: 9px; max-width: 220px; }
   .immersive-game .live-entry-head .live-online { font-size: 7px; padding: 5px; }
+  .immersive-game .live-entry-head .live-online { display: none; }
   .immersive-game .live-entry-map-layout { grid-template-columns: 1fr; gap: 12px; }
   .immersive-game .live-entry-map { max-width: none; }
   .immersive-game .live-entry-settings .live-purpose-list,
@@ -545,7 +547,13 @@ body.immersive-game {
   .immersive-game .command-tools button svg { width: 16px; height: 16px; }
   .immersive-game .command-crew,
   .immersive-game .command-routes { bottom: 128px; max-height: calc(100dvh - 275px); }
-  .immersive-game .live-entry-screen { top: 151px; bottom: 128px; }
+  .immersive-game:has(.live-preparing) .field-location,
+  .immersive-game:has(.live-preparing) .world-head { display: none; }
+  .immersive-game .live-entry-screen { top: 64px; bottom: 85px; padding: 10px 16px 0; }
+  .immersive-game .live-entry-head { padding-bottom: 7px; }
+  .immersive-game .live-entry-head .live-eyebrow,
+  .immersive-game .live-entry-head .live-online { display: none; }
+  .immersive-game .live-entry-footer { padding: 6px 0; }
   .immersive-game .live-entry-head h2 { font-size: 18px; }
   .immersive-game .live-entry-head p { display: none; }
   .immersive-game .live-field-hud { top: 156px; }
