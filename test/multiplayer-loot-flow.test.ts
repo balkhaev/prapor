@@ -70,7 +70,8 @@ async function fixture() {
       const exit = getLiveMap("perimeter").extracts[0]!;
       for (const player of players) {
         const row = db.query<{ identity: string; state: string }, []>("SELECT identity,state FROM live_players").all().find(row => JSON.parse(row.state).id === player.live.selfId)!;
-        const state = JSON.parse(row.state); Object.assign(state, position ?? exit, { safeUntil: 0, lastCombatAt: 0, disconnectAt: 0, ...(ammo === undefined ? {} : { ammo }), ...(medkits === undefined ? {} : { medkits }) });
+        const state = JSON.parse(row.state), point = position ?? exit;
+        Object.assign(state, { x: point.x, y: point.y }, { safeUntil: 0, lastCombatAt: 0, disconnectAt: 0, ...(ammo === undefined ? {} : { ammo }), ...(medkits === undefined ? {} : { medkits }) });
         if (medkits !== undefined) state.medicine = createMedicalInventory({ ...state.medicine, medkit: medkits * 40 });
         db.query("UPDATE live_players SET state=? WHERE identity=?").run(JSON.stringify(state), row.identity);
       }
@@ -142,7 +143,11 @@ describe("real multiplayer loot, shared market and headquarters supplies", () =>
   test("a generated jacket hides physical contents until server search and two real headquarters can extract its loot only once", async () => {
     const f = await fixture(), first = await f.enter(), second = await f.enter();
     const anchor = getLiveMap("perimeter").containers.find(anchor => anchor.kind === "jacket")!;
+    const firstId = first.live.selfId, secondId = second.live.selfId;
     await f.editLive([first, second], [], undefined, undefined, anchor);
+    expect(first.live.selfId).toBe(firstId); expect(second.live.selfId).toBe(secondId);
+    expect(first.live.entities.find(entity => entity.id === firstId)?.kind).toBe('player');
+    expect(second.live.entities.find(entity => entity.id === secondId)?.kind).toBe('player');
     const hidden = first.live.drops.find(drop => drop.containerId === anchor.id)!;
     expect(hidden).toBeDefined(); expect(hidden).toMatchObject({ containerKind: "jacket", searched: false, amount: 0 }); expect(hidden.items).toBeUndefined();
     expect(second.live.drops.find(drop => drop.id === hidden.id)!.items).toBeUndefined();
