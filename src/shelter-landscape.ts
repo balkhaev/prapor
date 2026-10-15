@@ -4,6 +4,7 @@ import { getShelterBuildingRect, getShelterCorridorSegments, getShelterOpenGroun
 import { projectShelterPoint, shelterRoomPosition, SHELTER_COLUMN_STRIDE, SHELTER_ROW_STRIDE } from "./shelter-isometric";
 import type { ShelterPoint } from "./shelter-motion";
 import { PIXEL_PALETTE as P } from "./pixel-art";
+import { paintShelterAccessRoad } from "./shelter-road";
 
 export interface ShelterLandscapeEdge extends ShelterCorridorSegment { side: "north" | "south" | "east" | "west" }
 export interface ShelterLandscapeDecoration {
@@ -326,15 +327,10 @@ export function paintShelterLandscape(g: Phaser.GameObjects.Graphics, landscape:
 	}
 	if (landscape.lots.length) {
 		const left = Math.min(...landscape.lots.map((lot) => lot.x)) - 12, right = Math.max(...landscape.lots.map((lot) => lot.x + lot.width)) + 12;
-		a.plane(left, 43, right - left, 67, 0x414e45);
-		a.plane(left, 110, right - left, 22, 0x9a957a);
-		for (let x = left + 14; x < right; x += 47) a.line([{ x, y: 76 }, { x: Math.min(x + 21, right), y: 76 }], 0xd5ceaa, 1.5, .55);
+		paintShelterAccessRoad(g, left, right);
 		a.line([{ x: ENTRANCE.x, y: 112 }, ENTRANCE], C.soil, 19, .8);
-		a.line([{ x: left, y: 110 }, { x: right, y: 110 }], 0x283e32, 1.2, .7);
-		for (let x = left + 27; x < right - 20; x += 113) {
-			// Patched tarmac and drain slats stay beside the existing gate road.
-			a.face([{ x, y: 54 }, { x: x + 27, y: 56 }, { x: x + 22, y: 70 }, { x: x - 3, y: 67 }], C.ink, .32);
-			a.line([{ x: x + 3, y: 57 }, { x: x + 12, y: 61 }, { x: x + 9, y: 65 }], C.steel, 1, .35);
+		for (let x = Math.ceil(left / 113) * 113 + 27; x < right - 20; x += 113) {
+			// Drain slats belong to the maintained frontage beside the gate.
 			a.plane(x + 11, 104, 15, 4, C.ink);
 			for (let slot = 13; slot < 25; slot += 3) a.line([{ x: x + slot, y: 104.5 }, { x: x + slot, y: 107.5 }], C.steel, 1, .7);
 		}

@@ -14,10 +14,43 @@ const lumaAt = (pixels: Uint8ClampedArray, width: number, x: number, y: number) 
 
 test('raster detail follows effective display size and density, with a bounded set of tiers', () => {
   expect(pixelActorDetail(18)).toBe(32); expect(pixelActorDetail(48)).toBe(64); expect(pixelActorDetail(64)).toBe(160);
-  expect(pixelActorDetail(24, 2)).toBe(64); expect(pixelActorDetail(48, 2)).toBe(160);
+  expect(pixelActorDetail(24, 2)).toBe(32); expect(pixelActorDetail(48, 2)).toBe(64);
+  expect(pixelActorDetail(28, 2)).toBe(64); expect(pixelActorDetail(32, 2)).toBe(64);
   expect(pixelActorDetail(18, 20)).toBe(pixelActorDetail(18, 2));
   expect(pixelActorDetail(48, .1)).toBe(pixelActorDetail(48, 1));
   expect(pixelActorDetail(NaN)).toBe(160); expect(pixelActorDetail(0)).toBe(160);
+});
+
+test('coverage retains the empty channels that separate legs, aiming arms and equipment', () => {
+  const width = 50, height = 60, source = new Uint8ClampedArray(width * height * 4);
+  rectangle(source, width, 12, 8, 27, 23);
+  rectangle(source, width, 12, 30, 12, 25); rectangle(source, width, 27, 30, 12, 25);
+  // The three-pixel trouser gap lies within one distant coverage block.
+  // It used to become a solid five-pixel block joining both legs together.
+  rectangle(source, width, 39, 12, 5, 3); rectangle(source, width, 43, 12, 3, 17);
+  rectangle(source, width, 36, 26, 8, 3);
+  for (const detail of [32, 64] as const) {
+    const distant = clarifyPixelActor(source, width, height, detail);
+    for (let y = 33; y < 53; y++) for (let x = 24; x < 27; x++) expect(alphaAt(distant, width, x, y)).toBe(0);
+    for (let y = 17; y < 25; y++) for (let x = 39; x < 43; x++) expect(alphaAt(distant, width, x, y)).toBe(0);
+    expect(alphaAt(distant, width, 20, 40)).toBeGreaterThan(128);
+    expect(alphaAt(distant, width, 30, 40)).toBeGreaterThan(128);
+  }
+});
+
+test('authored equipment swatches retain their hue and internal contrast through minification', () => {
+  const width = 50, height = 50, source = new Uint8ClampedArray(width * height * 4);
+  rectangle(source, width, 5, 5, 40, 40);
+  rectangle(source, width, 17, 10, 16, 25, [74, 88, 79, 255]);
+  rectangle(source, width, 20, 17, 1, 1, [218, 208, 172, 255]);
+  const distant = clarifyPixelActor(source, width, height, 32);
+  const before = lumaAt(source, width, 10, 20) - lumaAt(source, width, 25, 20);
+  const after = lumaAt(distant, width, 10, 20) - lumaAt(distant, width, 25, 20);
+  expect(after).toBeGreaterThan(before + 10);
+  // An isolated buckle highlight cannot bleach the entire dark vest block.
+  expect(lumaAt(distant, width, 20, 17)).toBeLessThan(95);
+  expect(distant[(20 * width + 25) * 4 + 1]).toBeGreaterThan(distant[(20 * width + 25) * 4]!);
+  expect(source[(17 * width + 20) * 4]).toBe(218);
 });
 
 test('distant coverage keeps a thin barrel visible at every nearest-sampling phase', () => {
