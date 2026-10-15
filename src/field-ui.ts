@@ -61,6 +61,11 @@ export function mountFieldInterface(options: {
 		}
 		return false;
 	}
+	function closePanels() {
+		body.classList.remove("field-dock-open", "field-crew-open", "field-routes-open");
+		body.classList.add("field-dock-collapsed");
+		sync();
+	}
 	function updateFullscreen() {
 		const active = document.fullscreenElement !== null;
 		const button = root.querySelector<HTMLButtonElement>('[data-action="toggle-fullscreen"]')!;
@@ -102,7 +107,7 @@ export function mountFieldInterface(options: {
 	document.addEventListener("fullscreenchange", updateFullscreen);
 	sync();
 	updateFullscreen();
-	return { sync, dismiss, destroy() {
+	return { sync, dismiss, closePanels, destroy() {
 		destroyed = true;
 		observer.disconnect();
 		root.removeEventListener("click", click);
