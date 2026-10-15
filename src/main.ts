@@ -3147,6 +3147,7 @@ function openMissionBoard(): void {
 	document.querySelector<HTMLButtonElement>('[data-action="close-tools"]')?.focus({ preventScroll: true });
 }
 function setView(view: "base" | "map" | "raid" | "live") {
+	const wasLive = liveMode?.isActive() ?? false;
 	if (view !== "base") cancelBuildingPlacement();
 	if (view === "live") {
 		if (!liveMode) return;
@@ -3187,6 +3188,7 @@ function setView(view: "base" | "map" | "raid" | "live") {
 	updateCameraControls();
 	if (world) renderCommandBoard();
 	updateSaveBanner(); setOverlayState();
+	if (wasLive) render();
 }
 render();
 world = createWorld(
