@@ -6,6 +6,7 @@ import { generatePerimeterCore } from '../src/game/world-generation';
 import { buildingExteriorStyle, buildingRoofDormer, sceneBuildings } from '../src/live-map-art';
 import { buildingArchitecture, buildingArchitectureHeightAt } from '../src/building-architecture';
 import { buildingStreetSign } from '../src/live-street-life';
+import { buildingFacadeLayout } from '../src/building-facade-layout';
 
 type CanvasRecord = HTMLCanvasElement & { paints: number; integerBounds: boolean; colors: Set<string>; spans: Array<[number, number, number, number, string]> };
 let restoreDocument: (() => void) | undefined;
@@ -199,6 +200,62 @@ test('a shop entrance retains real glass on either side, with dark recesses and 
   expect(image.colors.has(P.glassLight)).toBe(true);
   expect(image.colors.has(buildingExteriorStyle(shop).accent)).toBe(true); // public shop sign and matching awning
   expect(image.integerBounds).toBe(true);
+});
+
+test('paired native openings keep two readable dark panes at 32 pixels instead of a pale frame bar', () => {
+  const images = canvases(true), art = new PixelBuildingArt();
+  const candidate = Array.from({ length: 32 }, (_, i) => ({ ...building, id: `paired-native-${i}`, width: 10, height: 8, floors: 3 as const, facade: 'panel' as const, roof: 'flat' as const, entrances: [] }))
+    .map(house => ({ house, facade: buildingArchitecture(house).facades.find(face => face.side === 'y')! }))
+    .map(item => ({ ...item, window: buildingFacadeLayout(item.house,item.facade).windows.find(win => win.style === 'paired' && win.floor === 2 && win.balcony === 'none' && win.variation % 11 !== 0) }))
+    .find(item => item.window)!;
+  expect(candidate).toBeDefined();
+  const { house, facade, window } = candidate, item = window!;
+  const glass = new Set(['#334f55','#557b81','#728e8c']);
+  for (const native of [32,64,128] as const) {
+    const sprite = art.get(house,false,native), image = images.at(-1)!, scale = native/128;
+    const pixelAt = (u: number,z: number): string | undefined => {
+      const at = pixelIso((facade.u+u)*scale,facade.plane*scale,z*scale*1.7,sprite.anchor);
+      return [...image.spans].reverse().find(span => at.x >= span[0] && at.y >= span[1] && at.x < span[0]+span[2] && at.y < span[1]+span[3])?.[4];
+    };
+    for (const side of [-1,1]) {
+      const colors: Array<string | undefined> = [];
+      for (const across of [-.04,0,.04]) for (const vertical of [.32,.43,.54,.65]) colors.push(pixelAt(item.u+item.width*(side*.25+across),item.low+(item.high-item.low)*vertical));
+      expect(colors.filter(color => glass.has(color!)).length).toBeGreaterThan(colors.length/3);
+    }
+    expect(image.integerBounds).toBe(true);
+    expect(pixelBuildingSpriteBytes(house,false,native)).toBe(image.width*image.height*4);
+  }
+});
+
+test('glazed balcony stacks remain visible at every native level while cutaway removes every exterior enclosure', () => {
+  const images = canvases(true), art = new PixelBuildingArt();
+  const house = Array.from({ length: 32 }, (_, i) => ({ ...building, id: `loggia-native-${i}`, width: 10, floors: 3 as const, facade: 'panel' as const, roof: 'flat' as const }))
+    .find(item => buildingArchitecture(item).facades.some(facade => buildingFacadeLayout(item,facade).windows.some(win => win.balcony === 'glazed')))!;
+  const original = structuredClone(house);
+  for (const native of [32,64,128] as const) {
+    art.get(house,false,native); const closed = images.at(-1)!;
+    expect(closed.colors.has('#476b70')).toBe(true);
+    const open = art.get(house,true,native), cutaway = images.at(-1)!;
+    expect(cutaway.colors.has('#476b70')).toBe(false);
+    expect(pixelBuildingSpriteBytes(house,true,native)).toBe(open.image.width*open.image.height*4);
+    expect(art.retainedBytes).toBeLessThanOrEqual(PIXEL_BUILDING_CACHE_BYTES);
+  }
+  expect(house).toEqual(original);
+});
+
+test('inhabited high return walls stay behind the adjoining low roof at every native level', () => {
+  const images = canvases(true), art = new PixelBuildingArt();
+  const house = { ...building, id: 'city-residential-0-building-1', width: 23, height: 9, floors: 3 as const, facade: 'panel' as const, roof: 'flat' as const };
+  const wing = buildingArchitecture(house).volumes[1]!, roof = new Set(buildingExteriorStyle(house).roof);
+  expect(wing).toBeDefined();
+  for (const native of [32,64,128] as const) {
+    const sprite = art.get(house,false,native), image = images.at(-1)!, scale = native/128;
+    for (const across of [.42,.64,.78]) for (const depth of [.3,.55,.74]) {
+      const at = pixelIso((wing.x+wing.width*across)*scale,(wing.y+wing.height*depth)*scale,(wing.top*128+1)*1.7*scale,sprite.anchor);
+      const color = [...image.spans].reverse().find(span => at.x >= span[0] && at.y >= span[1] && at.x < span[0]+span[2] && at.y < span[1]+span[3])?.[4];
+      expect(roof.has(color!)).toBe(true);
+    }
+  }
 });
 
 test('distant houses preserve their large roof, masonry, corner and glass shapes without close-up texture noise', () => {
