@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { BUILDING_EXTERIOR_HEIGHT_SCALE, buildingExteriorStyle, buildingFacadeCadence, buildingNeedsCutaway, buildingPalette, buildingRoofDormer, buildingWallHeight, distantBuildingSurfaces, liveMapRasterPlan, mapVegetationBands, paintMapFootprints, paintPropModel, PropArtCache, sceneBuildings, SceneryIndex } from '../src/live-map-art';
 import type { LiveCityBuilding, LiveObstacle, LiveWorld, LiveWorldProp } from '../src/game/live';
 import { prefabObstacles } from '../src/game/world-prefabs';
+import { buildingArchitecture } from '../src/building-architecture';
 
 const building: LiveCityBuilding = { id: 'home', name: 'Дом', x: 10, y: 12, width: 8, height: 6, kind: 'apartment', entrances: [{ x: 13, y: 12 }, { x: 13, y: 17 }], floors: 3, facade: 'brick', roof: 'gable' };
 
@@ -49,7 +50,10 @@ describe('raid architecture visibility', () => {
       expect(points.every(point => Number.isFinite(point.x + point.y + point.z))).toBe(true);
       expect(points.every(point => point.x >= house.x - .5 && point.x <= house.x + house.width - .5 && point.y >= house.y - .5 && point.y <= house.y + house.height - .5)).toBe(true);
       if (roof === 'flat') expect(peak).toBeCloseTo(wall + .12);
-      else { expect(peak).toBeGreaterThan(wall); expect(peak).toBeLessThan(wall + .6); }
+      else {
+        const roofPeak = Math.max(...buildingArchitecture(house).surfaces.flatMap(surface => surface.points.map(point => point.z))) * BUILDING_EXTERIOR_HEIGHT_SCALE;
+        expect(peak).toBeGreaterThan(wall); expect(peak).toBeCloseTo(roofPeak);
+      }
       if (roof === 'gable') expect(surfaces.some(surface => surface.points.length === 3)).toBe(true);
       if (roof === 'sawtooth') expect(surfaces.filter(surface => surface.points.every(point => point.z >= wall)).length).toBe(12);
       expect(surfaces.some(surface => surface.color === '#334f55')).toBe(true);

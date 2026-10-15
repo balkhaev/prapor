@@ -4,7 +4,7 @@ import { pixelSeed } from './pixel-art';
 type Rect = LivePoint & { width: number; height: number };
 type StreetWorld = Pick<LiveWorld, 'width' | 'height' | 'paths' | 'city' | 'citySites' | 'props'>;
 export type CityStreetGroundDetail = Rect & {
-  kind: 'pavement' | 'passage' | 'play-chalk' | 'bench-leaves';
+  kind: 'pavement' | 'passage' | 'play-chalk' | 'bench-leaves' | 'shop-apron' | 'bench-pad';
   a: LivePoint; b: LivePoint; normal: LivePoint; offset: number; seed: number;
   /** Exact outdoor paving runs, shared by the cached and display-scale passes. */
   clip: Rect[];
@@ -64,16 +64,27 @@ export function buildCityStreetGround(world: StreetWorld, terrain: readonly Live
     const seed = pixelSeed(site.id);
     for (const passage of site.passages) strip('passage', passage, 1, 0, seed);
   }
-  // Rare, low-contrast traces of lived-in courtyards are tied to the real
-  // playground/bench. They stay flat and cannot look like loot or new cover.
+  // Small public places use their actual fixtures as anchors. Interior shop
+  // furnishings cannot lend an imaginary serving zone to the exterior wall.
   for (const prop of world.props ?? []) {
-    if (prop.kind !== 'playground' && prop.kind !== 'bench') continue;
+    if (!['playground', 'bench', 'kiosk', 'market-stall'].includes(prop.kind)) continue;
+    if (indoor[Math.floor(prop.y + prop.height / 2) * world.width + Math.floor(prop.x + prop.width / 2)]) continue;
     const seed = pixelSeed(prop.id);
-    if (prop.kind === 'bench' && seed % 4) continue;
     const horizontal = prop.orientation === 'x';
+    const normal = { x: horizontal ? 0 : -1, y: horizontal ? 1 : 0 };
+    const storefront = prop.kind === 'kiosk' || prop.kind === 'market-stall';
+    if (storefront || prop.kind === 'bench') {
+      // The serving side of an existing stall and the front of an existing
+      // bench get a small, coherent apron. It is only pigment on free paving;
+      // a clipped interior or a road can never acquire imaginary furniture.
+      const a = { x: prop.x + (horizontal ? .05 : prop.width + .36), y: prop.y + (horizontal ? prop.height + .36 : .05) };
+      const b = { x: a.x + (horizontal ? prop.width - .1 : 0), y: a.y + (horizontal ? 0 : prop.height - .1) };
+      add(storefront ? 'shop-apron' : 'bench-pad', a, b, normal, 0, seed, .62);
+    }
+    if (storefront || prop.kind === 'bench' && seed % 4) continue;
     const a = { x: prop.x + (horizontal ? .2 : prop.width + .28), y: prop.y + (horizontal ? prop.height + .28 : .2) };
     const b = { x: a.x + (horizontal ? 2.1 : 0), y: a.y + (horizontal ? 0 : 2.1) };
-    add(prop.kind === 'playground' ? 'play-chalk' : 'bench-leaves', a, b, { x: horizontal ? 0 : -1, y: horizontal ? 1 : 0 }, 0, seed, .7);
+    add(prop.kind === 'playground' ? 'play-chalk' : 'bench-leaves', a, b, normal, 0, seed, .7);
   }
   return details;
 }
@@ -108,6 +119,16 @@ export function paintCityStreetGroundDetail(c: CanvasRenderingContext2D, detail:
         line(point(length * .37, .48), point(length * .37 + .38, .48), '#6b7c536b', .09);
         line(point(length * .64, -.36), point(length * .64 + .65, -.36), '#89958061', .06);
       }
+      // Drain grates are part of the actual road-side curb, spaced every
+      // fourth run. Their transverse slots read as civic hardware, not litter.
+      if (length >= .8 && (Math.floor(detail.offset / CHUNK_LENGTH) + seed % 4) % 4 === 0) {
+        const start = Math.min(length * .38, Math.max(0, length - .6));
+        line(point(start, -.48), point(start + .6, -.48), '#405a53', .17);
+        line(point(start, -.37), point(start + .6, -.37), '#c2bda0', .025);
+        for (let slot = 0; slot < 6; slot++) {
+          line(point(start + .055 + slot * .09, -.545), point(start + .055 + slot * .09, -.425), '#8b9b83', .025);
+        }
+      }
     }
   } else if (detail.kind === 'passage') {
     // Use follows the actual authored way through a yard, with soft, quiet
@@ -115,6 +136,22 @@ export function paintCityStreetGroundDetail(c: CanvasRenderingContext2D, detail:
     line(a, b, '#c0b59629', .96);
     if (fine && seed % 3 === 0) for (let along = (2 - detail.offset % 2) % 2; along < length; along += 2) {
       line(point(along, -.32), point(along + .24, -.21), '#8a927849', .035);
+    }
+  } else if (detail.kind === 'shop-apron' || detail.kind === 'bench-pad') {
+    const shop = detail.kind === 'shop-apron';
+    line(a, b, shop ? '#b0aa8c' : '#a3aa91', .88);
+    line(point(0, -.42), point(length, -.42), shop ? '#777e68' : '#7b8c74', .07);
+    line(point(0, .42), point(length, .42), '#c6bea1', .08);
+    if (fine) {
+      for (let along = .35; along < length; along += .65) line(point(along, -.34), point(along, .34), '#7b8a735c', .025);
+      if (shop) {
+        // A faded entrance strip and two queue scuffs make the kiosk/stall a
+        // used place without placing another cover silhouette in its path.
+        line(point(length * .22, -.23), point(length * .76, -.23), seed % 2 ? '#577a704d' : '#9c715b4d', .19);
+        for (const along of [.32, .65]) line(point(length * along, .17), point(length * along + .12, .17), '#586e6159', .055);
+      } else {
+        line(point(length * .13, -.15), point(length * .85, -.15), '#63796738', .2);
+      }
     }
   } else if (detail.kind === 'play-chalk') {
     for (let row = 0; row < 4; row++) {

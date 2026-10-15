@@ -264,6 +264,9 @@ function foliage(m: Model): void {
   const tree=m.prop.kind==='tree',variant=m.prop.variant,birch=tree&&variant===2;
   m.shadow(tree?.64:.78);groundGrowth(m,tree?9:12);
   const center=m.point(.5,.5),span=Math.max(12,(m.prop.width+m.prop.height)*30);
+  // A mature urban tree has a broad crown above a legible bare trunk. The
+  // immutable footprint and trunk anchor stay exactly where the server put it.
+  const spread=tree?1.19:1,lean=tree?(m.random()-.5)*span*.12:0;
   const trunk=birch?C.cream:C.wood,trunkShade=birch?C.plasterShade:C.woodShade;
   if(tree) {
     for(const [u,v] of [[.25,.4],[.68,.26],[.76,.71],[.36,.78]]) {
@@ -283,10 +286,10 @@ function foliage(m: Model): void {
   }
   if(tree&&variant===3) {
     for(let level=0;level<4;level++) {
-      const cy=center.y-61-level*38,radius=span*(.92-level*.18),vertices:LivePoint[]=[{x:center.x,y:cy-64}];
+      const cy=center.y-61-level*38,radius=span*(.96-level*.18),vertices:LivePoint[]=[{x:center.x+lean,y:cy-64}];
       for(let side=0;side<2;side++)for(let tier=0;tier<5;tier++) {
         const t=side===0?tier:4-tier,sign=side===0?1:-1,width=radius*(.28+t*.18),y=cy-40+t*15;
-        vertices.push({x:center.x+sign*width,y},{x:center.x+sign*(width-7),y:y+5});
+        vertices.push({x:center.x+lean+sign*width,y},{x:center.x+lean+sign*(width-7),y:y+5});
       }
       m.raster.polygon(vertices,C.leafShade);
       m.raster.polygon([{x:center.x,y:cy-60},{x:center.x-radius*.77,y:cy+14},{x:center.x-radius*.16,y:cy+18},{x:center.x+radius*.15,y:cy-4}],C.leaf);
@@ -301,24 +304,25 @@ function foliage(m: Model): void {
     }
     return;
   }
-  const poplar=tree&&variant===1,rx=span*(poplar?.54:.96),ry=tree?(poplar?92:67):24,cy=center.y-(tree?(poplar?134:139):25);
+  const poplar=tree&&variant===1,rx=Math.min(span*(poplar?.66:birch?1.01:1.06)*spread,m.raster.width/2-Math.abs(lean)-16),ry=tree?(poplar?92:birch?73:76):24,cy=center.y-(tree?(poplar?134:139):25);
+  const crownX=center.x+lean;
   const silhouette:LivePoint[]=[];
   for(let i=0;i<32;i++) {
-    const angle=i*Math.PI/16,rough=.88+m.random()*.12;
-    silhouette.push({x:center.x+Math.cos(angle)*rx*rough,y:cy+Math.sin(angle)*ry*rough});
+    const angle=i*Math.PI/16,rough=.86+m.random()*.14,lobe=1+Math.sin(angle*5+variant)*.045;
+    silhouette.push({x:crownX+Math.cos(angle)*rx*rough*lobe,y:cy+Math.sin(angle)*ry*rough*lobe});
   }
   m.raster.polygon(silhouette,C.leafShade);
   // A dark underside, middle leaf masses and the lit upper-left crown read as volume.
-  const count=tree?25:14;
+  const count=tree?19:14;
   for(let i=0;i<count;i++) {
     const angle=i*2.399,radius=Math.sqrt((i+1)/(count+1));
-    const x=center.x+Math.cos(angle)*rx*.7*radius,y=cy+Math.sin(angle)*ry*.69*radius;
-    const size=(tree?14:8)+m.random()*(tree?13:10),mass:LivePoint[]=[];
+    const x=crownX+Math.cos(angle)*rx*.71*radius,y=cy+Math.sin(angle)*ry*.69*radius;
+    const size=(tree?23:8)+m.random()*(tree?16:10),mass:LivePoint[]=[];
     for(let lobe=0;lobe<12;lobe++) {
       const theta=lobe*Math.PI/6,rough=.78+m.random()*.22;
       mass.push({x:x+Math.cos(theta)*size*rough,y:y+Math.sin(theta)*Math.min(size*.67,ry*.38)*rough});
     }
-    const lit=x<center.x+rx*.2&&y<cy+ry*.14,color=lit?(birch?C.leafLight:C.leaf):C.leafShade;
+    const lit=x<crownX+rx*.2&&y<cy+ry*.14,color=lit?(birch?C.leafLight:C.leaf):C.leafShade;
     m.raster.polygon(mass,color);
     if(lit)m.raster.line(x-size*.45,y-3,x+size*.25,y-5,birch?C.grass:C.leafLight,2);
     for(let j=0;j<5;j++) {
@@ -328,7 +332,7 @@ function foliage(m: Model): void {
     }
   }
   if(birch)for(let i=0;i<7;i++) {
-    const x=center.x-rx*.55+m.random()*rx*1.1,y=cy+ry*.35+m.random()*ry*.38;
+    const x=crownX-rx*.55+m.random()*rx*1.1,y=cy+ry*.35+m.random()*ry*.38;
     m.raster.line(x,y,x-3,y+9,C.leafShade);m.raster.line(x-2,y+3,x-5,y+7,C.leaf);
   }
   if(!tree&&variant===2)for(let i=0;i<7;i++) {
@@ -438,6 +442,28 @@ function furniture(m: Model): void {
       for(const z of [39,49]) {m.grain(.06,.12,.94,z,7);for(const u of [.15,.84])m.bolt(u,.115,z);}
       if(m.prop.variant===3)m.line([.39,.12,49],[.48,.12,45],C.woodShade,3);
       m.wear(.04,.1,.96,.9,34,4+m.prop.variant*2,C.woodShade);
+      if(m.prop.variant===1) {
+        // Cast side frames and a gently arched top distinguish the park bench
+        // from the plain timber seats used beside loading yards.
+        for(const u of [.12,.88]) {
+          m.line([u,.18,40],[u,.44,47],C.steelShade,4);
+          m.line([u,.44,47],[u,.79,39],C.steelShade,4);
+          m.line([u,.21,42],[u,.44,48],C.steel,2);
+        }
+        m.line([.16,.12,51],[.5,.12,56],C.wood,4);
+        m.line([.5,.12,56],[.84,.12,51],C.wood,4);
+      } else if(m.prop.variant===2) {
+        for(const z of [38,48])m.line([.025,.115,z],[.975,.115,z],C.green,4);
+        m.line([.04,.1,52],[.96,.1,52],C.steel,2);
+        for(const u of [.16,.82])m.line([u,.16,3],[u,.8,3],C.steelShade,4);
+      } else if(m.prop.variant===3) {
+        // A folded newspaper lies on the seat; its low plane has no loot-box
+        // silhouette and does not change the existing seating footprint.
+        m.slab(.55,.3,.76,.71,35,C.cream);
+        m.line([.65,.31,36],[.65,.7,36],C.plasterShade);
+        for(const v of [.38,.47,.56,.65])m.line([.58,v,36],[.63,v,36],C.steelShade);
+        m.slab(.68,.37,.73,.51,36,C.steelShade);
+      }
     } else {
       m.box(.13,.15,.37,.45,33,8,METAL);
       m.line([.63,.28,34],[.89,.67,34],C.ink,3);
@@ -640,7 +666,33 @@ function smallBuilding(m: Model): void {
     if(variant===2)for(const v of [.25,.42,.59,.76])m.line([.94,v,21],[.94,v,43],C.rust);
     if(variant===3)m.line([.16,.948,36],[.2,.948,58],C.ink);
   } else {
-    m.box(.015,.015,.985,.985,height+8,9,[C.green,C.steelShade,C.panelShade]);
+    const roofPaint=variant===0?C.green:variant===1?C.terra:variant===2?C.blue:C.steel;
+    const roofShade=variant===1?C.terraShade:C.steelShade;
+    // The same real kiosk envelope supports four recognisable roof profiles:
+    // a folded ridge, a sloping canopy, a capped flat roof and a low hip.
+    // Window awnings stay inside the authored footprint rather than making
+    // another apparent obstacle on the pavement.
+    if(variant===0) {
+      m.poly([[.015,.015,91],[.985,.015,91],[.985,.5,116],[.015,.5,116]],roofShade);
+      m.poly([[.015,.5,116],[.985,.5,116],[.985,.985,91],[.015,.985,91]],roofPaint);
+      m.line([.015,.5,117],[.985,.5,117],C.steelLight,2);
+      for(const u of [.16,.38,.6,.82])m.line([u,.51,116],[u,.98,92],C.steelShade);
+    } else if(variant===1) {
+      m.poly([[.015,.015,116],[.985,.015,116],[.985,.985,94],[.015,.985,94]],roofPaint);
+      m.poly([[.015,.015,116],[.015,.985,94],[.015,.985,87],[.015,.015,92]],roofShade);
+      for(const u of [.13,.31,.49,.67,.85])m.line([u,.025,117],[u,.97,96],C.terraShade);
+      m.line([.02,.015,118],[.98,.015,118],C.woodLight,2);
+    } else if(variant===2) {
+      m.box(.015,.015,.985,.985,86,10,[roofPaint,roofShade,C.panelShade]);
+      m.box(.09,.08,.91,.85,97,9,[C.steelLight,C.steelShade,C.panelShade],false);
+      m.line([.02,.98,97],[.98,.98,97],C.cream,2);
+    } else {
+      m.poly([[.015,.015,91],[.985,.015,91],[.77,.3,113],[.22,.3,113]],roofShade);
+      m.poly([[.015,.985,91],[.985,.985,91],[.77,.3,113],[.22,.3,113]],roofPaint);
+      m.poly([[.015,.015,91],[.015,.985,91],[.22,.3,113]],C.steelShade);
+      m.poly([[.985,.015,91],[.985,.985,91],[.77,.3,113]],C.panelShade);
+      m.line([.22,.3,114],[.77,.3,114],C.steelLight,2);
+    }
     m.poly([[.14,.94,36],[.73,.94,36],[.73,.94,73],[.14,.94,73]],C.ink);
     m.poly([[.16,.945,39],[.7,.945,39],[.7,.945,70],[.16,.945,70]],C.glass);
     m.line([.43,.95,38],[.43,.95,70],C.steelLight,2);
@@ -655,12 +707,35 @@ function smallBuilding(m: Model): void {
     m.line([.08,.07,16],[.08,.92,16],C.terraShade);
     m.poly([[.23,.952,13],[.51,.952,13],[.51,.952,25],[.23,.952,25]],C.plasterShade);
     for(const z of [17,21])m.line([.26,.955,z],[.47,.955,z],C.ink);
-    m.line([.03,.98,96],[.97,.98,96],C.steelLight,2);
+    const eave=variant===2?97:variant===1?94:91;
+    m.line([.03,.98,eave],[.97,.98,eave],C.steelLight,2);
+    m.poly([[.11,.75,81],[.76,.75,81],[.76,.99,74],[.11,.99,74]],variant%2?C.cream:roofPaint);
+    for(let i=0;i<5;i++) {
+      const u=.11+i*.13;
+      m.poly([[u,.99,74],[u+.1,.99,74],[u+.1,.99,70],[u,.99,70]],variant%2?roofPaint:C.cream);
+    }
+    // Weathered posters and a service board use the existing side wall. Broad
+    // colour blocks remain art, while small rules suggest print at close range.
+    m.poly([[.937,.22,28],[.937,.54,28],[.937,.54,65],[.937,.22,65]],C.plasterShade);
+    m.poly([[.94,.24,31],[.94,.51,31],[.94,.51,62],[.94,.24,62]],C.cream);
+    m.poly([[.942,.27,49],[.942,.48,49],[.942,.48,58],[.942,.27,58]],variant%2?C.red:C.blue);
+    for(const z of [37,41,45])m.line([.944,.28,z],[.944,.47,z],C.steelShade);
+    m.poly([[.94,.63,22],[.94,.83,22],[.94,.83,47],[.94,.63,47]],C.terraShade);
+    m.line([.943,.66,42],[.943,.8,42],C.cream,2);
+    m.line([.943,.66,36],[.943,.77,36],C.plasterShade);
+    if(variant===1) {
+      // A hanging window box occupies the kiosk's own sill.
+      m.box(.13,.87,.31,.99,31,8,[C.terra,C.rustShade,C.terraShade],false);
+      for(const u of [.16,.24,.29]) {
+        const p=m.point(u,.93,43);m.raster.ellipse(p.x,p.y,7,5,C.leafShade);
+        m.raster.rect(p.x-3,p.y-5,5,4,C.leaf);m.raster.pixel(p.x,p.y-5,C.terra);
+      }
+    }
     if(variant===1)m.box(.54,.89,.69,.99,36,8,[C.terra,C.rustShade,C.terraShade]);
     if(variant===2)m.poly([[.16,.949,41],[.4,.949,41],[.4,.949,69],[.16,.949,69]],C.woodShade);
     if(variant===3)m.line([.6,.95,42],[.66,.95,62],C.ink,2);
   }
-  m.wear(.1,.1,.9,.9,height+18,12,C.rust);
+  if(shed)m.wear(.1,.1,.9,.9,height+18,12,C.rust);
 }
 
 function yard(m: Model): void {
@@ -697,20 +772,31 @@ function yard(m: Model): void {
         m.raster.ellipse(p.x,p.y,3,2,i%2?C.leafLight:C.terra);
       }
     }
-    m.slab(.01,.01,.99,.99,95,C.cream);
+    const crest=m.prop.variant===2?108:m.prop.variant===3?111:99;
+    m.poly([[.01,.01,95],[.99,.01,95],[.99,.48,crest],[.01,.48,crest]],C.plasterShade);
+    m.poly([[.01,.48,crest],[.99,.48,crest],[.99,.99,95],[.01,.99,95]],C.cream);
     for(let i=0;i<8;i++) {
       const u=i/8;
-      m.slab(u,.01,u+.063,.99,96,m.prop.variant%2?C.blue:C.red);
+      m.poly([[u,.01,96],[u+.063,.01,96],[u+.063,.48,crest+1],[u,.48,crest+1]],m.prop.variant%2?C.blue:C.red);
+      m.poly([[u,.48,crest+1],[u+.063,.48,crest+1],[u+.063,.99,96],[u,.99,96]],m.prop.variant%2?C.blue:C.red);
       m.poly([[u,.99,96],[u+.063,.99,96],[u+.063,.99,85],[u,.99,85]],m.prop.variant%2?C.steelShade:C.rustShade);
     }
     m.line([.01,.99,84],[.99,.99,84],C.ink);
     for(let i=0;i<8;i++) {
-      const u=.025+i*.122;m.line([u,.08,97],[u,.91,97],i%2?C.woodLight:C.plasterShade);
+      const u=.025+i*.122;m.line([u,.05,97],[u,.48,crest+2],i%2?C.woodLight:C.plasterShade);
+      m.line([u,.48,crest+2],[u,.96,97],i%2?C.woodLight:C.plasterShade);
       m.line([u,.99,88],[u+.04,.99,85],C.plasterShade);
     }
     m.line([.09,.1,73],[.91,.1,73],C.woodShade,3);
     m.line([.09,.9,72],[.91,.9,72],C.wood,3);
     m.slab(.43,.79,.61,.94,44,C.cream);m.line([.46,.84,45],[.56,.84,45],C.ink);
+    // Small hanging price cards and a cloth edge frame the actual counter;
+    // produce remains visibly contained by the existing trays.
+    for(const u of [.22,.47,.72]) {
+      m.line([u,.89,83],[u,.89,72],C.woodShade);
+      m.poly([[u-.055,.895,61],[u+.055,.895,61],[u+.055,.895,73],[u-.055,.895,73]],C.cream);
+      m.line([u-.03,.9,66],[u+.025,.9,66],C.steelShade,2);
+    }
     m.box(.74,.72,.87,.87,44,9,METAL,false);m.slab(.7,.68,.9,.89,54,C.steelLight);
     m.grain(.08,.93,.91,44,7);
   } else {
@@ -781,7 +867,7 @@ export class PixelPropArt {
     const cached=this.sprites.get(key);
     if(cached) {this.sprites.delete(key);this.sprites.set(key,cached);return cached;}
     // The footprint is authoritative; only elevated silhouettes receive a little padding.
-    const margin=prop.kind==='lamp'?56:prop.kind==='power-pole'?38:12;
+    const margin=prop.kind==='lamp'?56:prop.kind==='tree'?48:prop.kind==='power-pole'?38:12;
     const elevation=pixelPropHeight(prop.kind);
     const image=document.createElement('canvas');
     image.width=Math.ceil((prop.width+prop.height)*PIXEL_TILE/2)+margin*2+1;

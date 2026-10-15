@@ -3,7 +3,8 @@ import type { LiveCityBuilding, LiveObstacle } from '../src/game/live';
 import { PIXEL_BUILDING_CACHE_BYTES, PixelBuildingArt, pixelBuildingSpriteBytes, pixelBuildingVentAnchor } from '../src/pixel-buildings';
 import { pixelIso, PIXEL_PALETTE as P } from '../src/pixel-art';
 import { generatePerimeterCore } from '../src/game/world-generation';
-import { buildingExteriorStyle, buildingRoofDormer, buildingWallHeight, sceneBuildings } from '../src/live-map-art';
+import { buildingExteriorStyle, buildingRoofDormer, sceneBuildings } from '../src/live-map-art';
+import { buildingArchitecture, buildingArchitectureHeightAt } from '../src/building-architecture';
 
 type CanvasRecord = HTMLCanvasElement & { paints: number; integerBounds: boolean; colors: Set<string>; spans: Array<[number, number, number, number, string]> };
 let restoreDocument: (() => void) | undefined;
@@ -31,14 +32,31 @@ const building: LiveCityBuilding = { id: 'brick-home', name: 'Дом', x: 10, y:
 test('all facade and roof combinations use bounded integer surfaces at all three pixel levels', () => {
   const images = canvases(), original = structuredClone(building), art = new PixelBuildingArt();
   for (const facade of ['brick', 'plaster', 'panel', 'metal'] as const) for (const roof of ['flat', 'gable', 'sawtooth'] as const) for (const tile of [32, 64, 128] as const) {
-    const sprite = art.get({ ...building, id: `${facade}-${roof}`, facade, roof, roofAxis: roof === 'sawtooth' ? 'y' : 'x' }, false, tile);
+    const house = { ...building, id: `${facade}-${roof}`, facade, roof, roofAxis: roof === 'sawtooth' ? 'y' as const : 'x' as const };
+    const sprite = art.get(house, false, tile);
     expect(Number.isInteger(sprite.anchor.x) && Number.isInteger(sprite.anchor.y)).toBe(true);
     expect(sprite.image.width).toBeLessThanOrEqual(4096); expect(sprite.image.height).toBeLessThanOrEqual(4096);
-    expect(pixelBuildingSpriteBytes({ ...building, facade, roof }, false, tile)).toBe(sprite.image.width * sprite.image.height * 4);
+    expect(pixelBuildingSpriteBytes(house, false, tile)).toBe(sprite.image.width * sprite.image.height * 4);
     expect(art.retainedBytes).toBeLessThanOrEqual(32 * 1024 * 1024);
   }
   expect(images.every(image => image.integerBounds && image.paints > 100 && image.colors.size >= 15)).toBe(true);
   expect(building).toEqual(original);
+});
+
+test('hips, mansards, cross gables and stepped blocks have unclipped native silhouettes at 32 and 64 pixels', () => {
+  const images = canvases(true), art = new PixelBuildingArt();
+  const houses = Array.from({ length: 64 }, (_, index) => ({ ...building, id: `native-roof-${index}`, width: 14 }));
+  const selected = ['gable', 'hip', 'half-hip', 'mansard', 'cross-gable'].map(roof => houses.find(house => buildingArchitecture(house).roof === roof)!);
+  selected.push({ ...building, id: 'panel-block-1', width: 23, floors: 3, facade: 'panel', roof: 'flat', entrances: [] });
+  for (const house of selected) for (const native of [32, 64] as const) {
+    const sprite = art.get(house, false, native), image = images.at(-1)!;
+    expect(image.integerBounds).toBe(true);
+    expect(Math.min(...image.spans.map(span => span[1]))).toBeGreaterThan(4);
+    expect(image.colors.has(buildingExteriorStyle(house).roof[0])).toBe(true);
+    expect(image.colors.has(buildingExteriorStyle(house).roof[1])).toBe(true);
+    expect(pixelBuildingSpriteBytes(house, false, native)).toBe(sprite.image.width * sprite.image.height * 4);
+    expect(art.retainedBytes).toBeLessThanOrEqual(PIXEL_BUILDING_CACHE_BYTES);
+  }
 });
 
 test('cutaway keeps real doorway gaps transparent and removes the roof while preserving the room floor', () => {
@@ -137,6 +155,19 @@ test('ambient outlet sits inside the actual chimney opening at every roof plane,
   expect(residential.some(Boolean)).toBe(true); expect(residential.some(anchor => anchor === null)).toBe(true);
 });
 
+test('an ambient outlet follows same-object public architecture edits while world translation stays model-local', () => {
+  const factory: LiveCityBuilding = { ...building, id: 'mutable-workshop', kind: 'workshop', floors: 1, facade: 'metal', roof: 'flat', entrances: [] };
+  const before = pixelBuildingVentAnchor(factory)!;
+  for (const edit of [{ roof: 'gable' as const }, { floors: 3 as const }, { roofAxis: 'y' as const, height: 11 }, { width: 17, roof: 'sawtooth' as const }, { id: 'another-workshop', facade: 'brick' as const }]) {
+    Object.assign(factory, edit);
+    expect(pixelBuildingVentAnchor(factory)).toEqual(pixelBuildingVentAnchor({ ...factory }));
+  }
+  expect(pixelBuildingVentAnchor(factory)!.z).not.toBe(before.z);
+  const local = pixelBuildingVentAnchor(factory);
+  factory.x += 400; factory.y += 700;
+  expect(pixelBuildingVentAnchor(factory)).toEqual(local);
+});
+
 test('a shop entrance retains real glass on either side, with dark recesses and reflected panes', () => {
   const images = canvases(true), art = new PixelBuildingArt();
   const shop = { ...building, id: 'public-shop', kind: 'shop' as const, floors: 1 as const, facade: 'plaster' as const, entrances: [{ x: 13, y: 27 }] };
@@ -179,8 +210,7 @@ test('old roof windows sit on the same fitted dormer at every sprite level and r
     const house = { ...building, id, roofAxis }, dormer = buildingRoofDormer(house)!;
     const original = structuredClone(house), sprite = art.get(house, false, native), image = images.at(-1)!;
     const frontX = dormer.x + dormer.width, frontY = dormer.y + dormer.height;
-    const cross = roofAxis === 'x' ? frontY : frontX, span = roofAxis === 'x' ? house.height : house.width;
-    const base = Math.round(buildingWallHeight(house) * 128) + 40 * (1 - Math.abs(cross / span - .5) * 2);
+    const base = buildingArchitectureHeightAt(buildingArchitecture(house), frontX, frontY) * 128;
     const scale = native / 128;
     const glass = [.28, .72].map(u => {
       const x = dormer.side === 'y' ? dormer.x + dormer.width * u : frontX, y = dormer.side === 'x' ? dormer.y + dormer.height * u : frontY;

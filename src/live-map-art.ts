@@ -1,6 +1,7 @@
 import type { LiveCityBuilding, LivePoint, LiveWorld, LiveWorldProp } from './game/live';
 import { legacyHallEnvelopes } from './game/world-building-envelope';
 import { PIXEL_PALETTE as P, pixelSeed } from './pixel-art';
+import { buildingArchitecture, buildingArchitectureHeightAt } from './building-architecture';
 import { pixelLandcoverBands, type LandcoverRect } from './pixel-landcover';
 
 export type SceneryBounds = LivePoint & { width: number; height: number };
@@ -181,72 +182,49 @@ export function buildingRoofDormer(building: LiveCityBuilding): { x: number; y: 
     : { x: building.width * .65, y: building.height * .4, width: .6, height: 1.2, side: 'x' };
 }
 
-/** Medium-distance architecture retains its volume, framed openings and public
- * frontage. At most 72 small polygons replace a sprite; no bitmap is allocated. */
+/** Medium-distance architecture keeps the same stepped volumes and roof planes
+ * as native sprites. Facade detail is sparse and the plan allocates no bitmap. */
 export function distantBuildingSurfaces(building: LiveCityBuilding): DistantBuildingSurface[] {
-  const w = building.width, h = building.height, wall = buildingWallHeight(building) * BUILDING_EXTERIOR_HEIGHT_SCALE;
+  const w = building.width, h = building.height, plan = buildingArchitecture(building);
   const style = buildingExteriorStyle(building), result: DistantBuildingSurface[] = [];
   const point = (x: number, y: number, z = 0): ElevatedPoint => ({ x: building.x - .5 + x, y: building.y - .5 + y, z });
   const face = (points: ElevatedPoint[], color: string) => result.push({ points, color });
-  const wallRect = (side: 'x' | 'y', u: number, width: number, low: number, high: number, color: string) => {
-    const p = (at: number, z: number) => side === 'y' ? point(at, h, z) : point(w, at, z);
-    face([p(u, low), p(u + width, low), p(u + width, high), p(u, high)], color);
-  };
-  for (const side of ['x', 'y'] as const) {
-    const length = side === 'y' ? w : h, floors = building.floors ?? (building.kind === 'apartment' ? 2 : 1);
-    wallRect(side, 0, length, 0, wall, side === 'x' ? style.light : style.dark);
-    wallRect(side, 0, length, 0, .14, '#617369');
-    wallRect(side, 0, length, wall - .145, wall - .075, style.joint);
-    wallRect(side, 0, length, wall - .075, wall, style.trim);
-    for (const u of [0, length - .14]) wallRect(side, u, .14, .14, wall - .075, style.trim);
-    for (let floor = 1; floor < floors; floor++) wallRect(side, .14, length - .28, floor * .97 - .04, floor * .97 + .005, style.trim);
-    const doors = building.entrances.filter(door => side === 'y' ? door.y === building.y + h - 1 : door.x === building.x + w - 1)
-      .map(door => (side === 'y' ? door.x - building.x : door.y - building.y) + 1);
+  for (const facade of plan.facades) {
+    const { side, length, floors } = facade, wall = facade.top * BUILDING_EXTERIOR_HEIGHT_SCALE, bottom = facade.bottom * BUILDING_EXTERIOR_HEIGHT_SCALE;
+    const p = (u: number, z: number) => side === 'y' ? point(facade.u + u, facade.plane, z) : point(facade.plane, facade.u + u, z);
+    const wallRect = (u: number, width: number, low: number, high: number, color: string) => {
+      low = Math.max(bottom, low); high = Math.min(wall, high);
+      if (high > low && width > 0) face([p(u, low), p(u + width, low), p(u + width, high), p(u, high)], color);
+    };
+    wallRect(0, length, bottom, wall, side === 'x' ? style.light : style.dark);
+    wallRect(0, length, 0, .14, '#617369');
+    wallRect(0, length, wall - .145, wall - .075, style.joint);
+    wallRect(0, length, wall - .075, wall, style.trim);
+    for (const u of [0, length - .14]) wallRect(u, .14, .14, wall - .075, style.trim);
+    for (let floor = 1; floor < floors; floor++) wallRect(.14, length - .28, floor * .97 - .04, floor * .97 + .005, style.trim);
+    const outer = side === 'y' ? facade.plane === h : facade.plane === w;
+    const doors = outer ? building.entrances.filter(door => side === 'y' ? door.y === building.y + h - 1 : door.x === building.x + w - 1)
+      .map(door => (side === 'y' ? door.x - building.x : door.y - building.y) + 1 - facade.u).filter(u => u > 0 && u < length) : [];
     const industrial = building.kind === 'workshop' || building.kind === 'garage';
-    const columns = Math.min(floors > 3 ? 2 : 3, Math.max(1, Math.floor((length - .7) / (industrial ? 3.9 : building.kind === 'shop' ? 2.6 : 2.3))));
+    const columns = Math.min(plan.volumes.length > 1 || floors > 3 ? 2 : 3, Math.max(1, Math.floor((length - .7) / (industrial ? 3.9 : building.kind === 'shop' ? 2.6 : 2.3))));
     for (let floor = 0; floor < floors; floor++) for (let column = 0; column < columns; column++) {
       const u = length * (column + 1) / (columns + 1);
       if (!floor && doors.some(door => Math.abs(door - u) < 1.05)) continue;
       const width = industrial ? 1.1 : building.kind === 'shop' && !floor ? 1.25 : .72;
       const low = industrial ? wall - .4 : .24 + floor * .97, high = Math.min(wall - .16, low + (industrial ? .2 : building.kind === 'shop' && !floor ? .43 : .34));
-      wallRect(side, u - width / 2 - .065, width + .13, low - .04, high + .04, style.trim);
-      wallRect(side, u - width / 2, width, low, high, side === 'x' ? '#557b81' : '#334f55');
+      if (low < bottom + .05 || high <= low) continue;
+      wallRect(u - width / 2 - .065, width + .13, low - .04, high + .04, style.trim);
+      wallRect(u - width / 2, width, low, high, side === 'x' ? '#557b81' : '#334f55');
     }
-    if (building.kind === 'shop') wallRect(side, .2, length - .4, Math.min(.89, wall - .27), wall - .16, style.accent);
-    // A published entrance remains a recognisable dark recess, rather than a
-    // new navigable gap or a marker for undiscovered room contents.
-    for (const u of doors.slice(0, 2)) wallRect(side, Math.max(.12, u - .38), Math.min(.76, length - u + .26), 0, Math.min(wall - .14, .81), style.accentShade);
+    if (building.kind === 'shop') wallRect(.2, length - .4, Math.min(.89, wall - .27), wall - .16, style.accent);
+    for (const u of doors.slice(0, 2)) wallRect(Math.max(.12, u - .38), Math.min(.76, length - u + .26), 0, Math.min(wall - .14, .81), style.accentShade);
   }
-  const roof = building.roof ?? (building.kind === 'workshop' ? 'sawtooth' : building.kind === 'apartment' ? 'gable' : 'flat');
-  const axis = building.roofAxis ?? (w >= h ? 'x' : 'y');
-  if (roof === 'gable') {
-    const lift = (building.kind === 'workshop' ? 26 : 40) / 128 * BUILDING_EXTERIOR_HEIGHT_SCALE;
-    const ra = axis === 'x' ? point(0, h / 2, wall + lift) : point(w / 2, 0, wall + lift);
-    const rb = axis === 'x' ? point(w, h / 2, wall + lift) : point(w / 2, h, wall + lift);
-    face(axis === 'x' ? [point(0, 0, wall), point(w, 0, wall), rb, ra] : [point(0, 0, wall), ra, rb, point(0, h, wall)], style.roof[0]);
-    face(axis === 'x' ? [ra, rb, point(w, h, wall), point(0, h, wall)] : [ra, point(w, 0, wall), point(w, h, wall), rb], style.roof[1]);
-    face(axis === 'x' ? [point(w, 0, wall), point(w, h, wall), rb] : [point(0, h, wall), point(w, h, wall), rb], style.light);
-  } else if (roof === 'sawtooth') {
-    const span = axis === 'x' ? h : w, count = Math.min(6, Math.max(2, Math.round(span / 3))), band = span / count;
-    const lift = 26 / 128 * BUILDING_EXTERIOR_HEIGHT_SCALE;
-    for (let row = 0; row < count; row++) {
-      const a = row * band, b = (row + 1) * band;
-      const ra = axis === 'x' ? point(0, a, wall + lift) : point(a, 0, wall + lift);
-      const rb = axis === 'x' ? point(w, a, wall + lift) : point(a, h, wall + lift);
-      face([ra, rb, axis === 'x' ? point(w, b, wall) : point(b, h, wall), axis === 'x' ? point(0, b, wall) : point(b, 0, wall)], style.roof[row % 2]!);
-      face(axis === 'x' ? [point(0, a, wall), point(w, a, wall), rb, ra] : [point(a, 0, wall), point(a, h, wall), rb, ra], '#334f55');
-    }
-  } else {
-    face([point(0, 0, wall), point(w, 0, wall), point(w, h, wall), point(0, h, wall)], style.roof[0]);
-    face([point(.16, .16, wall), point(w - .16, .16, wall), point(w - .16, h - .16, wall), point(.16, h - .16, wall)], style.roof[1]);
-    wallRect('x', 0, h, wall, wall + .12, style.trim);
-    wallRect('y', 0, w, wall, wall + .12, style.trim);
-  }
+  const materials = { roofLight: style.roof[0], roofDark: style.roof[1], wallLight: style.light, wallDark: style.dark, trim: style.trim, glass: '#334f55' };
+  for (const surface of plan.surfaces) face(surface.points.map(p => point(p.x, p.y, p.z * BUILDING_EXTERIOR_HEIGHT_SCALE)), materials[surface.material]);
   const dormer = buildingRoofDormer(building);
   if (dormer) {
     const { x, y, width: dw, height: dh, side } = dormer;
-    const lift = 40 / 128 * BUILDING_EXTERIOR_HEIGHT_SCALE, span = axis === 'x' ? h : w;
-    const roofZ = (xx: number, yy: number) => wall + lift * (1 - Math.abs((axis === 'x' ? yy : xx) / span - .5) * 2);
+    const roofZ = (xx: number, yy: number) => buildingArchitectureHeightAt(plan, xx, yy) * BUILDING_EXTERIOR_HEIGHT_SCALE;
     const base = roofZ(x + dw, y + dh), top = base + 18 / 128 * BUILDING_EXTERIOR_HEIGHT_SCALE;
     face([point(x + dw, y, roofZ(x + dw, y)), point(x + dw, y + dh, base), point(x + dw, y + dh, top), point(x + dw, y, top)], style.light);
     face([point(x, y + dh, roofZ(x, y + dh)), point(x + dw, y + dh, base), point(x + dw, y + dh, top), point(x, y + dh, top)], style.dark);

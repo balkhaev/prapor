@@ -1,6 +1,7 @@
 import type { LiveCityBuilding, LiveObstacle, LivePoint } from './game/live';
 import { BUILDING_EXTERIOR_HEIGHT_SCALE, buildingExteriorStyle, buildingFacadeCadence, buildingRoofDormer, buildingWallHeight } from './live-map-art';
 import { PIXEL_TILE, PIXEL_PALETTE as P, PixelRaster, pixelIso, pixelRandom, pixelSeed } from './pixel-art';
+import { BUILDING_ARCHITECTURE_HEADROOM, buildingArchitecture, buildingArchitectureHeightAt, type BuildingFacade } from './building-architecture';
 
 type BuildingSprite = { image: HTMLCanvasElement; anchor: LivePoint };
 type NativeTile = 32 | 64 | 128;
@@ -13,19 +14,17 @@ export function pixelBuildingWallHeight(building: LiveCityBuilding): number {
   return buildingWallHeight(building) * EXTERIOR_HEIGHT_SCALE;
 }
 
-function roofSurface(building: LiveCityBuilding): { roof: NonNullable<LiveCityBuilding['roof']>; axis: 'x' | 'y'; height: (x: number, y: number) => number } {
-  const roof = building.roof ?? (building.kind === 'workshop' ? 'sawtooth' : building.kind === 'apartment' ? 'gable' : 'flat');
-  const axis = building.roofAxis ?? (building.width >= building.height ? 'x' : 'y');
-  const wall = Math.round(buildingWallHeight(building) * PIXEL_TILE), span = axis === 'x' ? building.height : building.width;
-  return { roof, axis, height(x, y) {
-    const cross = axis === 'x' ? y : x;
-    if (roof === 'gable') return wall + (building.kind === 'workshop' ? 26 : 40) * (1 - Math.abs(cross / span - .5) * 2);
-    if (roof === 'sawtooth') {
-      const band = span / Math.max(2, Math.round(span / 3));
-      return wall + 26 * (1 - (cross / band % 1));
-    }
-    return wall + 2;
-  } };
+type BuildingRoofSurface = { roof: ReturnType<typeof buildingArchitecture>['roof']; axis: 'x' | 'y'; height: (x: number, y: number) => number };
+const roofSurfaces = new WeakMap<LiveCityBuilding, { signature: string; surface: BuildingRoofSurface }>();
+
+function roofSurface(building: LiveCityBuilding): BuildingRoofSurface {
+  const signature = `${building.id}:${building.width}:${building.height}:${building.kind}:${building.floors}:${building.facade}:${building.roof}:${building.roofAxis}`;
+  const cached = roofSurfaces.get(building);
+  if (cached?.signature === signature) return cached.surface;
+  const plan = buildingArchitecture(building);
+  const surface = { roof: plan.roof, axis: plan.axis, height: (x: number, y: number) => buildingArchitectureHeightAt(plan, x, y) * PIXEL_TILE };
+  roofSurfaces.set(building, { signature, surface });
+  return surface;
 }
 
 /** Public, model-local outlet. x/y are world units; z includes exterior height
@@ -37,11 +36,13 @@ export function pixelBuildingVentAnchor(building: LiveCityBuilding): (LivePoint 
   return { x: x + .15, y: y + .15, z: (roofSurface(building).height(x, y) + 37) * EXTERIOR_HEIGHT_SCALE };
 }
 
-function buildingSpriteLayout(building: LiveCityBuilding, cutaway: boolean, nativeTile: NativeTile): { width: number; height: number; wallHeight: number; anchor: LivePoint } {
-  const scale = nativeTile / PIXEL_TILE, wallHeight = Math.round(buildingWallHeight(building) * PIXEL_TILE);
-  const headroom = cutaway ? 24 : Math.ceil((wallHeight + 96) * EXTERIOR_HEIGHT_SCALE);
+function buildingSpriteLayout(building: LiveCityBuilding, cutaway: boolean, nativeTile: NativeTile): { width: number; height: number; anchor: LivePoint } {
+  const scale = nativeTile / PIXEL_TILE;
+  // This is queried for the full visible frame's bitmap budget. Reserving the
+  // shared upper bound keeps it constant-time and allocates no roof polygons.
+  const headroom = cutaway ? 24 : Math.ceil((buildingWallHeight(building) + BUILDING_ARCHITECTURE_HEADROOM) * PIXEL_TILE * EXTERIOR_HEIGHT_SCALE);
   return { width: Math.ceil(((building.width + building.height) * 64 + 56) * scale),
-    height: Math.ceil(((building.width + building.height) * 32 + headroom + 64) * scale), wallHeight,
+    height: Math.ceil(((building.width + building.height) * 32 + headroom + 64) * scale),
     anchor: { x: Math.ceil((building.height * 64 + 28) * scale), y: Math.ceil((headroom + 28) * scale) } };
 }
 
@@ -67,12 +68,12 @@ export class PixelBuildingArt {
     const cached = this.entries.get(key);
     if (cached) { this.entries.delete(key); this.entries.set(key, cached); return cached; }
     const image = document.createElement('canvas'), scale = nativeTile / PIXEL_TILE;
-    const { width, height, wallHeight, anchor } = buildingSpriteLayout(building, cutaway, nativeTile);
+    const { width, height, anchor } = buildingSpriteLayout(building, cutaway, nativeTile);
     image.width = width; image.height = height;
     const context = image.getContext('2d');
     if (context) {
       context.imageSmoothingEnabled = false;
-      paintBuilding(new PixelRaster(context, image.width, image.height), building, anchor, scale, wallHeight, cutaway, walls);
+      paintBuilding(new PixelRaster(context, image.width, image.height), building, anchor, scale, cutaway, walls);
     }
     const sprite = { image, anchor }, bytes = image.width * image.height * 4;
     if (bytes <= PIXEL_BUILDING_CACHE_BYTES) {
@@ -87,8 +88,8 @@ export class PixelBuildingArt {
   }
 }
 
-function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LivePoint, scale: number, wallHeight: number, cutaway: boolean, walls?: readonly LiveObstacle[]): void {
-  const w = building.width, h = building.height, floors = building.floors ?? (building.kind === 'apartment' ? 2 : 1);
+function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LivePoint, scale: number, cutaway: boolean, walls?: readonly LiveObstacle[]): void {
+  const w = building.width, h = building.height;
   const material = building.facade ?? (building.kind === 'workshop' || building.kind === 'garage' ? 'metal' : building.kind === 'apartment' ? 'plaster' : 'brick');
   const palette = buildingExteriorStyle(building), seed = pixelSeed(building.id), random = pixelRandom(seed);
   const elevationScale = cutaway ? 1 : EXTERIOR_HEIGHT_SCALE, fine = scale >= .5, close = scale >= 1;
@@ -155,12 +156,19 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
     return;
   }
 
-  const facePoint = (side: FacadeSide, u: number, z: number): LivePoint => side === 'y' ? p(u, h, z) : p(w, u, z);
+  const plan = buildingArchitecture(building);
+  let activeFacade: BuildingFacade = plan.facades[0]!;
+  const facePoint = (side: FacadeSide, u: number, z: number): LivePoint => {
+    z = Math.max(activeFacade.bottom * PIXEL_TILE, Math.min(activeFacade.top * PIXEL_TILE, z));
+    return side === 'y' ? p(activeFacade.u + u, activeFacade.plane, z) : p(activeFacade.plane, activeFacade.u + u, z);
+  };
   const faceRect = (side: FacadeSide, u: number, width: number, low: number, high: number, color: string): void => {
+    low = Math.max(low, activeFacade.bottom * PIXEL_TILE); high = Math.min(high, activeFacade.top * PIXEL_TILE);
+    if (high <= low || width <= 0) return;
     r.polygon([facePoint(side, u, low), facePoint(side, u + width, low), facePoint(side, u + width, high), facePoint(side, u, high)], color);
   };
-  const doorPositions = (side: FacadeSide): number[] => building.entrances.filter(door => side === 'y' ? door.y === building.y + h - 1 : door.x === building.x + w - 1)
-    .map(door => (side === 'y' ? door.x - building.x : door.y - building.y) + 1);
+  const doorPositions = (side: FacadeSide): number[] => (side === 'y' ? activeFacade.plane === h : activeFacade.plane === w) ? building.entrances.filter(door => side === 'y' ? door.y === building.y + h - 1 : door.x === building.x + w - 1)
+    .map(door => (side === 'y' ? door.x - building.x : door.y - building.y) + 1 - activeFacade.u).filter(u => u > 0 && u < activeFacade.length) : [];
 
   const window = (side: FacadeSide, center: number, width: number, low: number, high: number, variation: number): void => {
     const left = center - width / 2, right = center + width / 2, warm = variation % 7 === 0;
@@ -193,8 +201,9 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
     line(facePoint(side, left - .06, low - 7), facePoint(side, left - .04, low - 12), palette.joint);
   };
 
-  for (const side of ['x', 'y'] as const) {
-    const length = side === 'y' ? w : h, shade = side === 'x' ? palette.light : palette.dark;
+  for (const facade of plan.facades) {
+    activeFacade = facade;
+    const { side, length, floors } = facade, wallHeight = facade.top * PIXEL_TILE, shade = side === 'x' ? palette.light : palette.dark;
     faceRect(side, 0, length, 0, wallHeight, shade);
     if (material === 'brick' && close) {
       for (let z = 8, row = 0; z < wallHeight; z += 8, row++) {
@@ -251,10 +260,11 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
       if (!floor && doors.some(door => Math.abs(door - u) < (industrial ? 1.65 : 1.05))) continue;
       const width = industrial ? 1.1 : building.kind === 'shop' && !floor ? 1.25 : .72;
       const low = industrial ? wallHeight - 30 : 18 + floor * 73, high = Math.min(wallHeight - 12, low + (industrial ? 15 : building.kind === 'shop' && !floor ? 32 : 25));
+      if (low < facade.bottom * PIXEL_TILE + 2 || high <= low) continue;
       window(side, u, width, low, high, column + floor + seed);
       if (building.kind === 'apartment' && floor > 0 && (material === 'panel' || (column + seed) % 3 === 0)) {
         const balconyWidth = material === 'panel' ? 1.16 : 1.35;
-        const z = low - 7, a = side === 'y' ? { x: u - balconyWidth / 2, y: h } : { x: w, y: u - balconyWidth / 2 };
+        const z = low - 7, a = side === 'y' ? { x: facade.u + u - balconyWidth / 2, y: facade.plane } : { x: facade.plane, y: facade.u + u - balconyWidth / 2 };
         const bw = side === 'y' ? balconyWidth : .34, bh = side === 'y' ? .34 : balconyWidth;
         box(a.x, a.y, bw, bh, z - 4, z, ['#8c9887', '#647363', '#bbc0a6']);
         line(p(a.x, a.y + bh, z + 16), p(a.x + bw, a.y + bh, z + 16), INK, 2);
@@ -283,7 +293,7 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
           }
         }
       } else if (fine && floor > 0 && (column + floor + seed) % 3 === 0) {
-        const x = side === 'y' ? u - .25 : w, y = side === 'y' ? h : u - .25;
+        const x = side === 'y' ? facade.u + u - .25 : facade.plane, y = side === 'y' ? facade.plane : facade.u + u - .25;
         const acWidth = side === 'y' ? .5 : .16, acHeight = side === 'y' ? .16 : .5;
         box(x, y, acWidth, acHeight, low - 18, low - 5, [P.steel, P.steelShade, P.steelLight]);
         const vent = p(x + acWidth, y + acHeight / 2, low - 11);
@@ -292,7 +302,7 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
         line(facePoint(side, u + .27, low - 16), facePoint(side, u + .27, low + 1), P.cream);
       }
       if (fine && building.kind === 'apartment' && floor === 0 && (column + seed) % 4 === 1) {
-        const x = side === 'y' ? u - .3 : w, y = side === 'y' ? h : u - .3;
+        const x = side === 'y' ? facade.u + u - .3 : facade.plane, y = side === 'y' ? facade.plane : facade.u + u - .3;
         const ww = side === 'y' ? .6 : .13, hh = side === 'y' ? .13 : .6;
         box(x, y, ww, hh, low - 12, low - 5, [P.terra, P.terraShade, P.soil]);
         for (let flower = 0; flower < 3; flower++) {
@@ -326,13 +336,13 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
       }
       line(facePoint(side, u, 2), facePoint(side, u, high - 2), INK);
       for (let step = 1; step >= 0; step--) {
-        const x = side === 'y' ? u - width / 2 - .09 : w + step * .15;
-        const y = side === 'y' ? h + step * .15 : u - width / 2 - .09;
+        const x = side === 'y' ? facade.u + u - width / 2 - .09 : facade.plane + step * .15;
+        const y = side === 'y' ? facade.plane + step * .15 : facade.u + u - width / 2 - .09;
         box(x, y, side === 'y' ? width + .18 : .15, side === 'y' ? .15 : width + .18, 0, (2 - step) * 3, ['#8b927e', '#737d6b', '#b4b59b']);
       }
       if (building.kind === 'shop' || building.kind === 'service') {
         const awningWidth = building.kind === 'shop' ? Math.min(3.1, length - .6, u * 2 - .4, (length - u) * 2 - .4) : 1.34;
-        const x = side === 'y' ? u - awningWidth / 2 : w, y = side === 'y' ? h : u - awningWidth / 2;
+        const x = side === 'y' ? facade.u + u - awningWidth / 2 : facade.plane, y = side === 'y' ? facade.plane : facade.u + u - awningWidth / 2;
         const aw = side === 'y' ? awningWidth : .38, ah = side === 'y' ? .38 : awningWidth;
         box(x, y, aw, ah, high + 3, high + 7, [palette.accent, palette.accentShade, palette.accent]);
         if (building.kind === 'shop') for (let stripe = 0; stripe < 7; stripe += 2) {
@@ -353,13 +363,13 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
         }
       } else if (building.kind === 'apartment') {
         const canopyWidth = Math.min(1.65, length - .4, u * 2 - .3, (length - u) * 2 - .3);
-        const x = side === 'y' ? u - canopyWidth / 2 : w, y = side === 'y' ? h : u - canopyWidth / 2;
+        const x = side === 'y' ? facade.u + u - canopyWidth / 2 : facade.plane, y = side === 'y' ? facade.plane : facade.u + u - canopyWidth / 2;
         const cw = side === 'y' ? canopyWidth : .46, ch = side === 'y' ? .46 : canopyWidth;
         box(x, y, cw, ch, high + 4, high + 9, [palette.accent, palette.accentShade, palette.accent]);
         line(p(x, y + ch, high + 9), p(x + cw, y + ch, high + 9), palette.trim, 2);
         for (const t of [.12, .88]) {
           const ax = side === 'y' ? x + cw * t : x + cw, ay = side === 'x' ? y + ch * t : y + ch;
-          line(p(ax, ay, high + 3), side === 'y' ? p(ax, h, high - 9) : p(w, ay, high - 9), INK, 2);
+          line(p(ax, ay, high + 3), side === 'y' ? p(ax, facade.plane, high - 9) : p(facade.plane, ay, high - 9), INK, 2);
         }
       }
       // An address tile and notices make a doorway distinct at walking zoom.
@@ -381,7 +391,7 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
     line(facePoint(side, drain + .025, 8), facePoint(side, drain + .025, wallHeight - 3), P.steelLight, 2);
     for (let z = 19; z < wallHeight - 6; z += 38) line(facePoint(side, drain - .07, z), facePoint(side, drain + .07, z), INK, 2);
     line(facePoint(side, drain, 7), facePoint(side, drain - .11, 4), P.steelShade, 3);
-    if (close) {
+    if (close && facade.bottom === 0) {
       const cableZ = wallHeight - 10;
       for (let span = 0; span < 4; span++) {
         const a = span / 4, b = (span + 1) / 4;
@@ -396,74 +406,28 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
     line(facePoint(side, 0, wallHeight), facePoint(side, length, wallHeight), '#e0d3b0', 2);
   }
 
-  const surface = roofSurface(building), { roof, axis } = surface;
+  const surface = roofSurface(building), { roof } = surface;
   const slate = palette.roof;
-  if (roof === 'gable') {
-    const lift = building.kind === 'workshop' ? 26 : 40;
-    const ra = axis === 'x' ? p(0, h / 2, wallHeight + lift) : p(w / 2, 0, wallHeight + lift);
-    const rb = axis === 'x' ? p(w, h / 2, wallHeight + lift) : p(w / 2, h, wallHeight + lift);
-    r.polygon(axis === 'x' ? [p(0, 0, wallHeight), p(w, 0, wallHeight), rb, ra] : [p(0, 0, wallHeight), ra, rb, p(0, h, wallHeight)], slate[0]!);
-    r.polygon(axis === 'x' ? [ra, rb, p(w, h, wallHeight), p(0, h, wallHeight)] : [ra, p(w, 0, wallHeight), p(w, h, wallHeight), rb], slate[1]!);
-    for (let u = .3; u < (axis === 'x' ? w : h); u += close ? .72 : 2.1) {
-      const ridge = axis === 'x' ? p(u, h / 2, wallHeight + lift) : p(w / 2, u, wallHeight + lift);
-      line(axis === 'x' ? p(u, 0, wallHeight) : p(0, u, wallHeight), ridge, '#a4b0a3');
-      line(ridge, axis === 'x' ? p(u, h, wallHeight) : p(w, u, wallHeight), '#60776d');
+  const surfaceColors = { roofLight: slate[0], roofDark: slate[1], wallLight: palette.light, wallDark: palette.dark, trim: palette.trim, glass: GLASS_DARK };
+  for (const face of plan.surfaces) {
+    const points = face.points.map(at => p(at.x, at.y, at.z * PIXEL_TILE));
+    r.polygon(points, surfaceColors[face.material]);
+    // Broad folds, hips and the mansard knee survive the 32px atlas. Fine
+    // roof fasteners never compete with those address-defining silhouettes.
+    if (face.material.startsWith('roof')) for (let i = 0; i < points.length; i++) {
+      line(points[i]!, points[(i + 1) % points.length]!, face.material === 'roofLight' ? '#b9bda6' : '#4f665e', 2);
     }
-    for (let v = .5; close && v < (axis === 'x' ? h : w); v += .8) {
-      const span = axis === 'x' ? h : w, z = wallHeight + lift * (1 - Math.abs(v - span / 2) / (span / 2));
-      line(axis === 'x' ? p(0, v, z) : p(v, 0, z), axis === 'x' ? p(w, v, z) : p(v, h, z), v < span / 2 ? '#7b8d7f' : '#506659');
-    }
-    r.polygon(axis === 'x' ? [p(w, 0, wallHeight), p(w, h, wallHeight), rb] : [p(0, h, wallHeight), p(w, h, wallHeight), rb], palette.light);
-    line(ra, rb, '#c2c3a9', 3);
-    line(axis === 'x' ? p(w, 0, wallHeight) : p(0, h, wallHeight), rb, palette.trim, 3);
-    line(rb, p(w, h, wallHeight), palette.trim, 3);
-    const vent = axis === 'x' ? p(w, h / 2, wallHeight + 15) : p(w / 2, h, wallHeight + 15);
-    r.ellipse(vent.x, vent.y, Math.max(1, Math.round(7 * scale)), Math.max(1, Math.round(9 * scale)), palette.trim);
-    r.ellipse(vent.x, vent.y, Math.max(1, Math.round(4 * scale)), Math.max(1, Math.round(6 * scale)), INK);
-    if (close) {
-      // Flashing and one fitted skylight follow the actual inclined roof plane.
-      const sx = w * .23, sy = h * .67, sw = Math.min(1.1, w * .16), sh = Math.min(.6, h * .12);
-      const roofPoint = (x: number, y: number, offset = 0) => p(x, y, surface.height(x, y) + offset);
-      r.polygon([roofPoint(sx - .06, sy - .05, 2), roofPoint(sx + sw + .06, sy - .05, 2), roofPoint(sx + sw + .06, sy + sh + .05, 2), roofPoint(sx - .06, sy + sh + .05, 2)], P.steelLight);
-      r.polygon([roofPoint(sx, sy, 3), roofPoint(sx + sw, sy, 3), roofPoint(sx + sw, sy + sh, 3), roofPoint(sx, sy + sh, 3)], P.glass);
-      line(roofPoint(sx + sw * .25, sy + .02, 4), roofPoint(sx + sw * .7, sy + sh - .02, 4), P.glassLight, 3);
-      line(roofPoint(sx + sw / 2, sy, 4), roofPoint(sx + sw / 2, sy + sh, 4), P.steelLight, 2);
-    }
-  } else if (roof === 'sawtooth') {
-    const span = axis === 'x' ? h : w, count = Math.max(2, Math.round(span / 3)), band = span / count, lift = 26;
-    for (let row = 0; row < count; row++) {
-      const a = row * band, b = (row + 1) * band;
-      const ra = axis === 'x' ? p(0, a, wallHeight + lift) : p(a, 0, wallHeight + lift);
-      const rb = axis === 'x' ? p(w, a, wallHeight + lift) : p(a, h, wallHeight + lift);
-      const da = axis === 'x' ? p(0, b, wallHeight) : p(b, 0, wallHeight), db = axis === 'x' ? p(w, b, wallHeight) : p(b, h, wallHeight);
-      r.polygon([ra, rb, db, da], slate[row % 2]!);
-      for (let u = .3; u < (axis === 'x' ? w : h); u += close ? .8 : 2.4) line(axis === 'x' ? p(u, a, wallHeight + lift) : p(a, u, wallHeight + lift), axis === 'x' ? p(u, b, wallHeight) : p(b, u, wallHeight), '#6b817c');
-      r.polygon(axis === 'x' ? [p(0, a, wallHeight), p(w, a, wallHeight), rb, ra] : [p(a, 0, wallHeight), p(a, h, wallHeight), rb, ra], GLASS_DARK);
-      for (let u = .5; u < (axis === 'x' ? w : h); u += fine ? 1.5 : 3) line(axis === 'x' ? p(u, a, wallHeight + 2) : p(a, u, wallHeight + 2), axis === 'x' ? p(u, a, wallHeight + lift - 2) : p(a, u, wallHeight + lift - 2), '#bec6ad', 2);
-      if (fine) {
-        const glassA = axis === 'x' ? p(.3, a, wallHeight + 8) : p(a, .3, wallHeight + 8);
-        const glassB = axis === 'x' ? p((w - .3), a, wallHeight + 18) : p(a, (h - .3), wallHeight + 18);
-        line(glassA, glassB, P.glassLight);
+  }
+  if (close) for (const volume of plan.volumes) {
+    const length = volume.axis === 'x' ? volume.width : volume.height, span = volume.axis === 'x' ? volume.height : volume.width;
+    // A few long standing seams follow the actual surface instead of flattening
+    // every roof into the same horizontal panel.
+    for (let u = .8; u < length - .4; u += 1.4) {
+      const at = (s: number) => ({ x: volume.x + (volume.axis === 'x' ? u : s), y: volume.y + (volume.axis === 'x' ? s : u) });
+      for (const [a, b] of [[.2, span * .19], [span * .19, span * .5], [span * .5, span * .81], [span * .81, span - .2]] as const) {
+        const aa = at(a), bb = at(b);
+        line(p(aa.x, aa.y, surface.height(aa.x, aa.y) + 1), p(bb.x, bb.y, surface.height(bb.x, bb.y) + 1), '#71867b');
       }
-      line(ra, rb, '#c5cbb4', 2);
-    }
-  } else {
-    quad(0, 0, w, h, wallHeight, slate[0]);
-    quad(.18, .18, w - .36, h - .36, wallHeight + 1, slate[1]);
-    for (let x = .5; x < w; x += close ? 1.8 : 4.5) line(p(x, .18, wallHeight + 2), p(x, h - .18, wallHeight + 2), '#60766b');
-    for (let y = .5; close && y < h; y += 1.8) line(p(.18, y, wallHeight + 2), p(w - .18, y, wallHeight + 2), '#93a18a');
-    for (const [x, y, ww, hh] of [[0, 0, w, .16], [0, h - .16, w, .16], [0, .16, .16, h - .32], [w - .16, .16, .16, h - .32]]) box(x!, y!, ww!, hh!, wallHeight, wallHeight + 9, ['#8e9c87', '#647961', '#b4bda2']);
-    box(w * .25, h * .36, .7, .65, wallHeight + 2, wallHeight + 17, ['#a3aea1', '#6d8374', '#d0cfb3']);
-    const vent = p(w * .25 + .35, h * .36 + .32, wallHeight + 18);
-    r.ellipse(vent.x, vent.y, Math.max(1, Math.round(12 * scale)), Math.max(1, Math.round(6 * scale)), '#607c6e');
-    line({ x: vent.x - Math.round(9 * scale), y: vent.y }, { x: vent.x + Math.round(9 * scale), y: vent.y }, '#c7caae', 2);
-    if (fine) {
-      quad(w * .53, h * .62, Math.min(w * .25, 1.8), Math.min(h * .2, 1.2), wallHeight + 2, P.roofShade);
-      line(p(w * .53, h * .62, wallHeight + 3), p(w * .53 + Math.min(w * .25, 1.8), h * .62, wallHeight + 3), P.ink, 2);
-      const hx = w * .67, hy = h * .7, hw = Math.min(.8, w * .12), hh = Math.min(.65, h * .12);
-      box(hx, hy, hw, hh, wallHeight + 2, wallHeight + 8, [P.steel, P.steelShade, P.steelLight]);
-      quad(hx + .07, hy + .07, hw - .14, hh - .14, wallHeight + 9, P.roofShade);
-      for (let y = .4; y < h - .3; y += .22) line(p(w - .25, y, wallHeight + 3), p(w - .13, y, wallHeight + 3), P.ink);
     }
   }
 
@@ -481,11 +445,12 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
     line(at(0, top + 1), at(1, top + 1), palette.trim, 2);
   }
 
-  // Eave gutters remain narrow enough to retain the published silhouette.
-  line(p(w, 0, wallHeight + 1), p(w, h, wallHeight + 1), P.steelShade, 4);
-  line(p(0, h, wallHeight + 1), p(w, h, wallHeight + 1), P.steelShade, 4);
-  line(p(w, 0, wallHeight + 3), p(w, h, wallHeight + 3), P.steelLight);
-  line(p(0, h, wallHeight + 3), p(w, h, wallHeight + 3), P.steelLight);
+  // Each volume has its own eave; a low wing never inherits a floating gutter.
+  for (const facade of plan.facades) {
+    const at = (u: number, dz: number) => facade.side === 'x' ? p(facade.plane, facade.u + u, facade.top * PIXEL_TILE + dz) : p(facade.u + u, facade.plane, facade.top * PIXEL_TILE + dz);
+    line(at(0, 1), at(facade.length, 1), P.steelShade, 4);
+    line(at(0, 3), at(facade.length, 3), P.steelLight);
+  }
 
   // Small roof equipment follows the roof plane, not a randomly raised cube.
   const chimneyX = w * .7, chimneyY = h * .36;
