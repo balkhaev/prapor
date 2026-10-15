@@ -13,6 +13,8 @@ COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --production
 
 FROM oven/bun:1-slim@sha256:14a223fa35747ec728bce300ef85888bc5f7958164d15bbba6a54b22b52a3288 AS production
+ARG SOURCE_COMMIT=unknown
+LABEL org.opencontainers.image.revision=$SOURCE_COMMIT
 WORKDIR /app
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=3000
 ENV ACCOUNT_DB_PATH=/app/data/accounts.sqlite APP_ORIGINS=https://game.delopusk.ru,https://game.balkhaev.com

@@ -36,6 +36,61 @@ Proxy принимает оба Host; сертификат origin выпуска
 bun F:/code/devhub/src/cli.ts prod prapor --logs
 ```
 
+### Надёжная загрузка Git для автоматических выпусков
+
+Маршрут с origin к GitHub медленно передавал большие Git pack-файлы и обрывал
+их до начала сборки. Загрузка репозитория идёт через существующий управляющий
+сервер `deploy.balkhaev.com`: TLS по-прежнему устанавливается самим Git с
+`github.com`, сертификат GitHub проверяется, исходный GitHub App и webhook
+остаются прежними.
+
+Канал поддерживают две системные службы из `infra/git-egress/`:
+`prapor-git-tunnel.service` на управляющем сервере и
+`prapor-git-proxy.service` на origin. Обе запускаются при загрузке ОС и
+восстанавливаются после сбоя процесса. Существующий проверенный SSH-ключ
+управляющего сервера не копируется. SSH forwarding слушает только origin
+loopback; CONNECT-прокси — только `127.0.0.1:19644` и `172.18.0.1:19644`.
+Он принимает исключительно `github.com:443`, не расшифровывает TLS и не
+журналирует заголовки или передаваемые данные. Доступ сборщиков требует
+отдельного случайного пароля; другие адреса и запросы отклоняются.
+
+У Git-based Compose в Coolify 4.4.6 два контекста загрузки: чтение Compose на
+origin и Git внутри одноразового helper. На host настроены только два точных
+URL этого репозитория. Helper получает URL-scoped `GIT_CONFIG_*` через штатные
+build-time secrets до первого Git-запроса, в том числе после собственного
+перезапуска. Эти переменные скрыты там, где содержат пароль, и исключены из
+runtime окружения игры. `use_build_secrets` и `include_source_commit_in_build`
+включены; явный Compose `build.args.SOURCE_COMMIT` сохраняет метку SHA образа.
+
+Однократная установка или повторное применение из проверенного checkout:
+
+```powershell
+# COOLIFY_ACCESS_TOKEN передаётся только через окружение оператора.
+bun infra/git-egress/configure.ts --apply
+bun infra/git-egress/configure.ts --check
+```
+
+Установщик не запускает deployment. Он проверяет приложение, отсутствие
+текущего выпуска, известные SSH host keys и приватные bind-адреса, сохраняет
+пароль в `/etc/prapor-git-egress/proxy_token` с правами `0600`, использует
+systemd credentials для изолированной службы и не выводит секреты.
+После установки обычный push в `main` должен сам создать webhook deployment.
+
+Проверка автоматического восстановления проводится между выпусками:
+
+```powershell
+bun infra/git-egress/configure.ts --test-recovery
+python infra/git-egress/test_proxy.py
+bun infra/git-egress/verify-release.ts --commit <полный-SHA> --wait
+```
+
+Проверка выпуска требует webhook, завершённый deployment, совпадение SHA с
+образом, OCI revision и `RELEASE_COMMIT`, здоровье и защищённые ответы обоих
+доменов. При диагностике достаточно `systemctl status` двух служб и
+`configure.ts --check`; verbose Git/curl tracing и вывод build environment
+с паролем прокси не включаются. Менять GitHub App, источник, данные игры или
+применять настройки к другим приложениям не требуется.
+
 ### Повторный выпуск и подтверждение автоматики
 
 Для контролируемого повторного выпуска проверенного `main` используй Redeploy
