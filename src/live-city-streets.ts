@@ -4,7 +4,7 @@ import { pixelSeed } from './pixel-art';
 type Rect = LivePoint & { width: number; height: number };
 type StreetWorld = Pick<LiveWorld, 'width' | 'height' | 'paths' | 'city' | 'citySites' | 'props'>;
 export type CityStreetGroundDetail = Rect & {
-  kind: 'pavement' | 'passage' | 'play-chalk' | 'bench-leaves' | 'shop-apron' | 'bench-pad';
+  kind: 'pavement' | 'passage' | 'play-chalk' | 'bench-leaves' | 'shop-apron' | 'bench-pad' | 'parking-bay' | 'stop-pad';
   a: LivePoint; b: LivePoint; normal: LivePoint; offset: number; seed: number;
   /** Exact outdoor paving runs, shared by the cached and display-scale passes. */
   clip: Rect[];
@@ -67,6 +67,14 @@ export function buildCityStreetGround(world: StreetWorld, terrain: readonly Live
   // Small public places use their actual fixtures as anchors. Interior shop
   // furnishings cannot lend an imaginary serving zone to the exterior wall.
   for (const prop of world.props ?? []) {
+    if (prop.id.startsWith('street-park:') || prop.kind === 'bus-stop') {
+      if (indoor[Math.floor(prop.y + prop.height / 2) * world.width + Math.floor(prop.x + prop.width / 2)]) continue;
+      const horizontal = prop.orientation === 'x', cross = horizontal ? prop.height : prop.width;
+      const a = { x: prop.x + (horizontal ? -.65 : prop.width / 2), y: prop.y + (horizontal ? prop.height / 2 : -.65) };
+      const b = { x: prop.x + (horizontal ? prop.width + .65 : prop.width / 2), y: prop.y + (horizontal ? prop.height / 2 : prop.height + .65) };
+      add(prop.kind === 'bus-stop' ? 'stop-pad' : 'parking-bay', a, b, { x: horizontal ? 0 : 1, y: horizontal ? 1 : 0 }, cross / 2 + .3, pixelSeed(prop.id), cross / 2 + .6);
+      continue;
+    }
     if (!['playground', 'bench', 'kiosk', 'market-stall'].includes(prop.kind)) continue;
     if (indoor[Math.floor(prop.y + prop.height / 2) * world.width + Math.floor(prop.x + prop.width / 2)]) continue;
     const seed = pixelSeed(prop.id);
@@ -152,6 +160,18 @@ export function paintCityStreetGroundDetail(c: CanvasRenderingContext2D, detail:
       } else {
         line(point(length * .13, -.15), point(length * .85, -.15), '#63796738', .2);
       }
+    }
+  } else if (detail.kind === 'parking-bay' || detail.kind === 'stop-pad') {
+    const edge = detail.offset, stop = detail.kind === 'stop-pad';
+    for (const side of [-1, 1]) {
+      line(point(.3, edge * side), point(length - .3, edge * side), stop ? '#b6ab7c99' : '#d3ccb18c', .065);
+    }
+    for (const end of [.3, length - .3]) line(point(end, -edge), point(end, edge), '#d3ccb18c', .065);
+    if (fine && stop) for (let along = .4; along < length - .4; along += .38) {
+      line(point(along, edge - .04), point(along + .15, edge + .12), '#d3bd8280', .05);
+    }
+    if (fine && !stop) for (const side of [-1, 1]) {
+      line(point(.65, side * edge * .8), point(length - .65, side * edge * .8), '#465c4938', .09);
     }
   } else if (detail.kind === 'play-chalk') {
     for (let row = 0; row < 4; row++) {

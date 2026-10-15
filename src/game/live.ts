@@ -44,7 +44,7 @@ export interface LiveCityBuilding extends LivePoint {
   roofAxis?: 'x' | 'y';
   facade?: 'brick' | 'plaster' | 'panel' | 'metal';
 }
-export const LIVE_PROP_KINDS = ['car', 'van', 'truck', 'bus', 'lamp', 'dumpster', 'pallet', 'crate', 'barrel', 'bench', 'planter', 'shed', 'sign', 'fence', 'shrub', 'tree', 'logs', 'railcar', 'transformer', 'playground', 'garden', 'kiosk', 'market-stall', 'workbench', 'hydrant', 'power-pole', 'bollard'] as const;
+export const LIVE_PROP_KINDS = ['car', 'van', 'truck', 'bus', 'lamp', 'dumpster', 'pallet', 'crate', 'barrel', 'bench', 'planter', 'shed', 'sign', 'fence', 'shrub', 'tree', 'logs', 'railcar', 'transformer', 'playground', 'garden', 'kiosk', 'market-stall', 'workbench', 'hydrant', 'power-pole', 'bollard', 'bus-stop'] as const;
 /** Public set dressing; blocking footprints have a matching authoritative obstacle. */
 export interface LiveWorldProp extends LivePoint {
   id: string; kind: typeof LIVE_PROP_KINDS[number]; width: number; height: number;

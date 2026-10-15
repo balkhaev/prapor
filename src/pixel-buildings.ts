@@ -2,6 +2,7 @@ import type { LiveCityBuilding, LiveObstacle, LivePoint } from './game/live';
 import { BUILDING_EXTERIOR_HEIGHT_SCALE, buildingExteriorStyle, buildingFacadeCadence, buildingRoofDormer, buildingWallHeight } from './live-map-art';
 import { PIXEL_TILE, PIXEL_PALETTE as P, PixelRaster, pixelIso, pixelRandom, pixelSeed } from './pixel-art';
 import { BUILDING_ARCHITECTURE_HEADROOM, buildingArchitecture, buildingArchitectureHeightAt, type BuildingFacade } from './building-architecture';
+import { buildingStreetSign, streetSignLettering } from './live-street-life';
 
 type BuildingSprite = { image: HTMLCanvasElement; anchor: LivePoint };
 type NativeTile = 32 | 64 | 128;
@@ -350,17 +351,6 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
           quad(x + (side === 'y' ? stripe * stripeWidth : 0), y + (side === 'x' ? stripe * stripeWidth : 0), side === 'y' ? stripeWidth : aw, side === 'x' ? stripeWidth : ah, high + 8, P.cream);
         }
         line(p(x, y + ah, high + 7), p(x + aw, y + ah, high + 7), '#c6bb92', 2);
-        // Public building type controls the sign, never hidden room contents.
-        faceRect(side, u - .72, 1.44, high + 11, high + 25, P.ink);
-        faceRect(side, u - .68, 1.36, high + 13, high + 23, palette.accent);
-        const z = high + 18;
-        if (building.kind === 'service') {
-          line(facePoint(side, u - .16, z), facePoint(side, u + .16, z), P.cream, 3);
-          line(facePoint(side, u, z - 4), facePoint(side, u, z + 4), P.cream, 3);
-        } else {
-          faceRect(side, u - .2, .4, z - 3, z + 2, P.cream);
-          line(facePoint(side, u - .12, z + 3), facePoint(side, u + .12, z + 3), P.cream);
-        }
       } else if (building.kind === 'apartment') {
         const canopyWidth = Math.min(1.65, length - .4, u * 2 - .3, (length - u) * 2 - .3);
         const x = side === 'y' ? facade.u + u - canopyWidth / 2 : facade.plane, y = side === 'y' ? facade.plane : facade.u + u - canopyWidth / 2;
@@ -370,6 +360,30 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
         for (const t of [.12, .88]) {
           const ax = side === 'y' ? x + cw * t : x + cw, ay = side === 'x' ? y + ch * t : y + ch;
           line(p(ax, ay, high + 3), side === 'y' ? p(ax, facade.plane, high - 9) : p(facade.plane, ay, high - 9), INK, 2);
+        }
+      }
+      const business = buildingStreetSign(building);
+      if (business) {
+        // One framed, legible shop board belongs to the actual entrance. Its
+        // elevation stays below the real eaves, including one-storey shops.
+        const boardWidth = Math.min(business.label.length * .29 + .6, 3.5, length - .6, u * 2 - .3, (length - u) * 2 - .3);
+        const boardTop = Math.min(wallHeight - 9, high + 28), boardBottom = boardTop - 18;
+        if (boardWidth > .65 && boardBottom > facade.bottom * PIXEL_TILE + 2) {
+          const left = u - boardWidth / 2;
+          faceRect(side, left, boardWidth, boardBottom, boardTop, business.edge);
+          faceRect(side, left + .04, boardWidth - .08, boardBottom + 2, boardTop - 2, business.board);
+          line(facePoint(side, left + .05, boardTop - 1), facePoint(side, left + boardWidth - .05, boardTop - 1), P.woodLight, 2);
+          if (fine) streetSignLettering(business.label, (x, y, width, height) => {
+            faceRect(side, left + .15 + x * (boardWidth - .3), width * (boardWidth - .3), boardBottom + 4 + (1 - y - height) * 10, boardBottom + 4 + (1 - y) * 10, business.lettering);
+          });
+          else for (const t of [.16, .34, .52, .7]) faceRect(side, left + boardWidth * t, boardWidth * .08, boardBottom + 6, boardTop - 6, business.lettering);
+          if (close && building.kind !== 'workshop') {
+            const notice = Math.min(length - .48, u + width / 2 + .22);
+            faceRect(side, notice, .32, 20, 49, business.edge);
+            faceRect(side, notice + .025, .27, 22, 47, P.cream);
+            faceRect(side, notice + .05, .22, 37, 44, business.board);
+            for (const z of [26, 30, 34]) line(facePoint(side, notice + .06, z), facePoint(side, notice + .24, z), P.steelShade);
+          }
         }
       }
       // An address tile and notices make a doorway distinct at walking zoom.
@@ -382,6 +396,19 @@ function paintBuilding(r: PixelRaster, building: LiveCityBuilding, anchor: LiveP
           faceRect(side, at, .27, 21, 35, palette.dark);
           faceRect(side, at + .025, .11, 23, 33, P.sand);
           faceRect(side, at + .15, .095, 25, 34, '#c9c8af');
+        }
+        if (building.kind === 'apartment') {
+          // Mail slots and a worn residents' notice board share the entrance
+          // wall. They add no apparent object in the doorway or on its steps.
+          const boxes = Math.max(.22, u - width / 2 - .86);
+          if (boxes + .57 < u - width / 2 - .08) {
+            faceRect(side, boxes, .57, 27, 45, '#4b635b');
+            for (const column of [0, 1, 2]) {
+              faceRect(side, boxes + .035 + column * .18, .14, 29, 43, '#81958a');
+              line(facePoint(side, boxes + .05 + column * .18, 39), facePoint(side, boxes + .145 + column * .18, 39), P.ink);
+              faceRect(side, boxes + .08 + column * .18, .05, 31, 34, P.cream);
+            }
+          }
         }
       }
     }

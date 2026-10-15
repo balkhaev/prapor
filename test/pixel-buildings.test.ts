@@ -5,6 +5,7 @@ import { pixelIso, PIXEL_PALETTE as P } from '../src/pixel-art';
 import { generatePerimeterCore } from '../src/game/world-generation';
 import { buildingExteriorStyle, buildingRoofDormer, sceneBuildings } from '../src/live-map-art';
 import { buildingArchitecture, buildingArchitectureHeightAt } from '../src/building-architecture';
+import { buildingStreetSign } from '../src/live-street-life';
 
 type CanvasRecord = HTMLCanvasElement & { paints: number; integerBounds: boolean; colors: Set<string>; spans: Array<[number, number, number, number, string]> };
 let restoreDocument: (() => void) | undefined;
@@ -28,6 +29,20 @@ function canvases(recordSpans = false): CanvasRecord[] {
 
 const building: LiveCityBuilding = { id: 'brick-home', name: 'Дом', x: 10, y: 20, width: 8, height: 8, kind: 'apartment',
   floors: 2, facade: 'brick', roof: 'gable', roofAxis: 'x', entrances: [{ x: 13, y: 20 }, { x: 13, y: 27 }] };
+
+test('real one-storey shops and services keep their entrance boards below the eaves at every native level', () => {
+  const images = canvases(true), art = new PixelBuildingArt();
+  for (const kind of ['shop', 'service', 'workshop'] as const) for (const native of [32, 64, 128] as const) {
+    const house = { ...building, id: `street-board-${kind}`, kind, floors: 1 as const }, sign = buildingStreetSign(house)!;
+    art.get(house, false, native);
+    const image = images.at(-1)!;
+    expect(image.integerBounds).toBe(true);
+    expect(image.colors.has(sign.board)).toBe(true);
+    expect(image.colors.has(sign.lettering)).toBe(true);
+    art.get(house, true, native);
+    expect(images.at(-1)!.colors.has(sign.board)).toBe(false);
+  }
+});
 
 test('all facade and roof combinations use bounded integer surfaces at all three pixel levels', () => {
   const images = canvases(), original = structuredClone(building), art = new PixelBuildingArt();

@@ -28,7 +28,7 @@ function canvases() {
   return {records,get created(){return created;}};
 }
 const dimensions:Record<LiveWorldProp['kind'],readonly[number,number]>={
-  car:[3,1],van:[3,2],truck:[4,2],bus:[5,2],railcar:[6,2],shed:[3,3],kiosk:[2,2],dumpster:[2,1],
+  car:[3,1],van:[3,2],truck:[4,2],bus:[5,2],railcar:[6,2],shed:[3,3],kiosk:[2,2],'bus-stop':[4,2],dumpster:[2,1],
   pallet:[1,1],crate:[1,1],barrel:[.7,.7],tree:[1.8,1.8],shrub:[1,1],bench:[1.5,.6],workbench:[1.5,.6],
   lamp:[.35,.35],'power-pole':[.4,.4],bollard:[.3,.3],hydrant:[.35,.35],sign:[.5,.5],garden:[2.5,1.5],
   playground:[2,2],'market-stall':[2,1.5],logs:[2,1],fence:[2,.2],planter:[1,1],transformer:[2,2],

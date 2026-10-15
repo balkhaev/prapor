@@ -10,7 +10,7 @@ type Colors = readonly [PixelColor, PixelColor, PixelColor];
 const HEIGHT: Record<LiveWorldProp['kind'], number> = {
   car: 82, van: 108, truck: 132, bus: 128, railcar: 144,
   tree: TREE_ART_HEIGHT, shrub: 62, lamp: 236, 'power-pole': 246, sign: 110,
-  shed: 156, kiosk: 132, 'market-stall': 118, transformer: 126,
+  shed: 156, kiosk: 132, 'bus-stop': 160, 'market-stall': 118, transformer: 126,
   fence: 86, dumpster: 66, pallet: 30, crate: 56, barrel: 66,
   bench: 62, planter: 68, logs: 48, playground: 142, garden: 36,
   workbench: 56, hydrant: 64, bollard: 54,
@@ -363,6 +363,20 @@ function container(m: Model): void {
     m.line([.29,.945,24],[.34,.945,30],C.ink);m.line([.29,.945,30],[.34,.945,24],C.ink);
     for(let i=0;i<5;i++) {const u=.13+i*.16;m.line([u,.89,15],[u+.02,.89,6],C.rust);}
     m.wear(.12,.15,.87,.86,54,13);
+    // The bags and folded cartons sit in the bin's own loading lip. They
+    // cannot become a new silhouette of cover on the surrounding pavement.
+    if(m.prop.variant===1||m.prop.variant===3) {
+      for(const [u,v,size] of [[.3,.65,8],[.68,.73,7]]) {
+        const p=m.point(u!,v!,55);
+        m.raster.ellipse(p.x,p.y-size!*.35,size!,size!*.67,C.rubber);
+        m.raster.line(p.x-2,p.y-size!+1,p.x+2,p.y-size!+1,C.steelShade,2);
+        m.raster.line(p.x-4,p.y-size!*.2,p.x-2,p.y-size!*.6,C.steelShade);
+      }
+    } else if(m.prop.variant===2) {
+      m.box(.15,.23,.45,.58,53,8,[C.sand,C.woodShade,C.woodLight],false);
+      m.line([.3,.25,62],[.3,.55,62],C.cream,2);
+      m.line([.17,.58,57],[.43,.58,57],C.woodShade);
+    }
     for(const u of [.17,.83]) {const p=m.point(u,.85,5);m.raster.ellipse(p.x,p.y,5,6,C.ink);}
   } else if(kind==='crate') {
     m.box(.06,.06,.94,.94,0,43,WOOD);
@@ -394,6 +408,13 @@ function container(m: Model): void {
       for(const v of [.15,.82]) {const p=m.point(u+.065,v,16);m.raster.pixel(p.x,p.y,C.ink);}
     }
     if(m.prop.variant===2) m.box(.3,.22,.77,.71,15,8,WOOD);
+    if(m.prop.variant===1) {
+      // A taped delivery carton stays below the existing pallet art envelope.
+      m.box(.2,.22,.76,.78,15,12,[C.sand,C.woodShade,C.woodLight]);
+      m.line([.48,.24,28],[.48,.76,28],C.cream,3);
+      m.poly([[.32,.785,18],[.58,.785,18],[.58,.785,24],[.32,.785,24]],C.cream);
+      for(const u of [.37,.43,.49])m.line([u,.79,19],[u,.79,23],C.steelShade);
+    }
     if(m.prop.variant===3) {m.slab(.36,.45,.46,.62,16,C.woodShade);m.line([.36,.45,17],[.46,.6,17],C.ink);}
   } else {
     const center=m.point(.5,.5), rx=(m.prop.width+m.prop.height)*27, ry=rx*.48;
@@ -464,6 +485,12 @@ function furniture(m: Model): void {
         m.line([.65,.31,36],[.65,.7,36],C.plasterShade);
         for(const v of [.38,.47,.56,.65])m.line([.58,v,36],[.63,v,36],C.steelShade);
         m.slab(.68,.37,.73,.51,36,C.steelShade);
+      } else if(m.prop.variant===0) {
+        // An abandoned shopping bag is a small domestic mark on the seat.
+        m.box(.68,.32,.84,.65,34,14,[C.sand,C.woodShade,C.woodLight],false);
+        m.line([.71,.41,48],[.71,.41,54],C.woodLight,2);
+        m.line([.71,.41,54],[.8,.41,54],C.woodLight,2);
+        m.line([.8,.41,54],[.8,.41,48],C.woodLight,2);
       }
     } else {
       m.box(.13,.15,.37,.45,33,8,METAL);
@@ -631,6 +658,66 @@ function utility(m: Model): void {
     m.raster.line(center.x-3,center.y-34,center.x-3,center.y-7,C.steel);
     for(const [x,y] of [[-4,3],[4,3]]) {m.raster.rect(center.x+x!-1,center.y+y!-1,3,2,C.ink);m.raster.pixel(center.x+x!,center.y+y!-1,C.steelLight);}
   }
+}
+
+function busStop(m: Model): void {
+  const variant=m.prop.variant,paint=[C.green,C.blue,C.red,C.steel][variant]!,trim=variant===2?C.rustShade:C.steelShade;
+  m.shadow(.93);
+  m.box(.055,.08,.945,.92,0,5,CONCRETE,false);
+  // A compact shelter occupies its published stopping pocket. Its back panel,
+  // seat and timetable make the blocked area a fixture, rather than an alley.
+  m.box(.08,.13,.92,.22,5,39,[paint,trim,C.panelShade]);
+  m.poly([[.1,.225,47],[.9,.225,47],[.9,.225,120],[.1,.225,120]],C.glass);
+  m.poly([[.11,.23,56],[.39,.23,56],[.39,.23,119],[.11,.23,119]],C.panelShade);
+  m.poly([[.43,.23,58],[.88,.23,58],[.88,.23,119],[.43,.23,119]],C.steelShade);
+  m.line([.12,.235,114],[.37,.235,114],C.glassLight,2);
+  m.line([.46,.235,111],[.72,.235,111],C.glassLight,2);
+  m.line([.19,.236,60],[.31,.236,113],C.steel,2);
+  m.line([.65,.236,58],[.8,.236,106],C.steel,2);
+  for(const u of [.09,.42,.91])m.post(u,.2,6,122,trim,4);
+  // The bench is framed separately from the dark rear glazing.
+  for(const u of [.24,.66])m.post(u,.48,5,28,C.steelShade,3);
+  m.box(.18,.31,.74,.61,31,6,WOOD);
+  for(const v of [.38,.49])m.line([.19,v,38],[.73,v,38],C.woodLight,2);
+  m.line([.19,.3,49],[.73,.3,49],C.woodShade,6);
+  m.line([.19,.3,51],[.73,.3,51],C.woodLight,2);
+  // A side notice/timetable board and a narrow bin are contained by the slab.
+  m.poly([[.91,.25,50],[.91,.7,50],[.91,.7,115],[.91,.25,115]],trim);
+  m.poly([[.915,.3,61],[.915,.65,61],[.915,.65,108],[.915,.3,108]],C.cream);
+  m.poly([[.918,.32,96],[.918,.63,96],[.918,.63,106],[.918,.32,106]],paint);
+  for(const z of [68,75,82,89]) {
+    m.line([.92,.33,z],[.92,.6,z],C.steelShade);
+    m.line([.921,.43,z-1],[.921,.43,z+1],C.terraShade,2);
+  }
+  m.box(.8,.55,.89,.78,6,28,[C.steel,C.steelShade,C.panelShade]);
+  m.slab(.81,.57,.88,.75,35,C.ink);
+  m.line([.805,.79,30],[.885,.79,30],C.steelLight);
+  if(variant===1) {
+    m.poly([[.51,.235,62],[.64,.235,62],[.64,.235,92],[.51,.235,92]],C.plasterShade);
+    for(const z of [68,73,78])m.line([.53,.24,z],[.62,.24,z],C.steelShade);
+    m.poly([[.55,.24,82],[.62,.24,82],[.62,.24,89],[.55,.24,89]],C.terra);
+  }
+  if(variant===3) {
+    m.line([.5,.236,61],[.56,.236,89],C.ink);
+    m.line([.56,.236,89],[.53,.236,112],C.ink);
+    m.line([.56,.236,89],[.69,.236,96],C.ink);
+  }
+  m.wear(.12,.16,.87,.2,44,4+variant,C.rust);
+  // Shallow roof folds and a colored fascia read at street-map distance.
+  m.poly([[.025,.035,141],[.975,.035,141],[.975,.95,132],[.025,.95,132]],paint);
+  m.poly([[.025,.95,132],[.975,.95,132],[.975,.95,124],[.025,.95,124]],trim);
+  m.poly([[.025,.035,141],[.025,.95,132],[.025,.95,124],[.025,.035,133]],trim);
+  m.line([.025,.04,142],[.975,.04,142],C.steelLight,2);
+  m.line([.03,.95,133],[.97,.95,133],C.cream,2);
+  for(const u of [.18,.38,.58,.78])m.line([u,.05,142],[u,.92,133],C.steelShade);
+  // Bus pictogram belongs to the roof end, with no pole on the footpath.
+  m.poly([[.79,.96,128],[.94,.96,128],[.94,.96,157],[.79,.96,157]],C.cream);
+  m.poly([[.8,.965,130],[.93,.965,130],[.93,.965,155],[.8,.965,155]],C.blue);
+  m.poly([[.82,.97,135],[.91,.97,135],[.91,.97,151],[.82,.97,151]],C.cream);
+  m.poly([[.83,.975,142],[.9,.975,142],[.9,.975,149],[.83,.975,149]],C.blue);
+  for(const u of [.835,.895])m.line([u,.98,132],[u,.98,135],C.ink,2);
+  m.line([.04,.955,127],[.32,.955,127],C.cream,2);
+  for(const u of [.4,.52,.64])m.line([u,.956,127],[u+.045,.956,127],C.woodLight);
 }
 
 function smallBuilding(m: Model): void {
@@ -842,6 +929,7 @@ function paintModel(model: Model): void {
     case 'bench': case 'workbench': case 'planter': case 'logs': case 'fence': furniture(model);break;
     case 'transformer': case 'lamp': case 'power-pole': case 'sign': case 'hydrant': case 'bollard': utility(model);break;
     case 'shed': case 'kiosk': smallBuilding(model);break;
+    case 'bus-stop': busStop(model);break;
     case 'garden': case 'playground': case 'market-stall': yard(model);break;
   }
 }
