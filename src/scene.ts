@@ -312,6 +312,7 @@ export function createWorld(
 		private atmosphereAir!: Phaser.GameObjects.Graphics;
 		private atmosphereGlows!: Phaser.GameObjects.Graphics;
 		private baseWeather!: Phaser.GameObjects.Graphics;
+		private weatherDisplayScale = 1;
 		private landscape: ShelterLandscape | null = null;
 		private smokeEmitters: ShelterSmokeEmitter[] = [];
 		private atmosphereLights: ShelterAtmosphereLight[] = [];
@@ -551,8 +552,8 @@ export function createWorld(
 		private applyCamera(): void {
 			this.viewCamera = clampShelterCamera(this.viewCamera, this.viewport, this.worldBounds);
 			this.baseLayer?.setScale(this.viewCamera.zoom).setPosition(-this.viewCamera.x * this.viewCamera.zoom, -this.viewCamera.y * this.viewCamera.zoom);
-			// Weather retains viewport pixels despite the yard's world transform.
-			this.baseWeather?.setPosition(this.viewCamera.x, this.viewCamera.y).setScale(1 / this.viewCamera.zoom);
+			// Weather uses CSS pixels despite both the yard camera and FIT scaling.
+			this.baseWeather?.setPosition(this.viewCamera.x, this.viewCamera.y).setScale(1 / (this.viewCamera.zoom * this.weatherDisplayScale));
 			this.mapLayer?.setPosition((this.viewport.width - WIDTH) / 2, (this.viewport.height - HEIGHT) / 2 + 30);
 			this.input?.setDefaultCursor(this.buildingGesture?.active ? "grabbing" : this.panMode || this.spacePressed || requestedView === "raid" ? "grab" : "default");
 			if (this.panMode || this.spacePressed || requestedView !== "base") interactions.onHover?.(null);
@@ -569,10 +570,12 @@ export function createWorld(
 
 		private resizeViewport(): void {
 			const rect = parent.getBoundingClientRect();
-			if (rect.width <= 0 || rect.height <= 0 || Math.abs(rect.width - this.stageSize.width) < .01 && Math.abs(rect.height - this.stageSize.height) < .01) return;
+			if (!Number.isFinite(rect.width) || !Number.isFinite(rect.height) || rect.width <= 0 || rect.height <= 0 || Math.abs(rect.width - this.stageSize.width) < .01 && Math.abs(rect.height - this.stageSize.height) < .01) return;
 			this.stageSize = { width: rect.width, height: rect.height };
 			this.cancelScavDrag(); this.cancelBuildingDrag(); this.cancelPan(); this.spacePressed = false;
 			const next = shelterViewportForSize(rect.width, rect.height);
+			const displayScale = rect.width / next.width;
+			this.weatherDisplayScale = Number.isFinite(displayScale) && displayScale > 0 ? displayScale : 1;
 			this.viewCamera = resizeShelterCamera(this.viewCamera, this.viewport, next, this.worldBounds);
 			const changed = Math.abs(next.width - this.viewport.width) > .001 || Math.abs(next.height - this.viewport.height) > .001;
 			this.viewport = next;
@@ -1426,7 +1429,7 @@ export function createWorld(
 			this.atmosphereAir.clear(); paintShelterAtmosphereAir(this.atmosphereAir, frame);
 			this.atmosphereGlows.clear(); paintShelterAtmosphereGlows(this.atmosphereGlows, frame);
 			this.baseWeather.clear();
-			paintSceneWeather(this.baseWeather, sampleSceneWeather({ width: this.viewport.width, height: this.viewport.height,
+			paintSceneWeather(this.baseWeather, sampleSceneWeather({ width: this.viewport.width * this.weatherDisplayScale, height: this.viewport.height * this.weatherDisplayScale,
 				timeMs: climate.timeMs, rain: climate.rain, fog: climate.fog, wind: climate.wind, reducedMotion }));
 		}
 
