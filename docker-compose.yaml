@@ -5,6 +5,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        SOURCE_COMMIT: ${SOURCE_COMMIT:-unknown}
     image: prapor-game:${SOURCE_COMMIT:-main}
     pull_policy: never
     container_name: prapor-game

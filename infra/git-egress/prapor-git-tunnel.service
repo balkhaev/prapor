@@ -1,0 +1,51 @@
+[Unit]
+Description=Prapor private Git HTTPS egress tunnel
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=root
+UMask=0077
+ExecStartPre=/usr/bin/test -r /data/coolify/ssh/keys/ssh_key@iy9ziufgkgvawjlsyyidpote
+ExecStartPre=/usr/bin/test -r /root/.ssh/known_hosts
+# Keep the existing pinned host key. Do not alter sshd or GatewayPorts.
+# The installer verifies that the remote listener is strictly 127.0.0.1:19643.
+ExecStart=/usr/bin/ssh -F /dev/null -i /data/coolify/ssh/keys/ssh_key@iy9ziufgkgvawjlsyyidpote \
+    -N -T -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none \
+    -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/root/.ssh/known_hosts \
+    -o GlobalKnownHostsFile=/dev/null -o UpdateHostKeys=no \
+    -o ControlMaster=no -o ControlPath=none -o ForwardAgent=no \
+    -o ExitOnForwardFailure=yes -o ConnectTimeout=10 -o ConnectionAttempts=1 \
+    -o ServerAliveInterval=10 -o ServerAliveCountMax=2 \
+    -R 127.0.0.1:19643:github.com:443 root@81.90.31.214
+Restart=always
+RestartSec=5s
+TimeoutStopSec=10s
+KillMode=control-group
+StandardInput=null
+NoNewPrivileges=yes
+# Coolify owns its existing 0600 key as UID 9999. Permit reading it without
+# changing its ownership, copying it, or granting this service write bypass.
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+AmbientCapabilities=
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+# SSH must read root's pinned known_hosts; it cannot update it.
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

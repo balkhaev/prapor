@@ -14,5 +14,5 @@
     "verbatimModuleSyntax": true,
     "allowImportingTsExtensions": true
   },
-  "include": ["src", "server.ts", "server", "test", "vite.config.ts"]
+  "include": ["src", "server.ts", "server", "test", "vite.config.ts", "infra/git-egress"]
 }
