@@ -157,10 +157,17 @@ describe("authoritative live injuries", () => {
 
   test("a disconnected body remains visible for thirty seconds without accepting commands", async () => {
     const disconnected = (await enter()).session;
-    await advance(15000);
+    // This contract depends on heartbeat/grace deadlines, not movement frames.
+    time += 15000; service.tick();
     const viewer = await enter(); expect(viewer.state.server.online).toBe(1); expect(viewer.state.entities.some(entity => entity.id === disconnected.id)).toBe(true);
     expect((await call("action", disconnected, { type: "heal" })).status).toBe(401);
-    await advance(30000, [viewer.session]); expect((await state(viewer.session)).entities.some(entity => entity.id === disconnected.id)).toBe(false);
+    // Keep the viewer's heartbeat alive and inspect the final millisecond of grace.
+    for (const elapsed of [10000, 10000, 9999]) {
+      time += elapsed; service.tick();
+      expect((await state(viewer.session)).entities.some(entity => entity.id === disconnected.id)).toBe(true);
+    }
+    time += 1; service.tick();
+    expect((await state(viewer.session)).entities.some(entity => entity.id === disconnected.id)).toBe(false);
     expect((await enter(disconnected)).state.selfId).toBe(disconnected.id);
   }, 15_000);
 
