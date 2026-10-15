@@ -4,10 +4,10 @@ import { liveDropLabel, liveLootTotals } from './live-loot-ui';
 import { getBoss } from './game/bosses';
 import { WEAPON_BY_ID } from './game/data';
 import { buildingNeedsCutaway, buildingPalette, sceneBuildings, SceneryIndex } from './live-map-art';
-import { PixelRaidRenderer, type PixelDetail } from './pixel-renderer';
+import { PixelRaidRenderer, pixelSpriteRect, type PixelDetail } from './pixel-renderer';
 import { PixelContainerArt } from './pixel-containers';
-import { PixelActorArt, type PixelActorGear } from './pixel-actors';
-import { pixelWeaponId } from './pixel-weapons';
+import { PixelActorArt } from './pixel-actors';
+import { pixelActorLoadout } from './pixel-loadout';
 import { PixelBuildingArt, pixelBuildingSpriteBytes, pixelBuildingWallHeight } from './pixel-buildings';
 import { PixelPropArt } from './pixel-props';
 import { PixelObstacleArt } from './pixel-obstacles';
@@ -46,7 +46,7 @@ export class LiveScene {
   private selected: string | null = null;
   private routePoiIds: string[] = [];
   private waypointTargets: Array<{ point: LivePoint; x: number; y: number }> = [];
-  private hitTargets: { entity: LiveEntity; x: number; y: number }[] = [];
+  private hitTargets: { entity: LiveEntity; x: number; y: number; bounds?: LabelBox }[] = [];
   private controls = document.createElement('div');
   private following = true;
   private overview = false;
@@ -177,7 +177,9 @@ export class LiveScene {
       if (x >= mini.x && x <= mini.x + mini.width && y >= mini.y && y <= mini.y + mini.height) this.focusPoint({ x: clamp((x - mini.x) / mini.scale, 0, this.snapshot.world.width - 1), y: clamp((y - mini.y) / mini.scale, 0, this.snapshot.world.height - 1) });
       return;
     }
-    const target = [...this.hitTargets].reverse().find(target => this.tile < 28 ? Math.hypot(target.x - x, target.y - y) < 9 : Math.abs(target.x - x) < Math.max(14, 18 * this.zoom) && y >= target.y - Math.max(38, 62 * this.zoom) && y <= target.y + 10 * this.zoom);
+    const target = [...this.hitTargets].reverse().find(target => target.bounds
+      ? x >= target.bounds.x - 4 && x <= target.bounds.x + target.bounds.width + 4 && y >= target.bounds.y - 4 && y <= target.bounds.y + target.bounds.height + 4
+      : Math.hypot(target.x - x, target.y - y) < 9);
     if (target && target.entity.id !== this.snapshot.selfId) { this.selected = target.entity.id; this.select(target.entity.id); return; }
     const waypoint = this.waypointTargets.find(target => Math.hypot(target.x - x, target.y - y) < 12);
     if (waypoint) { this.focusPoint(waypoint.point); return; }
@@ -717,7 +719,10 @@ export class LiveScene {
   }
   private paintEntity(entity: LiveEntity, now: number): void {
     const snapshot = this.snapshot!, motion = this.motions.get(entity.id)!, point = this.interpolated(motion, now), p = this.project(point), c = this.context;
-    if (p.x < -65 || p.x > this.width + 65 || p.y < -20 || p.y > this.height + 150) return;
+    // The widest rifle, body and labels must enter the viewport together at any
+    // zoom. A fixed ground-point margin clipped magnified actors at its edges.
+    const zoom = this.tile / (this.width < 480 ? 48 : 64), margin = Math.max(16, 96 * .32 * zoom);
+    if (p.x < -margin || p.x > this.width + margin || p.y < -margin || p.y > this.height + 176 * .32 * zoom + 40) return;
     const boss=entity.bossId?getBoss(entity.bossId):null;
     const own = entity.id === snapshot.selfId, selected = entity.id === this.selected, color = own ? '#f2d49a' : boss ? '#f0b267' : entity.kind === 'player' ? '#8dd5e4' : entity.faction === 'raiders' ? '#e48971' : '#d2a082';
     if (this.overview || this.tile < 28) {
@@ -726,28 +731,29 @@ export class LiveScene {
       if (own || selected || boss) this.label(own ? 'ТЫ' : boss?`БОСС · ${boss.name}`:entity.name, p.x, p.y - 10, color, 9);
       this.hitTargets.push({ entity, x: p.x, y: p.y }); return;
     }
-    const zoom = this.tile / (this.width < 480 ? 48 : 64);
     c.beginPath(); c.ellipse(p.x, p.y, 13 * zoom, 6 * zoom, 0, 0, Math.PI * 2); c.fillStyle = '#0005'; c.fill();
     if (own || selected) { c.strokeStyle = color; c.lineWidth = 2; c.stroke(); }
     const animation = this.combatAnimation.frame(entity, motion, now, snapshot.now + now - this.snapshotAt);
-    const weapon = pixelWeaponId(own ? snapshot.self.loadout?.weaponId : boss?.weaponId);
-    const gear: PixelActorGear | undefined = own && snapshot.self.loadout ? { profile: snapshot.self.loadout.kitId === 'assault' ? 'assault' : snapshot.self.loadout.kitId === 'scout' ? 'scout' : 'light', helmet: snapshot.self.loadout.helmetProtection > .1, armor: snapshot.self.loadout.armorProtection > .2, backpack: true } : undefined;
+    const { weapon, gear } = pixelActorLoadout(entity, snapshot.self);
     const sprite = this.actorArt.get(entity, animation, weapon, gear), actorScale = .32 * zoom;
+    const bounds = pixelSpriteRect(sprite, p, actorScale, this.renderer.deviceRatio);
     this.renderer.sprite(sprite, p, actorScale, this.width, this.height);
     if (sprite.muzzle && sprite.ejection) {
       const muzzle = this.renderer.spritePoint(sprite, p, actorScale, sprite.muzzle), ejection = this.renderer.spritePoint(sprite, p, actorScale, sprite.ejection);
       this.weaponMounts.set(entity.id, { point, muzzle, ejection, offset: { x: (muzzle.x - p.x) / zoom, y: (muzzle.y - p.y) / zoom }, ejectOffset: { x: (ejection.x - p.x) / zoom, y: (ejection.y - p.y) / zoom } });
     }
-    const top = p.y - 50 * zoom - 24;
+    const top = bounds.y - 37;
     this.label(own ? `ТЫ · ${entity.name}` : entity.name, p.x, top, color, own ? 11 : 10);
-    this.label(boss?`БОСС · ${WEAPON_BY_ID[boss.weaponId]!.name}`:entity.kind === 'player' ? own ? 'ТВОЙ БОЕЦ' : 'ИГРОК' : entity.faction === 'raiders' ? 'РЕЙДЕР · NPC' : 'ДИКИЙ · NPC', p.x, top + 13, boss?'#e7bc86':own ? '#e8d8b6' : entity.kind === 'player' ? '#90c4ce' : '#ad9b88', 7);
+    const role = boss ? 'БОСС' : entity.kind === 'player' ? own ? 'ТВОЙ БОЕЦ' : 'ИГРОК' : entity.faction === 'raiders' ? 'РЕЙДЕР' : 'ДИКИЙ';
+    const weaponName = WEAPON_BY_ID[weapon]?.name;
+    this.label(`${role}${weaponName ? ` · ${weaponName}` : ''}`, p.x, top + 13, boss?'#e7bc86':own ? '#e8d8b6' : entity.kind === 'player' ? '#90c4ce' : '#ad9b88', 7);
     c.fillStyle = '#14271a'; c.fillRect(p.x - 17, top + 18, 34, 3); c.fillStyle = entity.health > 35 ? '#b6cc85' : '#e09d82'; c.fillRect(p.x - 17, top + 18, 34 * entity.health / 100, 3);
     if (entity.safeUntil > snapshot.now) this.label('ЗАЩИТА', p.x, p.y + 20, '#bddbb7', 8);
     if (entity.aimUntil && entity.aimUntil > snapshot.now) {
       c.strokeStyle = '#f2a07f'; c.lineWidth = 2; c.beginPath(); c.ellipse(p.x, p.y, 18 * zoom, 9 * zoom, 0, 0, Math.PI * 2); c.stroke();
       this.label(entity.aimTargetId === snapshot.selfId ? 'ЦЕЛИТСЯ В ТЕБЯ' : 'ПРИЦЕЛИВАЕТСЯ', p.x, p.y + 22, '#fac09b', 8);
     } else if (entity.bleeding || entity.limping) this.label(entity.bleeding ? 'КРОВОТЕЧЕНИЕ' : 'ХРОМАЕТ', p.x, p.y + 22, '#e4b19a', 7);
-    this.hitTargets.push({ entity, x: p.x, y: p.y });
+    this.hitTargets.push({ entity, x: p.x, y: p.y, bounds });
   }
   private minimapBounds(snapshot: LiveSnapshot): { x: number; y: number; width: number; height: number; scale: number } {
     const scale = Math.min(this.width < 480 ? 2.1 : 2.5, (this.width * .28) / snapshot.world.width, (this.height * .22) / snapshot.world.height);

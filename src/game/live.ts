@@ -124,6 +124,15 @@ export interface LiveContainerAnchor extends LivePoint {
   lootTable: "mixed" | "tools" | "medical" | "intel" | "valuables" | "provisions";
   searchMs: number;
 }
+/** Public silhouettes only: no weapon stats, protection values or private inventory. */
+export interface LiveVisualLoadout {
+  profile: 'light' | 'assault' | 'scout';
+  /** Older fighters can lack an authored model. Never infer it from their name or skin. */
+  weaponId?: string;
+  helmet: boolean;
+  armor: boolean;
+  backpack: boolean;
+}
 export interface LiveEntity extends LivePoint {
   id: string;
   kind: "player" | "scav";
@@ -132,6 +141,8 @@ export interface LiveEntity extends LivePoint {
   health: number;
   action: "idle" | "moving" | "combat" | "downed";
   safeUntil: number;
+  /** Optional for older snapshots; visible equipment is projected after visibility filtering. */
+  visualLoadout?: LiveVisualLoadout;
   /** Visible signs only; another player's body and medicines stay private. */
   bleeding?: boolean;
   limping?: boolean;

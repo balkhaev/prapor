@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { createHash, randomBytes, randomInt, randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { LIVE_CAPACITY, LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT, LIVE_MEDICAL_CAPACITY, LIVE_PENDING_CAPACITY, LIVE_SERVER_ID, LIVE_SERVER_NAME, liveMedicalSupplyNeeded, type LiveCommand, type LiveDistrictId, type LiveDrop, type LiveEntity, type LiveEvent, type LiveMapId, type LivePlayer, type LivePoint, type LivePurpose, type LiveSnapshot, type LiveStatus, type LiveWorld } from "../src/game/live";
+import { LIVE_CAPACITY, LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT, LIVE_MEDICAL_CAPACITY, LIVE_PENDING_CAPACITY, LIVE_SERVER_ID, LIVE_SERVER_NAME, liveMedicalSupplyNeeded, type LiveCommand, type LiveDistrictId, type LiveDrop, type LiveEntity, type LiveEvent, type LiveMapId, type LivePlayer, type LivePoint, type LivePurpose, type LiveSnapshot, type LiveStatus, type LiveVisualLoadout, type LiveWorld } from "../src/game/live";
 import { LIVE_MAPS } from "../src/game/live-maps";
 import { createLiveNavigation } from "./live-navigation";
 import { createLiveSortie, type LiveSortiePlan } from './live-autobattle';
@@ -18,6 +18,8 @@ import { getLiveBossArenas } from '../src/game/live-boss-arenas';
 import type { AccountService } from "./accounts";
 import { LiveEconomyError, type EconomyLoot, type LiveDelivery, type LiveEconomy, type LiveEconomyIdentity, type LiveSupplyRequest } from "./live-economy";
 import { LIVE_FIELD_KITS, getLiveLoadout, isLiveKitId, quoteLiveKits, type LiveEntry, type LiveKitId } from '../src/game/live-entry';
+import { WEAPON_BY_ID } from '../src/game/data';
+import { GEAR_MODEL_BY_ID } from '../src/game/systems';
 
 export interface LiveOptions {
   dbPath: string;
@@ -59,6 +61,7 @@ interface Participant extends LiveEntity, LivePlayer, PathCache {
   entryPending?: { id: string; districtId: LiveDistrictId; purpose: LivePurpose; x: number; y: number; respawn: boolean; automatic?: boolean };
 }
 interface Scav extends LiveEntity, PathCache {
+  visualLoadout: LiveVisualLoadout;
   body: HealthState; healthAt: number; aim: { targetId: string; endsAt: number; part: BodyPart } | null;
   mapId: LiveMapId; faction: "scavs" | "raiders"; role: "patrol" | "guard" | "marksman";
   home: LivePoint; route: LivePoint[]; routeIndex: number; spawnIndex: number;
@@ -76,6 +79,32 @@ const TICK_MS = 250, HEARTBEAT_MS = 15_000, RESPAWN_MS = 10_000, COOKIE_SECONDS 
 const DISCONNECT_GRACE_MS = 30_000, LEAVE_MS = 5000;
 const MEDICINES: TreatmentType[] = ["medkit", "bandage", "tourniquet", "splint", "painkiller", "surgery"];
 const LIVE_PROTECTION: Partial<Record<BodyPart, number>> = { head: .2, chest: .3, stomach: .3 };
+/** NPCs have no tradable inventory. These authored models describe their visible equipment,
+ * while the existing role/faction combat rules and independently rolled loot stay unchanged. */
+const NPC_VISUAL_LOADOUTS: Readonly<Record<Scav['faction'], Readonly<Record<Scav['role'], LiveVisualLoadout>>>> = {
+  scavs: {
+    patrol: { profile: 'light', weaponId: 'pm', helmet: true, armor: true, backpack: false },
+    guard: { profile: 'assault', weaponId: 'pp91', helmet: true, armor: true, backpack: false },
+    marksman: { profile: 'scout', weaponId: 'mosin', helmet: true, armor: true, backpack: false },
+  },
+  raiders: {
+    patrol: { profile: 'assault', weaponId: 'akm', helmet: true, armor: true, backpack: false },
+    guard: { profile: 'assault', weaponId: 'akm', helmet: true, armor: true, backpack: false },
+    marksman: { profile: 'scout', weaponId: 'svd', helmet: true, armor: true, backpack: false },
+  },
+};
+function npcVisualLoadout(faction: Scav['faction'], role: Scav['role'], bossId?: BossId): LiveVisualLoadout {
+  if (!bossId) return { ...NPC_VISUAL_LOADOUTS[faction][role] };
+  const boss = getBoss(bossId)!, slot = GEAR_MODEL_BY_ID[boss.armorModelId]?.slot;
+  return { profile: WEAPON_BY_ID[boss.weaponId]?.category === 'sniper' ? 'scout' : 'assault', weaponId: boss.weaponId,
+    helmet: slot === 'helmet', armor: slot === 'armor', backpack: slot === 'backpack' };
+}
+function visibleLoadout(entity: Participant | Scav): LiveVisualLoadout | undefined {
+  if (!isParticipant(entity)) return { ...entity.visualLoadout };
+  const kit = entity.loadout;
+  return kit ? { profile: kit.kitId === 'scav' ? 'light' : kit.kitId, weaponId: kit.weaponId,
+    helmet: kit.helmetProtection > 0, armor: kit.armorProtection > 0, backpack: false } : undefined;
+}
 function storedBody(value: unknown, legacyHealth: number): HealthState {
   if (value !== undefined) return parseHealth(value);
   const body = createHealth(legacyHealth);
@@ -323,7 +352,13 @@ export function createLiveService(options: LiveOptions): LiveService {
     }
     return pickPoint(DEFAULT_MAP, true, districtId);
   };
-  const publicEntity = (entity: Participant | Scav): LiveEntity => ({ id: entity.id, kind: entity.kind, name: entity.name, appearance: entity.appearance, health: entity.health, action: entity.action, safeUntil: entity.safeUntil, x: entity.x, y: entity.y, ...(entity.faction ? { faction: entity.faction } : {}), ...(entity.role ? { role: entity.role } : {}), ...(entity.bossId ? { bossId: entity.bossId } : {}), bleeding: BODY_PARTS.some(part => entity.body.parts[part].bleeding !== "none"), limping: injuryEffects(entity.body, now()).movement < 1, ...(entity.aim ? { aimUntil: entity.aim.endsAt, aimTargetId: entity.aim.targetId } : {}) });
+  const publicEntity = (entity: Participant | Scav): LiveEntity => {
+    const visualLoadout = visibleLoadout(entity);
+    return { id: entity.id, kind: entity.kind, name: entity.name, appearance: entity.appearance, health: entity.health, action: entity.action, safeUntil: entity.safeUntil, x: entity.x, y: entity.y,
+      ...(visualLoadout ? { visualLoadout } : {}), ...(entity.faction ? { faction: entity.faction } : {}), ...(entity.role ? { role: entity.role } : {}), ...(entity.bossId ? { bossId: entity.bossId } : {}),
+      bleeding: BODY_PARTS.some(part => entity.body.parts[part].bleeding !== "none"), limping: injuryEffects(entity.body, now()).movement < 1,
+      ...(entity.aim ? { aimUntil: entity.aim.endsAt, aimTargetId: entity.aim.targetId } : {}) };
+  };
   const persist = (): void => {
     db.transaction(() => {
       for (const player of players.values()) savePlayer.run(player.identity, JSON.stringify(durable(player)));
@@ -448,6 +483,7 @@ export function createLiveService(options: LiveOptions): LiveService {
     return { ...point, ...freshPath(), mapId, id, kind: "scav", name: spawn.faction === "raiders" ? ["Рейдер Борз", "Рейдер Яр", "Рейдер Туман", "Рейдер Север"][index % 4]! : ["Косой", "Бродяга", "Шрам", "Лис", "Глухарь", "Рыжий"][index % 6]!,
       x: point?.x ?? spawn.point.x, y: point?.y ?? spawn.point.y,
       appearance: (spawn.faction === "raiders" ? 16 : 0) + index % 16, faction: spawn.faction, role: spawn.role,
+      visualLoadout: npcVisualLoadout(spawn.faction, spawn.role),
       home: { ...spawn.point }, route: spawn.route.length ? spawn.route.map(point => ({ ...point })) : [{ ...spawn.point }], routeIndex: Math.max(0, spawn.route.findIndex(point => point.x === spawn.point.x && point.y === spawn.point.y)), spawnIndex: index,
       health: point ? 100 : 0, body: storedBody(undefined, point ? 100 : 0), healthAt: now(), aim: null, action: point ? "idle" : "downed", safeUntil: 0, respawnAt: point ? 0 : now() + 1000, nextMove: now() + 750, nextAttack: now() + 1000 };
   };
@@ -470,6 +506,7 @@ export function createLiveService(options: LiveOptions): LiveService {
     const definition = getBoss(bossId)!, arena = bossArenas.get(bossId)!, point = bossSpawnPoint(bossId);
     return { ...point, ...freshPath(), id: `boss-${bossId}`, bossId, bossCycle: cycle, bossDeathSettled: false,
       mapId: DEFAULT_MAP, kind: 'scav', name: definition.name, appearance: 28 + BOSSES.findIndex(boss => boss.id === bossId), faction: 'raiders', role: 'guard',
+      visualLoadout: npcVisualLoadout('raiders', 'guard', bossId),
       home: { ...arena.home }, route: [{ ...arena.home }], routeIndex: 0, spawnIndex: -1, health: 100, body: createHealth(), healthAt: now(),
       aim: null, action: 'idle', safeUntil: 0, respawnAt: 0, nextMove: now() + 750, nextAttack: now() + 1000 };
   };
@@ -486,7 +523,7 @@ export function createLiveService(options: LiveOptions): LiveService {
     if (stored.bossLastHit && (!isObject(stored.bossLastHit) || typeof stored.bossLastHit.identity !== 'string' || typeof stored.bossLastHit.playerId !== 'string'
       || !Number.isSafeInteger(stored.bossLastHit.at) || stored.bossLastHit.at < 0)) throw new Error('Invalid stored boss hit');
     if (!insideBossArena(bossId, stored)) Object.assign(stored, bossSpawnPoint(bossId));
-    Object.assign(stored, freshPath(), { mapId: DEFAULT_MAP, kind: 'scav', name: definition.name, faction: 'raiders', role: 'guard', home: { ...arena.home }, route: [{ ...arena.home }], routeIndex: 0, spawnIndex: -1, aim: null });
+    Object.assign(stored, freshPath(), { mapId: DEFAULT_MAP, kind: 'scav', name: definition.name, faction: 'raiders', role: 'guard', visualLoadout: npcVisualLoadout('raiders', 'guard', bossId), home: { ...arena.home }, route: [{ ...arena.home }], routeIndex: 0, spawnIndex: -1, aim: null });
     stored.healthAt = Math.min(now(), stored.healthAt);
     return stored;
   };
@@ -518,6 +555,7 @@ export function createLiveService(options: LiveOptions): LiveService {
       if (!walkable(scav.mapId, scav)) Object.assign(scav, pickPoint(scav.mapId));
       scav.faction = scav.faction === "raiders" ? "raiders" : "scavs";
       scav.role = ["patrol", "guard", "marksman"].includes(scav.role) ? scav.role : "patrol";
+      scav.visualLoadout = npcVisualLoadout(scav.faction, scav.role);
       scav.home = scav.home && walkable(scav.mapId, scav.home) ? scav.home : { x: scav.x, y: scav.y };
       scav.route = scav.route?.filter(point => walkable(scav.mapId, point)) ?? [scav.home];
       if (!scav.route.length) scav.route = [scav.home];

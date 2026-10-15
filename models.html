@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#171c18" />
+    <meta name="description" content="Дикие и оружие Прапора в рейде: 32 внешности, восемь ракурсов, анимация и независимая примерка снаряжения." />
+    <title>Прапор · Модели рейда</title>
+  </head>
+  <body>
+    <main class="model-workshop">
+      <header class="workshop-heading">
+        <div><p class="eyebrow">Прапор / Полевая мастерская</p><h1>Боец. Оружие. Снаряжение.</h1><p class="intro">Посмотрите, как дикий выглядит в рейде: в движении, с оружием в руках и с любого ракурса.</p></div>
+        <nav class="workshop-nav" aria-label="Разделы игры"><a href="/characters.html">Оружейная мастерская ↗</a><a href="/">В убежище →</a></nav>
+      </header>
+
+      <div class="workshop-layout">
+        <section class="model-view panel" aria-labelledby="model-title">
+          <div class="panel-heading"><div><p class="eyebrow">Личное дело <span id="appearance-number">01 / 32</span></p><h2 id="model-title">Борода</h2></div><span class="live-badge" id="animation-status">В движении</span></div>
+          <div class="model-stage" id="model-stage"><canvas id="selected-model" width="640" height="420" role="img" aria-label="Борода с АКМ в рейдовой экипировке"></canvas><span class="stage-caption">МОДЕЛЬ РЕЙДА</span><span class="stage-direction" id="stage-direction">Спереди справа</span></div>
+          <div class="model-toolbar"><div class="turn-controls" role="group" aria-label="Поворот модели"><button id="turn-left" type="button" aria-label="Повернуть влево">↶</button><button id="turn-right" type="button" aria-label="Повернуть вправо">↷</button></div><button id="play-animation" type="button" aria-pressed="true">Пауза</button><button id="rotate-model" type="button" aria-pressed="true">Поворот по кругу</button></div>
+          <div class="frame-control"><label for="animation-frame">Кадр анимации</label><input id="animation-frame" type="range" min="1" max="8" value="1" step="1" /><output id="frame-number" for="animation-frame">1 / 8</output></div>
+          <p class="model-summary" id="model-summary" role="status" aria-live="polite"></p>
+        </section>
+
+        <section class="fitting panel" aria-labelledby="fitting-title">
+          <div class="panel-heading"><div><p class="eyebrow">Подготовка к выходу</p><h2 id="fitting-title">Примерить снаряжение</h2></div><span class="section-number">01</span></div>
+          <label class="full-field">Кого осмотреть<select id="model-figure"><option value="scav">Дикий</option><option value="raider">Налётчик</option><option value="bugor">Босс · Бугор</option><option value="lesnik">Босс · Лесник</option><option value="liteyshchik">Босс · Литейщик</option><option value="komendant">Босс · Комендант</option></select></label>
+          <div class="field-pair"><label>Внешность<select id="model-appearance"></select></label><label>Поза<select id="model-pose"><option value="idle">Стоит</option><option value="walk" selected>Идёт</option><option value="aim">Целится</option><option value="fire">Стреляет</option><option value="hit">Получает попадание</option><option value="downed">Ранен на земле</option></select></label></div>
+          <label class="full-field">Оружие в руках<select id="model-weapon"></select></label>
+          <label class="full-field">Ракурс<select id="model-facing"></select></label>
+          <fieldset class="gear-profile"><legend>Сборка снаряжения</legend><div class="profile-options"><button type="button" data-profile="light" aria-pressed="false">Налегке</button><button type="button" data-profile="assault" aria-pressed="true">Штурм</button><button type="button" data-profile="scout" aria-pressed="false">Разведка</button></div></fieldset>
+          <fieldset class="gear-options"><legend>Надето на бойце</legend><label><span><strong>Шлем</strong><small>Защита головы</small></span><input id="model-helmet" type="checkbox" checked /></label><label><span><strong>Бронежилет</strong><small>Защита корпуса</small></span><input id="model-armor" type="checkbox" checked /></label><label><span><strong>Рюкзак</strong><small>За спиной, со всех сторон</small></span><input id="model-backpack" type="checkbox" checked /></label></fieldset>
+          <p class="fitting-note">Каждый предмет можно снять отдельно. Примерка не меняет снаряжение вашего отряда.</p>
+        </section>
+      </div>
+
+      <section class="bearings-section" aria-labelledby="bearings-title"><div class="section-heading"><div><p class="eyebrow">Обойти вокруг</p><h2 id="bearings-title">Восемь ракурсов</h2></div><p>Выберите сторону, чтобы рассмотреть крупно</p></div><div class="bearing-grid" id="bearing-grid"></div></section>
+
+      <section class="weapons-section" aria-labelledby="weapons-title"><div class="section-heading"><div><p class="eyebrow">Рейдовый арсенал</p><h2 id="weapons-title">У каждого оружия свой силуэт</h2></div><p>Единый масштаб · от пистолета до винтовки</p></div><div class="weapon-grid" id="pixel-weapon-grid"></div><p class="catalog-note">Здесь показаны модели рейда. Для сборки оружия по деталям откройте <a href="/characters.html">оружейную мастерскую →</a></p></section>
+      <footer class="workshop-footer"><span>Прапор · Полевая мастерская</span><span>Те же модели, что на карте рейда</span></footer>
+      <noscript><p class="panel">Для просмотра моделей включите JavaScript в браузере.</p></noscript>
+    </main>
+    <script type="module" src="/src/pixel-model-preview.ts"></script>
+  </body>
+</html>

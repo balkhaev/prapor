@@ -32,7 +32,7 @@ test('observing the raid map never sends movement, search or loot orders', () =>
   const scene = new LiveScene(new Element() as unknown as HTMLElement, command => commands.push(command), id => selections.push(id));
   const world = getLiveMap('perimeter');
   const other = { id: 'other', kind: 'player' as const, name: 'Наблюдаемый', appearance: 0, x: 14, y: 14, health: 100, action: 'idle' as const, safeUntil: 0 };
-  const privateScene = scene as unknown as { snapshot: LiveSnapshot; active: boolean; following: boolean; camera: { x: number; y: number }; hitTargets: Array<{ entity: typeof other; x: number; y: number }>; waypointTargets: Array<{ point: { x: number; y: number }; x: number; y: number }> };
+  const privateScene = scene as unknown as { snapshot: LiveSnapshot; active: boolean; following: boolean; camera: { x: number; y: number }; hitTargets: Array<{ entity: typeof other; x: number; y: number; bounds?: { x: number; y: number; width: number; height: number } }>; waypointTargets: Array<{ point: { x: number; y: number }; x: number; y: number }> };
   privateScene.snapshot = { world, entities: [other], selfId: 'self', drops: [{ id: 'loot', x: 16, y: 12, amount: 1 }] } as unknown as LiveSnapshot;
   privateScene.active = true;
   const click = (x: number, y: number) => canvas.listeners.get('click')!({ clientX: x, clientY: y });
@@ -40,6 +40,17 @@ test('observing the raid map never sends movement, search or loot orders', () =>
   privateScene.hitTargets = [{ entity: other, x: 320, y: 240 }];
   click(320, 240);
   expect(selections).toEqual(['other']);
+  // Magnified rifles and prone models follow their actual cropped image rather
+  // than a fixed upright body hit box; the last painted model takes precedence.
+  const front = { ...other, id: 'front' };
+  privateScene.hitTargets = [
+    { entity: other, x: 320, y: 240, bounds: { x: 260, y: 120, width: 160, height: 135 } },
+    { entity: front, x: 330, y: 250, bounds: { x: 280, y: 130, width: 150, height: 135 } },
+  ];
+  click(410, 145);
+  expect(selections).toEqual(['other', 'front']);
+  click(250, 145);
+  expect(selections).toEqual(['other', 'front']);
   privateScene.waypointTargets = [{ point: { x: 30, y: 40 }, x: 450, y: 300 }];
   click(450, 300);
   expect(privateScene.camera).toEqual({ x: 30, y: 40 });

@@ -32,7 +32,8 @@ export function pixelActorRig(animation: PixelActorFrame, limping = false): Pixe
   const lean = animation.mode === 'hit' ? frame === 0 ? -4 : -1 : animation.mode === 'aim' || animation.mode === 'fire' ? 2 : walk ? 1 : 0;
   const p = (side: number, forward: number, z: number) => point(96 + lateral.x * side + bearing.x * forward, 176 + lateral.y * side + bearing.y * forward - z);
   const handZ = animation.mode === 'aim' || animation.mode === 'fire' ? 91 : animation.mode === 'hit' ? 77 : 79;
-  return { anchor: { ...PIXEL_ACTOR_ANCHOR }, grip: p(7, 17 + lean, handZ + bob), leftShoulder: p(-20, lean, 108 + bob), rightShoulder: p(20, lean, 108 + bob),
+  // Keep the stock beside the firing shoulder, rather than in the centre of the chest.
+  return { anchor: { ...PIXEL_ACTOR_ANCHOR }, grip: p(15, 17 + lean, handZ + bob), leftShoulder: p(-20, lean, 108 + bob), rightShoulder: p(20, lean, 108 + bob),
     leftKnee: p(-8, leftStride * .58 + leftLift * .25, 32 + bob * .4 + leftLift * .3 + (limping ? 5 : 0)), rightKnee: p(8, rightStride * .58 + rightLift * .25, 32 + bob * .4 + rightLift * .3),
     leftHeel: p(-8, leftStride - 4, leftLift + 2), rightHeel: p(8, rightStride - 4, rightLift + 2),
     leftToe: p(-8, leftStride + 8, leftLift + (walk && leftStride < -9 ? 3 : 1)), rightToe: p(8, rightStride + 8, rightLift + (walk && rightStride < -9 ? 3 : 1)),
@@ -72,6 +73,10 @@ function paintModel(r: PixelRaster, entity: ActorIdentity, animation: PixelActor
   const torsoHalf = (boss === 'bugor' || boss === 'liteyshchik' ? 25 : boss === 'lesnik' ? 19 : boss === 'komendant' ? 23 : 21) + (animation.mode === 'idle' && frame === 2 ? 1 : 0);
   const helmet = gear?.helmet ?? (entity.faction === 'raiders' || profile === 'assault'), armor = gear?.armor ?? (profile === 'assault' || !!boss);
   const backpack = gear?.backpack ?? (profile !== 'light' || look % 3 !== 1);
+  const cosmeticHat = gear?.helmet === false && Math.floor(look / 8) === 3 ? 1 : Math.floor(look / 8);
+  // Explicit equipment wins over both a saved cosmetic helmet and a boss's default.
+  const hat = gear?.helmet !== undefined ? helmet ? 3 : cosmeticHat
+    : boss === 'lesnik' ? 2 : boss === 'komendant' ? 1 : helmet || boss === 'liteyshchik' ? 3 : cosmeticHat;
   const p = (side: number, forward: number, z = 0): LivePoint => point(96 + lateral.x * side + bearing.x * forward, 176 + lateral.y * side + bearing.y * forward - z);
   const b = (side: number, forward: number, z: number): LivePoint => p(side, forward + rig.lean, z + rig.bob);
   const line = (a: LivePoint, c: LivePoint, color: string, width = 1) => r.line(a.x, a.y, c.x, c.y, color, width);
@@ -89,8 +94,23 @@ function paintModel(r: PixelRaster, entity: ActorIdentity, animation: PixelActor
   if (animation.mode === 'downed') {
     limb(p(-8, -42, 7), p(-10, -17, 13), 13, trousers, trouserLight); limb(p(8, -48, 8), p(8, -17, 12), 13, trousers);
     limb(p(-9, -49, 5), p(-9, -37, 5), 12, P.rubber); limb(p(9, -54, 5), p(9, -42, 5), 12, P.rubber);
+    if (backpack) {
+      // A fallen pack rests under the upper body; its sides and cargo pocket stay visible.
+      outline([p(-23, -6, 9), p(23, -6, 9), p(23, 22, 14), p(-23, 22, 14)], '#768067');
+      outline([p(-26, 0, 13), p(-20, 0, 13), p(-20, 17, 17), p(-26, 17, 17)], '#52664d');
+      line(p(-23, -4, 11), p(-23, 20, 16), '#97a080', 3);
+    }
     outline([p(-18, -20, 12), p(18, -20, 12), p(20, 18, 20), p(-17, 20, 20)], coat); line(p(-12, -15, 21), p(-12, 14, 22), light, 3);
-    r.ellipse(p(0, 33, 18).x, p(0, 33, 18).y, 13, 9, skinShade); r.ellipse(p(0, 35, 22).x, p(0, 35, 22).y, 13, 7, helmet ? '#64715a' : hair);
+    if (armor) {
+      outline([p(-13, -10, 24), p(13, -10, 24), p(13, 16, 29), p(-13, 16, 29)], '#5f7263');
+      line(p(-10, -8, 26), p(10, -8, 26), '#92a184', 2); line(p(-10, 12, 29), p(10, 12, 29), '#384e43', 3);
+    }
+    r.ellipse(p(0, 33, 18).x, p(0, 33, 18).y, 13, 9, skinShade);
+    const head = p(0, 35, 22);
+    r.ellipse(head.x, head.y, 13, 7, hat === 3 ? '#64795e' : hat === 2 ? '#817856' : hat === 1 ? '#79745e' : hair);
+    if (hat === 3) { r.ellipse(head.x - 2, head.y - 2, 8, 3, '#99a187'); line(point(head.x - 12, head.y + 4), point(head.x + 12, head.y + 4), '#3a553f', 2); }
+    else if (hat === 2) for (const side of [-1, 1]) r.ellipse(head.x + side * 11, head.y + 3, 4, 5, '#595b48');
+    else if (hat === 1) line(point(head.x - 10, head.y + 5), point(head.x + 10, head.y + 5), '#3e514c', 3);
     limb(p(-18, 10, 18), p(-25, 23, 9), 10, shade); limb(p(17, 10, 18), p(21, 28, 8), 10, coat);
     paintPixelWeapon(r, weaponId, p(20, 9, 10), animation.facing); return {};
   }
@@ -128,13 +148,26 @@ function paintModel(r: PixelRaster, entity: ActorIdentity, animation: PixelActor
     line(point(elbow.x * .22 + hand.x * .78, elbow.y * .22 + hand.y * .78), hand, '#3f4c3d', 10);
   };
   const farHand = nearSign > 0 ? leftHand : rightHand, nearHand = nearSign > 0 ? rightHand : leftHand;
-  arm(-nearSign, farHand, true); if (rear) paintPixelWeapon(r, weaponId, rig.grip, animation.facing, kick);
+  const hand = (at: LivePoint) => { r.ellipse(at.x, at.y, 5, 4, '#3a4e3d'); r.rect(at.x - 3, at.y - 2, 5, 3, profile === 'light' ? skin : '#82917a'); r.rect(at.x + 1, at.y, 2, 2, '#c0ad85'); };
+  arm(-nearSign, farHand, true);
+  if (rear) {
+    // Both forearms reach around the front of the torso. Painting their hands last
+    // would make them show through the back plate and the backpack.
+    arm(nearSign, nearHand, false);
+    paintPixelWeapon(r, weaponId, rig.grip, animation.facing, kick); hand(farHand); hand(nearHand);
+  }
   outline([b(-torsoHalf, -8, 109), b(torsoHalf, -8, 109), b(torsoHalf - 5, 10, 58), b(-torsoHalf + 5, 10, 58)], shade);
   volume(0, 1, torsoHalf - 2, 11, 61, 105, [rear ? shade : coat, shade, light]);
   outline([b(-torsoHalf, 4, 106), b(-torsoHalf + 6, 12, 112), b(torsoHalf - 6, 12, 112), b(torsoHalf, 4, 106), b(torsoHalf - 4, 12, 91), b(-torsoHalf + 4, 12, 91)], coat);
   line(b(-torsoHalf + 3, 12, 91), b(-torsoHalf + 4, 12, 64), light, 3); line(b(0, 12, 101), b(0, 12, 62), '#b9aa7f', 2);
   volume(0, 1, 17, 10, 54, 62, ['#55624e', '#354a39', '#9c9970']); const buckle = b(0, 12, 59); r.rect(buckle.x - 3, buckle.y - 2, 6, 4, '#c9b27e');
-  if (rear) pack();
+  if (rear) {
+    if (armor) {
+      volume(0, -12, torsoHalf - 6, 3, 70, 103, ['#5f7263', '#384e43', '#92a184']);
+      line(b(-torsoHalf + 7, -16, 96), b(torsoHalf - 7, -16, 96), '#a6ad8c', 2);
+    }
+    pack();
+  }
   else {
     if (armor) { volume(0, 14, torsoHalf - 6, 3, 70, 103, ['#5f7263', '#384e43', '#92a184']); line(b(-torsoHalf + 7, 18, 96), b(torsoHalf - 7, 18, 96), '#a6ad8c', 2); }
     for (const side of [-10, 2]) volume(side, 18, 4, 3, 66, 82, [profile === 'light' ? '#93896b' : '#7e8a6c', '#4b5f46', '#b4b492']);
@@ -162,8 +195,6 @@ function paintModel(r: PixelRaster, entity: ActorIdentity, animation: PixelActor
     const nose = b(0, 16, 130), root = b(0, 11, 135); outline([point(root.x - 1, root.y), nose, point(nose.x - 2, nose.y + 3), b(0, 11, 128)], skinLight, skinShade); line(b(-4, 12, 124), b(5, 12, 124), '#876247', 2);
     if (look % 4 !== 3 || boss === 'lesnik' || boss === 'bugor') { outline([b(-10, 11, 127), b(-6, 14, 123), b(7, 14, 123), b(11, 10, 127), b(8, 12, boss === 'lesnik' ? 111 : 118), b(-7, 12, 118)], boss === 'lesnik' ? '#a49b82' : hair); line(b(-4, 14, 124), b(5, 14, 124), '#7c6450', 2); }
   }
-  const cosmeticHat = gear?.helmet === false && Math.floor(look / 8) === 3 ? 1 : Math.floor(look / 8);
-  const hat = boss === 'lesnik' ? 2 : boss === 'komendant' ? 1 : helmet || boss === 'liteyshchik' ? 3 : cosmeticHat;
   const hatY = head.y - 12;
   if (hat === 3) {
     r.ellipse(head.x, hatY, headW + 2, 11, P.ink); r.ellipse(head.x, hatY - 1, headW + 1, 10, boss === 'liteyshchik' ? '#7f8977' : '#64795e');
@@ -184,9 +215,10 @@ function paintModel(r: PixelRaster, entity: ActorIdentity, animation: PixelActor
     outline([b(-12, 9, 143), b(12, 9, 143), b(12, 19, 142), b(-12, 19, 142)], boss === 'komendant' ? '#283e45' : '#6c6e58');
     if (boss === 'komendant') { const badge = b(0, 12, 149); r.rect(badge.x - 2, badge.y - 2, 4, 4, '#d3c17f'); }
   } else { r.ellipse(head.x, head.y - 9, headW - 1, 8, hair); r.polygon([point(head.x - headW + 2, head.y - 7), point(head.x - 8, head.y - 15), point(head.x + 5, head.y - 15), point(head.x + 9, head.y - 9)], look % 4 === 2 ? '#b0a18a' : '#927757'); line(b(nearSign * 9, 9, 143), b(nearSign * 11, 8, 136), hair, 4); }
-  if (!rear) paintPixelWeapon(r, weaponId, rig.grip, animation.facing, kick);
-  arm(nearSign, nearHand, false);
-  for (const hand of [leftHand, rightHand]) { r.ellipse(hand.x, hand.y, 5, 4, '#3a4e3d'); r.rect(hand.x - 3, hand.y - 2, 5, 3, profile === 'light' ? skin : '#82917a'); r.rect(hand.x + 1, hand.y, 2, 2, '#c0ad85'); }
+  if (!rear) {
+    paintPixelWeapon(r, weaponId, rig.grip, animation.facing, kick);
+    arm(nearSign, nearHand, false); hand(farHand); hand(nearHand);
+  }
   return { muzzle: weapon.muzzle, ejection: weapon.ejection };
 }
 
