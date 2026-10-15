@@ -149,9 +149,9 @@ export function buildRoadSurfaceArt(world: GroundWorld & Partial<Pick<LiveWorld,
       }
     }
   }
-  // Tiny low-contrast aggregate is resolved only in the display pass. Stratified
-  // metre samples stay sparse; selecting the closest segment avoids a second
-  // grain layer where several roads share the same intersection.
+  // Tiny low-contrast aggregate is resolved only in the display pass. Visiting
+  // each stratified metre cell once avoids a second grain layer where several
+  // roads share the same intersection.
   let grains = 0;
   for (const run of art.runs) for (let x = run.x; x < run.x + run.width && grains < 8192 && art.strokes.length < STROKE_LIMIT; x++) {
     const sample = hash(x, run.y);
