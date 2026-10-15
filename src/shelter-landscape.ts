@@ -226,9 +226,9 @@ class LandscapePainter {
 }
 
 /** The grid is kept in the model only: the ground has no seams, squares or alternating colours. */
-export function paintShelterLandscape(g: Phaser.GameObjects.Graphics, landscape: ShelterLandscape, worldBounds: ShelterRect): void {
+export function paintShelterLandscape(g: Phaser.GameObjects.Graphics, landscape: ShelterLandscape, worldBounds: ShelterRect, paintForestFloor = true): void {
 	const a = new LandscapePainter(g), owned = new Set(landscape.sites.map(key));
-	g.fillStyle(C.forest).fillRect(worldBounds.x, worldBounds.y, worldBounds.width, worldBounds.height);
+	if (paintForestFloor) g.fillStyle(C.forest).fillRect(worldBounds.x, worldBounds.y, worldBounds.width, worldBounds.height);
 	for (const lot of landscape.lots) a.plane(lot.x, lot.y, lot.width, lot.height, C.grass);
 	for (const site of landscape.sites) {
 		const p = shelterRoomPosition(site.column, site.row), seed = hash(site.column, site.row, 3), r = random(seed);

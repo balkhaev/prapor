@@ -26,6 +26,7 @@ import type { SceneLamp } from './pixel-lighting';
 import { getShelterRoutine, restoreShelterRoutine, type ShelterRoutine } from "./shelter-routines";
 import { getShelterActivityPose } from "./shelter-activity";
 import type { ShelterPersonView } from "./territory-life";
+import { getShelterBackdropCoverage, getShelterBackdropDecorations, paintShelterBackdropTile, SHELTER_BACKDROP_TILE } from './shelter-backdrop';
 
 export interface WorldSnapshot {
 	identityKey?: string;
@@ -337,6 +338,11 @@ export function createWorld(
 		private nativeEvents = new AbortController();
 		private viewState: WorldSnapshot | null = null;
 		private terrain!: Phaser.GameObjects.Graphics;
+		private backdropGround!: Phaser.GameObjects.TileSprite;
+		private backdropTrees!: Phaser.GameObjects.Graphics;
+		private backdropTextureKey = `shelter-backdrop-${Phaser.Utils.String.UUID()}`;
+		private backdropCoverage: ShelterRect | null = null;
+		private backdropSignature = '';
 		private exteriorProps: Phaser.GameObjects.Graphics[] = [];
 		private perimeterFences: Phaser.GameObjects.Graphics[] = [];
 		private layoutSignature = "";
@@ -401,6 +407,7 @@ export function createWorld(
 				this.nativeEvents.abort();
 				this.baseWeather?.destroy();
 				this.wetGround?.destroy(); this.wetPatches = []; this.wetLamps = [];
+				this.textures.remove(this.backdropTextureKey);
 				this.raidActors.clear();
 				this.places.clear();
 				this.cells.clear();
@@ -559,6 +566,7 @@ export function createWorld(
 
 		private applyCamera(): void {
 			this.viewCamera = clampShelterCamera(this.viewCamera, this.viewport, this.worldBounds);
+			this.syncBackdrop();
 			this.baseLayer?.setScale(this.viewCamera.zoom).setPosition(-this.viewCamera.x * this.viewCamera.zoom, -this.viewCamera.y * this.viewCamera.zoom);
 			// Weather uses CSS pixels despite both the yard camera and FIT scaling.
 			this.baseWeather?.setPosition(this.viewCamera.x, this.viewCamera.y).setScale(1 / (this.viewCamera.zoom * this.weatherDisplayScale));
@@ -1009,6 +1017,12 @@ export function createWorld(
 		}
 
 		private paintBunker(): void {
+			const floor = this.add.graphics();
+			paintShelterBackdropTile(floor); floor.generateTexture(this.backdropTextureKey, SHELTER_BACKDROP_TILE, SHELTER_BACKDROP_TILE); floor.destroy();
+			this.textures.get(this.backdropTextureKey).setFilter(Phaser.Textures.FilterMode.NEAREST);
+			this.backdropGround = this.add.tileSprite(0, 0, SHELTER_BACKDROP_TILE, SHELTER_BACKDROP_TILE, this.backdropTextureKey).setOrigin(0).setDepth(-1_000_000_002);
+			this.backdropTrees = this.add.graphics().setDepth(-1_000_000_001);
+			this.baseLayer.add([this.backdropGround, this.backdropTrees]);
 			this.terrain = this.add.graphics().setDepth(-1_000_000_000); this.baseLayer.add(this.terrain);
 			this.atmosphereGround = this.add.graphics().setDepth(-999_999_998);
 			this.wetGround = this.add.graphics().setDepth(-999_999_997);
@@ -1027,6 +1041,20 @@ export function createWorld(
 			this.shelterCaption = this.text(29, 477, "ПОСТРОЙКИ · ДВОР · ПРОИЗВОДСТВО", 10, "#abb69c").setVisible(false);
 			this.baseLayer.add([this.baseCaption, this.shelterCaption]);
 			this.syncShelterLayout(snapshot());
+		}
+
+		private syncBackdrop(): void {
+			if (!this.backdropGround || !this.backdropTrees) return;
+			const coverage = getShelterBackdropCoverage(this.viewCamera, this.viewport, this.worldBounds);
+			const signature = `${coverage.x}:${coverage.y}:${coverage.width}:${coverage.height}|${this.worldBounds.x}:${this.worldBounds.y}:${this.worldBounds.width}:${this.worldBounds.height}`;
+			if (signature === this.backdropSignature) return;
+			this.backdropSignature = signature; this.backdropCoverage = coverage; this.lastAtmospherePaint = -1000;
+			// Keep TileSprite's backing canvas at 512² even when a portrait camera sees
+			// thousands of world pixels. Reciprocal tile scale retains world-sized texels.
+			this.backdropGround.setPosition(coverage.x, coverage.y).setDisplaySize(coverage.width, coverage.height)
+				.setTileScale(SHELTER_BACKDROP_TILE / coverage.width, SHELTER_BACKDROP_TILE / coverage.height).setTilePosition(coverage.x, coverage.y);
+			this.backdropTrees.clear();
+			for (const decoration of getShelterBackdropDecorations(coverage, this.worldBounds)) paintShelterDecoration(this.backdropTrees, decoration);
 		}
 
 		private syncShelterLayout(state: WorldSnapshot): void {
@@ -1055,7 +1083,7 @@ export function createWorld(
 			}
 			for (const slot of this.scavs.values()) if (!slot.assignment) { slot.routine = null; slot.goal = ""; slot.route = []; slot.dwellUntil = 0; }
 			const g = this.terrain; g.clear();
-			paintShelterLandscape(g, landscape, this.worldBounds);
+			paintShelterLandscape(g, landscape, this.worldBounds, false);
 			for (const prop of this.exteriorProps) prop.destroy(); this.exteriorProps = [];
 			for (const decoration of landscape.decorations) {
 				const art = this.add.graphics().setDepth(projectShelterPoint(decoration.point).y);
@@ -1435,8 +1463,9 @@ export function createWorld(
 			}
 			// One tint covers world art only. Chrome, controls and selection layers
 			// stay above it; individual light pools never add a second dark overlay.
+			const shadeBounds = this.backdropCoverage ?? this.worldBounds;
 			this.atmosphereShade.clear().fillStyle(pigment(profile.ambient), profile.ambientAlpha)
-				.fillRect(Math.floor(this.worldBounds.x) - 1, Math.floor(this.worldBounds.y) - 1, Math.ceil(this.worldBounds.width) + 2, Math.ceil(this.worldBounds.height) + 2);
+				.fillRect(Math.floor(shadeBounds.x) - 1, Math.floor(shadeBounds.y) - 1, Math.ceil(shadeBounds.width) + 2, Math.ceil(shadeBounds.height) + 2);
 			const frame = sampleShelterAtmosphere({ timeMs: climate.timeMs, groundBounds: this.worldBounds, smokeEmitters: this.smokeEmitters, lights: this.atmosphereLights,
 				lightStrength: profile.lights, shadowStrength: profile.shadowAlpha,
 				weatherRain: climate.rain, weatherFog: climate.fog, weatherWind: climate.wind,
