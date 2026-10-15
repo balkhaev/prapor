@@ -32,6 +32,17 @@ const mean = (points: Point[]) => ({ x: points.reduce((sum, point) => sum + poin
 const near = (a: Point, b: Point) => Math.abs(a.x - b.x) < 1e-6 && Math.abs(a.y - b.y) < 1e-6;
 
 describe("oriented cutaway building artwork", () => {
+	test("room-specific detail is deterministic at fractional positions without changing building geometry", () => {
+		const signatures = new Set<string>();
+		for (const type of Object.keys(ROOM_DEFINITIONS) as RoomInstance["type"][]) {
+			const building = room(type, 1), before = structuredClone(building), first = graphics(), repeat = graphics();
+			paintIsometricRoom(first.g, 0, 0, building); paintIsometricRoom(repeat.g, 0, 0, building);
+			expect(first.faces).toEqual(repeat.faces); expect(first.points).toEqual(repeat.points); expect(building).toEqual(before);
+			expect(first.points.length).toBeLessThan(12000);
+			signatures.add(JSON.stringify(first.faces));
+		}
+		expect(signatures.size).toBe(Object.keys(ROOM_DEFINITIONS).length);
+	});
 	test("turned buildings cast their soft foundation shadows in the same world direction", () => {
 		for (const facing of [0, 1, 2, 3] as const) {
 			const building = room("workshop", facing), drawing = graphics(), { width, height } = getRoomLocalSize(building);

@@ -10,7 +10,7 @@ export default defineConfig({
   build: {
     target: "es2022",
     rollupOptions: {
-      input: { game: "index.html", characters: "characters.html", models: "models.html" },
+      input: { game: "index.html", characters: "characters.html", models: "models.html", environment: "environment.html" },
       output: {
         manualChunks: (id) => id.includes("node_modules/phaser") ? "phaser" : undefined,
       },

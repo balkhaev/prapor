@@ -18,6 +18,7 @@ export interface ShelterWind { x: number; y: number; sway: number }
 export interface AtmosphereEllipse extends ShelterPoint { width: number; height: number; alpha: number }
 export interface ShelterSmokePuff extends AtmosphereEllipse { id: number; color: number }
 export interface ShelterFlame extends ShelterPoint { width: number; height: number; lean: number; alpha: number }
+export interface ShelterEmber extends ShelterPoint { alpha: number; color: number }
 export interface ShelterBird extends ShelterPoint { size: number; wing: number; alpha: number }
 export interface ShelterLightGlow extends AtmosphereEllipse { color: number; coreAlpha: number }
 export interface ShelterAtmosphereFrame {
@@ -25,6 +26,7 @@ export interface ShelterAtmosphereFrame {
 	clouds: AtmosphereEllipse[];
 	smoke: ShelterSmokePuff[];
 	flames: ShelterFlame[];
+	embers: ShelterEmber[];
 	birds: ShelterBird[];
 	glows: ShelterLightGlow[];
 	mist: AtmosphereEllipse[];
@@ -41,7 +43,7 @@ export interface ShelterAtmosphereInput {
 	reducedMotion?: boolean;
 }
 
-export const SHELTER_ATMOSPHERE_LIMITS = Object.freeze({ smokeEmitters: 24, puffsPerEmitter: 3, flames: 24, lights: 32, birds: 6, clouds: 3, mist: 6 });
+export const SHELTER_ATMOSPHERE_LIMITS = Object.freeze({ smokeEmitters: 24, puffsPerEmitter: 3, embersPerFire: 3, flames: 24, lights: 32, birds: 6, clouds: 3, mist: 6 });
 const TAU = Math.PI * 2;
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const finite = (value: number, fallback = 0) => Number.isFinite(value) ? value : fallback;
@@ -72,7 +74,7 @@ export function sampleShelterWind(timeMs: number, reducedMotion = false): Shelte
 /** Visual time only: no persistent particles, random calls, or game-state mutations. */
 export function sampleShelterAtmosphere(input: ShelterAtmosphereInput): ShelterAtmosphereFrame {
 	const t = time(input.timeMs, input.reducedMotion), area = bounds(input.groundBounds), wind = sampleShelterWind(t, input.reducedMotion);
-	const frame: ShelterAtmosphereFrame = { wind, clouds: [], smoke: [], flames: [], birds: [], glows: [], mist: [] };
+	const frame: ShelterAtmosphereFrame = { wind, clouds: [], smoke: [], flames: [], embers: [], birds: [], glows: [], mist: [] };
 	for (let i = 0; i < SHELTER_ATMOSPHERE_LIMITS.clouds; i++) {
 		const p = phase(t / (76000 + i * 9000) + .18 + i * .29);
 		frame.clouds.push({
@@ -94,6 +96,12 @@ export function sampleShelterAtmosphere(input: ShelterAtmosphereInput): ShelterA
 				width: 5.3 + lift * .25, height: clamp(sourceHeight, 3, 12) + lift * .8,
 				lean: wind.x * 1.05 + (input.reducedMotion ? 0 : Math.sin(t / 3100 * TAU + i) * .55), alpha: .87 * strength,
 			});
+			if (!input.reducedMotion) for (let ember = 0; ember < SHELTER_ATMOSPHERE_LIMITS.embersPerFire; ember++) {
+				const p = phase(t / (2300 + ember * 270) + ember / 3 + i * .17), rise = 4 + p * 17;
+				frame.embers.push({ x: clamp(emitter.x, -1e6, 1e6) + wind.x * rise * .8 + Math.sin(p * TAU + ember) * 2,
+					y: clamp(emitter.y, -1e6, 1e6) - rise, alpha: envelope(p, .22) * (1 - p) * .65 * strength,
+					color: pigment(ember % 2 ? P.woodLight : P.yellow) });
+			}
 		}
 		for (let j = 0; j < SHELTER_ATMOSPHERE_LIMITS.puffsPerEmitter; j++) {
 			const p = phase(t / (fire ? 5700 : 7300) + j / 3 + phase(i * .371 + .21));
@@ -169,6 +177,8 @@ export function paintShelterAtmosphereAir(g: Phaser.GameObjects.Graphics, frame:
 		patch(g, puff.x, puff.y, puff.width, puff.height);
 		g.fillStyle(puff.color, puff.alpha * .45);
 		patch(g, puff.x - puff.width * .2, puff.y - puff.height * .2, puff.width * .55, puff.height * .45);
+		g.fillStyle(puff.color, puff.alpha * .6);
+		patch(g, puff.x + puff.width * .22, puff.y - puff.height * .24, puff.width * .4, puff.height * .5);
 	}
 	for (const flame of frame.flames) {
 		g.fillStyle(pigment(P.rust), flame.alpha);
@@ -177,6 +187,7 @@ export function paintShelterAtmosphereAir(g: Phaser.GameObjects.Graphics, frame:
 		patch(g, flame.x + flame.lean, flame.y - flame.height * .66, flame.width * .55, flame.height * .7);
 		g.fillStyle(pigment(P.cream), flame.alpha).fillRect(Math.round(flame.x - 1), Math.round(flame.y - 3), 2, 3);
 	}
+	for (const ember of frame.embers) g.fillStyle(ember.color, ember.alpha).fillRect(Math.round(ember.x), Math.round(ember.y), 1, 1);
 	for (const bird of frame.birds) {
 		if (bird.alpha <= 0) continue;
 		g.lineStyle(1, pigment(P.ink), bird.alpha);

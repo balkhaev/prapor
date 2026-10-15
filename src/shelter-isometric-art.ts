@@ -155,6 +155,21 @@ function foundation(a: RoomPainter, finish: BuildingFinish): void {
 	a.line([1, a.height - 1, .3], [a.width - 1, a.height - 1, .3], 0xc4b997, 1.1, .85);
 	a.line([a.width - 1, 1, .3], [a.width - 1, a.height - 1, .3], 0x566455, .8, .7);
 	for (let x = 13; x < a.width - 5; x += 23) a.line([x, a.height - 1, -4], [x, a.height - 1, -.5], 0x4b5548, .6, .55);
+	// Mortar courses, chipped corners and damp patches give the raised plinth
+	// thickness without extending the building or covering the entrance route.
+	for (const side of ["east", "south"] as const) {
+		const length = side === "south" ? a.width : a.height;
+		const edge = (along: number, z: number): Vertex => side === "south" ? [along, a.height - .8, z] : [a.width - .8, along, z];
+		a.line(edge(3, -2.4), edge(length - 3, -2.4), C.seam, 1, .8);
+		for (let along = 11; along < length - 5; along += 29) {
+			a.line(edge(along, -4.6), edge(along, -2.5), C.seam, 1, .8);
+			a.line(edge(along + 8, -2.2), edge(along + 8, -.3), C.seam, 1, .7);
+			if (along % 3 === 2) a.line(edge(along + 3, -.4), edge(along + 7, -.4), C.pale, 1, .6);
+		}
+	}
+	for (const [x, y] of [[7, 7], [a.width - 9, 7], [7, a.height - 9], [a.width - 9, a.height - 9]]) {
+		a.wash([[x!, y!, .3], [x! + 6, y!, .3], [x! + 4, y! + 3, .3], [x!, y! + 4, .3]], pigment(P.soil), .27);
+	}
 }
 
 function windowPositions(side: WallSide, length: number): { along: number; width: number }[] {
@@ -241,6 +256,15 @@ function roof(a: RoomPainter, finish: BuildingFinish): void {
 		a.line(vertex(along, -5, 33), vertex(along, 4, 41), finish.roof[0], .65, .65);
 		a.line(vertex(along, 4, 41), vertex(along, depth, 32), finish.roof[2], .75, .7);
 	}
+	// Lapped repair sheets catch the light on one edge; fasteners repeat only
+	// along seams, leaving broad quiet planes around the cutaway interior.
+	for (const fraction of [.32, .73]) {
+		const along = Math.round(length * fraction), near = 7, far = Math.min(depth - 2, 13);
+		a.face([vertex(along, near, slope(near) + .18), vertex(along + 14, near, slope(near) + .18),
+			vertex(along + 14, far, slope(far) + .18), vertex(along, far, slope(far) + .18)], pigment(P.panelShade), .8, finish.roof[2]);
+		a.line(vertex(along, near, slope(near) + .3), vertex(along + 14, near, slope(near) + .3), C.steel, 1, .8);
+		for (const end of [along + 2, along + 12]) { const bolt = vertex(end, near + 1, slope(near + 1) + .4); a.dot(bolt[0], bolt[1], bolt[2]!, .6, C.pale); }
+	}
 	a.line(vertex(-4, 4, 41), vertex(length + 4, 4, 41), 0xc9cbb3, 1.4, .85);
 	for (let along = 9; along < length; along += 32) {
 		const bolt = vertex(along, 4, 41.2); a.dot(bolt[0], bolt[1], bolt[2]!, .7, 0xe0d9bf, .85);
@@ -254,7 +278,9 @@ function roof(a: RoomPainter, finish: BuildingFinish): void {
 	const chimney = chimneyLocal(a.room);
 	if (chimney) {
 		const { x, y } = chimney;
+		a.plane(x - 2, y - 1, 16, 13, 35.3, pigment(P.steelShade));
 		a.box(x + 2, y + 2, 8, 6, 11, STONE, 35);
+		for (const z of [39, 43]) a.line([x + 2, y + 8, z], [x + 10, y + 8, z], C.seam, 1, .75);
 		a.box(x, y, 12, 10, 2, STEEL, 46);
 		a.plane(x + 3, y + 3, 6, 4, 48.1, C.ink);
 	}
@@ -291,6 +317,17 @@ function walls(a: RoomPainter, finish: BuildingFinish): void {
 			a.line(inside(along, 5), inside(along, 29), finish.wall[2], 1.7, .65);
 			a.line(inside(along + 1.5, 5), inside(along + 1.5, 29), finish.wall[0], .8, .7);
 		}
+		// Surface conduit, porcelain clips and a small breaker box stay on the
+		// actual visible wall after rotation. They never become floor obstacles.
+		const service = Math.min(length - 22, Math.max(69, length * .67));
+		a.line(inside(12, 28), inside(length - 12, 28), C.ink, 2, .8);
+		a.line(inside(12, 28.8), inside(length - 12, 28.8), C.steel, 1, .8);
+		for (let along = 17; along < length - 10; along += 31) { const clip = inside(along, 28); a.dot(clip[0], clip[1], clip[2]!, .75, C.pale); }
+		a.line(inside(service + 3, 28), inside(service + 3, 17), C.ink, 2);
+		a.face([inside(service - 2, 10), inside(service + 8, 10), inside(service + 8, 19), inside(service - 2, 19)], C.dark);
+		a.line(inside(service - 1, 18), inside(service + 7, 18), C.steel, 1);
+		for (const z of [12, 14]) a.line(inside(service, z), inside(service + 5, z), C.ink, 1);
+		const lamp = inside(service + 6, 16); a.dot(lamp[0], lamp[1], lamp[2]!, .6, finish.accent);
 	}
 	for (const [x, y, vertical, horizontal] of [
 		[0, 0, "west", "north"], [a.width - 7, 0, "east", "north"],
@@ -579,6 +616,47 @@ function construction(a: RoomPainter): void {
 	for (let x = 28; x < right - 6; x += 11) a.line([x, a.height - 15, 2], [x + 5, a.height - 15, 4], C.ink, 1.3);
 }
 
+/** Small evidence of use belongs to each station, not to the walking model. */
+function workingTraces(a: RoomPainter): void {
+	const type = a.room.type;
+	if (type === "workshop" || type === "recycler" || type === "hangar") {
+		const x = type === "hangar" ? a.width * .53 : 46, y = type === "hangar" ? a.height * .55 : 57;
+		a.wash([[x - 11, y - 5, .35], [x + 13, y - 4, .35], [x + 17, y + 4, .35], [x + 3, y + 8, .35], [x - 14, y + 3, .35]], C.ink, .25);
+		for (let i = 0; i < 11; i++) {
+			const px = x - 10 + i * 7 % 25, py = y - 4 + i * 11 % 13;
+			a.line([px, py, .5], [px + 2 + i % 2, py + (i % 3 - 1), .5], i % 3 ? C.steel : pigment(P.rust), 1, .85);
+		}
+	}
+	if (type === "workshop") {
+		// Oiler, rag, swarf tray and a loose spanner sit on the bench edge.
+		a.box(68, 43, 10, 5, 1, BLACK, 14.4);
+		for (let i = 0; i < 5; i++) a.line([69 + i, 44, 15.5], [71 + i, 46, 15.5], C.steel, 1);
+		a.box(39, 41, 4, 4, 6, OLIVE, 14.3); a.line([41, 43, 20.5], [45, 43, 22.5], C.steel, 1);
+		a.plane(52, 45, 10, 3, 14.5, pigment(P.panel));
+		a.line([87, 28, .7], [87, 50, .7], C.ink, 2, .8); a.line([87, 50, .7], [97, 50, .7], C.ink, 2, .8);
+	} else if (type === "ammo") {
+		for (let i = 0; i < 9; i++) a.line([53 + i * 7 % 29, 60 + i * 11 % 13, .6], [55 + i * 7 % 29, 60 + i * 11 % 13, .6], C.amber, 1, .9);
+		a.box(88, 61, 13, 9, 5, WOOD); a.plane(90, 63, 9, 5, 5.2, C.ink);
+		for (let i = 0; i < 3; i++) a.dot(92 + i * 2, 65, 5.4, .7, C.amber);
+	} else if (type === "recycler") {
+		a.box(76, 64, 23, 13, 2, STEEL);
+		for (let i = 0; i < 5; i++) a.box(78 + i * 3, 67 + i % 2 * 3, 5, 2, 2, i % 2 ? BLACK : STEEL, 2);
+	} else if (type === "medbay") {
+		for (let i = 0; i < 3; i++) { a.box(128 + i * 4, 65, 3, 3, 5, PALE, 15.2); a.dot(129 + i * 4, 66, 20.5, .7, i % 2 ? C.cyan : C.amber); }
+		a.line([80, 57, 15], [85, 57, 15], C.steel, 1); a.line([85, 57, 15], [85, 62, 10], C.steel, 1);
+	} else if (type === "radio") {
+		// A coiled lead and separate dark/light conductor stay below the desk.
+		for (let i = 0; i < 3; i++) a.face([[112 - i, 57, .5], [119, 54 - i, .5], [127 + i, 59, .5], [119, 63 + i, .5]], C.ink, .45, C.ink);
+		a.line([98, 40, 17], [112, 40, .6], C.ink, 2); a.line([112, 40, .6], [119, 55, .6], C.ink, 2);
+	} else if (type === "storage") {
+		for (const x of [63, 77]) { a.box(x, 51, 11, 8, 6, WOOD); a.line([x + 5, 51, 6.2], [x + 5, 59, 6.2], C.pale, 1); }
+		a.plane(91, 48, 13, 9, .5, pigment(P.plaster)); a.line([94, 51, .7], [101, 51, .7], C.dark, 1);
+	} else if (type === "dormitory") {
+		for (const x of [29, 37]) { a.box(x, 56, 5, 9, 4, BLACK); a.box(x, 56, 5, 3, 5, BLACK, 2); a.dot(x + 2, 62, 4.4, .6, C.steel); }
+		a.line([56, 25, 13], [64, 25, 13], C.pale, 1); a.line([56, 27, 13], [65, 27, 13], C.pale, 1);
+	}
+}
+
 /** Draw a small cutaway building in the shared projected world space. */
 export function paintIsometricRoom(g: Phaser.GameObjects.Graphics, column: number, row: number, room: RoomInstance | null): void {
 	if (!room) { paintIsometricLand(g, column, row, true); return; }
@@ -599,6 +677,7 @@ export function paintIsometricRoom(g: Phaser.GameObjects.Graphics, column: numbe
 		case "dormitory": dormitory(a); break;
 		case "hangar": hangar(a); break;
 	}
+	workingTraces(a);
 	roof(a, finish);
 	if (!a.farWall("south")) frontDetails(a, finish, room.type);
 	if (room.status === "upgrading") construction(a);

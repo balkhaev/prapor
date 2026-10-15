@@ -22,6 +22,21 @@ function allNumbers(value: unknown): number[] {
 }
 
 describe("shelter atmosphere", () => {
+	test("only existing fires emit bounded fading embers, and reduced motion removes them", () => {
+		const fire = { x: 160, y: 325, kind: "fire" as const }, chimney = { x: 50, y: 50, kind: "chimney" as const };
+		for (const timeMs of [0, 1000, 10000000]) {
+			const frame = sampleShelterAtmosphere({ ...input, timeMs, smokeEmitters: [chimney, fire] });
+			expect(frame.embers).toHaveLength(SHELTER_ATMOSPHERE_LIMITS.embersPerFire);
+			expect(frame.embers.every(ember => ember.y < fire.y && ember.y >= fire.y - 21 && Math.abs(ember.x - fire.x) < 20 && ember.alpha >= 0 && ember.alpha <= .65)).toBe(true);
+			expect(sampleShelterAtmosphere({ ...input, timeMs, smokeEmitters: [chimney] }).embers).toEqual([]);
+			expect(sampleShelterAtmosphere({ ...input, timeMs, smokeEmitters: [fire], reducedMotion: true }).embers).toEqual([]);
+		}
+		const crowded = sampleShelterAtmosphere({ ...input, smokeEmitters: Array.from({ length: 1000 }, () => fire) });
+		expect(crowded.embers).toHaveLength(SHELTER_ATMOSPHERE_LIMITS.smokeEmitters * SHELTER_ATMOSPHERE_LIMITS.embersPerFire);
+		const cycle = 2300, before = sampleShelterAtmosphere({ ...input, timeMs: cycle - .1, smokeEmitters: [fire] }).embers[0]!;
+		const after = sampleShelterAtmosphere({ ...input, timeMs: cycle + .1, smokeEmitters: [fire] }).embers[0]!;
+		expect(before.alpha).toBeLessThan(.000001); expect(after.alpha).toBeLessThan(.000001);
+	});
 	test("atmospheric silhouettes use bounded integer pixel bands and shared pigments", () => {
 		const rectangles: number[][] = [], lines: number[][] = [], colors: number[] = [];
 		const g = { clear() { return g; }, fillStyle(color: number) { colors.push(color); return g; }, lineStyle(_width: number, color: number) { colors.push(color); return g; },

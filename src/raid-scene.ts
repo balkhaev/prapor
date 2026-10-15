@@ -10,6 +10,9 @@ import { PixelBuildingArt } from './pixel-buildings';
 import { PixelPropArt } from './pixel-props';
 import { PixelContainerArt } from './pixel-containers';
 import { PixelRaster, PIXEL_PALETTE as P } from './pixel-art';
+import { paintPropAtmosphere, paintBuildingAtmosphere } from './pixel-environment';
+import { raidGroundArt } from './raid-ground-art';
+import type { LiveCityBuilding, LiveWorldProp } from './game/live';
 import { raidPixelBuilding, raidPixelFrame, raidPixelProp } from './pixel-raid-presentation';
 import { PIXEL_SCENE_THEME as T, pixelSceneTint as tintColor } from './pixel-scene-theme';
 import type { BossId } from './game/bosses';
@@ -87,6 +90,8 @@ export class RaidStreetRenderer {
 	private propArt = new PixelPropArt();
 	private containerArt = new PixelContainerArt();
 	private sceneryTextures = new Set<string>();
+	private environment: { art: Phaser.GameObjects.Graphics; prop?: LiveWorldProp; building?: LiveCityBuilding }[] = [];
+	private environmentAt = 0;
 
 	constructor(private scene: Phaser.Scene, viewport: ShelterViewport, private reducedMotion: boolean, _requestScavAtlas: (appearance: number) => void = () => {}) {
 		this.viewport = { ...viewport };
@@ -207,23 +212,11 @@ export class RaidStreetRenderer {
 		this.plan = plan;
 		this.projection.originX = plan.height * 32 + 160;
 		this.bounds = { width: (plan.width + plan.height) * 32 + 320, height: (plan.width + plan.height) * 16 + 290 };
-		const ground = this.scene.add.graphics().setDepth(-1000), rng = random(plan.seed);
+		const ground = this.scene.add.graphics().setDepth(-1000);
 		this.world.add(ground);
 		const yard = plan.mapId === 'forest' ? tintColor(P.leafShade) : plan.mapId === 'depot' ? tintColor(P.soil) : tintColor(P.grass);
 		polygon(ground, this.quad(-1, -1, plan.width + 2, plan.height + 2), mix(yard, tintColor(P.ink), .34));
-		const streets = new Set(plan.tiles.filter((tile) => tile.kind === "street").map((tile) => `${tile.x}:${tile.y}`));
-		for (const tile of plan.tiles) {
-			const points = this.quad(tile.x, tile.y), p = this.project({ x: tile.x + .5, y: tile.y + .5 });
-			const base = tile.kind === "street" ? mix(tintColor(P.concreteShade), tintColor(P.ink), .3) : tile.kind === "sidewalk" ? tintColor(P.concrete) : yard;
-			polygon(ground, points, mix(base, rng() > .5 ? tintColor(P.ink) : tintColor(P.cream), .04 + rng() * .055));
-			if (tile.kind === "sidewalk") { line(ground, [points[1]!, points[2]!, points[3]!], tintColor(P.cream), 1, .4); line(ground, [points[0]!, points[1]!], tintColor(P.ink), 1, .6); }
-			if (tile.kind === "street" && (tile.x + tile.y) % 3 === 0) {
-				const horizontal = streets.has(`${tile.x + 1}:${tile.y}`) || streets.has(`${tile.x - 1}:${tile.y}`), vertical = streets.has(`${tile.x}:${tile.y + 1}`) || streets.has(`${tile.x}:${tile.y - 1}`);
-				if (!(horizontal && vertical)) line(ground, [{ x: p.x - 5, y: p.y + (horizontal ? -2.5 : 2.5) }, { x: p.x + 5, y: p.y + (horizontal ? 2.5 : -2.5) }], tintColor(P.cream), 1.4, .35);
-			}
-			for (let n = 0; n < 3; n++) ground.fillStyle(tile.kind === "street" ? tintColor(P.ink) : tintColor(P.leafShade), .22).fillEllipse(p.x + (rng() - .5) * 32, p.y + (rng() - .5) * 15, 1 + rng() * 5, 1 + rng() * 2);
-			if (tile.kind === "yard" && rng() > .55) { line(ground, [{ x: p.x, y: p.y }, { x: p.x - 2, y: p.y - 5 }, { x: p.x + 2, y: p.y - 1 }, { x: p.x + 3, y: p.y - 7 }], tintColor(P.leafLight), 1.2, .5); }
-		}
+		this.world.add(this.sceneryImage(raidGroundArt(plan), this.project({ x: 0, y: 0 })).setDepth(-999));
 		for (const building of plan.buildings) this.buildBuilding(building);
 		for (const prop of plan.props) this.buildProp(prop);
 		for (const spot of plan.lootSpots) {
@@ -258,6 +251,7 @@ export class RaidStreetRenderer {
 		return this.scene.add.image(point.x, point.y, key).setOrigin(sprite.anchor.x / copy.width, sprite.anchor.y / copy.height).setScale(scale);
 	}
 	private clearScenery(): void {
+		this.environment = [];
 		for (const key of this.sceneryTextures) this.scene.textures.remove(key);
 		this.sceneryTextures.clear(); this.buildingArt.clear(); this.propArt.clear(); this.containerArt.clear();
 	}
@@ -271,11 +265,13 @@ export class RaidStreetRenderer {
 				const prop = raidPixelProp({ id: `${building.id}-${n}`, kind: 'tree', x: building.x + rng() * building.width, y: building.y + rng() * building.height, blocking: true });
 				prop.variant = n % 4;
 				root.add(this.sceneryImage(this.propArt.get(prop), this.project({ x: prop.x - prop.width / 2, y: prop.y - prop.height / 2 }), .5));
+				this.addEnvironment(root, this.project({ x: prop.x - prop.width / 2, y: prop.y - prop.height / 2 }), { prop });
 			}
 			renderedHeight = 135;
 		} else {
 			const sprite = this.buildingArt.get(raidPixelBuilding(building), false, 64);
 			const image = this.sceneryImage(sprite, this.project(building)); root.add(image);
+			this.addEnvironment(root, this.project(building), { building: raidPixelBuilding(building) });
 			renderedHeight = front.y - (image.y - sprite.anchor.y);
 		}
 		this.world.add(root);
@@ -300,8 +296,23 @@ export class RaidStreetRenderer {
 		} else {
 			const native = raidPixelProp(prop), offset = this.project({ x: prop.x - native.width / 2, y: prop.y - native.height / 2 });
 			root.add(this.sceneryImage(this.propArt.get(native), { x: offset.x - point.x, y: offset.y - point.y }, .5));
+			this.addEnvironment(root, { x: offset.x - point.x, y: offset.y - point.y }, { prop: native });
 		}
 		this.world.add(root);
+	}
+	private addEnvironment(parent: Phaser.GameObjects.Container, origin: Point, source: { prop?: LiveWorldProp; building?: LiveCityBuilding }): void {
+		if (source.prop && !['tree', 'shrub', 'planter', 'garden', 'lamp'].includes(source.prop.kind)) return;
+		const art = this.scene.add.graphics().setPosition(origin.x, origin.y).setScale(.5);
+		parent.add(art); this.environment.push({ art, ...source });
+	}
+	private paintEnvironment(now: number, paused: boolean): void {
+		if (!paused) this.environmentAt = now;
+		for (const item of this.environment) {
+			const art = item.art.clear();
+			const plot = (x: number, y: number, width: number, height: number, color: string, alpha: number) => { art.fillStyle(tintColor(color), alpha).fillRect(Math.round(x), Math.round(y), Math.round(width), Math.round(height)); };
+			if (item.prop) paintPropAtmosphere(item.prop, this.environmentAt, plot, this.reducedMotion);
+			if (item.building) paintBuildingAtmosphere(item.building, this.environmentAt, plot, this.reducedMotion);
+		}
 	}
 
 	private makePawn(appearance: number, _hostile: boolean): Pawn {
@@ -539,6 +550,7 @@ export class RaidStreetRenderer {
 			}
 		}
 		this.effects.clear();
+		this.paintEnvironment(now, frame.paused);
 		this.drawActionMarker(frame, point);
 		if (!this.report && !frame.paused && frame.enemyPositions.length) {
 			for (const enemy of frame.enemyPositions) {

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#171c18" />
+    <meta name="description" content="Окружение Прапора: лесная база, городские дворы, депо и промышленные районы в общей пиксельной изометрии." />
+    <title>Прапор · Окружение</title>
+  </head>
+  <body>
+    <main class="environment-workshop">
+      <header class="environment-heading"><div><p class="eyebrow">Прапор · Полевая мастерская</p><h1>Места, в которых живут свои</h1><p class="intro">Рассмотрите постройки, деревья, дороги и небольшие следы жизни. Демонстрационные сцены используют окружение из игры.</p></div><nav aria-label="Разделы игры"><a href="/models.html">Бойцы и оружие ↗</a><a href="/">В убежище →</a></nav></header>
+      <section class="environment-panel" aria-label="Просмотр окружения">
+        <div class="environment-toolbar"><label>Место<select id="environment-scene"><option value="base">Лесная база</option></select></label><div class="environment-camera" role="group" aria-label="Камера"><button id="environment-out" aria-label="Отдалить">−</button><button id="environment-overview">Обзор</button><button id="environment-focus">Поближе</button><button id="environment-in" aria-label="Приблизить">+</button></div><span id="environment-location" role="status">Лесная база</span></div>
+        <div id="environment-stage" class="environment-stage" role="region" aria-label="Изометрическое окружение"></div>
+        <div class="environment-footer"><span>Потяните сцену для обзора · колесо мыши меняет масштаб</span><span>Дерево · камень · металл · живая природа</span></div>
+      </section>
+      <p class="environment-note">База и шесть маршрутов отряда. Тот же рисунок материалов, зданий и предметов используется в общем Периметре.</p>
+      <noscript><p>Для просмотра окружения включите JavaScript.</p></noscript>
+    </main>
+    <script type="module" src="/src/environment-preview.ts"></script>
+  </body>
+</html>
