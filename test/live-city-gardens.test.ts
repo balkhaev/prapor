@@ -3,7 +3,7 @@ import type { LiveTerrain, LiveWorld } from '../src/game/live';
 import { LIVE_TERRAIN_CODES } from '../src/game/live';
 import { LIVE_MAPS } from '../src/game/live-maps';
 import { buildSurfaceMasks } from '../src/live-ground-art';
-import { buildCityGardenGround, paintCityGardenGroundDetail } from '../src/live-city-gardens';
+import { buildCityGardenGround, cityGardenTrees, paintCityGardenGroundDetail } from '../src/live-city-gardens';
 
 function fixture() {
   const world = { width: 40, height: 40, city: { x: 1, y: 1, width: 38, height: 38 }, extracts: [{ x: 4, y: 4 }],
@@ -60,6 +60,27 @@ test('cached lawn masses and fine low planting share the exact clip and preserve
   expect(saves).toBe(0); expect(fills).toBeGreaterThan(details.length * 6);
 });
 
+test('garden trees stay in safe planted cells, respect existing trees and leave gameplay data untouched', () => {
+  const f = fixture(), before = structuredClone(f.world);
+  const gardens = buildCityGardenGround(f.world, f.terrain, f.walkable, f.indoor);
+  const trees = cityGardenTrees(f.world, gardens);
+  expect(trees.length).toBe(2);
+  expect(cityGardenTrees(f.world, gardens)).toEqual(trees);
+  expect(f.world).toEqual(before);
+  expect(cityGardenTrees(f.world, [])).toEqual([]);
+  for (const tree of trees) {
+    expect(tree.blocking).toBe(false);
+    expect(tree.kind).toBe('tree');
+    expect(f.world.props!.some(prop => prop.id === tree.id)).toBe(false);
+    expect(gardens.some(garden => garden.sourceId === 'green-court' && garden.clip.some(run =>
+      tree.x >= run.x && tree.x + tree.width <= run.x + run.width && tree.y >= run.y && tree.y + tree.height <= run.y + 1))).toBe(true);
+    const center = { x: tree.x + tree.width / 2, y: tree.y + tree.height / 2 };
+    for (const other of [...f.world.props!.filter(prop => prop.kind === 'tree'), ...trees.filter(prop => prop !== tree)]) {
+      expect(Math.hypot(center.x - other.x - other.width / 2, center.y - other.y - other.height / 2)).toBeGreaterThan(2.5);
+    }
+  }
+});
+
 test('new metropolitan homes receive grouped garden borders with bounded shared geometry', () => {
   const world = LIVE_MAPS[0]!, terrain = world.terrainRows!.flatMap(row => [...row].map(code => LIVE_TERRAIN_CODES[code as keyof typeof LIVE_TERRAIN_CODES]));
   const walkable = Uint8Array.from(terrain, ground => +(ground !== 'water'));
@@ -74,6 +95,10 @@ test('new metropolitan homes receive grouped garden borders with bounded shared 
     return detail.clip.some(run => run.x < court.x || run.x + run.width > court.x + court.width || run.y < court.y || run.y >= court.y + court.height);
   });
   expect(outsideCourt.length).toBeGreaterThan(10);
+  const gardenTrees = cityGardenTrees(world, details);
+  expect(gardenTrees.length).toBeGreaterThan(20);
+  expect(gardenTrees.length).toBeLessThanOrEqual(256);
+  expect(gardenTrees.some(tree => homes.some(site => tree.id.startsWith(`garden-tree:${site.id}:`)))).toBe(true);
   expect(details.length).toBeLessThanOrEqual(4096);
   expect(details.every(detail => detail.width <= 10 && detail.height <= 10 && detail.clip.length <= 11 * 11)).toBe(true);
   const planted = new Set<number>();
