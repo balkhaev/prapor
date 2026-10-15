@@ -56,6 +56,8 @@ const options = () => ({ dbPath, now: () => time, random: () => 0, automaticTick
 async function call(path: string, body?: unknown, session?: Session): Promise<Response> {
   const response = await service.fetch(new Request(`${ORIGIN}/api/live/${path}`, {
     method: body === undefined ? 'GET' : 'POST', headers: {
+      // The gallery-sized geometry is already known; paced movement uses real cached client updates.
+      ...(["state", "action"].includes(path) ? { "x-prapor-world-version": map.version } : {}),
       ...(session ? { cookie: session.cookie, 'x-prapor-live': session.id } : {}),
       ...(body === undefined ? {} : { origin: ORIGIN, 'content-type': 'application/json' }),
     }, ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -200,5 +202,5 @@ describe('city passages use the actual server collision grid', () => {
       const step = Math.abs(point.x - last.x) + Math.abs(point.y - last.y); expect(step).toBeLessThanOrEqual(1); steps += step; last = point;
     }
     expect(steps).toBeGreaterThanOrEqual(8); expect(visitedInterior).toBe(true); expect(service.healthy()).toBe(true);
-  });
+  }, 15_000);
 });

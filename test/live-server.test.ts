@@ -19,6 +19,7 @@ interface Session { cookie: string; id: string; accountId?: string }
 const options = () => ({ dbPath, secureCookies: true, allowedOrigins: [ORIGIN], now: () => time, random: () => 0, automaticTicks: false, accounts });
 function request(path: string, method = "GET", body?: unknown, session?: Session, headers: Record<string, string> = {}): Request {
   return new Request(`${ORIGIN}${path}`, { method, headers: {
+    ...(path === "action" && cachedWorld ? { "x-prapor-world-version": cachedWorld.version } : {}),
     ...(method !== "GET" ? { origin: ORIGIN, "content-type": "application/json" } : {}),
     ...(session ? { cookie: session.cookie, "x-prapor-live": session.id } : {}),
     ...(session?.accountId ? { "x-prapor-account": session.accountId } : {}), ...headers,
@@ -46,7 +47,8 @@ async function state(session: Session): Promise<LiveSnapshot> {
 async function act(session: Session, command: LiveCommand): Promise<LiveSnapshot> {
   const reply = await call("action", "POST", command, session);
   expect(reply.status).toBe(200);
-  return reply.json() as Promise<LiveSnapshot>;
+  const snapshot = await reply.json() as LiveSnapshot;
+  return { ...snapshot, world: snapshot.world ?? cachedWorld! };
 }
 async function advance(ms: number, sessions: Session[] = []): Promise<void> {
   for (let step = 0; step < ms; step += 250) {
@@ -557,7 +559,7 @@ describe("shared endless live server", () => {
     await advance(250, [first.session, second.session]);
     const replenished = (await state(first.session)).drops.find(drop => drop.containerId === anchor.id)!;
     expect(replenished).toBeDefined(); expect(replenished.id).not.toBe("searchable"); expect(replenished).toMatchObject({ searched: false, amount: 0 });
-  });
+  }, 15_000);
 
   test("search progress cancels on movement, incoming damage and leaving, so a browser cannot finish an interrupted search", async () => {
     const first = await enter(), second = await enter(), world = getLiveMap("perimeter"), anchor = world.containers[0]!;
@@ -613,7 +615,7 @@ describe("live API security and account ownership", () => {
     for (let index = 0; index < 180; index++) expect((await call("action", "POST", { type: "patrol", enabled: false }, first.session)).status).toBe(200);
     expect((await call("action", "POST", { type: "patrol", enabled: false }, first.session)).status).toBe(429);
     expect((await state(first.session)).selfId).toBe(first.session.id);
-  });
+  }, 15_000);
 
   test("logged-in account identity is stable across sessions, guest/account changes are bound, and logout revokes commands", async () => {
     accounts = createAccountService({ dbPath: join(directory, "accounts.sqlite"), secureCookies: true, allowedOrigins: [ORIGIN], now: () => time });

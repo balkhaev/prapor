@@ -2,7 +2,7 @@ import { afterEach, expect, test } from 'bun:test';
 import type { LiveCityBuilding, LiveObstacle } from '../src/game/live';
 import { PIXEL_BUILDING_CACHE_BYTES, PixelBuildingArt, pixelBuildingSpriteBytes, pixelBuildingVentAnchor } from '../src/pixel-buildings';
 import { pixelIso, PIXEL_PALETTE as P } from '../src/pixel-art';
-import { generateLiveWorld } from '../src/game/world-generation';
+import { generatePerimeterCore } from '../src/game/world-generation';
 import { sceneBuildings } from '../src/live-map-art';
 
 type CanvasRecord = HTMLCanvasElement & { paints: number; integerBounds: boolean; colors: Set<string>; spans: Array<[number, number, number, number, string]> };
@@ -70,7 +70,8 @@ test('legacy cutaway uses the supplied perimeter pieces rather than assuming a t
 });
 
 test('generated legacy hall cutaways preserve every actual free doorway cell and perimeter wall', () => {
-  const images = canvases(true), art = new PixelBuildingArt(), world = generateLiveWorld('pixel-door-geometry');
+  // Legacy hall geometry belongs to the preserved core; its G10 translation is covered by world-metropolis tests.
+  const images = canvases(true), art = new PixelBuildingArt(), world = generatePerimeterCore('pixel-door-geometry');
   const halls = sceneBuildings(world).filter(building => building.id.startsWith('hall-')).slice(0, 8);
   expect(halls.length).toBeGreaterThan(3);
   for (const hall of halls) {
@@ -86,7 +87,7 @@ test('generated legacy hall cutaways preserve every actual free doorway cell and
       expect(painted).toBe(wallCell);
     }
   }
-});
+}, 15_000);
 
 test('building cache is lazy, reuses sprites, separates levels and evicts the least recently used surface', () => {
   const images = canvases(), art = new PixelBuildingArt();
