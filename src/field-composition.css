@@ -41,6 +41,7 @@ body.immersive-game { --field-glass: #19251fe8; --field-edge: #b6b79a36; }
 .immersive-game .field-launch:hover { background: #777345; }
 .immersive-game .command-main .world-bottom { display: none; }
 .immersive-game .scene-hover { left: 87px; bottom: 111px; width: max-content; max-width: min(350px, calc(100vw - 110px)); padding: 8px 11px; }
+.immersive-game:has(.field-object-card:not([hidden])) .scene-hover { display: none; }
 .immersive-game .command-dock,
 .immersive-game .command-dock.context-open,
 .immersive-game .command-dock.raid-dock,
@@ -144,6 +145,7 @@ body.immersive-game { --field-glass: #19251fe8; --field-edge: #b6b79a36; }
  .immersive-game .command-tools .scene-light-control>summary { width: 46px; }
 }
 @media (max-width: 640px) {
+ .immersive-game .scene-hover { display: none; }
  .immersive-game .command-hud { inset: 8px 8px auto; display: flex; flex-wrap: wrap; height: 70px; gap: 4px; padding: 5px 8px; }
  .immersive-game .command-brand { display: flex; flex: 1; }
  .immersive-game .command-brand .brand-mark { width: 17px; height: 19px; font-size: 12px; }
