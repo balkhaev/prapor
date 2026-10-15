@@ -116,7 +116,10 @@ body.immersive-game { --field-glass: #19251fe8; --field-edge: #b6b79a36; }
 .immersive-game .field-raid-actions { display: flex; gap: 5px; }
 .immersive-game .field-raid-actions button { min-height: 32px; padding: 5px 9px; font-size: 10px; }
 .immersive-game .field-raid-recall { color: var(--game-brass-light); border-color: var(--game-brass); }
-.immersive-game .live-camera { left: 87px; bottom: 29px; padding: 3px; }
+.immersive-game .live-camera { left: 87px; bottom: 67px; padding: 3px; }
+.immersive-game .live-watching .field-launch,
+.immersive-game .live-watching .field-controls [data-field-panel=crew],
+.immersive-game .live-watching .field-controls [data-field-panel=routes] { display: none; }
 .immersive-game .live-field-hud { left: 87px; top: 116px; max-width: 235px; }
 .immersive-game .live-field-legend { display: none; }
 .immersive-game .live-entry-screen { inset: 116px 16px 84px 87px; width: auto; max-width: 1100px; padding: 14px 18px 0; }
@@ -190,6 +193,7 @@ body.immersive-game { --field-glass: #19251fe8; --field-edge: #b6b79a36; }
  .immersive-game .field-raid-vitals dd { font-size: 11px; }
  .immersive-game .field-raid-actions button { min-height: 28px; font-size: 9px; padding: 4px 7px; }
  .immersive-game .live-camera { left: 8px; bottom: 156px; }
+ .immersive-game .live-watching .field-controls { display: none; }
  .immersive-game .live-field-hud { left: 8px; top: 128px; max-width: 190px; }
  .immersive-game .live-entry-screen { inset: 128px 8px 94px; width: auto; max-width: none; padding: 10px 12px 0; }
  .immersive-game .building-placement { left: 8px; right: 8px; bottom: 167px; width: auto; max-width: none; }
@@ -206,6 +210,7 @@ body.immersive-game { --field-glass: #19251fe8; --field-edge: #b6b79a36; }
  .immersive-game .command-main .world-head { inset: 57px 8px auto 108px; }
  .immersive-game .command-main .camera-controls { left: 108px; bottom: 45px; }
  .immersive-game .field-controls { left: 108px; bottom: 8px; }
+ .immersive-game .live-camera { left: 108px; bottom: 45px; }
  .immersive-game .field-location { display: none; }
  .immersive-game .field-launch { right: 8px; bottom: 8px; min-height: 30px; }
  .immersive-game .tool-backdrop { inset: 56px 8px 78px 108px; }
