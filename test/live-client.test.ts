@@ -17,6 +17,19 @@ const fixture = (): LiveSnapshot => {
 }; };
 
 describe('live wire parser', () => {
+  test('preserves validated public equipment through full and cached snapshots without aliasing the packet', () => {
+    const source = fixture(), visualLoadout = { profile: 'scout' as const, weaponId: 'mosin', helmet: false, armor: true, backpack: false };
+    source.entities[1]!.visualLoadout = visualLoadout;
+    const parsed = readLiveSnapshot(source);
+    expect(parsed.entities[1]!.visualLoadout).toEqual(visualLoadout);
+    expect(parsed.entities[1]!.visualLoadout).not.toBe(visualLoadout);
+    const { world: _world, ...cached } = source;
+    expect(readLiveSnapshot(cached, parsed.world).entities[1]!.visualLoadout).toEqual(visualLoadout);
+    for (const bad of [null, [], { ...visualLoadout, profile: 'heavy' }, { ...visualLoadout, helmet: 1 }, { ...visualLoadout, backpack: undefined }, { ...visualLoadout, weaponId: '' }, { ...visualLoadout, weaponId: 'x'.repeat(65) }, { ...visualLoadout, ammo: 30 }]) {
+      const packet = fixture(); Object.assign(packet.entities[1]!, { visualLoadout: bad });
+      expect(() => readLiveSnapshot(packet)).toThrow(LiveApiError);
+    }
+  });
   test('preserves server time, identity, kit and NPC distinction without advancing them', () => {
     const source = fixture(), snapshot = readLiveSnapshot(source);
     expect(snapshot).toEqual(source);

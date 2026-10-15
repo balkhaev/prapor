@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from 'bun:test';
-import { PIXEL_FACINGS, type PixelActorFrame } from '../src/pixel-animation';
+import { PIXEL_FACINGS, pixelBearing, type PixelActorFrame } from '../src/pixel-animation';
 import { PixelActorArt, PIXEL_ACTOR_ANCHOR, PIXEL_ACTOR_CACHE_BYTES, PIXEL_ACTOR_FRAMES, paintPixelActor, pixelActorRig } from '../src/pixel-actors';
-import { PIXEL_WEAPON_IDS, pixelWeaponAnchors } from '../src/pixel-weapons';
+import { PIXEL_WEAPON_IDS, PIXEL_WEAPON_PROFILES, pixelWeaponAnchors } from '../src/pixel-weapons';
 import type { LiveEntity } from '../src/game/live';
 
 const colors: string[] = [''];
@@ -86,9 +86,68 @@ test('cropped muzzle/ejection remain registered to the mounted trigger and suppo
     expect(sprite.muzzle).toEqual({ x: expected.muzzle.x - 96 + sprite.anchor.x, y: expected.muzzle.y - 176 + sprite.anchor.y });
     expect(sprite.ejection).toEqual({ x: expected.ejection.x - 96 + sprite.anchor.x, y: expected.ejection.y - 176 + sprite.anchor.y });
     const trigger = { x: rig.grip.x - 96 + sprite.anchor.x, y: rig.grip.y - 176 + sprite.anchor.y };
-    expect(canvases.colorAt(sprite.image, trigger.x, trigger.y)).toBe('#c6a484');
-    if (weapon !== 'pm') { const support = { x: expected.forehand.x - 96 + sprite.anchor.x, y: expected.forehand.y - 176 + sprite.anchor.y }; expect(['#c6a484', '#3a4e3d', '#c0ad85']).toContain(canvases.colorAt(sprite.image, support.x, support.y) ?? ''); }
+    // Rear hands can be hidden by a real torso/pack; sockets still exist underneath.
+    if (pixelBearing(facing).y >= -.1) {
+      expect(canvases.colorAt(sprite.image, trigger.x, trigger.y)).toBe('#c6a484');
+      if (weapon !== 'pm') { const support = { x: expected.forehand.x - 96 + sprite.anchor.x, y: expected.forehand.y - 176 + sprite.anchor.y }; expect(['#c6a484', '#3a4e3d', '#c0ad85']).toContain(canvases.colorAt(sprite.image, support.x, support.y) ?? ''); }
+    }
     expect(sprite.image.width).toBeLessThan(192); expect(sprite.image.height).toBeLessThan(192);
+  }
+});
+
+test('rear-facing hands and forearms stay behind the torso and backpack', () => {
+  const handColors = new Set(['#c6a484', '#82917a', '#c0ad85', '#3a4e3d']);
+  for (const weapon of PIXEL_WEAPON_IDS) for (const backpack of [false, true]) for (const mode of ['idle', 'aim', 'fire'] as const) {
+    const animation = { mode, frame: 0, facing: 'n' as const }, rig = pixelActorRig(animation), s = surface();
+    paintPixelActor(s.context, scav, animation, weapon, { profile: 'light', helmet: false, armor: false, backpack });
+    // The trigger hand is physically on the front of the body. It must not be
+    // painted over the coat/pack just because its socket is still available.
+    expect(handColors.has(colors[s.pixels[rig.grip.y * 192 + rig.grip.x]!]!)).toBe(false);
+    expect(s.valid).toBe(true);
+  }
+});
+
+test('two-handed stocks seat beside the firing shoulder across all eight bearings', () => {
+  for (const facing of PIXEL_FACINGS) for (const weapon of PIXEL_WEAPON_IDS) {
+    const profile = PIXEL_WEAPON_PROFILES[weapon]; if (!profile.twoHanded) continue;
+    const rig = pixelActorRig({ mode: 'aim', frame: 0, facing }), bearing = pixelBearing(facing);
+    const stock = { x: rig.grip.x - bearing.x * profile.rear, y: rig.grip.y - bearing.y * profile.rear - profile.boreHeight };
+    expect(Math.hypot(stock.x - rig.rightShoulder.x, stock.y - rig.rightShoulder.y)).toBeLessThan(18);
+  }
+});
+
+test('fallen models retain each visible equipment item and leave no live firing sockets', () => {
+  for (const facing of PIXEL_FACINGS) for (const helmet of [false, true]) for (const armor of [false, true]) for (const backpack of [false, true]) {
+    const s = surface(), metadata = paintPixelActor(s.context, { ...scav, appearance: 24 }, { mode: 'downed', frame: 0, facing }, 'sks', { profile: 'light', helmet, armor, backpack });
+    const palette = new Set([...s.pixels].map(id => colors[id]));
+    expect(palette.has('#64795e')).toBe(helmet);
+    expect(palette.has('#5f7263')).toBe(armor);
+    expect(['#768067', '#52664d', '#97a080'].some(color => palette.has(color))).toBe(backpack);
+    expect(metadata.muzzle).toBeUndefined(); expect(metadata.ejection).toBeUndefined(); expect(s.valid).toBe(true);
+    expect(s.pixels.slice(207 * 192).every(pixel => pixel === 0)).toBe(true);
+    expect(s.pixels.every((pixel, index) => index % 192 !== 0 && index % 192 !== 191 || pixel === 0)).toBe(true);
+  }
+});
+
+test('armor has a visible rear plate when the back is not covered by a pack', () => {
+  for (const facing of ['ne', 'n', 'nw'] as const) for (const armor of [false, true]) {
+    const s = surface(); paintPixelActor(s.context, scav, { mode: 'idle', frame: 0, facing }, 'sks', { profile: 'light', helmet: false, armor, backpack: false });
+    expect(s.pixels.some(id => colors[id] === '#5f7263')).toBe(armor);
+  }
+});
+
+test('an explicitly absent helmet overrides cosmetic and boss helmets in live and fallen models', () => {
+  for (const appearance of [0, 24, 31]) for (const bossId of [undefined, 'liteyshchik'] as const) for (const mode of ['idle', 'downed'] as const) {
+    const s = surface(); paintPixelActor(s.context, { ...scav, appearance, bossId }, { mode, frame: 0, facing: 'se' }, 'sks', { profile: 'assault', helmet: false, armor: false, backpack: false });
+    const palette = new Set([...s.pixels].map(id => colors[id]));
+    for (const helmetColor of ['#64795e', '#7f8977', '#99a187', '#3a553f', '#345252']) expect(palette.has(helmetColor)).toBe(false);
+  }
+});
+
+test('an explicit helmet also replaces a boss cosmetic cap', () => {
+  for (const bossId of ['lesnik', 'komendant'] as const) for (const mode of ['idle', 'downed'] as const) {
+    const s = surface(); paintPixelActor(s.context, { ...scav, bossId }, { mode, frame: 0, facing: 'se' }, 'sks', { profile: 'light', helmet: true, armor: false, backpack: false });
+    expect(s.pixels.some(id => colors[id] === '#64795e')).toBe(true);
   }
 });
 
