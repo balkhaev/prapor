@@ -4,6 +4,7 @@ import { pixelBearing, type PixelActorFrame } from './pixel-animation';
 import { paintPixelWeapon, pixelWeaponAnchors, pixelWeaponProfile, pixelWeaponSignature, type PixelWeaponInput } from './pixel-weapons';
 import { pixelActorRig } from './pixel-actor-rig';
 import { PIXEL_ACTOR_CACHE_BYTES, PIXEL_ACTOR_ANCHOR, PIXEL_ACTOR_NATIVE_SIZE, frameIndex } from './pixel-actor-config';
+import { clarifyPixelActor, type PixelActorDetail } from './pixel-actor-clarity';
 export { pixelActorRig, type PixelActorRig } from './pixel-actor-rig';
 export { PIXEL_ACTOR_CACHE_BYTES, PIXEL_ACTOR_FRAMES, PIXEL_ACTOR_ANCHOR, PIXEL_ACTOR_NATIVE_SIZE } from './pixel-actor-config';
 
@@ -249,15 +250,22 @@ export class PixelActorArt {
   private sprites = new Map<string, PixelActorSprite>(); private bytes = 0;
   get retainedBytes(): number { return this.bytes; }
   clear(): void { for (const { image } of this.sprites.values()) { image.width = 1; image.height = 1; } this.sprites.clear(); this.bytes = 0; }
-  get(entity: ActorIdentity, animation: PixelActorFrame, weapon: PixelWeaponInput = 'unknown', gear?: PixelActorGear): PixelActorSprite {
+  get(entity: ActorIdentity, animation: PixelActorFrame, weapon: PixelWeaponInput = 'unknown', gear?: PixelActorGear, detail: PixelActorDetail = 160): PixelActorSprite {
     const look = Number.isFinite(entity.appearance) ? Math.abs(Math.trunc(entity.appearance)) % 32 : 0, normalized = { ...animation, frame: frameIndex(animation) };
-    const key = `${look}:${entity.faction}:${entity.bossId ?? ''}:${entity.role ?? ''}:${entity.limping ?? false}:${normalized.facing}:${normalized.mode}:${normalized.frame}:${pixelWeaponSignature(weapon)}:${gear?.profile ?? ''}:${gear?.helmet ?? ''}:${gear?.armor ?? ''}:${gear?.backpack ?? ''}`;
+    const key = `${look}:${entity.faction}:${entity.bossId ?? ''}:${entity.role ?? ''}:${entity.limping ?? false}:${normalized.facing}:${normalized.mode}:${normalized.frame}:${pixelWeaponSignature(weapon)}:${gear?.profile ?? ''}:${gear?.helmet ?? ''}:${gear?.armor ?? ''}:${gear?.backpack ?? ''}:${detail}`;
     const old = this.sprites.get(key); if (old) { this.sprites.delete(key); this.sprites.set(key, old); return old; }
     const native = document.createElement('canvas'); native.width = PIXEL_ACTOR_NATIVE_SIZE.width; native.height = PIXEL_ACTOR_NATIVE_SIZE.height;
     const context = native.getContext('2d'); let left = 0, top = 0, width: number = native.width, height: number = native.height, metadata: PaintedActor = {};
     if (context) { const raster = new ActorRaster(context, native.width, native.height); metadata = paintModel(raster, entity, normalized, weapon, gear); left = Math.max(0, raster.left - 2); top = Math.max(0, raster.top - 2); width = Math.min(native.width - left, raster.right - left + 2); height = Math.min(native.height - top, raster.bottom - top + 2); }
     const image = document.createElement('canvas'); image.width = width; image.height = height;
-    const cropped = image.getContext('2d'); if (cropped) { cropped.imageSmoothingEnabled = false; cropped.drawImage(native, left, top, width, height, 0, 0, width, height); }
+    const cropped = image.getContext('2d'); if (cropped) {
+      cropped.imageSmoothingEnabled = false; cropped.drawImage(native, left, top, width, height, 0, 0, width, height);
+      if (detail !== 160 && cropped.getImageData && cropped.putImageData) {
+        const pixels = cropped.getImageData(0, 0, width, height);
+        pixels.data.set(clarifyPixelActor(pixels.data, width, height, detail, { x: left, y: top }));
+        cropped.putImageData(pixels, 0, 0);
+      }
+    }
     native.width = 1; native.height = 1;
     const shifted = (p: LivePoint | undefined) => p ? point(p.x - left, p.y - top) : undefined;
     const sprite = { image, anchor: point(PIXEL_ACTOR_ANCHOR.x - left, PIXEL_ACTOR_ANCHOR.y - top), muzzle: shifted(metadata.muzzle), ejection: shifted(metadata.ejection) }, bytes = width * height * 4;

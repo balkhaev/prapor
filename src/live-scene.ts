@@ -8,6 +8,7 @@ import { PixelRaidRenderer, pixelSpriteRect, type PixelDetail } from './pixel-re
 import { PixelContainerArt } from './pixel-containers';
 import { PixelActorArt, PIXEL_ACTOR_ANCHOR, PIXEL_ACTOR_NATIVE_SIZE } from './pixel-actors';
 import { pixelActorWalkCycleDistance } from './pixel-actor-config';
+import { pixelActorDetail } from './pixel-actor-clarity';
 import { pixelActorLoadout } from './pixel-loadout';
 import { PixelBuildingArt, pixelBuildingSpriteBytes, pixelBuildingWallHeight } from './pixel-buildings';
 import { PixelPropArt } from './pixel-props';
@@ -848,7 +849,7 @@ export class LiveScene {
       || p.y > this.height + PIXEL_ACTOR_ANCHOR.y * scale + 40) return;
     const boss=entity.bossId?getBoss(entity.bossId):null;
     const own = entity.id === snapshot.selfId, selected = entity.id === this.selected, color = own ? T.self : boss ? T.boss : entity.kind === 'player' ? T.ally : entity.faction === 'raiders' ? T.hostile : T.scav;
-    if (this.overview || this.tile < 28) {
+    if (this.overview || 160 * scale < 14) {
       c.fillStyle = color; c.strokeStyle = T.panel; c.lineWidth = 1.5; c.beginPath(); c.arc(p.x, p.y, own || selected ? 4.5 : 2.8, 0, Math.PI * 2); c.fill(); c.stroke();
       if (entity.aimUntil && entity.aimUntil > snapshot.now && entity.aimTargetId === snapshot.selfId) this.label('ЦЕЛИТСЯ В ТЕБЯ', p.x, p.y - 14, T.injured, 8);
       if (own || selected || boss) this.label(own ? 'ТЫ' : boss?`БОСС · ${boss.name}`:entity.name, p.x, p.y - 10, color, 9);
@@ -858,7 +859,7 @@ export class LiveScene {
     if (own || selected) { c.strokeStyle = color; c.lineWidth = 2; c.stroke(); }
     const animation = this.combatAnimation.frame(entity, motion, now, snapshot.now + now - this.snapshotAt, pixelActorWalkCycleDistance(this.width < 480 ? 48 : 64));
     const { weapon, gear } = pixelActorLoadout(entity, snapshot.self);
-    const sprite = this.actorArt.get(entity, animation, weapon, gear), actorScale = .32 * zoom;
+    const sprite = this.actorArt.get(entity, animation, weapon, gear, pixelActorDetail(160 * scale, this.renderer.deviceRatio)), actorScale = scale;
     const bounds = pixelSpriteRect(sprite, p, actorScale, this.renderer.deviceRatio);
     this.renderer.sprite(sprite, p, actorScale, this.width, this.height);
     if (sprite.muzzle && sprite.ejection) {

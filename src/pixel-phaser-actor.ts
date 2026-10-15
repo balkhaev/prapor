@@ -4,6 +4,7 @@ import { PixelActorArt, type PixelActorGear, type PixelActorSprite } from './pix
 import { pixelActorFrameIndex } from './pixel-actor-config';
 import type { PixelActorFrame } from './pixel-animation';
 import { pixelWeaponSignature, type PixelWeaponInput } from './pixel-weapons';
+import { pixelActorDetail, type PixelActorDetail } from './pixel-actor-clarity';
 
 type Identity = Pick<LiveEntity, 'appearance' | 'faction' | 'bossId' | 'role' | 'limping'>;
 type Entry = { key: string; sprite: Omit<PixelActorSprite, 'image'>; width: number; height: number; bytes: number; users: number };
@@ -18,12 +19,12 @@ class Pool {
   private entries = new Map<string, Entry>();
   private bytes = 0;
   constructor(private textures: Phaser.Textures.TextureManager) {}
-  acquire(identity: Identity, animation: PixelActorFrame, weapon: PixelWeaponInput, gear?: PixelActorGear): Entry {
+  acquire(identity: Identity, animation: PixelActorFrame, weapon: PixelWeaponInput, gear?: PixelActorGear, detail: PixelActorDetail = 160): Entry {
     const signature = JSON.stringify([identity.appearance, identity.faction, identity.bossId, identity.role, identity.limping,
-      animation.facing, animation.mode, pixelActorFrameIndex(animation), pixelWeaponSignature(weapon), gear?.profile, gear?.helmet, gear?.armor, gear?.backpack]);
+      animation.facing, animation.mode, pixelActorFrameIndex(animation), pixelWeaponSignature(weapon), gear?.profile, gear?.helmet, gear?.armor, gear?.backpack, detail]);
     let entry = this.entries.get(signature);
     if (!entry) {
-      const sprite = this.art.get(identity, animation, weapon, gear), copy = document.createElement('canvas');
+      const sprite = this.art.get(identity, animation, weapon, gear, detail), copy = document.createElement('canvas');
       copy.width = sprite.image.width; copy.height = sprite.image.height;
       const context = copy.getContext('2d');
       if (context) { context.imageSmoothingEnabled = false; context.drawImage(sprite.image, 0, 0); }
@@ -64,13 +65,14 @@ export class PixelPhaserActor {
     this.image = scene.add.image(0, 0, '__MISSING'); parent.add(this.image);
     parent.once('destroy', () => this.destroy());
   }
-  update(identity: Identity, animation: PixelActorFrame, weapon: PixelWeaponInput | null, gear?: PixelActorGear, displayHeight = 48): void {
+  update(identity: Identity, animation: PixelActorFrame, weapon: PixelWeaponInput | null, gear?: PixelActorGear, displayHeight = 48, sampling?: { screenScale: number; deviceRatio?: number }): void {
     if (this.destroyed) return;
     const input = weapon ?? emptyWeapon;
-    const signature = JSON.stringify([identity, animation.mode, animation.facing, pixelActorFrameIndex(animation), pixelWeaponSignature(input), gear]);
+    const detail = sampling ? pixelActorDetail(displayHeight * sampling.screenScale, sampling.deviceRatio) : 160;
+    const signature = JSON.stringify([identity, animation.mode, animation.facing, pixelActorFrameIndex(animation), pixelWeaponSignature(input), gear, detail]);
     if (signature !== this.signature) {
       const previous = this.entry;
-      this.entry = this.pool.acquire(identity, animation, input, gear); this.signature = signature;
+      this.entry = this.pool.acquire(identity, animation, input, gear, detail); this.signature = signature;
       const entry = this.entry;
       this.image.setTexture(entry.key).setOrigin(entry.sprite.anchor.x / entry.width, entry.sprite.anchor.y / entry.height);
       if (previous) this.pool.release(previous);

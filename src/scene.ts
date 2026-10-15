@@ -4,6 +4,7 @@ import { getRoomFootprint, getRoomPosition, getRoomBounds, getRoomFacing, getRoo
 import { type BaseRoom } from "./game/data";
 import type { GearItem, Loadout } from "./game/systems";
 import { PixelPhaserActor } from './pixel-phaser-actor';
+import { applyPhaserFramebuffer, planPhaserFramebuffer } from './phaser-framebuffer';
 import { PIXEL_PALETTE } from './pixel-art';
 import { OPERATIONS_GRID, operationsMapCoordinate, paintOperationsMap, paintOperationsDistrictSymbol } from './operations-map-art';
 import { getScavVisualLoadout } from "./scav-loadout";
@@ -300,6 +301,7 @@ export function createWorld(
 	const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 	const stageRect = parent.getBoundingClientRect();
 	const initialViewport = shelterViewportForSize(stageRect.width, stageRect.height);
+	const initialFramebuffer = planPhaserFramebuffer(initialViewport, stageRect, window.devicePixelRatio || 1);
 
 	class PraporWorld extends Phaser.Scene {
 		private baseLayer!: Phaser.GameObjects.Container;
@@ -355,7 +357,7 @@ export function createWorld(
 		private viewport: ShelterViewport = { ...initialViewport };
 		private viewportObserver: ResizeObserver | null = null;
 		private viewportFrame = 0;
-		private stageSize = { width: 0, height: 0 };
+		private stageSize = { width: 0, height: 0, density: 0 };
 		private panMode = false;
 		private spacePressed = false;
 		private panGesture: { pointerId: number; clientX: number; clientY: number } | null = null;
@@ -582,25 +584,29 @@ export function createWorld(
 				if (!this.viewportFrame) this.viewportFrame = requestAnimationFrame(() => { this.viewportFrame = 0; this.resizeViewport(); });
 			});
 			this.viewportObserver.observe(parent);
+			window.addEventListener('resize', () => this.resizeViewport(), { signal: this.nativeEvents.signal });
 		}
 
 		private resizeViewport(): void {
 			const rect = parent.getBoundingClientRect();
-			if (!Number.isFinite(rect.width) || !Number.isFinite(rect.height) || rect.width <= 0 || rect.height <= 0 || Math.abs(rect.width - this.stageSize.width) < .01 && Math.abs(rect.height - this.stageSize.height) < .01) return;
-			this.stageSize = { width: rect.width, height: rect.height };
+			const density = window.devicePixelRatio || 1;
+			if (!Number.isFinite(rect.width) || !Number.isFinite(rect.height) || rect.width <= 0 || rect.height <= 0 || Math.abs(rect.width - this.stageSize.width) < .01 && Math.abs(rect.height - this.stageSize.height) < .01 && density === this.stageSize.density) return;
+			this.stageSize = { width: rect.width, height: rect.height, density };
 			this.cancelScavDrag(); this.cancelBuildingDrag(); this.cancelPan(); this.spacePressed = false;
 			const next = shelterViewportForSize(rect.width, rect.height);
 			const displayScale = rect.width / next.width;
 			this.weatherDisplayScale = Number.isFinite(displayScale) && displayScale > 0 ? displayScale : 1;
 			this.viewCamera = resizeShelterCamera(this.viewCamera, this.viewport, next, this.worldBounds);
-			const changed = Math.abs(next.width - this.viewport.width) > .001 || Math.abs(next.height - this.viewport.height) > .001;
+			const framebuffer = planPhaserFramebuffer(next, rect, density);
+			const changed = Math.abs(framebuffer.width - this.scale.gameSize.width) > .001 || Math.abs(framebuffer.height - this.scale.gameSize.height) > .001;
 			this.viewport = next;
 			this.lastAtmospherePaint = -1000;
-			// FIT still scales uniformly, but its logical viewport now occupies the
-			// whole stage. Only the fully visible overview keeps centered margins.
+			// FIT manages the display aspect; the main camera maps the unchanged
+			// logical scene into a denser, bounded framebuffer.
 			this.scale.getParentBounds();
-			if (changed) this.scale.setGameSize(next.width, next.height);
+			if (changed) this.scale.setGameSize(framebuffer.width, framebuffer.height);
 			else this.scale.refresh();
+			applyPhaserFramebuffer(this.cameras.main, framebuffer);
 			this.raidStreet?.resize(next);
 			this.applyCamera();
 		}
@@ -1258,7 +1264,8 @@ export function createWorld(
 			const pixel = new PixelPhaserActor(this, body), sprite = pixel.image, poses = null;
 			body.add(tool); tool.setPosition(13, -21);
 			const visualLoadout = getScavVisualLoadout(scav ?? {}, snapshot().gearItems ?? [], snapshot().weapons ?? []);
-			pixel.update({ appearance }, scavPixelFrame('se', 0, 0, false), visualLoadout.weapon, scavPixelGear(visualLoadout));
+			pixel.update({ appearance }, scavPixelFrame('se', 0, 0, false), visualLoadout.weapon, scavPixelGear(visualLoadout), 48,
+				{ screenScale: .78 * this.viewCamera.zoom * this.weatherDisplayScale, deviceRatio: window.devicePixelRatio || 1 });
 			const label = this.text(0, -64, "", 16, "#ffedc7").setOrigin(.5).setFontFamily("Manrope, sans-serif").setFontStyle("bold").setLetterSpacing(0).setBackgroundColor("#0b1b20").setPadding(7, 4).setVisible(false);
 			const order = this.add.circle(-10, -34, 3.5, C.sage).setStrokeStyle(1, 0x10242b).setVisible(false);
 			const hit = this.add.zone(0, -21, 32, 46).setInteractive({ useHandCursor: true });
@@ -1375,7 +1382,8 @@ export function createWorld(
 				const slot = this.scavs.get(scav.id) ?? this.createScav(scav.id, index, at);
 				this.setScavAppearance(slot, requestedAppearance);
 				slot.visualLoadout = getScavVisualLoadout(scav, state.gearItems ?? [], state.weapons ?? []);
-				slot.pixel.update({ appearance: slot.appearance, limping: scav.status === 'wounded' }, scavPixelFrame(slot.direction, slot.animation.stride, slot.animation.idleSeconds * 1000, slot.walking, reducedMotion), slot.working ? null : slot.visualLoadout.weapon, scavPixelGear(slot.visualLoadout));
+				slot.pixel.update({ appearance: slot.appearance, limping: scav.status === 'wounded' }, scavPixelFrame(slot.direction, slot.animation.stride, slot.animation.idleSeconds * 1000, slot.walking, reducedMotion), slot.working ? null : slot.visualLoadout.weapon, scavPixelGear(slot.visualLoadout), 48,
+					{ screenScale: .78 * this.viewCamera.zoom * this.weatherDisplayScale, deviceRatio: window.devicePixelRatio || 1 });
 				const previousStatus = slot.status, previousAssignment = slot.assignment;
 				slot.assignment = room?.id ?? null; slot.status = scav.status; slot.health = scav.health;
 				if (room || scav.status !== "ready") slot.routine = null;
@@ -1533,7 +1541,8 @@ export function createWorld(
 				// hit zones and drag coordinates use the same projected feet position.
 				slot.body.setPosition(0, Math.round(activityPose.bodyLift)).setScale(1).setAngle(slot.working ? pose.angle + activityPose.bodyTilt : activityPose.bodyTilt);
 				slot.pixel.update({ appearance: slot.appearance, limping: slot.status === 'wounded' }, scavPixelFrame(slot.direction, slot.animation.stride, slot.animation.idleSeconds * 1000, slot.walking || walkedDistance > 0, reducedMotion),
-					slot.working || ambientWork ? null : slot.visualLoadout.weapon, scavPixelGear(slot.visualLoadout));
+					slot.working || ambientWork ? null : slot.visualLoadout.weapon, scavPixelGear(slot.visualLoadout), 48,
+					{ screenScale: slot.actor.scaleX * this.viewCamera.zoom * this.weatherDisplayScale, deviceRatio: window.devicePixelRatio || 1 });
 				const stride = (slot.animation.stride % 1) * Math.PI * 2;
 				slot.legA.setAngle(Math.sin(stride) * 9 * slot.animation.walkBlend);
 				slot.legB.setAngle(-Math.sin(stride) * 9 * slot.animation.walkBlend);
@@ -1878,8 +1887,8 @@ export function createWorld(
 	const game = new Phaser.Game({
 		type: Phaser.AUTO,
 		parent,
-		width: initialViewport.width,
-		height: initialViewport.height,
+		width: initialFramebuffer.width,
+		height: initialFramebuffer.height,
 		backgroundColor: "#10120f",
 		antialias: false,
 		pixelArt: true,
@@ -1887,8 +1896,8 @@ export function createWorld(
 		scale: {
 			mode: Phaser.Scale.FIT,
 			autoCenter: Phaser.Scale.CENTER_BOTH,
-			width: initialViewport.width,
-			height: initialViewport.height,
+			width: initialFramebuffer.width,
+			height: initialFramebuffer.height,
 		},
 		fps: { target: 60 },
 		audio: { noAudio: true },
