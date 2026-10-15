@@ -29,6 +29,7 @@ import { getSquadRaidFieldFrame, type SquadRaidFieldFrame, type SquadRaidFieldSh
 import type { ScavVisualLoadout } from "./scav-loadout";
 import { getBoss } from './game/bosses';
 import { bossVisualLoadout } from './boss-ui';
+import { clearFieldHudRect, fieldHudOverlaps, placeFieldHudBox, readFieldHudBounds, type FieldHudBox } from './field-hud';
 
 type Point = { x: number; y: number };
 type Plan = ReturnType<typeof getRaidFieldPlan>;
@@ -66,6 +67,16 @@ export class RaidStreetRenderer {
 	private hudCssScale = 1;
 	private hudTop = 43;
 	private hudBottomInset = 30;
+	private hudLeft = 15;
+	private hudWidth = 366;
+	private hudSummary: FieldHudBox | null = null;
+	private hudBounds: FieldHudBox[] = [];
+	private canvasHudBounds: FieldHudBox[] = [];
+	private fieldRect: FieldHudBox;
+	private hudLayoutDirty = true;
+	private hudObserver: MutationObserver;
+	private minimapVisible = true;
+	private progressWidth = 350;
 	private mini: Phaser.GameObjects.Graphics;
 	private miniGuide: Phaser.GameObjects.Container;
 	private progress: Phaser.GameObjects.Graphics;
@@ -115,6 +126,7 @@ export class RaidStreetRenderer {
 
 	constructor(private scene: Phaser.Scene, viewport: ShelterViewport, private reducedMotion: boolean, _requestScavAtlas: (appearance: number) => void = () => {}) {
 		this.viewport = { ...viewport };
+		this.fieldRect = { x: 0, y: 0, ...viewport };
 		this.world = scene.add.container(0, 0);
 		this.hud = scene.add.container(0, 0);
 		this.layer = scene.add.container(0, 0, [this.world, this.hud]).setVisible(false);
@@ -137,6 +149,9 @@ export class RaidStreetRenderer {
 		this.miniGuide = scene.add.container(0, 0, [this.text(9, 5, "УЛИЦЫ", 8, T.muted), this.text(MINI.width - 9, 5, "С ↑", 8).setOrigin(1, 0),
 			this.text(17, 104, "Боец", 8), this.text(62, 104, "Цель", 8), this.text(109, 104, "Связь", 8)]).setVisible(false);
 		this.hud.add([this.hudPlate, this.title, this.actionBadge, this.caption, this.detail, this.groundMinimap, this.mini, this.miniGuide, this.progress, this.alertRoot]);
+		this.hudObserver = new MutationObserver(() => { this.hudLayoutDirty = true; });
+		this.hudObserver.observe(scene.game.canvas.ownerDocument?.body ?? scene.game.canvas.closest('.command-shell') ?? scene.game.canvas.parentElement ?? scene.game.canvas,
+			{ childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['class', 'style', 'hidden', 'open'] });
 		this.resize(viewport);
 	}
 
@@ -176,39 +191,54 @@ export class RaidStreetRenderer {
 		this.weatherCache.clear(); this.weatherGraphics.clear(); this.paintedWeather = null;
 		const center = { x: this.camera.x + this.viewport.width / this.camera.zoom / 2, y: this.camera.y + this.viewport.height / this.camera.zoom / 2 };
 		this.viewport = { ...viewport }; this.camera.x = center.x - viewport.width / this.camera.zoom / 2; this.camera.y = center.y - viewport.height / this.camera.zoom / 2;
+		this.layoutHud();
+		if (this.following) this.follow(0, true); this.applyCamera();
+	}
+	private layoutHud(): void {
+		const viewport = this.viewport;
 		const canvas = this.scene.game.canvas, rect = canvas.getBoundingClientRect();
-		const card = canvas.closest(".world-card"), head = card?.querySelector(".world-head")?.getBoundingClientRect(), bottom = card?.querySelector(".world-bottom")?.getBoundingClientRect();
 		this.hudCssScale = rect.width > 0 && viewport.width > 0 ? rect.width / viewport.width : 1;
 		this.compactHud = rect.width > 0 && rect.width <= 480;
 		const inverseScale = 1 / this.hudCssScale;
-		const headInset = head ? Math.max(0, head.bottom - rect.top) : 0;
-		this.hudTop = this.compactHud ? (headInset + 8) * inverseScale : Math.max(43, (headInset + 8) * inverseScale);
-		this.hudBottomInset = ((bottom ? Math.max(0, rect.bottom - bottom.top) : 0) + 8) * inverseScale;
+		this.hudBounds = readFieldHudBounds(canvas).map(box => ({ x: box.x * inverseScale, y: box.y * inverseScale, width: box.width * inverseScale, height: box.height * inverseScale }));
+		this.hudWidth = this.compactHud ? Math.min(160 * inverseScale, viewport.width - 16 * inverseScale) : Math.min(366, viewport.width - 30);
+		this.hudSummary = placeFieldHudBox(viewport, { width: this.hudWidth, height: this.compactHud ? 45 * inverseScale : 117 }, this.hudBounds, { x: 15, y: 43 });
+		this.hudLeft = this.hudSummary?.x ?? 15;
+		this.hudTop = this.hudSummary?.y ?? 43;
+		const reserved = this.hudSummary ? [...this.hudBounds, this.hudSummary] : [...this.hudBounds];
 		const miniScale = (this.compactHud ? .9 : 1) * inverseScale;
-		const right = Math.max(17, 8 * inverseScale), miniY = viewport.height - MINI.height * miniScale - this.hudBottomInset;
-		for (const item of [this.groundMinimap, this.mini, this.miniGuide]) item.setPosition(viewport.width - MINI.width * miniScale - right, miniY).setScale(miniScale);
-		this.title.setVisible(!this.compactHud).setPosition(27, this.hudTop + 11);
-		this.caption.setVisible(!this.compactHud).setPosition(27, this.hudTop + 58);
-		this.detail.setVisible(!this.compactHud).setPosition(27, this.hudTop + 95);
-		this.actionBadge.setFontSize(this.compactHud ? 12 * inverseScale : 10)
-			.setPosition(this.compactHud ? 16 * inverseScale : 27, this.compactHud ? this.hudTop + 6 * inverseScale : this.hudTop + 38)
-			.setWordWrapWidth(this.compactHud ? 124 * inverseScale : 342, true);
+		const mini = placeFieldHudBox(viewport, { width: MINI.width * miniScale, height: MINI.height * miniScale }, reserved,
+			{ x: viewport.width - MINI.width * miniScale - 17, y: viewport.height - MINI.height * miniScale - 38 * inverseScale });
+		this.minimapVisible = Boolean(mini);
+		for (const item of [this.groundMinimap, this.mini, this.miniGuide]) item.setVisible(Boolean(mini)).setPosition(mini?.x ?? 0, mini?.y ?? 0).setScale(miniScale);
+		if (mini) reserved.push(mini);
+		this.title.setVisible(Boolean(this.hudSummary) && !this.compactHud).setPosition(this.hudLeft + 12, this.hudTop + 11);
+		this.caption.setVisible(Boolean(this.hudSummary) && !this.compactHud).setPosition(this.hudLeft + 12, this.hudTop + 58);
+		this.detail.setVisible(Boolean(this.hudSummary) && !this.compactHud).setPosition(this.hudLeft + 12, this.hudTop + 95);
+		this.actionBadge.setVisible(Boolean(this.hudSummary)).setFontSize(this.compactHud ? 12 * inverseScale : 10)
+			.setPosition(this.hudLeft + 8 * inverseScale, this.compactHud ? this.hudTop + 6 * inverseScale : this.hudTop + 38)
+			.setWordWrapWidth(Math.max(1, this.hudWidth - 16 * inverseScale), true);
+		this.progressWidth = Math.min(350, viewport.width * .4);
+		const progress = placeFieldHudBox(viewport, { width: this.progressWidth, height: 10 }, reserved, { x: 23, y: viewport.height - 40 * inverseScale });
+		this.progress.setVisible(Boolean(progress)).setPosition(progress?.x ?? 0, progress?.y ?? 0);
+		this.hudBottomInset = progress ? viewport.height - progress.y - 10 : 30;
+		this.canvasHudBounds = reserved;
+		this.fieldRect = clearFieldHudRect(viewport, reserved);
 		this.paintHudPlate();
-		this.alertRoot.setPosition(23, viewport.height - 137);
 		if (this.compactHud) this.alertRoot.setVisible(false);
-		this.progress.setPosition(23, viewport.height - this.hudBottomInset - 10); if (this.following) this.follow(0, true); this.applyCamera();
+		this.hudLayoutDirty = false;
 	}
 	private paintHudPlate(): void {
-		this.hudPlate.clear().setVisible(!this.compactHud || Boolean(this.actionBadge.text));
+		this.hudPlate.clear().setVisible(Boolean(this.hudSummary) && (!this.compactHud || Boolean(this.actionBadge.text)));
 		if (this.compactHud) {
 			const inverseScale = 1 / this.hudCssScale;
-			const width = Math.min(this.viewport.width - 16 * inverseScale, Math.max(90 * inverseScale, this.actionBadge.width + 16 * inverseScale));
+			const width = this.hudWidth;
 			const height = Math.max(26 * inverseScale, this.actionBadge.height + 12 * inverseScale);
-			this.hudPlate.fillStyle(tintColor(T.panel), .94).fillRoundedRect(8 * inverseScale, this.hudTop, width, height, 5 * inverseScale)
-				.lineStyle(inverseScale, tintColor(T.border), .65).strokeRoundedRect(8 * inverseScale, this.hudTop, width, height, 5 * inverseScale);
+			this.hudPlate.fillStyle(tintColor(T.panel), .94).fillRoundedRect(this.hudLeft, this.hudTop, width, height, 5 * inverseScale)
+				.lineStyle(inverseScale, tintColor(T.border), .65).strokeRoundedRect(this.hudLeft, this.hudTop, width, height, 5 * inverseScale);
 		} else {
-			const width = Math.min(366, this.viewport.width - 30);
-			this.hudPlate.fillStyle(tintColor(T.panel), .91).fillRoundedRect(15, this.hudTop, width, 117, 6).lineStyle(1, tintColor(T.border), .36).strokeRoundedRect(15, this.hudTop, width, 117, 6);
+			const width = this.hudWidth;
+			this.hudPlate.fillStyle(tintColor(T.panel), .91).fillRoundedRect(this.hudLeft, this.hudTop, width, 117, 6).lineStyle(1, tintColor(T.border), .36).strokeRoundedRect(this.hudLeft, this.hudTop, width, 117, 6);
 			this.title.setWordWrapWidth(width - 24, true); this.caption.setWordWrapWidth(width - 24, true);
 		}
 	}
@@ -234,7 +264,9 @@ export class RaidStreetRenderer {
 	private follow(deltaMs: number, snap = false): void {
 		if (!this.pawn) return;
 		const focus = this.squadFrame ? this.project(this.squadFrame.focus) : this.pawn.root;
-		this.camera = followRaidCamera(this.camera, focus, this.viewport, deltaMs, snap, this.reducedMotion);
+		const screen = { x: this.fieldRect.x + this.fieldRect.width * .46, y: this.fieldRect.y + this.fieldRect.height * .58 };
+		const framed = { x: focus.x + (this.viewport.width * .46 - screen.x) / this.camera.zoom, y: focus.y + (this.viewport.height * .58 - screen.y) / this.camera.zoom };
+		this.camera = followRaidCamera(this.camera, framed, this.viewport, deltaMs, snap, this.reducedMotion);
 	}
 
 	private build(plan: Plan, raid: Raid, appearance: number): void {
@@ -494,7 +526,7 @@ export class RaidStreetRenderer {
 	private drawMiniGround(): void {
 		if (!this.plan) return;
 		const g = this.groundMinimap, plan = this.plan; g.clear();
-		this.miniGuide.setVisible(true);
+		this.miniGuide.setVisible(this.minimapVisible);
 		g.fillStyle(tintColor(T.panel), .94).fillRoundedRect(0, 0, MINI.width, MINI.height, 3).lineStyle(1, tintColor(T.border), .65).strokeRoundedRect(0, 0, MINI.width, MINI.height, 3);
 		const layout = fitMinimap(plan, { x: MINI.inset, y: MINI.top, width: MINI.innerWidth, height: MINI.innerHeight });
 		g.fillStyle(tintColor(P.ink)).fillRect(layout.x, layout.y, layout.width, layout.height);
@@ -591,11 +623,21 @@ export class RaidStreetRenderer {
 		this.alertText.setText(`${getRaidActionLabel(alert.action)}\n${alert.label}`).setColor(danger ? T.injured : T.text);
 		const height = this.alertText.height + 18;
 		this.alertPlate.clear().fillStyle(tintColor(T.panel), .95).fillRoundedRect(0, 0, width, height, 5).lineStyle(1, tint, .65).strokeRoundedRect(0, 0, width, height, 5).fillStyle(tint).fillRect(0, 7, 3, height - 14);
-		this.alertRoot.setY(Math.min(this.viewport.height - 137, this.viewport.height - this.hudBottomInset - 22 - height));
+		const position = placeFieldHudBox(this.viewport, { width, height }, this.canvasHudBounds,
+			{ x: 23, y: Math.min(this.viewport.height - 137, this.viewport.height - this.hudBottomInset - 22 - height) });
+		this.alertRoot.setVisible(Boolean(position));
+		if (position) this.alertRoot.setPosition(position.x, position.y);
 		this.alertRoot.setAlpha(this.reducedMotion ? 1 : Math.min(1, alert.remainingMs / 450));
+	}
+	private hideOccludedLabels(): void {
+		const blocked = (text: Phaser.GameObjects.Text) => this.canvasHudBounds.some(box => fieldHudOverlaps(box, text.getBounds()));
+		for (const label of this.squadLabels.values()) label.text.setVisible(!blocked(label.text));
+		for (const loot of this.loot.values()) if (loot.label.visible) loot.label.setVisible(!blocked(loot.label));
+		for (const enemy of this.enemies) if (enemy.bossBadge?.visible) enemy.bossBadge.setVisible(!blocked(enemy.bossBadge));
 	}
 
 	update(snapshot: RaidStreetSnapshot, now: number, delta: number): void {
+		if (this.hudLayoutDirty) this.layoutHud();
 		const climate = readSceneClimate();
 		const requestedId = snapshot.selectedRaidId !== undefined ? snapshot.selectedRaidId ?? snapshot.raids[0]?.id ?? null : this.selectedId ?? snapshot.raids[0]?.id ?? null;
 		const requestedRaid = snapshot.raids.find((raid) => raid.id === requestedId);
@@ -691,7 +733,7 @@ export class RaidStreetRenderer {
 		}
 		if (this.pendingCamera) this.applyRestoredCamera();
 		else if (this.following) this.follow(delta, firstFrame);
-		this.applyCamera(); this.paintWetGround(climate); this.world.sort("depth"); this.paintLighting(climate); this.paintWeather(climate); this.updateMini(frame);
+		this.applyCamera(); this.hideOccludedLabels(); this.paintWetGround(climate); this.world.sort("depth"); this.paintLighting(climate); this.paintWeather(climate); this.updateMini(frame);
 		const status = this.report ? this.report.success ? "РЕЙД ЗАВЕРШЁН · ДОБЫЧА НА БАЗЕ" : "РЕЙД ЗАВЕРШЁН · СМОТРИ ОТЧЁТ"
 			: objective.settling ? "КОНТРОЛЬНАЯ ТОЧКА · ОЖИДАЕТСЯ СВОДКА" : frame.paused ? "ЖДЁТ ПРИКАЗА · ДОБЫЧА ПРИ НЁМ"
 			: `${objective.label}${frame.action === "search" ? ` · ${Math.floor(frame.segmentProgress * 100)}%` : frame.enemyPositions.length ? ` · КОНТАКТ ${frame.enemyPositions.length}` : ""}`;
@@ -704,7 +746,7 @@ export class RaidStreetRenderer {
 		this.detail.setText(`Этап ${raid.expedition?.stage ?? 1} · Участок ${objective.segment}/${objective.segments}${!frame.paused && !this.report ? ` · ${objective.remainingSeconds} с` : ""}`);
 		this.paintHudPlate();
 		this.updateAlert();
-		this.progress.clear(); this.progress.fillStyle(tintColor(T.panel), .92).fillRoundedRect(0, 0, Math.min(350, this.viewport.width - 224), 10, 3).fillStyle(tintColor(T.self)).fillRoundedRect(0, 0, Math.min(350, this.viewport.width - 224) * frame.progress, 10, 3);
+		this.progress.clear(); this.progress.fillStyle(tintColor(T.panel), .92).fillRoundedRect(0, 0, this.progressWidth, 10, 3).fillStyle(tintColor(T.self)).fillRoundedRect(0, 0, this.progressWidth * frame.progress, 10, 3);
 	}
-	destroy(): void { this.layer.destroy(true); this.weatherCache.clear(); this.paintedWeather = null; this.scene.textures.remove(this.lightKey); this.lightBuffer.clear(); this.clearScenery(); this.loot.clear(); this.hostileLoadouts.clear(); this.bossLoadouts.clear(); this.squadPawns.clear(); this.squadLabels.clear(); this.squadFrame = null; this.cachedGroup = []; this.enemies = []; this.occluders = []; this.pawn = null; this.cachedRaid = null; this.visualLoadout = null; }
+	destroy(): void { this.hudObserver.disconnect(); this.layer.destroy(true); this.weatherCache.clear(); this.paintedWeather = null; this.scene.textures.remove(this.lightKey); this.lightBuffer.clear(); this.clearScenery(); this.loot.clear(); this.hostileLoadouts.clear(); this.bossLoadouts.clear(); this.squadPawns.clear(); this.squadLabels.clear(); this.squadFrame = null; this.cachedGroup = []; this.enemies = []; this.occluders = []; this.pawn = null; this.cachedRaid = null; this.visualLoadout = null; }
 }

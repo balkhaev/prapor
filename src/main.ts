@@ -177,6 +177,8 @@ import { productionLootReceipt, productionRefundLabel, productionOutputSnapshot 
 import { getTradeInventory, getTradeQuote, LOOT_MODEL_BY_ID } from './game/engine';
 import { MARKET_MAX_ACTIVE } from './game/flea';
 import './game-theme.css';
+import './immersive.css';
+import { mountFieldInterface } from './field-ui';
 
 type Page = "home" | "raids" | "arsenal" | "base" | "contracts" | "journal" | "recruits" | "squad" | "achievements" | "flea";
 const e = (value: unknown) =>
@@ -317,6 +319,7 @@ let deferredRender = false;
 let world: ReturnType<typeof createWorld> | null = null;
 let territoryLife: TerritoryLifeController | null = null;
 let liveMode: ReturnType<typeof createLiveMode> | null = null;
+let fieldInterface: ReturnType<typeof mountFieldInterface> | null = null;
 const gameSound = createGameSound();
 let toastTimer: ReturnType<typeof setTimeout>;
 
@@ -401,6 +404,12 @@ document.querySelector(".world-head .view-switch")!.insertAdjacentHTML("beforeen
 document.querySelector('.camera-controls [data-camera="fit"]')!.insertAdjacentHTML("beforebegin", `<button data-camera="near" class="camera-fit camera-near" aria-label="Рабочий вид базы" title="Рабочий вид базы: ближе к постройкам">${icon("base",15)}<span>К постройкам</span></button>`);
 document.querySelector(".world-head")!.insertAdjacentHTML("beforeend", `<button class="scene-sound" data-action="toggle-sound" aria-label="Звуки игры" aria-pressed="false" title="Включить звуки игры">${icon("sound",17)}<span>Звук</span></button>`);
 worldViewport.insertAdjacentHTML("afterend", '<div id="scene-hover" class="scene-hover" hidden><strong></strong><span></span></div>');
+fieldInterface = mountFieldInterface({
+	root: app, icon,
+	getState: () => ({ view: liveMode?.isActive() ? "live" : worldView, context: `${contextMode}:${selectedRoomId ?? ""}:${selectedShelterSite?.column ?? ""}:${selectedShelterSite?.row ?? ""}`, status: serverReady ? "Прогресс на сервере · база на связи" : connectionMessage }),
+	closeContext: closeCommandContext,
+	onError: message => toast(message, false),
+});
 function updateSceneHover(value: { title: string; detail: string } | null) {
 	const readout = document.querySelector<HTMLElement>("#scene-hover"); if (!readout) return;
 	readout.hidden = !value || !canWorldInteract() || Boolean(workerPlacement || crewPointer);
@@ -1445,7 +1454,7 @@ function focusScavOrTool(id: string) {
 	if (page === "home" && window.innerWidth <= 850 && contextMode !== "overview") { document.querySelector<HTMLButtonElement>('#command-dock [data-action="close-context"]')?.focus({ preventScroll: true }); return; }
 	const scope = page !== "home" ? document.querySelector<HTMLElement>("#tool-root") : document.querySelector<HTMLElement>("#command-crew");
 	const target = scope?.querySelector<HTMLButtonElement>(`[data-scav="${CSS.escape(id)}"]`);
-	if (target) target.focus({ preventScroll: true });
+	if (target?.getClientRects().length) target.focus({ preventScroll: true });
 	else if (page !== "home") document.querySelector<HTMLButtonElement>('[data-action="close-tools"]')?.focus({ preventScroll: true });
 	else document.querySelector<HTMLButtonElement>('.command-tools [data-page="raids"]')?.focus({ preventScroll: true });
 }
@@ -1479,6 +1488,7 @@ function renderInspector() {
 	setOverlayState();
 }
 function setOverlayState() {
+	fieldInterface?.sync();
 	if (buildingDragPreview?.active && !canBuildingDrag()) world?.cancelBuildingDrag();
 	paintBuildingPlacement();
 	const modalOpen = accountDialogOpen || accountChanging || Boolean(document.querySelector("#modal-root .modal"));
@@ -1505,8 +1515,10 @@ function setOverlayState() {
 		document.querySelector<HTMLElement>("#hero")!.inert = true;
 		document.querySelector<HTMLElement>("#command-crew")!.inert = true;
 		document.querySelector<HTMLElement>("#command-routes")!.inert = true;
+		document.querySelector<HTMLElement>(".field-controls")!.inert = true;
+		document.querySelector<HTMLElement>(".field-launch")!.inert = true;
 	} else {
-		for (const selector of [".command-hud", ".command-toolbar", "#hero", "#command-crew", "#command-routes"]) document.querySelector<HTMLElement>(selector)!.inert = false;
+		for (const selector of [".command-hud", ".command-toolbar", "#hero", "#command-crew", "#command-routes", ".field-controls", ".field-launch"]) document.querySelector<HTMLElement>(selector)!.inert = false;
 	}
 	const drawer = document.querySelector<HTMLElement>(".inspector"); if (drawer) drawer.inert = modalOpen;
 	document.body.classList.toggle("overlay-open", modalOpen || drawerOpen || toolsOpen || mobileContext);
@@ -1742,6 +1754,7 @@ function renderCommandBoard() {
 	const scroll = dock.querySelector<HTMLElement>(".command-dock-scroll, .live-raid-scroll") ?? dock; scroll.scrollTop = oldScroll;
 	const explanation = dock.querySelector<HTMLDetailsElement>(".gameplay-explanation"); if (explanation) explanation.open = explanationOpen;
 	dock.querySelectorAll<HTMLDetailsElement>('details[data-logistics-detail]').forEach(node => { node.open = openLogistics.includes(node.dataset.logisticsDetail); });
+	fieldInterface?.sync();
 	if (activeKey) {
 		const replacement = dock.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(activeKey)}"]`);
 		if (replacement?.getClientRects().length && !replacement.closest("[inert]")) replacement.focus({ preventScroll: true });
@@ -1752,8 +1765,9 @@ function renderCommandBoard() {
 	const crewScroll = crew.querySelector<HTMLElement>(".command-crew-strip")?.scrollLeft ?? 0;
 const crewEvents = getSquadSocialEvents(state);
 	const focusedWorker = document.activeElement instanceof HTMLElement && crew.contains(document.activeElement) ? document.activeElement.dataset.workerHandle ?? document.activeElement.dataset.scav : null;
+	const crewFocusKey = document.activeElement instanceof HTMLElement && crew.contains(document.activeElement) ? document.activeElement.dataset.focusKey : null;
 	const focusWasHandle = document.activeElement instanceof HTMLElement && Boolean(document.activeElement.dataset.workerHandle);
-	crew.innerHTML = `<div class="command-strip-head"><h2>Свои люди <span>${state.scavs.length} / ${getScavCapacity(state)}</span><small class="crew-drag-help">Перенеси портрет в комнату</small></h2><button class="text-button" data-mission-board>Снаряжение отряда →</button></div><div class="command-crew-strip">${state.scavs.map((scav) => {
+	crew.innerHTML = `<div class="command-strip-head"><h2>Свои люди <span>${state.scavs.length} / ${getScavCapacity(state)}</span><small class="crew-drag-help">Перенеси портрет в комнату</small></h2><button class="text-button" data-mission-board>Снаряжение отряда →</button><button class="icon-button" data-field-close="crew" data-focus-key="field-close-crew" aria-label="Свернуть панель людей">×</button></div><div class="command-crew-strip">${state.scavs.map((scav) => {
 		const raid = state.raids.find((item) => item.scavId === scav.id), working = scav.assignment ? state.shelter.rooms.find((item) => item.id === scav.assignment) : null;
 		const waiting = raid?.expedition?.status === "choice";
 		const pickReason = workerPickReason(scav.id);
@@ -1762,8 +1776,11 @@ const sharedEvent = crewEvents.find(event => event.scavIds.includes(scav.id));
 	}).join("")}<button class="crew-recruit" data-action="recruit" aria-label="Найм диких: посмотреть кандидатов" title="Выбрать нового дикого и посмотреть связи">${icon("people",23)}<span>Найм</span><small>${getRecruitmentBoard(state).length} на связи</small></button></div>`;
 	const crewStrip = crew.querySelector<HTMLElement>(".command-crew-strip"); if (crewStrip) crewStrip.scrollLeft = crewScroll;
 	if (focusedWorker) crew.querySelector<HTMLElement>(`[data-${focusWasHandle ? "worker-handle" : "scav"}="${CSS.escape(focusedWorker)}"]`)?.focus({ preventScroll: true });
+	if (crewFocusKey) crew.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(crewFocusKey)}"]`)?.focus({ preventScroll: true });
 	const routes = document.querySelector<HTMLElement>("#command-routes")!;
-	routes.innerHTML = `<div class="command-strip-head"><h2>Общий Периметр</h2><button class="text-button" data-open-live>Подготовить выход →</button></div><div class="command-sector-strip">${ENTRY_DISTRICTS.map(district => `<button class="sector-chip" data-live-district="${district.id}" aria-label="Подготовить выход: ${district.name}"><span class="sector-chip-art" aria-hidden="true">${district.symbol}</span><span><strong>${district.name}</strong><small>${district.detail}</small></span>${icon("arrow",12)}</button>`).join("")}</div><button class="text-button" data-mission-board>Задания отряда · ${state.raids.length} в пути →</button>`;
+	const routesFocusKey = document.activeElement instanceof HTMLElement && routes.contains(document.activeElement) ? document.activeElement.dataset.focusKey : null;
+	routes.innerHTML = `<div class="command-strip-head"><h2>Общий Периметр</h2><button class="text-button" data-open-live>Подготовить выход →</button><button class="icon-button" data-field-close="routes" data-focus-key="field-close-routes" aria-label="Свернуть маршруты">×</button></div><div class="command-sector-strip">${ENTRY_DISTRICTS.map(district => `<button class="sector-chip" data-live-district="${district.id}" aria-label="Подготовить выход: ${district.name}"><span class="sector-chip-art" aria-hidden="true">${district.symbol}</span><span><strong>${district.name}</strong><small>${district.detail}</small></span>${icon("arrow",12)}</button>`).join("")}</div><button class="text-button" data-mission-board>Задания отряда · ${state.raids.length} в пути →</button>`;
+	if (routesFocusKey) routes.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(routesFocusKey)}"]`)?.focus({ preventScroll: true });
 }
 function commandNextAction(item: RoomCommandStatus) {
 	const room = state.shelter.rooms.find((candidate) => candidate.id === item.roomId); if (!room) return "";
@@ -3068,7 +3085,7 @@ document.addEventListener("keydown", (event) => {
 		return;
 	}
 	const dialog = document.querySelector<HTMLElement>("#modal-root .modal") ?? document.querySelector<HTMLElement>(".inspector") ?? (page !== "home" ? document.querySelector<HTMLElement>(".tool-window") : window.innerWidth <= 850 && contextMode !== "overview" ? document.querySelector<HTMLElement>("#command-dock") : null);
-	if (!dialog) return;
+	if (!dialog) { if (event.key === "Escape" && !(event.target instanceof HTMLSelectElement) && fieldInterface?.dismiss()) event.preventDefault(); return; }
 	if (event.key === "Escape") {
 		if (event.target instanceof HTMLSelectElement) return;
 		event.preventDefault();
@@ -3280,6 +3297,7 @@ const responsiveContext = () => {
 };
 window.addEventListener("resize", responsiveContext);
 import.meta.hot?.dispose(() => {
+	fieldInterface?.destroy();
 	territoryLife?.destroy();
 	liveMode?.destroy();
 	dismissAchievementNotice();
