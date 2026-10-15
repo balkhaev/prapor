@@ -4,4 +4,11 @@
 .scene-light-control[hidden] { display: none; }
 .environment-toolbar .scene-light-control { min-width: 0; display: flex; flex: 0 0 auto; align-items: center; gap: 7px; padding-bottom: 1px; }
 .environment-toolbar .scene-light-control select { width: 125px; }
-@media(max-width:700px) { .scene-light-control select { min-height: 40px; max-width: 120px; } .world-head > .scene-light-control { margin-left: auto; } }
+.world-head:has([data-view="map"][aria-pressed="true"]) > .scene-light-control { display: none; }
+@media(max-width:700px) { .scene-light-control select { min-height: 40px; max-width: 120px; } }
+@media(max-width:640px) {
+  .command-main .world-head > .scene-light-control { order: 2; margin-left: auto; }
+  .command-main .world-head > .scene-light-control > span { display: none; }
+  .command-main .world-head > .scene-light-control select { width: 100px; min-height: 40px; }
+  .command-main .world-head > .scene-sound { order: 4; }
+}
