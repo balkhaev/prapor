@@ -18,6 +18,9 @@ import { buildSurfaceMasks, paintRoadSurface, paintTerrainTexture, terrainTextur
 import { paintPropAtmosphere, paintBuildingAtmosphere, type EnvironmentPixel } from './pixel-environment';
 import { fitMinimap, minimapPoint, minimapViewport } from './minimap-presentation';
 import { SceneLightBuffer, propLampSources } from './pixel-lighting';
+import { readSceneClimate } from './scene-climate';
+import { paintCanvasSceneWeather } from './scene-weather';
+import { SceneWeatherCache } from './scene-weather-cache';
 
 type Motion = PixelMotion;
 type LabelBox = { x: number; y: number; width: number; height: number };
@@ -77,6 +80,7 @@ export class LiveScene {
   private surfaceMasks: SurfaceMasks = { road: new Uint8Array(), indoor: new Uint8Array(), roadRuns: [] };
   private environmentAt = 0;
   private lightBuffer = new SceneLightBuffer();
+  private weatherCache = new SceneWeatherCache();
   private lampProps: LiveWorldProp[] = [];
   private reducedMotion = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
 
@@ -107,8 +111,8 @@ export class LiveScene {
   }
 
   show(): void { if (this.active) return; this.active = true; this.resize(); this.animate(); }
-  hide(): void { this.active = false; cancelAnimationFrame(this.frame); this.frame = 0; }
-  clear(): void { this.snapshot = null; this.motions.clear(); this.selected = null; this.routePoiIds = []; this.waypointTargets = []; this.hitTargets = []; this.combatAnimation.clear(); this.weaponMounts.clear(); this.shotRigs.clear(); this.paint(); }
+  hide(): void { this.active = false; cancelAnimationFrame(this.frame); this.frame = 0; this.weatherCache.clear(); }
+  clear(): void { this.snapshot = null; this.weatherCache.clear(); this.motions.clear(); this.selected = null; this.routePoiIds = []; this.waypointTargets = []; this.hitTargets = []; this.combatAnimation.clear(); this.weaponMounts.clear(); this.shotRigs.clear(); this.paint(); }
   setSelected(id: string | null): void { this.selected = id; }
   /** Inspect public architecture without issuing a movement command. */
   focusPoint(point: LivePoint): void {
@@ -506,7 +510,7 @@ export class LiveScene {
   }
 
   private paint(): void {
-    const c = this.context, now = performance.now();
+    const c = this.context, now = performance.now(), climate = readSceneClimate();
     this.environmentAt = now;
     c.clearRect(0, 0, this.width, this.height);
     c.fillStyle = T.background; c.fillRect(0, 0, this.width, this.height);
@@ -572,20 +576,22 @@ export class LiveScene {
       objects.push({ depth: point.x + point.y + activityDepth + .1, paint: () => this.paintEntity(entity, now) });
     }
     objects.sort((a, b) => a.depth - b.depth).forEach(object => object.paint());
-    this.paintLighting();
+    this.paintLighting(climate);
+    paintCanvasSceneWeather(c, this.weatherCache.get({ width: this.width, height: this.height, timeMs: climate.timeMs,
+      rain: climate.rain, fog: climate.fog, wind: climate.wind, reducedMotion: this.reducedMotion?.matches }));
     this.paintIntent(snapshot, now);
     this.paintLandmarks(world);
     this.paintWaypoints(world);
     this.paintCombat(now);
     this.minimap(snapshot);
   }
-  private paintLighting(): void {
+  private paintLighting(climate: ReturnType<typeof readSceneClimate>): void {
     const scale = this.tile / PIXEL_TILE;
     const lamps = this.lampProps.flatMap(prop => {
       const origin = this.project({ x: prop.x - .5, y: prop.y - .5 });
       return propLampSources(prop).map(lamp => ({ x: origin.x + lamp.x * scale, y: origin.y + lamp.y * scale, headY: origin.y + lamp.headY * scale, radius: lamp.radius * scale }));
     });
-    this.lightBuffer.paint(this.width, this.height, lamps);
+    this.lightBuffer.paint(this.width, this.height, lamps, undefined, climate);
     this.context.drawImage(this.lightBuffer.canvas, 0, 0, this.width, this.height);
   }
   private paintLandmarks(world: LiveWorld): void {

@@ -46,13 +46,17 @@ export interface ShelterAtmosphereInput {
 	/** Shared scene profile: multiplier, independent of the atmosphere clock. */
 	lightStrength?: number;
 	shadowStrength?: number;
+	/** Shared visual climate. The local mist remains a small forest accent. */
+	weatherRain?: number;
+	weatherFog?: number;
+	weatherWind?: number;
 }
 
 export const SHELTER_ATMOSPHERE_LIMITS = Object.freeze({ smokeEmitters: 24, puffsPerEmitter: 3, embersPerFire: 3, flames: 24, lights: 32, birds: 6, clouds: 3, mist: 6 });
 const TAU = Math.PI * 2;
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const finite = (value: number, fallback = 0) => Number.isFinite(value) ? value : fallback;
-const time = (value: number, reducedMotion = false) => reducedMotion ? 0 : clamp(finite(value), 0, 1e12);
+const time = (value: number, reducedMotion = false) => reducedMotion ? 0 : clamp(finite(value), 0, 1e15);
 const phase = (value: number) => value - Math.floor(value);
 const smooth = (value: number) => { const p = clamp(value, 0, 1); return p * p * (3 - 2 * p); };
 /** A moving sample fades all the way out before it wraps back to its source. */
@@ -66,19 +70,22 @@ function bounds(rect: ShelterRect): ShelterRect {
 }
 
 /** A low, continuous breeze also drives tree crowns and cloth in the scene. */
-export function sampleShelterWind(timeMs: number, reducedMotion = false): ShelterWind {
+export function sampleShelterWind(timeMs: number, reducedMotion = false, weatherWind?: number): ShelterWind {
 	if (reducedMotion) return { x: 0, y: 0, sway: 0 };
-	const t = time(timeMs);
+	const t = time(timeMs), shared = weatherWind === undefined ? null : clamp(finite(weatherWind), -1, 1);
+	const local = .48 + Math.sin(t / 24000 * TAU) * .22 + Math.sin(t / 61000 * TAU + .7) * .08;
+	const sway = Math.sin(t / 7500 * TAU) * .68 + Math.sin(t / 19000 * TAU + .8) * .22;
 	return {
-		x: .48 + Math.sin(t / 24000 * TAU) * .22 + Math.sin(t / 61000 * TAU + .7) * .08,
+		x: shared === null ? local : shared * .85 + (local - .48) * .2,
 		y: Math.sin(t / 31000 * TAU + .5) * .08,
-		sway: Math.sin(t / 7500 * TAU) * .68 + Math.sin(t / 19000 * TAU + .8) * .22,
+		sway: shared === null ? sway : shared * .25 + sway * (.5 + Math.abs(shared) * .5),
 	};
 }
 
 /** Visual time only: no persistent particles, random calls, or game-state mutations. */
 export function sampleShelterAtmosphere(input: ShelterAtmosphereInput): ShelterAtmosphereFrame {
-	const t = time(input.timeMs, input.reducedMotion), area = bounds(input.groundBounds), wind = sampleShelterWind(t, input.reducedMotion);
+	const t = time(input.timeMs, input.reducedMotion), area = bounds(input.groundBounds), wind = sampleShelterWind(t, input.reducedMotion, input.weatherWind);
+	const rain = clamp(finite(input.weatherRain ?? 0), 0, 1), fog = clamp(finite(input.weatherFog ?? 0), 0, 1);
 	const lightStrength = clamp(finite(input.lightStrength ?? 1, 1), 0, 2), shadowStrength = clamp(finite(input.shadowStrength ?? 1, 1), 0, 2);
 	const frame: ShelterAtmosphereFrame = { wind, clouds: [], smoke: [], flames: [], embers: [], birds: [], glows: [], groundLights: [], mist: [] };
 	for (let i = 0; i < SHELTER_ATMOSPHERE_LIMITS.clouds; i++) {
@@ -87,7 +94,7 @@ export function sampleShelterAtmosphere(input: ShelterAtmosphereInput): ShelterA
 			x: area.x + area.width * p,
 			y: area.y + area.height * (.25 + i * .25) + Math.sin(p * TAU + i) * Math.min(12, area.height * .05),
 			width: Math.min(230, area.width * .3 + 20), height: Math.min(72, area.height * .15 + 8),
-			alpha: .028 * envelope(p, .2) * shadowStrength,
+			alpha: .028 * envelope(p, .2) * shadowStrength * (1 + rain * .8),
 		});
 	}
 	const emitters = input.smokeEmitters ?? [];
@@ -140,7 +147,7 @@ export function sampleShelterAtmosphere(input: ShelterAtmosphereInput): ShelterA
 		});
 	}
 	if (input.birdBounds && !input.reducedMotion) {
-		const sky = bounds(input.birdBounds), p = phase(t / 58000 + .075), alpha = envelope(p / .37, .18) * .72;
+		const sky = bounds(input.birdBounds), p = phase(t / 58000 + .075), alpha = envelope(p / .37, .18) * .72 * (1 - rain);
 		for (let i = 0; i < SHELTER_ATMOSPHERE_LIMITS.birds; i++) {
 			frame.birds.push({
 				x: sky.x + sky.width * clamp(p / .37, 0, 1) - (i % 3) * 9,
@@ -153,7 +160,7 @@ export function sampleShelterAtmosphere(input: ShelterAtmosphereInput): ShelterA
 	const zones = input.mistZones ?? [];
 	for (let i = 0; i < Math.min(zones.length, SHELTER_ATMOSPHERE_LIMITS.mist); i++) {
 		const zone = bounds(zones[i]!), drift = Math.sin(t / 42000 * TAU + i * 1.3);
-		frame.mist.push({ x: zone.x + zone.width * .5 + drift * Math.min(12, zone.width * .08), y: zone.y + zone.height * .5, width: zone.width, height: zone.height, alpha: .025 + Math.sin(t / 58000 * TAU + i) * .005 });
+		frame.mist.push({ x: zone.x + zone.width * .5 + drift * Math.min(12, zone.width * .08), y: zone.y + zone.height * .5, width: zone.width, height: zone.height, alpha: (.025 + Math.sin(t / 58000 * TAU + i) * .005) * (1 - fog * .85) });
 	}
 	return frame;
 }

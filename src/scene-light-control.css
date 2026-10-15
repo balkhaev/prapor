@@ -1,15 +1,24 @@
-.scene-light-control { display: inline-flex; align-items: center; gap: 7px; color: var(--game-muted, #a5b0a6); font-size: 10px; flex: 0 0 auto; }
-.scene-light-control select { min-height: 36px; max-width: 130px; padding: 6px 24px 6px 9px; border: 1px solid var(--game-line-strong, #52654e); border-radius: 5px; background: var(--game-inset, #263532); color: var(--game-text, #dad0ac); font: inherit; cursor: pointer; }
-.scene-light-control select:focus-visible { outline: 2px solid var(--game-brass-light, #b7a56b); outline-offset: 2px; }
-.scene-light-control[hidden] { display: none; }
-.environment-toolbar .scene-light-control { min-width: 0; display: flex; flex: 0 0 auto; align-items: center; gap: 7px; padding-bottom: 1px; }
-.environment-toolbar .scene-light-control select { width: 125px; }
-.environment-toolbar .scene-light-control[hidden] { display: none; }
-.world-head:has([data-view="map"][aria-pressed="true"]) > .scene-light-control { display: none; }
-@media(max-width:700px) { .scene-light-control select { min-height: 40px; max-width: 120px; } }
+.scene-light-control { position: relative; flex: 0 0 auto; color: var(--game-text, #dad0ac); z-index: 20; font-size: 11px; pointer-events: auto; }
+.scene-light-control[hidden], .environment-toolbar .scene-light-control[hidden], .world-head:has([data-view="map"][aria-pressed="true"]) > .scene-light-control { display: none; }
+.scene-light-control > summary { display: flex; align-items: center; gap: 7px; min-height: 38px; padding: 7px 10px; border: 1px solid var(--game-line-strong, #52654e); border-radius: 5px; background: var(--game-inset, #263532); cursor: pointer; list-style: none; user-select: none; }
+.scene-light-control > summary::-webkit-details-marker { display: none; }
+.scene-light-control[open] > summary { border-color: var(--game-brass-light, #b7a56b); }
+.scene-light-control > summary:focus-visible, .scene-light-control select:focus-visible { outline: 2px solid var(--game-brass-light, #b7a56b); outline-offset: 2px; }
+.scene-light-control .scene-climate-mobile { display: none; }
+.scene-climate-panel { position: absolute; z-index: 100; right: 0; top: calc(100% + 7px); width: 280px; max-width: calc(100vw - 32px); padding: 12px; border: 1px solid var(--game-line-strong, #52654e); border-radius: 7px; background: var(--game-inset, #263532); box-shadow: 0 8px 24px #09172e55; }
+.scene-climate-fields { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 10px; }
+.scene-light-control .scene-climate-fields label { min-width: 0; display: grid; gap: 6px; margin: 0; color: var(--game-muted, #a5b0a6); font-size: 10px; }
+.scene-light-control .scene-climate-fields select { width: 100%; min-width: 0; min-height: 38px; padding: 6px 4px; border: 1px solid var(--game-line-strong, #52654e); border-radius: 4px; background: var(--game-panel, #273b35); color: var(--game-text, #dad0ac); font: inherit; cursor: pointer; }
+.scene-light-control .scene-climate-speed { grid-column: 1 / -1; }
+.scene-climate-status { display: block; margin-top: 12px; font: 10px 'IBM Plex Mono', monospace; color: var(--game-brass-light, #b7a56b); }
+.scene-climate-panel small { display: block; margin-top: 6px; color: var(--game-muted, #a5b0a6); font-size: 9px; }
+.environment-toolbar > .scene-light-control { margin-left: 0; }
+.world-head > .scene-light-control { padding: 0; border: 0; background: none; }
 @media(max-width:640px) {
   .command-main .world-head > .scene-light-control { order: 2; margin-left: auto; }
-  .command-main .world-head > .scene-light-control > span { display: none; }
-  .command-main .world-head > .scene-light-control select { width: 100px; min-height: 40px; }
+  .scene-light-control .scene-climate-desktop { display: none; }
+  .scene-light-control .scene-climate-mobile { display: inline; }
+  .scene-light-control > summary { min-height: 40px; }
+  .scene-light-control select { min-height: 40px; font-size: 11px; }
   .command-main .world-head > .scene-sound { order: 4; }
 }

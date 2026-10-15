@@ -13,6 +13,9 @@ import { PixelRaster, PIXEL_PALETTE as P } from './pixel-art';
 import { paintPropAtmosphere, paintBuildingAtmosphere } from './pixel-environment';
 import { raidGroundArt } from './raid-ground-art';
 import { SceneLightBuffer, propLampSources } from './pixel-lighting';
+import { readSceneClimate } from './scene-climate';
+import { paintSceneWeather } from './scene-weather';
+import { SceneWeatherCache } from './scene-weather-cache';
 import type { LiveCityBuilding, LiveWorldProp } from './game/live';
 import { raidPixelBuilding, raidPixelFrame, raidPixelProp } from './pixel-raid-presentation';
 import { PIXEL_SCENE_THEME as T, pixelSceneTint as tintColor } from './pixel-scene-theme';
@@ -99,6 +102,9 @@ export class RaidStreetRenderer {
 	private lightTexture: Phaser.Textures.CanvasTexture;
 	private lightImage: Phaser.GameObjects.Image;
 	private lightKey: string;
+	private weatherGraphics: Phaser.GameObjects.Graphics;
+	private weatherCache = new SceneWeatherCache();
+	private paintedWeather: ReturnType<SceneWeatherCache['get']> | null = null;
 
 	constructor(private scene: Phaser.Scene, viewport: ShelterViewport, private reducedMotion: boolean, _requestScavAtlas: (appearance: number) => void = () => {}) {
 		this.viewport = { ...viewport };
@@ -109,6 +115,8 @@ export class RaidStreetRenderer {
 		this.lightTexture = scene.textures.createCanvas(this.lightKey, 1, 1)!;
 		this.lightImage = scene.add.image(0, 0, this.lightKey).setOrigin(0).setVisible(false);
 		this.layer.addAt(this.lightImage, 1);
+		this.weatherGraphics = scene.add.graphics().setVisible(false);
+		this.layer.addAt(this.weatherGraphics, 2);
 		this.effects = scene.add.graphics().setDepth(10000);
 		this.world.add(this.effects);
 		this.hudPlate = scene.add.graphics();
@@ -133,6 +141,7 @@ export class RaidStreetRenderer {
 	selectRaid(id: string | null): void { if (id !== this.selectedId) { this.selectedId = id; this.cachedRaid = null; this.cachedGroup = []; this.squadFrame = null; this.carriedWeapon = null; this.report = null; this.following = true; this.pendingCamera = null; this.feedback = null; this.alertRoot.setVisible(false); } }
 	reset(): void {
 		this.lightImage.setVisible(false); this.lightBuffer.clear();
+		this.weatherGraphics.clear().setVisible(false); this.weatherCache.clear(); this.paintedWeather = null;
 		this.world.removeAll(true); this.clearScenery(); this.plan = null; this.planInput = ""; this.builtRaidId = null; this.selectedId = null; this.cachedRaid = null; this.carriedWeapon = null; this.report = null; this.pawn = null; this.enemies = []; this.loot.clear(); this.occluders = []; this.pendingCamera = null;
 		this.squadPawns.clear(); this.squadLabels.clear(); this.squadFrame = null; this.cachedGroup = [];
 		this.groundMinimap.clear(); this.mini.clear(); this.miniGuide.setVisible(false); this.progress.clear(); this.title.setText("УЛИЦЫ · НАБЛЮДЕНИЕ");
@@ -157,6 +166,7 @@ export class RaidStreetRenderer {
 	setFollow(enabled: boolean): void { this.following = enabled; if (enabled && this.pawn) this.follow(0, true); this.applyCamera(); }
 	resetCamera(): void { this.pendingCamera = null; this.camera.zoom = 1.8; this.setFollow(true); }
 	resize(viewport: ShelterViewport): void {
+		this.weatherCache.clear(); this.weatherGraphics.clear(); this.paintedWeather = null;
 		const center = { x: this.camera.x + this.viewport.width / this.camera.zoom / 2, y: this.camera.y + this.viewport.height / this.camera.zoom / 2 };
 		this.viewport = { ...viewport }; this.camera.x = center.x - viewport.width / this.camera.zoom / 2; this.camera.y = center.y - viewport.height / this.camera.zoom / 2;
 		const canvas = this.scene.game.canvas, rect = canvas.getBoundingClientRect();
@@ -329,7 +339,7 @@ export class RaidStreetRenderer {
 			if (item.building) paintBuildingAtmosphere(item.building, this.environmentAt, plot, this.reducedMotion);
 		}
 	}
-	private paintLighting(): void {
+	private paintLighting(climate: ReturnType<typeof readSceneClimate>): void {
 		const zoom = this.camera.zoom;
 		const lamps = (this.plan?.props ?? []).flatMap(prop => {
 			if (prop.kind !== 'lamp') return [];
@@ -337,13 +347,24 @@ export class RaidStreetRenderer {
 			return propLampSources(native).map(light => ({ x: (origin.x + light.x * .5 - this.camera.x) * zoom, y: (origin.y + light.y * .5 - this.camera.y) * zoom,
 				headY: (origin.y + light.headY * .5 - this.camera.y) * zoom, radius: light.radius * .5 * zoom }));
 		});
-		if (this.lightBuffer.paint(this.viewport.width, this.viewport.height, lamps)) {
+		if (this.lightBuffer.paint(this.viewport.width, this.viewport.height, lamps, undefined, climate)) {
 			const canvas = this.lightBuffer.canvas;
 			this.lightTexture.setSize(canvas.width, canvas.height);
 			const context = this.lightTexture.getContext(); context.clearRect(0, 0, canvas.width, canvas.height); context.drawImage(canvas, 0, 0);
 			this.lightTexture.refresh(); this.lightImage.setDisplaySize(this.viewport.width, this.viewport.height);
 		}
 		this.lightImage.setVisible(true);
+	}
+	private paintWeather(climate: ReturnType<typeof readSceneClimate>): void {
+		// Internal Phaser coordinates may be much larger than the visible canvas.
+		// Sample density and streak size in display pixels, then adapt this one layer.
+		const displayScale = this.hudCssScale;
+		const weather = this.weatherCache.get({ width: this.viewport.width * displayScale, height: this.viewport.height * displayScale,
+			timeMs: climate.timeMs, rain: climate.rain, fog: climate.fog, wind: climate.wind, reducedMotion: this.reducedMotion });
+		this.weatherGraphics.setScale(1 / displayScale).setVisible(true);
+		if (weather !== this.paintedWeather) {
+			this.weatherGraphics.clear(); paintSceneWeather(this.weatherGraphics, weather); this.paintedWeather = weather;
+		}
 	}
 
 	private makePawn(appearance: number, _hostile: boolean): Pawn {
@@ -541,6 +562,7 @@ export class RaidStreetRenderer {
 	}
 
 	update(snapshot: RaidStreetSnapshot, now: number, delta: number): void {
+		const climate = readSceneClimate();
 		const requestedId = snapshot.selectedRaidId !== undefined ? snapshot.selectedRaidId ?? snapshot.raids[0]?.id ?? null : this.selectedId ?? snapshot.raids[0]?.id ?? null;
 		const requestedRaid = snapshot.raids.find((raid) => raid.id === requestedId);
 		const cachedMember = this.cachedRaid?.squad?.members.some((member) => member.raidId === requestedId);
@@ -548,7 +570,10 @@ export class RaidStreetRenderer {
 		if (id !== this.selectedId) this.selectRaid(id);
 		const activeRaid = snapshot.raids.find((raid) => raid.id === id);
 		const raid = activeRaid ?? (this.cachedRaid?.id === id ? this.cachedRaid : null);
-		if (!raid) { this.world.setVisible(false); this.mini.clear(); this.groundMinimap.clear(); this.miniGuide.setVisible(false); this.progress.clear(); this.title.setText("УЛИЦЫ · НАБЛЮДЕНИЕ"); this.caption.setText("Отправь бойца в рейд и выбери «Наблюдать»"); this.actionBadge.setText(""); this.detail.setText(""); this.feedback = null; this.alertRoot.setVisible(false); this.paintHudPlate(); return; }
+		if (!raid) {
+			this.world.setVisible(false); this.lightImage.setVisible(false); this.weatherGraphics.clear().setVisible(false); this.weatherCache.clear(); this.paintedWeather = null;
+			this.mini.clear(); this.groundMinimap.clear(); this.miniGuide.setVisible(false); this.progress.clear(); this.title.setText("УЛИЦЫ · НАБЛЮДЕНИЕ"); this.caption.setText("Отправь бойца в рейд и выбери «Наблюдать»"); this.actionBadge.setText(""); this.detail.setText(""); this.feedback = null; this.alertRoot.setVisible(false); this.paintHudPlate(); return;
+		}
 		this.world.setVisible(true);
 		this.cachedRaid = raid;
 		this.report = activeRaid ? null : snapshot.history?.find((report) => report.raidId === id || report.squad?.leaderRaidId === id) ?? (this.report?.raidId === id ? this.report : null);
@@ -630,10 +655,9 @@ export class RaidStreetRenderer {
 			const actionTint = frame.action === "skirmish" ? tintColor(T.hostile) : frame.action === "search" ? tintColor(T.loot) : frame.action === "cover" ? tintColor(T.ally) : tintColor(T.self);
 			this.effects.lineStyle(1.3, actionTint, .6).strokeEllipse(point.x, point.y + 1, 29, 14); polygon(this.effects, [{ x: point.x, y: point.y - 57 }, { x: point.x - 4, y: point.y - 64 }, { x: point.x + 4, y: point.y - 64 }], actionTint);
 		}
-		if (!this.reducedMotion && plan.theme.weather === "rain") for (let n = 0; n < 25; n++) { const x = this.camera.x + ((n * 137 + now / 60) % (this.viewport.width / this.camera.zoom)), y = this.camera.y + ((n * 91 + now / 10) % (this.viewport.height / this.camera.zoom)); line(this.effects, [{ x, y }, { x: x - 2, y: y + 6 }], tintColor(P.steelLight), .7, .17); }
 		if (this.pendingCamera) this.applyRestoredCamera();
 		else if (this.following) this.follow(delta, firstFrame);
-		this.applyCamera(); this.world.sort("depth"); this.paintLighting(); this.updateMini(frame);
+		this.applyCamera(); this.world.sort("depth"); this.paintLighting(climate); this.paintWeather(climate); this.updateMini(frame);
 		const status = this.report ? this.report.success ? "РЕЙД ЗАВЕРШЁН · ДОБЫЧА НА БАЗЕ" : "РЕЙД ЗАВЕРШЁН · СМОТРИ ОТЧЁТ"
 			: objective.settling ? "КОНТРОЛЬНАЯ ТОЧКА · ОЖИДАЕТСЯ СВОДКА" : frame.paused ? "ЖДЁТ ПРИКАЗА · ДОБЫЧА ПРИ НЁМ"
 			: `${objective.label}${frame.action === "search" ? ` · ${Math.floor(frame.segmentProgress * 100)}%` : frame.enemyPositions.length ? ` · КОНТАКТ ${frame.enemyPositions.length}` : ""}`;
@@ -648,5 +672,5 @@ export class RaidStreetRenderer {
 		this.updateAlert();
 		this.progress.clear(); this.progress.fillStyle(tintColor(T.panel), .92).fillRoundedRect(0, 0, Math.min(350, this.viewport.width - 224), 10, 3).fillStyle(tintColor(T.self)).fillRoundedRect(0, 0, Math.min(350, this.viewport.width - 224) * frame.progress, 10, 3);
 	}
-	destroy(): void { this.layer.destroy(true); this.scene.textures.remove(this.lightKey); this.lightBuffer.clear(); this.clearScenery(); this.loot.clear(); this.hostileLoadouts.clear(); this.bossLoadouts.clear(); this.squadPawns.clear(); this.squadLabels.clear(); this.squadFrame = null; this.cachedGroup = []; this.enemies = []; this.occluders = []; this.pawn = null; this.cachedRaid = null; this.visualLoadout = null; }
+	destroy(): void { this.layer.destroy(true); this.weatherCache.clear(); this.paintedWeather = null; this.scene.textures.remove(this.lightKey); this.lightBuffer.clear(); this.clearScenery(); this.loot.clear(); this.hostileLoadouts.clear(); this.bossLoadouts.clear(); this.squadPawns.clear(); this.squadLabels.clear(); this.squadFrame = null; this.cachedGroup = []; this.enemies = []; this.occluders = []; this.pawn = null; this.cachedRaid = null; this.visualLoadout = null; }
 }

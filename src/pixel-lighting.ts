@@ -1,25 +1,7 @@
 import type { LiveWorldProp } from './game/live';
 import { pixelIso } from './pixel-art';
-
-export type SceneLightMode = 'day' | 'dusk' | 'night';
-const profiles = {
-  day: { ambient: '#eddbb0', ambientAlpha: .025, lights: .18, shadowAlpha: .17 },
-  dusk: { ambient: '#142b3b', ambientAlpha: .22, lights: 1, shadowAlpha: .22 },
-  night: { ambient: '#09172e', ambientAlpha: .48, lights: 1.5, shadowAlpha: .12 },
-} as const;
-export function sceneLightProfile(mode: SceneLightMode) { return profiles[mode]; }
-export function parseSceneLightMode(value: unknown): SceneLightMode { return value === 'day' || value === 'night' ? value : 'dusk'; }
-const preferenceKey = 'prapor-scene-light';
-let selectedMode: SceneLightMode | null = null;
-export function readSceneLightMode(): SceneLightMode {
-  if (!selectedMode) { try { selectedMode = parseSceneLightMode(globalThis.localStorage?.getItem(preferenceKey)); } catch { selectedMode = 'dusk'; } }
-  return selectedMode;
-}
-export function setSceneLightMode(mode: SceneLightMode): void {
-  selectedMode = parseSceneLightMode(mode);
-  try { globalThis.localStorage?.setItem(preferenceKey, selectedMode); } catch { /* The visual preference also works without storage. */ }
-  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('prapor:lighting'));
-}
+import { readSceneLightMode, sceneLightProfile, type SceneClimate, type SceneLightMode } from './scene-climate';
+export { readSceneLightMode, sceneLightProfile, parseSceneLightMode, setSceneLightMode, type SceneLightMode } from './scene-climate';
 
 export interface SceneLamp { x: number; y: number; headY: number; radius: number }
 /** Native sprite coordinates, shared by the live and paid raid adapters. */
@@ -39,13 +21,14 @@ export class SceneLightBuffer {
   private surface: HTMLCanvasElement | null = null;
   private signature = '';
   get canvas(): HTMLCanvasElement { return this.surface ??= document.createElement('canvas'); }
-  paint(width: number, height: number, lamps: readonly SceneLamp[], mode = readSceneLightMode()): boolean {
+  paint(width: number, height: number, lamps: readonly SceneLamp[], mode: SceneLightMode = readSceneLightMode(), climate?: Pick<SceneClimate, 'profile'>): boolean {
     const w = Math.max(1, Math.min(640, Math.ceil(width / 3))), h = Math.max(1, Math.min(480, Math.ceil(height / 3)));
-    const lights = visibleSceneLamps(lamps, width, height), signature = `${w}:${h}:${width}:${height}:${mode}:${lights.map(light => [light.x, light.y, light.headY, light.radius].map(n => Math.round(n * 2) / 2).join(',')).join(';')}`;
+    const profile = climate?.profile ?? sceneLightProfile(mode);
+    const lightKey = `${profile.ambient}:${Math.round(profile.ambientAlpha * 2048)}:${Math.round(profile.lights * 1024)}`;
+    const lights = visibleSceneLamps(lamps, width, height), signature = `${w}:${h}:${width}:${height}:${mode}:${lightKey}:${lights.map(light => [light.x, light.y, light.headY, light.radius].map(n => Math.round(n * 2) / 2).join(',')).join(';')}`;
     if (signature === this.signature) return false;
     const canvas = this.canvas; canvas.width = w; canvas.height = h;
     const c = canvas.getContext('2d'); if (!c) return false;
-    const profile = sceneLightProfile(mode);
     c.clearRect(0, 0, w, h); c.fillStyle = profile.ambient; c.globalAlpha = profile.ambientAlpha; c.fillRect(0, 0, w, h); c.globalAlpha = 1;
     c.scale(w / width, h / height);
     const halo = (x: number, y: number, rx: number, ry: number, color: string, alpha: number, operation: GlobalCompositeOperation) => {

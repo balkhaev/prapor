@@ -2,12 +2,13 @@ import { afterEach, expect, test } from 'bun:test';
 import { parseSceneLightMode, propLampSources, sceneLightProfile, SceneLightBuffer, visibleSceneLamps } from '../src/pixel-lighting';
 import { waterBankEdges } from '../src/live-ground-art';
 import type { LiveTerrain, LiveWorldProp } from '../src/game/live';
+import { sampleSceneClimate, SCENE_DAY_MS } from '../src/scene-climate';
 
 test('lighting modes retain scene detail and put stronger practical lights into darker scenes', () => {
   const day = sceneLightProfile('day'), dusk = sceneLightProfile('dusk'), night = sceneLightProfile('night');
   expect(day.ambientAlpha).toBeLessThan(dusk.ambientAlpha); expect(dusk.ambientAlpha).toBeLessThan(night.ambientAlpha);
   expect(night.ambientAlpha).toBeLessThan(.55); expect(day.lights).toBeLessThan(dusk.lights); expect(dusk.lights).toBeLessThan(night.lights);
-  for (const value of [undefined, null, 'broken', {}, 7]) expect(parseSceneLightMode(value)).toBe('dusk');
+  for (const value of [undefined, null, 'broken', {}, 7]) expect(parseSceneLightMode(value)).toBe('auto');
   expect(parseSceneLightMode('day')).toBe('day'); expect(parseSceneLightMode('night')).toBe('night');
 });
 
@@ -36,6 +37,10 @@ test('one bounded light mask is reused until the mode or projected sources chang
   expect(buffer.paint(4000, 3000, lights, 'dusk')).toBe(true); expect(buffer.canvas.width).toBeLessThanOrEqual(640); expect(buffer.canvas.height).toBeLessThanOrEqual(480);
   expect(buffer.paint(4000, 3000, lights, 'dusk')).toBe(false); expect(creates).toBe(1); expect(paints).toBe(1);
   expect(buffer.paint(4000, 3000, lights, 'night')).toBe(true); expect(creates).toBe(1);
+  const morning = sampleSceneClimate(SCENE_DAY_MS * .21, 'auto', 'clear'), noon = sampleSceneClimate(SCENE_DAY_MS * .5, 'auto', 'clear');
+  expect(buffer.paint(4000, 3000, lights, 'auto', morning)).toBe(true);
+  expect(buffer.paint(4000, 3000, lights, 'auto', morning)).toBe(false);
+  expect(buffer.paint(4000, 3000, lights, 'auto', noon)).toBe(true);
   const old = buffer.canvas; buffer.clear(); expect(old.width).toBe(1); expect(old.height).toBe(1);
 });
 
