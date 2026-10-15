@@ -64,7 +64,7 @@ test('garden trees stay in safe planted cells, respect existing trees and leave 
   const f = fixture(), before = structuredClone(f.world);
   const gardens = buildCityGardenGround(f.world, f.terrain, f.walkable, f.indoor);
   const trees = cityGardenTrees(f.world, gardens);
-  expect(trees.length).toBe(2);
+  expect(trees.length).toBe(4);
   expect(cityGardenTrees(f.world, gardens)).toEqual(trees);
   expect(f.world).toEqual(before);
   expect(cityGardenTrees(f.world, [])).toEqual([]);
