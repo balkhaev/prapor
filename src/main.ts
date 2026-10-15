@@ -1,4 +1,5 @@
 import "./style.css";
+import { mountSceneLightControl } from './scene-light-control';
 import "./gear-style.css";
 import "./module-catalog.css";
 import "./achievements.css";
@@ -394,6 +395,7 @@ app.insertAdjacentHTML('beforeend', '<aside id="achievement-notice" class="achie
 document.querySelector(".command-footer")!.prepend(document.querySelector("#offline-summary")!);
 document.querySelector(".world-head .view-switch")!.insertAdjacentHTML("afterend", '<div class="camera-controls" role="group" aria-label="Вид убежища"><button data-camera="out" aria-label="Отдалить убежище" title="Отдалить (−)">−</button><span id="camera-scale" class="camera-scale" aria-label="Масштаб">100%</span><button data-camera="in" aria-label="Приблизить убежище" title="Приблизить (+)">+</button><button data-camera="fit" class="camera-fit" aria-label="Обзор всего убежища" title="Обзор всего убежища (0)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 9V3h6m6 0h6v6m0 6v6h-6M9 21H3v-6"/></svg><span>Обзор</span></button><button data-camera="pan" aria-label="Рука: перемещать вид" title="Рука: перетаскивать убежище" aria-pressed="false"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 12V5a2 2 0 0 1 4 0v7-8a2 2 0 0 1 4 0v8-5a2 2 0 0 1 4 0v8c0 4-3 7-7 7h-1c-2 0-4-1-5-3L3 12a2 2 0 0 1 3-2l2 2"/></svg></button></div>');
 const worldViewport = document.querySelector<HTMLElement>("#world")!;
+mountSceneLightControl(document.querySelector('.world-head')!);
 worldViewport.insertAdjacentHTML("afterend", '<div id="live-world" aria-label="Общий онлайн-периметр" hidden></div>');
 document.querySelector(".world-head .view-switch")!.insertAdjacentHTML("beforeend", '<button data-view="live" aria-label="Автоматический рейд" title="Общий Периметр · автобаттлер" aria-pressed="false"><span class="live-tab-dot" aria-hidden="true"></span> Рейд · автобой</button>');
 document.querySelector('.camera-controls [data-camera="fit"]')!.insertAdjacentHTML("beforebegin", `<button data-camera="near" class="camera-fit camera-near" aria-label="Рабочий вид базы" title="Рабочий вид базы: ближе к постройкам">${icon("base",15)}<span>К постройкам</span></button>`);

@@ -5,6 +5,7 @@ import { type BaseRoom } from "./game/data";
 import type { GearItem, Loadout } from "./game/systems";
 import { PixelPhaserActor } from './pixel-phaser-actor';
 import { PIXEL_PALETTE } from './pixel-art';
+import { OPERATIONS_GRID, operationsMapCoordinate, paintOperationsMap, paintOperationsDistrictSymbol } from './operations-map-art';
 import { getScavVisualLoadout } from "./scav-loadout";
 import { advanceShelterRoute, clientToShelterPoint } from "./shelter-motion";
 import { clampShelterCamera, getMinShelterZoom, shelterOverviewCamera, focusShelterRect, panShelterCamera, projectShelterRect, resizeShelterCamera, shelterViewportForSize, viewportToShelter, zoomShelterCamera, type ShelterCamera, type ShelterRect, type ShelterViewport, type ClientRect } from "./shelter-camera";
@@ -16,7 +17,8 @@ import { projectShelterPoint, unprojectShelterPoint, projectShelterBounds, shelt
 import { paintIsometricRoom, paintIsometricProduction, getShelterChimney, getShelterPorchLamp } from "./shelter-isometric-art";
 import { RaidStreetRenderer } from "./raid-scene";
 import { getShelterLandscape, paintShelterLandscape, paintShelterDecoration, type ShelterLandscape, type ShelterLandscapeDecoration } from "./shelter-landscape";
-import { sampleShelterAtmosphere, sampleShelterWind, paintShelterAtmosphereGround, paintShelterAtmosphereAir, paintShelterAtmosphereGlows, type ShelterSmokeEmitter, type ShelterAtmosphereLight } from "./shelter-atmosphere";
+import { sampleShelterAtmosphere, sampleShelterWind, paintShelterAtmosphereGround, paintShelterAtmosphereGroundLights, paintShelterAtmosphereAir, paintShelterAtmosphereGlows, type ShelterSmokeEmitter, type ShelterAtmosphereLight } from "./shelter-atmosphere";
+import { readSceneLightMode, sceneLightProfile, type SceneLightMode } from './pixel-lighting';
 import { getShelterRoutine, restoreShelterRoutine, type ShelterRoutine } from "./shelter-routines";
 import { getShelterActivityPose } from "./shelter-activity";
 import type { ShelterPersonView } from "./territory-life";
@@ -173,7 +175,6 @@ type ShelterCell = {
 	productLabel: Phaser.GameObjects.Text;
 	label: Phaser.GameObjects.Text;
 	status: Phaser.GameObjects.Text;
-	lamp: Phaser.GameObjects.Image;
 	zone: Phaser.GameObjects.Zone;
 	signature: string;
 	column: number;
@@ -226,13 +227,6 @@ const C = {
 	sage: pigment(PIXEL_PALETTE.panelShade),
 	red: pigment(PIXEL_PALETTE.red),
 };
-function random(seed: number): () => number {
-	let n = seed >>> 0;
-	return () => {
-		n = (Math.imul(n, 1664525) + 1013904223) >>> 0;
-		return n / 4294967296;
-	};
-}
 function polygon(
 	g: Phaser.GameObjects.Graphics,
 	points: Point[],
@@ -312,6 +306,8 @@ export function createWorld(
 		private shelterCaption!: Phaser.GameObjects.Text;
 		private ambient!: Phaser.GameObjects.Graphics;
 		private atmosphereGround!: Phaser.GameObjects.Graphics;
+		private atmosphereGroundLights!: Phaser.GameObjects.Graphics;
+		private atmosphereShade!: Phaser.GameObjects.Graphics;
 		private atmosphereAir!: Phaser.GameObjects.Graphics;
 		private atmosphereGlows!: Phaser.GameObjects.Graphics;
 		private landscape: ShelterLandscape | null = null;
@@ -320,6 +316,7 @@ export function createWorld(
 		private windProps: { art: Phaser.GameObjects.Graphics; decoration: ShelterLandscapeDecoration }[] = [];
 		private lastAtmospherePaint = -1000;
 		private lastWindPaint = -1000;
+		private baseLightMode: SceneLightMode | null = null;
 		private dragGhost!: Phaser.GameObjects.Graphics;
 		private placementGhost!: Phaser.GameObjects.Graphics;
 		private buildingGhost!: Phaser.GameObjects.Graphics;
@@ -372,7 +369,6 @@ export function createWorld(
 
 		create(): void {
 			this.cameras.main.setBackgroundColor(C.void);
-			this.makeGlow();
 			this.baseLayer = this.add.container(0, 0);
 			this.mapLayer = this.add.container(0, 30);
 			this.paintBunker();
@@ -988,24 +984,14 @@ export function createWorld(
 			document.addEventListener("visibilitychange", () => { if (document.hidden) { this.cancelScavDrag(); this.cancelBuildingDrag(); this.cancelCameraGesture(); } }, options);
 		}
 
-		private makeGlow(): void {
-			const texture = this.textures.createCanvas("prapor-light", 64, 64);
-			if (!texture) return;
-			const context = texture.getContext();
-			for (const [size, alpha] of [[56, .04], [40, .07], [24, .13], [8, .35]]) {
-				context.fillStyle = `rgba(218,208,172,${alpha})`;
-				context.fillRect(32 - size! / 2, 32 - size! / 2, size!, size!);
-			}
-			texture.setFilter(Phaser.Textures.FilterMode.NEAREST);
-			texture.refresh();
-		}
-
 		private paintBunker(): void {
 			this.terrain = this.add.graphics().setDepth(-1_000_000_000); this.baseLayer.add(this.terrain);
 			this.atmosphereGround = this.add.graphics().setDepth(-999_999_998);
+			this.atmosphereGroundLights = this.add.graphics().setDepth(-999_999_997).setBlendMode(Phaser.BlendModes.ADD);
+			this.atmosphereShade = this.add.graphics().setDepth(999_998);
 			this.atmosphereGlows = this.add.graphics().setDepth(999_999).setBlendMode(Phaser.BlendModes.ADD);
 			this.atmosphereAir = this.add.graphics().setDepth(1_000_002);
-			this.baseLayer.add([this.atmosphereGround, this.atmosphereGlows, this.atmosphereAir]);
+			this.baseLayer.add([this.atmosphereGround, this.atmosphereGroundLights, this.atmosphereShade, this.atmosphereGlows, this.atmosphereAir]);
 			this.ambient = this.add.graphics().setDepth(1_000_000); this.baseLayer.add(this.ambient);
 			this.dragGhost = this.add.graphics().setDepth(100_000_000); this.baseLayer.add(this.dragGhost);
 			this.placementGhost = this.add.graphics().setDepth(100_000_002); this.baseLayer.add(this.placementGhost);
@@ -1102,15 +1088,14 @@ export function createWorld(
 			const status = this.text(front.x, front.y - 4, "", 8, "#c1d8bd").setOrigin(.5).setFontFamily("Manrope, sans-serif").setLetterSpacing(0).setBackgroundColor("#10221ded").setPadding(3, 2);
 			const productLabel = this.text(at.x, at.y - 39, "", 9, "#f4e4bb").setOrigin(.5).setLetterSpacing(0).setBackgroundColor("#10231e").setPadding(4, 2).setVisible(false);
 			const feedback = this.text(front.x, front.y - 23, "", 12, "#e6ffce").setOrigin(.5).setLetterSpacing(0).setBackgroundColor("#163023").setPadding(5, 3).setVisible(false);
-			const lamp = this.add.image(at.x, at.y + 5, "prapor-light").setScale(1.2, .72).setAlpha(.08).setBlendMode(Phaser.BlendModes.ADD);
 			const bounds = projectShelterBounds(lot);
 			const zone = this.add.zone(bounds.x, bounds.y, bounds.width, bounds.height).setOrigin(0);
 			zone.setInteractive(new Phaser.Geom.Polygon(corners.map((point) => ({ x: point.x - bounds.x, y: point.y - bounds.y }))), Phaser.Geom.Polygon.Contains);
 			zone.input!.cursor = "pointer";
-			const root = this.add.container(0, 0, [art, lamp, animation, frame, progress]).setDepth(at.y - 20);
+			const root = this.add.container(0, 0, [art, animation, frame, progress]).setDepth(at.y - 20);
 			const chrome = this.add.container(0, 0, [label, status, productLabel, feedback]).setDepth(10_000_000);
 			this.baseLayer.add([root, chrome, zone.setDepth(-100_000_000)]);
-			const cell: ShelterCell = { root, chrome, open: false, expansion: null, art, frame, progress, animation, stationClock: 0, stationJob: null, production: null, productLabel, label, status, lamp, zone, signature: "", column, row, hovered: false, room: room ?? null, roomId: room?.id, working: false, operational: "empty", feedback, lastCycles: null, completedAt: -10000 };
+			const cell: ShelterCell = { root, chrome, open: false, expansion: null, art, frame, progress, animation, stationClock: 0, stationJob: null, production: null, productLabel, label, status, zone, signature: "", column, row, hovered: false, room: room ?? null, roomId: room?.id, working: false, operational: "empty", feedback, lastCycles: null, completedAt: -10000 };
 			this.cells.set(room ? roomCellKey(room.id) : `${column}:${row}`, cell);
 			zone.on("pointerover", (pointer: Phaser.Input.Pointer) => { if (this.acceptsPointer(pointer, "base")) { cell.hovered = true; for (const candidate of this.cells.values()) if (candidate === cell || candidate.room?.id === cell.room?.id) this.paintCellFrame(candidate); if (!this.buildingPlacement) this.describeCell(cell); } });
 			zone.on("pointerout", () => { cell.hovered = false; for (const candidate of this.cells.values()) if (candidate === cell || candidate.room?.id === cell.room?.id) this.paintCellFrame(candidate); interactions.onHover?.(null); });
@@ -1170,7 +1155,6 @@ export function createWorld(
 			const style = ROOM_STYLE[cell.room?.type ?? "workshop"]!;
 			cell.label.setText(cell.room ? `${style.label} · ${cell.room.level || ""}` : cell.open ? "СВОБОДНАЯ ЗЕМЛЯ" : cell.expansion ? "РАСШИРЕНИЕ" : "ЗА ОГРАДОЙ").setFontSize(cell.room ? 11 : 9).setColor(cell.room ? "#fff1dc" : "#afc0a4");
 			cell.status.setText(cell.room ? "" : cell.open ? "+ ПОСТРОИТЬ" : cell.expansion ? "ИДУТ РАБОТЫ" : "ПРИСОЕДИНИТЬ →");
-			cell.lamp.setVisible(Boolean(cell.room)).setTint(style.light);
 		}
 
 		private positionCellChrome(cell: ShelterCell): void {
@@ -1179,7 +1163,7 @@ export function createWorld(
 			const front = projectShelterPoint(cell.room ? getRoomEntrance(cell.room, 7) : { x: rect.x + rect.width / 2, y: rect.y + rect.height - 7 });
 			cell.label.setPosition(at.x, at.y - 43); cell.status.setPosition(front.x, front.y - 4);
 			cell.productLabel.setPosition(at.x, at.y - 63); cell.feedback.setPosition(front.x, front.y - 23);
-			cell.lamp.setPosition(at.x, at.y + 5); cell.root.setDepth(cell.room ? shelterBuildingDepth(rect) : -999_999_999);
+			cell.root.setDepth(cell.room ? shelterBuildingDepth(rect) : -999_999_999);
 			if (cell.room) {
 				const hit = shelterBuildingHitPolygon(rect);
 				const x = Math.min(...hit.map((point) => point.x)), y = Math.min(...hit.map((point) => point.y));
@@ -1280,7 +1264,6 @@ export function createWorld(
 					const status = construction ? `СТРОЙКА ${Math.floor(progress * 100)}%` : room.type === "storage" ? "ЗАПАСЫ" : room.type === "dormitory" ? "МЕСТА ОТРЯДА" : room.type === "hangar" ? "БОЛЬШИЕ ЗАПАСЫ" : cell.working ? `${Math.floor((cell.production?.progress ?? 0) * 100)}% · ${cell.production?.stageLabel ?? "Сборка"}` : production?.reason ? briefReason : !room.workerIds.length ? "НУЖЕН РАБОЧИЙ" : production?.status === "Нет заказа" ? "БЕЗ ЗАКАЗА" : "ЖДЁТ ПАРТИЮ";
 					const clippedStatus = `${status.toLocaleUpperCase("ru-RU").slice(0, 17)}${status.length > 17 ? "…" : ""}`;
 					cell.status.setText(clippedStatus).setColor(construction ? "#ffd399" : cell.working ? "#d1efb0" : cell.operational === "blocked" ? "#edc294" : "#c1cbbc");
-					cell.lamp.setAlpha(construction ? .1 : cell.working ? .18 : .06);
 				}
 			}
 			this.baseCaption.setText("УЛИЦА · ВЫХОД В РЕЙД");
@@ -1405,7 +1388,8 @@ export function createWorld(
 
 		private animateAtmosphere(time: number): void {
 			if (!this.landscape || !this.atmosphereAir) return;
-			if (reducedMotion && this.lastAtmospherePaint >= 0) return;
+			const mode = readSceneLightMode(), profile = sceneLightProfile(mode), modeChanged = mode !== this.baseLightMode;
+			if (reducedMotion && this.lastAtmospherePaint >= 0 && !modeChanged) return;
 			if (time - this.lastWindPaint >= 83) {
 				this.lastWindPaint = time;
 				const wind = sampleShelterWind(time, reducedMotion);
@@ -1413,15 +1397,22 @@ export function createWorld(
 					art.clear(); paintShelterDecoration(art, decoration, wind.sway * (1.1 + decoration.seed % 5 * .1));
 				}
 			}
-			if (time - this.lastAtmospherePaint < 50) return;
+			if (time - this.lastAtmospherePaint < 50 && !modeChanged) return;
 			this.lastAtmospherePaint = time;
+			// One tint covers world art only. Chrome, controls and selection layers
+			// stay above it; individual light pools never add a second dark overlay.
+			this.baseLightMode = mode;
+			this.atmosphereShade.clear().fillStyle(pigment(profile.ambient), profile.ambientAlpha)
+				.fillRect(Math.floor(this.worldBounds.x) - 1, Math.floor(this.worldBounds.y) - 1, Math.ceil(this.worldBounds.width) + 2, Math.ceil(this.worldBounds.height) + 2);
 			const frame = sampleShelterAtmosphere({ timeMs: time, groundBounds: this.worldBounds, smokeEmitters: this.smokeEmitters, lights: this.atmosphereLights,
+				lightStrength: profile.lights, shadowStrength: profile.shadowAlpha,
 				birdBounds: { x: this.worldBounds.x + 60, y: this.worldBounds.y + 25, width: Math.max(100, this.worldBounds.width - 120), height: 55 },
 				mistZones: this.windProps.filter(prop => prop.decoration.kind === "tree" && !prop.decoration.owned).slice(-3).map(prop => {
 					const at = projectShelterPoint(prop.decoration.point);
 					return { x: at.x - 48, y: at.y - 12, width: 96, height: 20 };
 				}), reducedMotion });
 			this.atmosphereGround.clear(); paintShelterAtmosphereGround(this.atmosphereGround, frame);
+			paintShelterAtmosphereGroundLights(this.atmosphereGroundLights, frame);
 			this.atmosphereAir.clear(); paintShelterAtmosphereAir(this.atmosphereAir, frame);
 			this.atmosphereGlows.clear(); paintShelterAtmosphereGlows(this.atmosphereGlows, frame);
 		}
@@ -1527,7 +1518,6 @@ export function createWorld(
 				const elapsed = time - cell.completedAt, rect = roomRect(cell.room);
 				const badge = projectShelterPoint({ x: rect.x + rect.width / 2, y: rect.y + rect.height - 7 });
 				cell.feedback.setVisible(elapsed >= 0 && elapsed < 1800).setAlpha(reducedMotion ? 1 : Phaser.Math.Clamp(1 - elapsed / 1800, 0, 1)).setY(badge.y - 23 - (reducedMotion ? 0 : Math.max(0, elapsed) / 120));
-				if (cell.working) cell.lamp.setAlpha(reducedMotion ? .18 : .16 + (Math.sin(time / 1300 + cell.column + cell.row) + 1) * .025);
 				if (cell.production) cell.stationClock = advanceShelterStationClock(cell.stationClock, delta, cell.production, reducedMotion);
 				paintIsometricProduction(g, cell.column, cell.row, cell.room, cell.production, cell.stationClock, reducedMotion);
 			}
@@ -1535,195 +1525,43 @@ export function createWorld(
 		private paintMap(): void {
 			const g = this.add.graphics();
 			this.mapLayer.add(g);
-			g.fillStyle(C.void).fillRect(0, 0, WIDTH, HEIGHT);
-			g.fillStyle(C.ink).fillRect(20, 20, 800, 420);
-			const rng = random(4731);
-			for (let n = 0; n < 1300; n++)
-				g.fillStyle(n % 2 ? pigment(PIXEL_PALETTE.sand) : C.void, 0.035).fillRect(
-					20 + rng() * 800,
-					20 + rng() * 420,
-					1 + rng() * 3,
-					1
-				);
-			for (let x = 30; x <= 810; x += 42)
-				line(
-					g,
-					[
-						{ x, y: 20 },
-						{ x, y: 440 },
-					],
-					pigment(PIXEL_PALETTE.steelShade),
-					1,
-					0.13
-				);
-			for (let y = 20; y <= 440; y += 42)
-				line(
-					g,
-					[
-						{ x: 20, y },
-						{ x: 820, y },
-					],
-					pigment(PIXEL_PALETTE.steelShade),
-					1,
-					0.13
-				);
-
-			// Survey contours wrap forest hills and a river; no per-frame path rebuilding.
-			for (const hill of [
-				{ x: 235, y: 120, rx: 130, ry: 65 },
-				{ x: 620, y: 340, rx: 164, ry: 86 },
-				{ x: 720, y: 105, rx: 88, ry: 51 },
-			]) {
-				for (let ring = 1; ring <= 5; ring++) {
-					const points: Point[] = [];
-					for (let n = 0; n <= 64; n++) {
-						const angle = (n / 64) * Math.PI * 2;
-						const wave =
-							1 +
-							Math.sin(angle * 4 + ring * 0.2) * 0.11 +
-							Math.sin(angle * 7) * 0.035;
-						points.push({
-							x: Math.round(hill.x + ((Math.cos(angle) * hill.rx * ring) / 5) * wave),
-							y: Math.round(hill.y + ((Math.sin(angle) * hill.ry * ring) / 5) * wave),
-						});
-					}
-					line(g, points, C.sage, 1, 0.18);
-				}
-			}
-			const river: Point[] = [];
-			for (let y = 25; y <= 433; y += 8)
-				river.push({
-					x: 454 + Math.sin(y / 61) * 47 + Math.sin(y / 24) * 11,
-					y,
-				});
-			line(g, river, C.void, 17);
-			line(g, river, pigment(PIXEL_PALETTE.glass), 9, 0.55);
-			line(g, river, pigment(PIXEL_PALETTE.glassLight), 1, 0.4);
-			for (let n = 0; n < 75; n++) {
-				const x = 72 + rng() * 690,
-					y = 65 + rng() * 330;
-				if (Math.abs(x - (454 + Math.sin(y / 61) * 47)) < 45) continue;
-				const h = 5 + rng() * 5;
-				polygon(
-					g,
-					[
-						{ x, y: y - h },
-						{ x: x - 4, y },
-						{ x: x + 4, y },
-					],
-					C.wall,
-					0.8
-				);
-				line(
-					g,
-					[
-						{ x, y: y - h + 2 },
-						{ x, y: y + 3 },
-					],
-					C.sage,
-					1,
-					0.2
-				);
-			}
-			// Industrial footprint blocks: yards, apartment grids and the fenced perimeter.
-			for (const district of [
-				{ x: 590, y: 132, w: 4, h: 3 },
-				{ x: 285, y: 262, w: 3, h: 3 },
-				{ x: 655, y: 248, w: 3, h: 2 },
-			]) {
-				for (let row = 0; row < district.h; row++)
-					for (let col = 0; col < district.w; col++) {
-						g.fillStyle(pigment(PIXEL_PALETTE.panelShade), 0.26).fillRect(
-							district.x + col * 18,
-							district.y + row * 14,
-							11,
-							8
-						);
-						g.lineStyle(1, pigment(PIXEL_PALETTE.steel), 0.22).strokeRect(
-							district.x + col * 18,
-							district.y + row * 14,
-							11,
-							8
-						);
-					}
-				g.lineStyle(1, C.sage, 0.2).strokeRect(
-					district.x - 7,
-					district.y - 7,
-					district.w * 18 + 2,
-					district.h * 14 + 2
-				);
-			}
 			const places = snapshot().maps;
-			let previous = this.hq;
-			for (const place of places) {
-				const p = position(place);
-				const elbow = { x: p.x * 0.56 + previous.x * 0.44, y: previous.y - 20 };
-				line(g, [previous, elbow, p], C.void, 7, 0.8);
-				line(g, [previous, elbow, p], C.gold, 3, 0.48);
-				dashed(g, previous, elbow, C.gold, 1, 0.35);
-				dashed(g, elbow, p, C.gold, 1, 0.35);
-				dashed(g, this.hq, p, C.gold, 1, 0.2);
-				previous = p;
-			}
-			// Headquarters, compass and marginal field annotations.
-			g.fillStyle(C.gold).fillRect(this.hq.x - 7, this.hq.y - 6, 14, 12);
-			g.lineStyle(1, C.light).strokeRect(
-				this.hq.x - 12,
-				this.hq.y - 11,
-				24,
-				22
-			);
-			const compass = { x: 777, y: 66 };
-			line(
-				g,
-				[
-					{ x: compass.x, y: compass.y - 15 },
-					{ x: compass.x, y: compass.y + 15 },
-				],
-				pigment(PIXEL_PALETTE.steelLight),
-				1
-			);
-			line(
-				g,
-				[
-					{ x: compass.x - 12, y: compass.y },
-					{ x: compass.x + 12, y: compass.y },
-				],
-				pigment(PIXEL_PALETTE.steelLight),
-				1
-			);
-			polygon(
-				g,
-				[
-					{ x: compass.x, y: compass.y - 16 },
-					{ x: compass.x - 3, y: compass.y - 8 },
-					{ x: compass.x + 3, y: compass.y - 8 },
-				],
-				C.gold
-			);
-			this.mapLayer.add(this.text(777, 38, "С", 12, PIXEL_PALETTE.cream).setOrigin(0.5));
-			this.mapLayer.add(
-				this.text(33, 32, "ОПЕРАТИВНАЯ КАРТА", 15, PIXEL_PALETTE.cream)
-			);
-			this.operationsCaption = this.text(33, 58, "", 12, PIXEL_PALETTE.steelLight);
+			paintOperationsMap(g, places.map(place => ({ id: place.id, point: position(place) })), this.hq);
+			this.mapLayer.add(this.text(34, 32, "ОПЕРАТИВНАЯ КАРТА", 16, PIXEL_PALETTE.cream));
+			this.operationsCaption = this.text(34, 59, "", 12, PIXEL_PALETTE.steelLight);
 			this.mapLayer.add(this.operationsCaption);
-			this.mapLayer.add(
-				this.text(
-					32,
-					420,
-					"НАЖМИ НА РАЙОН, ЧТОБЫ ВЫБРАТЬ МАРШРУТ",
-					12,
-					PIXEL_PALETTE.panel
-				)
-			);
-			this.mapLayer.add(
-				this.text(774, 421, "1:25 000", 11, PIXEL_PALETTE.sand).setOrigin(1, 0)
-			);
-			this.mapLayer.add(
-				this.text(this.hq.x, this.hq.y + 23, "БАЗА", 13, PIXEL_PALETTE.cream).setOrigin(
-					0.5
-				)
-			);
+			this.mapLayer.add(this.text(778, 27, "С", 11, PIXEL_PALETTE.cream).setOrigin(.5, 0));
+			for (let column = 0; column < OPERATIONS_GRID.columns; column++) {
+				this.mapLayer.add(this.text(
+					OPERATIONS_GRID.x + (column + .5) * OPERATIONS_GRID.width / OPERATIONS_GRID.columns,
+					81, String(column + 1), 10, PIXEL_PALETTE.panelShade
+				).setOrigin(.5, 0));
+			}
+			for (let row = 0; row < OPERATIONS_GRID.rows; row++) {
+				this.mapLayer.add(this.text(
+					32, OPERATIONS_GRID.y + (row + .5) * OPERATIONS_GRID.height / OPERATIONS_GRID.rows,
+					String.fromCharCode(65 + row), 11, PIXEL_PALETTE.panelShade
+				).setOrigin(.5));
+			}
+			this.mapLayer.add(this.text(this.hq.x, this.hq.y + 22, "БАЗА", 13, PIXEL_PALETTE.cream)
+				.setOrigin(.5).setBackgroundColor(PIXEL_PALETTE.ink).setPadding(5, 3));
+			for (const entry of [
+				{ x: 36, label: "БАЗА", paint: PIXEL_PALETTE.yellow, style: "base" },
+				{ x: 184, label: "ДОСТУПНО", paint: PIXEL_PALETTE.steelLight, style: "open" },
+				{ x: 382, label: "ЗАКРЫТО", paint: PIXEL_PALETTE.panelShade, style: "closed" },
+				{ x: 562, label: "НАПРАВЛЕНИЕ", paint: PIXEL_PALETTE.yellow, style: "route" },
+			]) {
+				const ink = pigment(entry.paint);
+				if (entry.style === "route") {
+					line(g, [{ x: entry.x, y: 453 }, { x: entry.x + 18, y: 453 }], ink, 2);
+					polygon(g, [{ x: entry.x + 21, y: 453 }, { x: entry.x + 15, y: 449 }, { x: entry.x + 15, y: 457 }], ink);
+				} else {
+					g.lineStyle(1, ink).strokeRect(entry.x, 447, 12, 12);
+					if (entry.style === "closed") line(g, [{ x: entry.x + 2, y: 457 }, { x: entry.x + 10, y: 449 }], ink);
+					else g.fillStyle(ink).fillRect(entry.x + 4, 451, 4, 4);
+				}
+				this.mapLayer.add(this.text(entry.x + (entry.style === "route" ? 29 : 21), 446, entry.label, 12, entry.paint));
+			}
 			this.selectedRoute = this.add.graphics();
 			this.mapLayer.add(this.selectedRoute);
 			for (const place of places) this.mapPlace(place);
@@ -1736,7 +1574,7 @@ export function createWorld(
 				p.x,
 				p.y + 28,
 				place.name.toUpperCase(),
-				16,
+				17,
 				PIXEL_PALETTE.cream
 			).setOrigin(0.5);
 			label.setBackgroundColor(PIXEL_PALETTE.black).setPadding(9, 5);
@@ -1784,8 +1622,17 @@ export function createWorld(
 			const selectedPlace = state.maps.find((place) => place.id === state.selectedMapId && state.level >= place.level);
 			if (selectedPlace) {
 				const selectedPoint = position(selectedPlace);
-				line(this.selectedRoute, [this.hq, selectedPoint], C.gold, 4, 0.12);
-				dashed(this.selectedRoute, this.hq, selectedPoint, C.light, 2, 0.7);
+				const distance = Math.max(1, Math.hypot(selectedPoint.x - this.hq.x, selectedPoint.y - this.hq.y));
+				const direction = { x: (selectedPoint.x - this.hq.x) / distance, y: (selectedPoint.y - this.hq.y) / distance };
+				const start = { x: this.hq.x + direction.x * 18, y: this.hq.y + direction.y * 18 };
+				const end = { x: selectedPoint.x - direction.x * 31, y: selectedPoint.y - direction.y * 31 };
+				line(this.selectedRoute, [start, end], C.void, 6, .9);
+				dashed(this.selectedRoute, start, end, C.gold, 2, .95);
+				const arrow = { x: start.x + (end.x - start.x) * .72, y: start.y + (end.y - start.y) * .72 };
+				polygon(this.selectedRoute, [arrow,
+					{ x: arrow.x - direction.x * 9 - direction.y * 4, y: arrow.y - direction.y * 9 + direction.x * 4 },
+					{ x: arrow.x - direction.x * 9 + direction.y * 4, y: arrow.y - direction.y * 9 - direction.x * 4 },
+				], C.gold);
 			}
 			for (const place of state.maps) {
 				const item = this.places.get(place.id);
@@ -1794,41 +1641,21 @@ export function createWorld(
 					active = state.level >= place.level;
 				const selected = active && state.selectedMapId === place.id;
 				const highlighted = selected || (active && item.hovered);
-				const color = highlighted ? C.light : active ? pigment(PIXEL_PALETTE.steelLight) : C.sage;
+				const color = highlighted ? C.gold : active ? pigment(PIXEL_PALETTE.steelLight) : C.sage;
 				item.active = active;
 				if (item.zone.input) item.zone.input.cursor = active ? "pointer" : "not-allowed";
 				item.dot.clear();
-				if (highlighted) item.dot.fillStyle(C.gold, 0.13).fillCircle(p.x, p.y, 27);
-				item.dot
-					.lineStyle(highlighted ? 2 : 1, color, active ? 0.75 : 0.35)
-					.strokeCircle(p.x, p.y, highlighted ? 24 : 20);
-				item.dot.fillStyle(C.void).fillCircle(p.x, p.y, 11);
-				item.dot
-					.lineStyle(2, color, active ? 1 : 0.55)
-					.strokeCircle(p.x, p.y, 11);
-				item.dot.fillStyle(color, active ? 1 : 0.4).fillCircle(p.x, p.y, 3);
-				for (const d of [-1, 1]) {
-					line(
-						item.dot,
-						[
-							{ x: p.x + d * 14, y: p.y },
-							{ x: p.x + d * 22, y: p.y },
-						],
-						color,
-						1,
-						0.7
-					);
-					line(
-						item.dot,
-						[
-							{ x: p.x, y: p.y + d * 14 },
-							{ x: p.x, y: p.y + d * 22 },
-						],
-						color,
-						1,
-						0.7
-					);
+				if (selected) {
+					item.dot.fillStyle(C.gold, .08).fillRect(p.x - 62, p.y - 32, 124, 101);
+					for (const dx of [-1, 1]) for (const dy of [-1, 1]) {
+						const corner = { x: p.x + dx * 62, y: p.y + (dy < 0 ? -32 : 69) };
+						line(item.dot, [{ x: corner.x - dx * 13, y: corner.y }, corner, { x: corner.x, y: corner.y - dy * 9 }], C.gold, 2, .85);
+					}
 				}
+				item.dot.fillStyle(C.void).fillRect(p.x - 19, p.y - 19, 38, 38);
+				item.dot.lineStyle(highlighted ? 2 : 1, color, active ? 1 : .7).strokeRect(p.x - 19, p.y - 19, 38, 38);
+				if (highlighted) item.dot.lineStyle(1, color, .55).strokeRect(p.x - 23, p.y - 23, 46, 46);
+				paintOperationsDistrictSymbol(item.dot, place.id, p, highlighted ? PIXEL_PALETTE.yellow : active ? PIXEL_PALETTE.steelLight : PIXEL_PALETTE.panelShade);
 				item.label.setColor(highlighted ? PIXEL_PALETTE.yellow : active ? PIXEL_PALETTE.cream : PIXEL_PALETTE.panelShade)
 					.setBackgroundColor(highlighted ? PIXEL_PALETTE.rubber : PIXEL_PALETTE.black);
 				item.detail.setColor(active ? PIXEL_PALETTE.steelLight : PIXEL_PALETTE.panelShade);
@@ -1836,11 +1663,11 @@ export function createWorld(
 					(raid) => raid.mapId === place.id
 				).length;
 				item.detail.setText(
-					active
+					`${operationsMapCoordinate(p)} · ` + (active
 						? raiding
 							? `В РЕЙДЕ: ${raiding}`
-							: selected ? "МАРШРУТ ВЫБРАН" : "ВЫБРАТЬ ↗"
-						: `ЗАКРЫТО · УР. ${place.level}`
+							: selected ? "НАПРАВЛЕНИЕ ВЫБРАНО" : "ВЫБРАТЬ ↗"
+						: `ЗАКРЫТО · УР. ${place.level}`)
 				);
 			}
 			const live = new Set(state.raids.map((raid) => raid.id));
@@ -1853,7 +1680,7 @@ export function createWorld(
 			for (const raid of state.raids)
 				if (!this.raidActors.has(raid.id)) {
 					const marker = this.add.container(this.hq.x, this.hq.y);
-					const color = raid.isAuto ? 0xa8c986 : 0xe8bb76;
+					const color = pigment(raid.isAuto ? PIXEL_PALETTE.glassLight : PIXEL_PALETTE.yellow);
 					const ring = this.add
 						.ellipse(0, 0, 20, 20)
 						.setStrokeStyle(1, color, 0.6);
@@ -1863,15 +1690,15 @@ export function createWorld(
 						-26,
 						raid.scavName.toLocaleUpperCase("ru-RU"),
 						14,
-						"#f3dfb4"
+						PIXEL_PALETTE.cream
 					).setOrigin(0.5);
-					const phase = this.text(0, 22, "", 12, "#edcc91").setOrigin(0.5);
+					const phase = this.text(0, 22, "", 12, PIXEL_PALETTE.yellow).setOrigin(0.5);
 					label
-						.setBackgroundColor("#17231b")
+						.setBackgroundColor(PIXEL_PALETTE.black)
 						.setPadding(3, 2)
 						.setVisible(false);
 					phase
-						.setBackgroundColor("#17231b")
+						.setBackgroundColor(PIXEL_PALETTE.black)
 						.setPadding(3, 2)
 						.setVisible(false);
 					marker.setSize(44, 44).setInteractive({ useHandCursor: true });
@@ -1915,7 +1742,7 @@ export function createWorld(
 				marker.phase.setVisible(selected || marker.hovered || waiting).setText(
 					waiting && !selected && !marker.hovered ? "!" : `${raid.isAuto ? "↻ " : ""}${getRaidPhase(raid, Date.now()).label.toLocaleUpperCase("ru-RU")}`
 				);
-				marker.phase.setColor(waiting ? "#ffe0a0" : "#edcc91");
+				marker.phase.setColor(waiting ? PIXEL_PALETTE.cream : PIXEL_PALETTE.yellow);
 				marker.actor.setDepth(selected ? 2000 : 0);
 			}
 			this.mapLayer.sort("depth");
