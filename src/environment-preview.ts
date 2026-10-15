@@ -2,6 +2,7 @@ import './environment-preview.css';
 import { createWorld, type WorldSnapshot } from './scene';
 import { createGame, dispatchRaid } from './game/engine';
 import { MAPS } from './game/data';
+import { getRaidFieldPlan } from './raid-field';
 
 const stage = document.querySelector<HTMLElement>('#environment-stage')!;
 const choice = document.querySelector<HTMLSelectElement>('#environment-scene')!;
@@ -39,7 +40,16 @@ function showScene(): void {
 choice.addEventListener('change', showScene);
 document.querySelector('#environment-out')!.addEventListener('click', () => world.zoomBy(1 / 1.2));
 document.querySelector('#environment-in')!.addEventListener('click', () => world.zoomBy(1.2));
-document.querySelector('#environment-overview')!.addEventListener('click', () => { if (choice.value === 'base') world.resetCamera(); else { world.setRaidFollow(false); world.zoomBy(.7 / world.getCameraState().zoom); } });
+document.querySelector('#environment-overview')!.addEventListener('click', () => {
+  if (choice.value === 'base') { world.resetCamera(); return; }
+  const raid = state.raids[0]; if (!raid) return;
+  const plan = getRaidFieldPlan(raid);
+  world.setRaidFollow(false); world.zoomBy(.7 / world.getCameraState().zoom);
+  const camera = world.getCameraState(), canvas = world.game.canvas;
+  const center = { x: plan.height * 32 + 160 + (plan.width - plan.height) * 16, y: 110 + (plan.width + plan.height) * 8 };
+  world.panBy((center.x - canvas.width / camera.zoom / 2 - camera.x) * camera.zoom, (center.y - canvas.height / camera.zoom / 2 - camera.y) * camera.zoom);
+});
 document.querySelector('#environment-focus')!.addEventListener('click', () => { if (choice.value === 'base') world.focusBase(); else { world.setRaidFollow(true); world.zoomBy(1.8 / world.getCameraState().zoom); } });
 world.game.events.once('ready', showScene);
-window.addEventListener('pagehide', () => world.game.destroy(true), { once: true });
+window.addEventListener('pagehide', event => { if (event.persisted) world.game.loop.sleep(); else world.game.destroy(true); });
+window.addEventListener('pageshow', event => { if (event.persisted) world.game.loop.wake(); });
