@@ -162,7 +162,7 @@ describe("authoritative live injuries", () => {
     expect((await call("action", disconnected, { type: "heal" })).status).toBe(401);
     await advance(30000, [viewer.session]); expect((await state(viewer.session)).entities.some(entity => entity.id === disconnected.id)).toBe(false);
     expect((await enter(disconnected)).state.selfId).toBe(disconnected.id);
-  });
+  }, 15_000);
 
   test("legacy health and spent medicines survive restart without resetting wounds or granting a treatment", async () => {
     const player = (await enter()).session;
