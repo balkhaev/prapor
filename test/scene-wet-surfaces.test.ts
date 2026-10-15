@@ -73,6 +73,28 @@ describe('ground wetness and real lamp reflections', () => {
     expect(after.every((mark, index) => Math.abs(mark.alpha - before[index]!.alpha) < .00001)).toBe(true);
   });
 
+  test('tall native lamps give readable night glints at real raid distances without brightening the wet ground', () => {
+    const source = { ...patch, y: 256, height: 20 };
+    const lamp = { x: 100, y: 200, headY: 1, radius: 145 };
+    const night = sampleWetSurfaces({ ...input, patches: [source], lamps: [lamp], wetness: 1, rain: 0, lights: 1.5 });
+    const dark = sampleWetSurfaces({ ...input, patches: [source], lamps: [lamp], wetness: 1, rain: 0, lights: 0 });
+    const reflections = select(night, 'reflection'), water = select(night, 'water');
+    expect(reflections.length).toBeGreaterThan(0);
+    expect(Math.max(...reflections.map(mark => mark.alpha))).toBeGreaterThan(.1);
+    expect(reflections.some(mark => mark.height === 2)).toBe(true);
+    expect(reflections.every(mark => mark.height <= 2 && mark.alpha <= .5 && contained(mark, water))).toBe(true);
+    expect(night.marks.filter(mark => mark.kind !== 'reflection')).toEqual(dark.marks);
+    const lowLamp = sampleWetSurfaces({ ...input, patches: [source], lamps: [{ ...lamp, y: 254, headY: 224 }], wetness: 1, rain: 0 });
+    expect(select(lowLamp, 'reflection').length).toBeGreaterThan(0);
+    expect(select(lowLamp, 'reflection').every(mark => mark.height === 1)).toBe(true);
+    const day = sampleWetSurfaces({ ...input, patches: [source], lamps: [lamp], wetness: 1, rain: 0, lights: .18 });
+    expect(Math.max(...select(day, 'reflection').map(mark => mark.alpha))).toBeLessThan(.03);
+    const rim = sampleWetSurfaces({ ...input, patches: [{ ...source, y: lamp.y + lamp.radius / 2 - .01 }], lamps: [lamp], wetness: 1, rain: 0 });
+    expect(select(rim, 'reflection').every(mark => mark.alpha < .001)).toBe(true);
+    const outside = sampleWetSurfaces({ ...input, patches: [{ ...source, y: lamp.y + lamp.radius / 2 + .01 }], lamps: [lamp], wetness: 1, rain: 0 });
+    expect(select(outside, 'reflection')).toHaveLength(0);
+  });
+
   test('rain animates quiet clipped ripples, while still water and reduced motion remain static', () => {
     const still = sampleWetSurfaces({ ...input, rain: 0, timeMs: 0 });
     expect(sampleWetSurfaces({ ...input, rain: 0, timeMs: 1792062000000 })).toEqual(still);

@@ -4,6 +4,9 @@ import { getShelterLandscape, type ShelterLandscape } from '../src/shelter-lands
 import { getShelterBuildingRect, type ShelterLayoutBuilding } from '../src/shelter-layout';
 import { projectShelterPoint } from '../src/shelter-isometric';
 import { sampleWetSurfaces } from '../src/scene-wet-surfaces';
+import { createGame } from '../src/game/engine';
+import { getRoomFacing, getRoomFootprint, getRoomPosition, getShelterSites } from '../src/game/shelter';
+import { getShelterPorchLamp } from '../src/shelter-isometric-art';
 
 const sites = Array.from({ length: 3 }, (_, row) => Array.from({ length: 4 }, (_, column) => ({ row, column }))).flat();
 const buildings: ShelterLayoutBuilding[] = Array.from({ length: 4 }, (_, column) => ({ column, row: 0, width: 1, height: 1 }));
@@ -50,6 +53,39 @@ test('a safe hollow beneath a real lamp catches only its actual reflected column
   expect(sampleWetSurfaces(input).marks.some(mark => mark.kind === 'reflection')).toBe(true);
   expect(sampleWetSurfaces({ ...input, lamps: [] }).marks.some(mark => mark.kind === 'reflection')).toBe(false);
   expect(sampleWetSurfaces({ ...input, wetness: 0 }).marks).toEqual([]);
+});
+
+test('the actual environment-preview starting base reflects both yard posts and every physical porch lamp', () => {
+  // Match createGame-based environment-preview.ts and the source assembly in
+  // scene.ts, including its real room footprints and generated outdoor lamps.
+  const state = createGame(1792000000000), rooms = state.shelter.rooms;
+  const buildings = rooms.map(room => ({ column: room.column, row: room.row, position: getRoomPosition(room), facing: getRoomFacing(room), ...getRoomFootprint(room) }));
+  const landscape = getShelterLandscape(getShelterSites(state.shelter), buildings, state.shelter.expansions);
+  const sources: { x: number; y: number; height: number; kind: string; label: string }[] = rooms.filter(room => room.status === 'ready').map(room => {
+    const lamp = getShelterPorchLamp(room);
+    return { ...projectShelterPoint(lamp.point), height: lamp.height, kind: 'lamp', label: room.type };
+  });
+  for (const prop of landscape.decorations) {
+    const point = projectShelterPoint(prop.point);
+    if (prop.kind === 'lamp') sources.push({ x: point.x + 7, y: point.y, height: 30, kind: 'lamp', label: 'yard' });
+    else if (prop.kind === 'camp') sources.push({ ...point, height: 4, kind: 'fire', label: 'camp' });
+  }
+  const lamps = sources.slice(0, 32).map(source => ({ x: source.x, y: source.y, headY: source.y - source.height, radius: (source.kind === 'fire' ? 66 : 38 + source.height * 1.2) / 2 }));
+  const patches = getShelterWetPatches(landscape, buildings, lamps);
+  const input = { patches, lamps, timeMs: state.lastUpdated, wetness: 1, rain: .92, lights: 1.5 };
+  const marks = sampleWetSurfaces(input).marks.filter(mark => mark.kind === 'reflection');
+  expect(sources.filter(source => source.label === 'yard')).toHaveLength(2);
+  expect(marks.length).toBeGreaterThanOrEqual(24); expect(marks.reduce((sum, mark) => sum + mark.width * mark.height, 0)).toBeGreaterThan(100);
+  for (const [index, source] of sources.entries()) if (source.kind === 'lamp') {
+    const reflected = sampleWetSurfaces({ ...input, lamps: [lamps[index]!] }).marks.filter(mark => mark.kind === 'reflection');
+    expect(reflected.length, source.label).toBeGreaterThanOrEqual(2);
+    expect(Math.max(...reflected.map(mark => mark.alpha)), source.label).toBeGreaterThan(source.label === 'yard' ? .12 : .04);
+  }
+  // The porch column falls on earth beside its narrow gravel apron. It must
+  // retain the soil response instead of gaining an invented paved material.
+  for (const source of sources.filter(source => source.height === 12)) {
+    expect(patches.some(patch => patch.x === source.x && patch.y > source.y && patch.y <= source.y + 10 && patch.material === 'soil')).toBe(true);
+  }
 });
 
 test('an irregular yard never places wet ground in its unowned recess and large input retains the patch budget', () => {

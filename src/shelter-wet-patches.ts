@@ -26,10 +26,12 @@ export function getShelterWetPatches(landscape: ShelterLandscape, buildings: rea
   const obstacles = buildings.map(getShelterBuildingRect).filter(validRect).map(rect => ({ x: rect.x - 5, y: rect.y - 5, width: rect.width + 10, height: rect.height + 10 }));
   const left = Math.min(...lots.map(lot => lot.x)) - 12, right = Math.max(...lots.map(lot => lot.x + lot.width)) + 12;
   const road = { x: left, y: 43, width: right - left, height: 89 };
-  const safe = (patch: WetSurfacePatch, street: boolean) => {
+  const safe = (patch: WetSurfacePatch) => {
     const bounds = shelterWetPatchBounds(patch);
     const corners = [-1, 1].flatMap(dx => [-1, 1].map(dy => ({ x: bounds.x + (dx + 1) * bounds.width / 2, y: bounds.y + (dy + 1) * bounds.height / 2 })));
-    if (!corners.every(p => street ? inRect(p.x, p.y, road) : lots.some(lot => inRect(p.x, p.y, lot)))) return false;
+    // The street and owned yard meet at y=132; crossing their shared boundary
+    // is valid ground, while recesses and unowned forest still reject a patch.
+    if (!corners.every(p => inRect(p.x, p.y, road) || lots.some(lot => inRect(p.x, p.y, lot)))) return false;
     if (obstacles.some(rect => overlaps(bounds, rect))) return false;
     return !landscape.decorations.some(prop => {
       const x = Math.max(bounds.x, Math.min(prop.point.x, bounds.x + bounds.width)), y = Math.max(bounds.y, Math.min(prop.point.y, bounds.y + bounds.height));
@@ -41,17 +43,17 @@ export function getShelterWetPatches(landscape: ShelterLandscape, buildings: rea
   for (const light of [...lights].filter(p => Number.isFinite(p.x) && Number.isFinite(p.y)).sort((a, b) => a.y - b.y || a.x - b.x).slice(0, 32)) {
     // A small hollow may catch the real fixture's vertical reflected column.
     // It is still rejected if any of its ground falls under a room or prop.
-    for (const offset of [6, 10, 14, 18]) {
+    for (const offset of [6, 8, 10, 12]) {
       const center = { x: light.x, y: light.y + offset }, logical = unprojectShelterPoint(center), street = inRect(logical.x, logical.y, road);
       const seed = pixelSeed(`shelter-wet-light:${light.x.toFixed(2)}:${light.y.toFixed(2)}:${offset}`);
-      const patch: WetSurfacePatch = { ...center, width: 12 + seed % 7, height: 4 + (seed >>> 4) % 3, seed, material: street ? 'hard' : 'soil' };
-      if (safe(patch, street)) { reflected.push(patch); break; }
+      const patch: WetSurfacePatch = { ...center, width: street ? 12 + seed % 7 : 9 + seed % 4, height: street ? 4 + (seed >>> 4) % 3 : 3 + (seed >>> 4) % 2, seed, material: street ? 'hard' : 'soil' };
+      if (safe(patch)) { reflected.push(patch); break; }
     }
   }
   const add = (x: number, y: number, street: boolean) => {
     const key = `${x}:${y}`, seed = pixelSeed(`shelter-wet:${key}`), point = projectShelterPoint({ x: x + (seed % 5 - 2), y: y + ((seed >>> 3) % 5 - 2) });
     const patch: WetSurfacePatch = { ...point, width: street ? 18 + seed % 15 : 10 + seed % 13, height: street ? 6 + (seed >>> 4) % 7 : 4 + (seed >>> 4) % 5, seed, material: street ? 'hard' : 'soil' };
-    if (safe(patch, street)) candidates.set(key, patch);
+    if (safe(patch)) candidates.set(key, patch);
   };
   // A bounded road share leaves enough wet hollows across the open yard.
   let budget = 0;
