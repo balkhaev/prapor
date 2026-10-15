@@ -1,8 +1,13 @@
 import type { LiveCityBuilding, LivePoint, LiveWorld, LiveWorldProp } from './game/live';
 import { legacyHallEnvelopes } from './game/world-building-envelope';
 import { PIXEL_PALETTE as P } from './pixel-art';
+import { pixelLandcoverBands, type LandcoverRect } from './pixel-landcover';
 
 export type SceneryBounds = LivePoint & { width: number; height: number };
+
+export function mapVegetationBands(prop: Pick<LiveWorldProp, 'id' | 'kind' | 'x' | 'y' | 'width' | 'height'>): LandcoverRect[] {
+  return pixelLandcoverBands(prop, prop.id, prop.kind === 'tree' ? 7 : 5);
+}
 
 /** Navigation bitmaps have their own budgets; they never inherit the world's pixel-art scale. */
 export function liveMapRasterPlan(width: number, height: number): {
@@ -20,13 +25,15 @@ export function paintMapFootprints(c: CanvasRenderingContext2D, world: LiveWorld
   for (const obstacle of world.obstacles) {
     if (obstacle.kind === 'water' || obstacle.propId) continue;
     c.fillStyle = obstacle.kind === 'tree' ? P.leafShade : obstacle.kind === 'building' ? P.panelShade : P.concreteShade;
-    c.fillRect(obstacle.x, obstacle.y, obstacle.width, obstacle.height);
+    if (obstacle.kind === 'tree') for (const band of pixelLandcoverBands(obstacle, `tree:${obstacle.x}:${obstacle.y}`, 7)) c.fillRect(band.x, band.y, band.width, band.height);
+    else c.fillRect(obstacle.x, obstacle.y, obstacle.width, obstacle.height);
   }
   for (const prop of world.props ?? []) {
     const green = ['tree', 'shrub', 'garden', 'planter'].includes(prop.kind);
     if (!prop.blocking && !green && prop.kind !== 'playground') continue;
     c.fillStyle = green ? P.leafShade : P.steelShade;
-    c.fillRect(prop.x, prop.y, prop.width, prop.height);
+    if (green) for (const band of mapVegetationBands(prop)) c.fillRect(band.x, band.y, band.width, band.height);
+    else c.fillRect(prop.x, prop.y, prop.width, prop.height);
   }
   for (const building of buildings) {
     c.fillStyle = buildingPalette(building)[2];

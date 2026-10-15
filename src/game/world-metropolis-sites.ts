@@ -1,6 +1,6 @@
 import type { LiveCityBuilding, LiveCitySite, LiveContainerAnchor, LiveDistrictId, LiveLandscapePath, LiveObstacle, LivePoi, LivePoint, LiveZone } from './live';
 import type { LiveNpcSpawn } from './live-maps';
-import { METROPOLIS_QUARTERS, metropolisHash, type MetropolisQuarter, type MetropolisUse } from './world-metropolis-plan';
+import { METROPOLIS_QUARTERS, metropolisHash, metropolisParcelPlan, type MetropolisParcelPlan, type MetropolisUse } from './world-metropolis-plan';
 
 type Rect = LivePoint & { width: number; height: number };
 const point = (x: number, y: number): LivePoint => ({ x, y });
@@ -36,15 +36,56 @@ function openBuilding(rect: Rect, id: string, name: string, kind: LiveCityBuildi
   }
   const entrances = sideDoors ? [point(rect.x, door), point(rect.x + rect.width - 1, door)] : [point(door, rect.y), point(door, rect.y + rect.height - 1)];
   const floor = sideDoors ? point(rect.x + Math.floor(rect.width / 2), door) : point(door, rect.y + Math.floor(rect.height / 2));
-  walls.push({ x: rect.x + 1, y: rect.y + 1, width: 1, height: 1, kind: 'barricade', label: kind === 'shop' ? 'Товарный прилавок' : kind === 'workshop' ? 'Рабочий верстак' : 'Хозяйственный шкаф' });
+  walls.push({ x: rect.x + rect.width - 2, y: rect.y + rect.height - 2, width: 1, height: 1, kind: 'barricade', label: kind === 'shop' ? 'Товарный прилавок' : kind === 'workshop' ? 'Рабочий верстак' : 'Хозяйственный шкаф' });
   return { building: { ...rect, id, name, kind, entrances }, walls, floor };
 }
-function parcel(quarter: MetropolisQuarter, slot: number): Rect {
-  if (quarter.band === 'north' || quarter.band === 'south') {
-    const column = slot % 4, row = Math.floor(slot / 4), waterfront = quarter.x === 704 && column === 0;
-    return { x: quarter.x + column * 48 + (waterfront ? 12 : 6), y: (quarter.band === 'north' ? 136 : 784) + row * 60, width: waterfront ? 30 : 36, height: 44 };
+const compact = (points: LivePoint[]): LivePoint[] => points.filter((point, index) => !index || point.x !== points[index - 1]!.x || point.y !== points[index - 1]!.y);
+function circulation(plan: MetropolisParcelPlan): { main: LivePoint[]; court: Rect } {
+  const { rect, axis, layout, access } = plan, along = axis === 'y' ? 'y' : 'x', cross = axis === 'y' ? 'x' : 'y';
+  const length = axis === 'y' ? rect.height : rect.width, middle = rect[along] + Math.floor(length / 2);
+  const at = (c: number, a: number): LivePoint => axis === 'y' ? point(c, a) : point(a, c);
+  const main = compact([access[0], at(access[0][cross], middle), at(access[1][cross], middle), access[1]]);
+  const crossStart = Math.min(access[0][cross], access[1][cross]) - 3, crossLength = Math.abs(access[0][cross] - access[1][cross]) + 6;
+  const courtLength = layout === 'lane' ? length - 4 : layout === 'yard' ? Math.floor(length * .7) : layout === 'garden' ? Math.max(10, Math.floor(length * .4)) : Math.min(16, length - 4);
+  const nearHigh = access[0][along] > access[1][along];
+  const courtStart = layout === 'yard' ? nearHigh ? rect[along] + length - 2 - courtLength : rect[along] + 2
+    : layout === 'garden' ? nearHigh ? rect[along] + 2 : rect[along] + length - 2 - courtLength : rect[along] + Math.floor((length - courtLength) / 2);
+  const court = axis === 'y' ? { x: crossStart, y: courtStart, width: crossLength, height: courtLength } : { x: courtStart, y: crossStart, width: courtLength, height: crossLength };
+  return { main, court };
+}
+function passageToFloor(main: LivePoint[], floor: LivePoint, vertical: boolean): LivePoint[] {
+  const along = vertical ? 'y' : 'x';
+  for (let index = 1; index < main.length; index++) {
+    const a = main[index - 1]!, b = main[index]!;
+    if (a[along] === b[along] || floor[along] < Math.min(a[along], b[along]) || floor[along] > Math.max(a[along], b[along])) continue;
+    const branch = vertical ? point(a.x, floor.y) : point(floor.x, a.y);
+    return compact([...main.slice(0, index), branch, floor, branch, ...main.slice(index)]);
   }
-  return { x: (quarter.band === 'west' ? 136 : 784) + slot % 2 * 60, y: quarter.y + Math.floor(slot / 2) * 36 + 4, width: 44, height: 28 };
+  throw new Error('Address floor has no courtyard access');
+}
+function houseSlots(plan: MetropolisParcelPlan, count: number, seed: string): Rect[] {
+  const { rect, axis, layout, access } = plan, vertical = axis === 'y', along = vertical ? rect.height : rect.width;
+  const cross0 = vertical ? rect.x : rect.y, crossLength = vertical ? rect.width : rect.height;
+  const nearCross = vertical ? access[0].x : access[0].y, farCross = vertical ? access[1].x : access[1].y;
+  const laneLo = Math.min(nearCross, farCross) - 3, laneHi = Math.max(nearCross, farCross) + 3;
+  const maxSide = Math.floor((along - 3) / 6);
+  const desired = layout === 'yard' ? count - 2 : Math.ceil(count / 2) + (layout === 'court' ? plan.slot % 2 ? 1 : -1 : layout === 'garden' ? 1 : 0);
+  const leftCount = Math.max(count - maxSide, Math.min(maxSide, Math.max(1, Math.min(count - 1, desired))));
+  const result: Rect[] = [];
+  for (const [side, quantity] of [leftCount, count - leftCount].entries()) {
+    const gap = along - 4 >= quantity * 5 + (quantity - 1) * 2 ? 2 : 1;
+    const available = along - 4 - gap * (quantity - 1), extra = available - quantity * 5;
+    const weights = Array.from({ length: quantity }, (_, index) => 1 + metropolisHash(seed + ':' + plan.id + ':' + side + ':' + index) % 5);
+    const totalWeight = weights.reduce((sum, value) => sum + value, 0), spans = weights.map(weight => 5 + Math.floor(extra * weight / totalWeight));
+    for (let remaining = available - spans.reduce((sum, value) => sum + value, 0), index = 0; remaining > 0; remaining--, index++) spans[index % quantity]!++;
+    let cursor = (vertical ? rect.y : rect.x) + 2;
+    for (const span of spans) {
+      const lo = side ? laneHi : cross0 + 2, hi = side ? cross0 + crossLength - 2 : laneLo;
+      result.push(vertical ? { x: lo, y: cursor, width: hi - lo, height: span } : { x: cursor, y: lo, width: span, height: hi - lo });
+      cursor += span + gap;
+    }
+  }
+  return result;
 }
 
 /** New parcels are genuinely roomed addresses, rather than scaled-up scenery.
@@ -53,39 +94,31 @@ export function generateMetropolisSites(seed: string): {
   sites: LiveCitySite[]; pois: LivePoi[]; obstacles: LiveObstacle[]; containers: LiveContainerAnchor[]; npcSpawns: LiveNpcSpawn[]; zones: LiveZone[]; paths: LiveLandscapePath[];
 } {
   const sites: LiveCitySite[] = [], pois: LivePoi[] = [], obstacles: LiveObstacle[] = [], containers: LiveContainerAnchor[] = [], npcSpawns: LiveNpcSpawn[] = [], zones: LiveZone[] = [], paths: LiveLandscapePath[] = [];
-  for (const quarter of METROPOLIS_QUARTERS) for (let slot = 0; slot < 8; slot++) {
-    const rect = parcel(quarter, slot), vertical = rect.height >= rect.width, id = `${quarter.id}-block-${slot}`;
+  for (const plan of metropolisParcelPlan()) {
+    const quarter = METROPOLIS_QUARTERS.find(quarter => quarter.id === plan.quarterId)!, { slot, rect, id } = plan, vertical = plan.axis === 'y';
     const street = streetNames[quarter.use][Math.floor(slot / 4)]!, name = `${street} · квартал ${slot + 1}`;
-    const centre = point(rect.x + Math.floor(rect.width / 2), rect.y + Math.floor(rect.height / 2));
-    const ports = vertical ? [point(centre.x, rect.y), point(centre.x, rect.y + rect.height - 1)] : [point(rect.x, centre.y), point(rect.x + rect.width - 1, centre.y)];
-    const court: Rect = vertical ? { x: centre.x - 4, y: rect.y + 2, width: 8, height: rect.height - 4 } : { x: rect.x + 2, y: centre.y - 4, width: rect.width - 4, height: 8 };
-    const buildings: LiveCityBuilding[] = [], floors: LivePoint[] = [], rows = Math.ceil(quarter.buildings / 2), span = vertical ? rect.height : rect.width;
-    const along = Math.floor((span - 6 - (rows - 1) * 2) / rows), across = Math.floor(((vertical ? rect.width : rect.height) - 14) / 2);
+    const { main, court } = circulation(plan), ports = plan.access;
+    const centre = point(court.x + Math.floor(court.width / 2), court.y + Math.floor(court.height / 2));
+    const buildings: LiveCityBuilding[] = [], floors: LivePoint[] = [], houses = houseSlots(plan, quarter.buildings, seed);
     for (let address = 0; address < quarter.buildings; address++) {
-      const row = Math.floor(address / 2), side = address % 2;
-      const house = vertical
-        ? { x: side ? centre.x + 4 : rect.x + 3, y: rect.y + 3 + row * (along + 2), width: across, height: along }
-        : { x: rect.x + 3 + row * (along + 2), y: side ? centre.y + 4 : rect.y + 3, width: along, height: across };
-      const kind = kindFor(quarter.use, address + slot), variant = metropolisHash(`${seed}:${id}:${address}`);
+      const house = houses[address]!, side = vertical ? house.x > court.x : house.y > court.y;
+      const kind = kindFor(plan.use, address + slot), variant = metropolisHash(`${seed}:${id}:${address}`);
       // Keep the street/court setback, but vary the actual built frontage inside
       // its address slot. Workshops, row houses and service blocks read differently.
-      const trimAlong = Math.min((variant >>> 4) % 3, (vertical ? house.height : house.width) - 8);
-      const trimAcross = Math.min((variant >>> 7) % 3, (vertical ? house.width : house.height) - 6);
+      const trimAlong = Math.min((variant >>> 4) % 2, (vertical ? house.height : house.width) - 5);
+      const trimAcross = Math.min((variant >>> 7) % 3, (vertical ? house.width : house.height) - 5);
       if (vertical) { house.y += variant % 2 ? trimAlong : 0; house.height -= trimAlong; house.width -= trimAcross; if (!side) house.x += trimAcross; }
       else { house.x += variant % 2 ? trimAlong : 0; house.width -= trimAlong; house.height -= trimAcross; if (!side) house.y += trimAcross; }
       const buildingName = `${street}, ${1 + slot * 20 + address}`;
       const built = openBuilding(house, `${id}-building-${address}`, buildingName, kind, vertical);
-      Object.assign(built.building, architecture(quarter.use, kind, variant, house.height >= house.width));
+      Object.assign(built.building, architecture(plan.use, kind, variant, house.height >= house.width));
       buildings.push(built.building); floors.push(built.floor); obstacles.push(...built.walls);
       const kinds = kind === 'shop' ? ['cabinet', 'crate', 'duffel'] as const : kind === 'workshop' || kind === 'garage' ? ['toolbox', 'crate', 'duffel'] as const : ['jacket', 'cabinet', 'duffel'] as const;
       const lootTable = kind === 'service' ? 'intel' : kind === 'workshop' || kind === 'garage' ? 'tools' : kind === 'shop' ? 'provisions' : 'mixed';
       containers.push({ ...built.floor, id: `${id}-address-${address}-search`, poiId: id, kind: kinds[address % 3]!, lootTable, searchMs: 3000 + address % 3 * 500 });
     }
-    const toInterior = (floor: LivePoint): LivePoint[] => vertical
-      ? [ports[0]!, point(centre.x, floor.y), floor, point(centre.x, floor.y), ports[1]!]
-      : [ports[0]!, point(floor.x, centre.y), floor, point(floor.x, centre.y), ports[1]!];
-    const passages = [[ports[0]!, ports[1]!], toInterior(floors[0]!), toInterior(floors.at(-1)!)];
-    const use = quarter.use, industrial = use === 'works' || use === 'port' || use === 'station';
+    const passages = [main, passageToFloor(main, floors[0]!, vertical), passageToFloor(main, floors.at(-1)!, vertical)];
+    const use = plan.use, industrial = use === 'works' || use === 'port' || use === 'station';
     const kind: LiveCitySite['kind'] = industrial ? 'workyard' : use === 'market' ? 'arcade' : use === 'civic' || use === 'campus' ? 'service-yard' : 'courtyard';
     const danger: 2 | 3 = industrial && slot % 4 === 1 || use === 'market' && slot % 4 === 2 ? 3 : 2;
     pois.push({ ...rect, id, name, templateId: `city-${kind}`, districtId: districtOf(centre), danger, entrances: ports,
@@ -95,10 +128,7 @@ export function generateMetropolisSites(seed: string): {
     containers.push({ ...centre, id: `${id}-courtyard-search`, poiId: id, kind: 'duffel', lootTable: 'mixed', searchMs: 3000 });
     const home = vertical ? point(centre.x + 1, centre.y) : point(centre.x, centre.y + 1);
     npcSpawns.push({ point: home, faction: industrial ? 'raiders' : 'scavs', role: slot % 3 ? 'patrol' : 'guard', route: [home, ports[0]!, ports[1]!, home] });
-    const access = vertical
-      ? [point(ports[0]!.x, rect.y - 8), ports[0]!, ports[1]!, point(ports[1]!.x, rect.y + rect.height + 8)]
-      : [point(rect.x - 8, ports[0]!.y), ports[0]!, ports[1]!, point(rect.x + rect.width + 8, ports[1]!.y)];
-    paths.push({ id: `metro-frontage-${id}`, name: `${street}: проход двора`, kind: 'trail', width: 2, points: access });
+    paths.push({ id: `metro-frontage-${id}`, name: `${street}: проход двора`, kind: 'trail', width: 2, points: main });
   }
   return { sites, pois, obstacles, containers, npcSpawns, zones, paths };
 }

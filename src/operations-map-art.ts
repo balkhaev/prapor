@@ -1,5 +1,6 @@
 import type Phaser from 'phaser';
-import { PIXEL_PALETTE as P, pixelRandom } from './pixel-art';
+import { PIXEL_PALETTE as P, pixelRandom, pixelSeed } from './pixel-art';
+import { pixelLandcoverBands, type LandcoverRect } from './pixel-landcover';
 
 export type OperationsPoint = { x: number; y: number };
 export type OperationsSite = { id: string; point: OperationsPoint };
@@ -85,6 +86,19 @@ function building(g: MapGraphics, x: number, y: number, width: number, height: n
   } else for (let column = 3; column < width - 2; column += 5) rect(g, x + column, y + height - 3, 2, 1, P.black);
 }
 
+/** These are map symbols around the fixed route anchors, not additional playable buildings. */
+export function operationsDistrictBuildings(site: OperationsSite): LandcoverRect[] {
+  const random = pixelRandom(pixelSeed(site.id)), industrial = site.id !== 'courtyard', result: LandcoverRect[] = [];
+  const columns = site.id === 'depot' ? 4 : 3, rows = site.id === 'bunker' ? 2 : 3;
+  for (let row = 0; row < rows; row++) for (let column = 0; column < columns; column++) {
+    const x = Math.round(site.point.x - 54 + column * 30 + (random() - .5) * 13), y = Math.round(site.point.y - 47 + row * 19 + (random() - .5) * 9);
+    const width = Math.round((industrial ? 17 : 12) + random() * 9), height = Math.round(6 + random() * 7);
+    if (Math.hypot(x + width / 2 - site.point.x, y + height / 2 - site.point.y) < 29) continue;
+    result.push({ x, y, width, height });
+  }
+  return result;
+}
+
 /** Static ink layers. Nothing here changes navigation, unlocks or dispatch state. */
 export function paintOperationsMap(g: MapGraphics, sites: readonly OperationsSite[], headquarters: OperationsPoint): void {
   rect(g, 0, 0, 840, 520, P.black);
@@ -95,9 +109,9 @@ export function paintOperationsMap(g: MapGraphics, sites: readonly OperationsSit
   const rng = pixelRandom(4731), river = operationsMapRiver(), roads = operationsMapRoads(sites, headquarters);
   const forest = sites.find(site => site.id === 'forest')?.point;
   // Low contrast, stepped woodland masses follow the existing forest district.
-  if (forest) for (let layer = 0; layer < 5; layer++) {
-    const x = forest.x - 122 + layer * 16, y = forest.y - 62 + layer * 18;
-    polygon(g, [{ x, y }, { x: x + 65, y: y - 12 }, { x: x + 152, y: y + 2 }, { x: x + 183, y: y + 31 }, { x: x + 125, y: y + 55 }, { x: x + 22, y: y + 49 }], P.leafShade, .32);
+  if (forest) for (let layer = 0; layer < 4; layer++) {
+    const bounds = { x: forest.x - 125 + layer * 13, y: Math.max(91, forest.y - 65 + layer * 16), width: 250 - layer * 29, height: 108 - layer * 12 };
+    for (const band of pixelLandcoverBands(bounds, `forest:${layer}`, 12)) rect(g, band.x, band.y, band.width, band.height, P.leafShade, .24);
   }
   for (let index = 0; index < 530; index++) {
     const x = 46 + Math.floor(rng() * 747), y = 94 + Math.floor(rng() * 312);
@@ -113,16 +127,14 @@ export function paintOperationsMap(g: MapGraphics, sites: readonly OperationsSit
     const industrial = id !== 'courtyard';
     const columns = id === 'depot' ? 4 : 3, rows = id === 'bunker' ? 2 : 3;
     const x = Math.round(point.x - 54), y = Math.round(point.y - 47);
-    rect(g, x - 6, y - 7, columns * 30 + 12, rows * 19 + 13, P.soil, .15);
+    const ground = { x: Math.max(44, point.x - 80), y: Math.max(91, point.y - 60), width: 148, height: Math.min(112, 410 - Math.max(91, point.y - 60)) };
+    for (const band of pixelLandcoverBands(ground, `district:${id}`, 12)) rect(g, band.x, band.y, band.width, band.height, industrial ? P.soil : P.leafShade, .14);
+    for (const band of pixelLandcoverBands({ x: ground.x + 12, y: ground.y + 9, width: ground.width - 30, height: ground.height - 20 }, `district:${id}:edge`, 9)) rect(g, band.x, band.y, band.width, band.height, P.sand, .045);
     if (id === 'reserve' || id === 'bunker') {
       g.lineStyle(1, color(P.panelShade), .4).strokeRect(x - 5, y - 6, columns * 30 + 7, rows * 19 + 8);
       for (let post = 0; post < columns * 30; post += 10) rect(g, x + post, y - 7, 1, 3, P.panelShade, .6);
     }
-    for (let row = 0; row < rows; row++) for (let column = 0; column < columns; column++) {
-      const bx = x + column * 30, by = y + row * 19;
-      if (Math.hypot(bx + 9 - point.x, by + 5 - point.y) < 31) continue;
-      building(g, bx, by, industrial ? 23 : 17, industrial ? 10 : 7, industrial);
-    }
+    for (const symbol of operationsDistrictBuildings({ id, point })) building(g, symbol.x, symbol.y, symbol.width, symbol.height, industrial);
     if (id === 'depot') {
       for (let track = 0; track < 3; track++) {
         const ty = y + 7 + track * 12;
@@ -155,12 +167,12 @@ export function paintOperationsMap(g: MapGraphics, sites: readonly OperationsSit
   const grid = OPERATIONS_GRID;
   for (let column = 0; column <= grid.columns; column++) {
     const x = grid.x + column * grid.width / grid.columns;
-    stroke(g, [{ x, y: grid.y }, { x, y: grid.y + grid.height }], P.panelShade, 1, .16);
+    stroke(g, [{ x, y: grid.y }, { x, y: grid.y + grid.height }], P.panelShade, 1, .075);
     rect(g, x, grid.y - 3, 1, 4, P.panelShade, .65);
   }
   for (let row = 0; row <= grid.rows; row++) {
     const y = grid.y + row * grid.height / grid.rows;
-    stroke(g, [{ x: grid.x, y }, { x: grid.x + grid.width, y }], P.panelShade, 1, .16);
+    stroke(g, [{ x: grid.x, y }, { x: grid.x + grid.width, y }], P.panelShade, 1, .075);
     rect(g, grid.x - 3, y, 4, 1, P.panelShade, .65);
   }
   // A compact headquarters symbol belongs to the existing base, never a new POI.

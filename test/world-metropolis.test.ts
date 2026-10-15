@@ -28,7 +28,7 @@ function fixtures(): NonNullable<typeof cached> {
   return cached;
 }
 
-describe('full G10 metropolis', () => {
+describe('full metropolis', () => {
   test('preserves every durable G9 object, native terrain cell and source value at +256', () => {
     const { core, world, original } = fixtures();
     expect(core.version).toBe('perimeter-g9-66e1010a');
@@ -50,7 +50,7 @@ describe('full G10 metropolis', () => {
 
   test('adds physical city fabric across sixteen quarters within bounded public budgets', () => {
     const { core, world } = fixtures(), sites = world.citySites!, buildings = sites.flatMap(site => site.buildings);
-    expect(world).toMatchObject({ width: 1024, height: 1024, generatorVersion: 10 });
+    expect([world.width, world.height, world.generatorVersion]).toEqual([1024, 1024, 11]);
     expect(world.city).toMatchObject({ x: 128, y: 128, width: 768, height: 768 });
     expect(world.city!.quarters).toHaveLength(16);
     expect(world.city!.width * world.city!.height / (core.city!.width * core.city!.height)).toBeGreaterThan(7);
@@ -155,14 +155,14 @@ describe('full G10 metropolis', () => {
     }
   });
 
-  test('includes extraction geometry in the G10 revision', () => {
+  test('includes extraction geometry in the metropolis revision', () => {
     const { core, world } = fixtures(), changed = structuredClone(core);
     changed.extracts[0]!.x++;
     expect(generateMetropolis(changed).version).not.toBe(world.version);
     expect(JSON.stringify(core)).toBe(fixtures().original);
   }, 30_000);
 
-  test('validates complete G10 worlds for distant layout seeds', () => {
+  test('validates complete worlds for distant layout seeds', () => {
     const { world } = fixtures();
     expect(validateGeneratedWorld(world)).toMatchObject({ chunks: 1024, containers: 1048, pois: 199 });
     for (const seed of ['seed-9', 'seed-99']) {

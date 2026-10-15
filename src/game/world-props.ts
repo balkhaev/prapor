@@ -20,7 +20,7 @@ const sizes: Partial<Record<PropKind, [number, number]>> = {
 const labels: Partial<Record<PropKind, string>> = { car: 'Припаркованная машина', van: 'Фургон', truck: 'Грузовик', bus: 'Автобус', dumpster: 'Мусорный контейнер', pallet: 'Паллеты', crate: 'Транспортная тара', shed: 'Хозяйственная постройка', railcar: 'Грузовой вагон', transformer: 'Трансформатор', kiosk: 'Киоск' };
 
 /** Authored use of space drives decoration. Physical cover always leaves a clear detour. */
-export function generateWorldProps(world: SceneryWorld, seed: string, options: { exclude?: Rect; budget?: number; idPrefix?: string } = {}): { props: LiveWorldProp[]; obstacles: LiveObstacle[] } {
+export function generateWorldProps(world: SceneryWorld, seed: string, options: { exclude?: Rect; budget?: number; idPrefix?: string; organicGreenery?: boolean } = {}): { props: LiveWorldProp[]; obstacles: LiveObstacle[] } {
   const { width, height } = world, total = width * height;
   const budget = Math.max(0, Math.min(16384, Math.floor(options.budget ?? 6000)));
   const physical = new Uint8Array(total), occupied = new Uint8Array(total), reserved = new Uint8Array(total), interiors = new Uint8Array(total);
@@ -177,9 +177,16 @@ export function generateWorldProps(world: SceneryWorld, seed: string, options: {
   // cannot consume the wire cap and leave the last district without its trees.
   const greeneryStep = Math.max(3, Math.ceil(Math.sqrt(greeneryWeight / Math.max(500, budget - 500 - props.length))));
   for (let y = 3; y < height - 3; y += greeneryStep) for (let x = 3; x < width - 3; x += greeneryStep) {
-    const code = material(x, y), roll = hash(`${seed}:greenery:${x}:${y}`), urban = !!world.city && inside({ x, y }, world.city);
-    if (code === 'f' && roll % 7 !== 0) add(roll % 5 === 0 ? 'shrub' : 'tree', x + (roll % 5 - 2) / 4, y + (Math.floor(roll / 5) % 5 - 2) / 4, 'x', 'grove');
-    else if (code === 'g' && (urban ? roll % 3 === 0 : roll % 6 === 0)) add(roll % 4 === 0 ? 'tree' : 'shrub', x, y, 'x', urban ? 'garden' : 'hedge');
+    const roll = hash(`${seed}:greenery:${x}:${y}`);
+    // Stratified candidates retain the same bounded budget, but each patch has
+    // its own position and broad density. Forest edges no longer form rows.
+    const px = options.organicGreenery ? x + (((roll >>> 8) % 101) / 100 - .5) * greeneryStep * .85 : x;
+    const py = options.organicGreenery ? y + (((roll >>> 16) % 101) / 100 - .5) * greeneryStep * .85 : y;
+    const code = material(px, py), urban = !!world.city && inside({ x: px, y: py }, world.city);
+    const cluster = !options.organicGreenery || Math.sin(px / 17) + Math.cos(py / 23) + Math.sin((px - py) / 31) > -1.2;
+    if (!cluster) continue;
+    if (code === 'f' && roll % 7 !== 0) add(roll % 5 === 0 ? 'shrub' : 'tree', px + (roll % 5 - 2) / 4, py + (Math.floor(roll / 5) % 5 - 2) / 4, 'x', 'grove');
+    else if (code === 'g' && (urban ? roll % 3 === 0 : roll % 6 === 0)) add(roll % 4 === 0 ? 'tree' : 'shrub', px, py, 'x', urban ? 'garden' : 'hedge');
   }
   return { props, obstacles };
 }
