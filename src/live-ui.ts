@@ -61,7 +61,7 @@ export function createLiveMode(options: LiveModeOptions) {
   let selectedDistrict: LiveDistrictId = 'customs', selectedPurpose: LivePurpose = 'loot';
   let selectedRouteId: string | null = null;
   let selectedBossId:string|null=null;
-  let exitIntent = false, exitToMarket = false;
+  let exitIntent = false;
   const { world, dock } = options;
   world.classList.add('live-world');
   world.hidden = true;
@@ -76,7 +76,7 @@ export function createLiveMode(options: LiveModeOptions) {
   const identityChanged = () => identityAccount !== options.getAccountId() || identityGame !== options.getGameId();
   const stopRequest = () => { window.clearTimeout(pollTimer); pollTimer = 0; controller?.abort(); controller = null; requestBusy = false; actionBusy = false; };
   const schedule = (version: number) => { window.clearTimeout(pollTimer); if (active && version === generation && !destroyed) pollTimer = window.setTimeout(() => void poll(), snapshot ? 500 : 2000); };
-  const clearSession = () => { snapshot = null; entry = null; entryReceivedAt = 0; receivedAt = 0; selectedId = null; selectedRouteId = null; exitIntent = false; exitToMarket = false; scene.clear(); };
+  const clearSession = () => { snapshot = null; entry = null; entryReceivedAt = 0; receivedAt = 0; selectedId = null; selectedRouteId = null; exitIntent = false; scene.clear(); };
   const acceptSnapshot = (next: LiveSnapshot, command?: LiveCommand) => {
     if (next.self.gameId && next.self.gameId !== identityGame) throw new LiveApiError(401, 'game_identity_changed');
     const economyChanged = liveEconomyChanged(snapshot?.self ?? null, next.self, command?.type);
@@ -89,14 +89,12 @@ export function createLiveMode(options: LiveModeOptions) {
   };
 
   function finishExit(): void {
-    const market = exitToMarket;
     clearSession(); hide();
-    if (market) options.onMarket(); else options.onExit();
+    options.onExit();
   }
 
-  async function leave(toMarket = false): Promise<void> {
+  async function leave(): Promise<void> {
     if (!active || actionBusy || destroyed || exitIntent) return;
-    exitToMarket = toMarket;
     if (!snapshot) { finishExit(); return; }
     if (identityChanged()) { resetIdentity(); return; }
     stopRequest(); exitIntent = true;
@@ -151,7 +149,7 @@ export function createLiveMode(options: LiveModeOptions) {
         const next = await liveRequest('state', identity(), value => readLiveSnapshot(value, cachedWorld), undefined, controller.signal, undefined, options.fetch);
         if (!isCurrent(version, account, game)) return;
         if (next.selfId !== expected) throw new LiveApiError(401, 'identity_changed');
-        if (exitIntent && next.self.leaveAt === 0) { exitIntent = false; exitToMarket = false; message = 'Выход прерван. Боец остаётся на Периметре.'; }
+        if (exitIntent && next.self.leaveAt === 0) { exitIntent = false; message = 'Выход прерван. Боец остаётся на Периметре.'; }
         acceptSnapshot(next);
         if (next.entities.find(entity => entity.id === next.selfId)!.health <= 0 && game) {
           const preparation = await liveRequest('entry', { accountId: account, gameId: game }, readLiveEntry, undefined, controller.signal, undefined, options.fetch);
@@ -222,7 +220,7 @@ export function createLiveMode(options: LiveModeOptions) {
       if (!isCurrent(version, account, game)) return;
       if (next.selfId !== expected) throw new LiveApiError(401, 'identity_changed');
       const interruptedExit = exitIntent && next.self.leaveAt === 0;
-      if (interruptedExit) { exitIntent = false; exitToMarket = false; }
+      if (interruptedExit) { exitIntent = false; }
       acceptSnapshot(next, command); message = interruptedExit ? 'Выход прерван приказом.' : ['resupply', 'extract', 'respawn', 'loot'].includes(command.type) ? next.self.economyMessage ?? '' : ''; offline = false;
     } catch (error) { explain(error, version, account, game); }
     finally { if (version === generation) { controller = null; requestBusy = false; actionBusy = false; render(); schedule(version); } }
@@ -416,7 +414,7 @@ export function createLiveMode(options: LiveModeOptions) {
     else if (action === 'exit') void leave();
     else if (action === 'account') options.onAccount();
     else if (action === 'missions' && !snapshot && !actionBusy) options.onMissionBoard?.();
-    else if (action === 'market') void leave(true);
+    else if (action === 'market') options.onMarket();
     else if (action === 'select' && id) { selectedId = id; scene.setSelected(id); render(); }
     else if (action === 'attack' && id && snapshot) void send({ type: 'engage', targetId: snapshot.self.targetId === id ? null : id });
     else if (action === 'cease') void send({ type: 'engage', targetId: null });

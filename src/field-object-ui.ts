@@ -25,7 +25,7 @@ export interface FieldObjectOptions {
 	onRoomDetails: (id: string, tab: CommandRoomTab) => void;
 	onScavDetails: (id: string, tab: FieldScavTab) => void;
 	onClose?: () => void;
-	insets?: FieldObjectInsets;
+	insets?: FieldObjectInsets | (() => FieldObjectInsets);
 }
 export interface FieldObjectController {
 	show: (selection: FieldObjectSelection) => void;
@@ -121,7 +121,8 @@ export function mountFieldObjectUI(options: FieldObjectOptions): FieldObjectCont
 		if (!anchor) { card.hidden = true; return; }
 		card.hidden = false;
 		const surface = options.root.getBoundingClientRect();
-		const placement = placeFieldObjectCard(anchor, surface, { width: Math.min(320, surface.width - 32), height: card.offsetHeight || 250 }, options.insets);
+		const insets = typeof options.insets === "function" ? options.insets() : options.insets;
+		const placement = placeFieldObjectCard(anchor, surface, { width: Math.min(320, surface.width - 32), height: card.offsetHeight || 250 }, insets);
 		if (!placement) { card.hidden = true; return; }
 		card.dataset.side = placement.side;
 		card.dataset.offscreen = String(!anchor.visible);

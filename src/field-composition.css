@@ -60,6 +60,12 @@ body.immersive-game { --field-glass: #19251fe8; --field-edge: #b6b79a36; }
 .immersive-game .command-strip-head .icon-button { width: 28px; height: 28px; min-width: 28px; flex: none; }
 .immersive-game .tool-backdrop { inset: 74px 16px 82px 87px; padding: 0; background: transparent; backdrop-filter: none; place-items: stretch end; pointer-events: none; z-index: 75; }
 .immersive-game .tool-window { width: min(1120px, 100%); height: 100%; max-height: 100%; border-color: #b6b79a55; border-radius: 5px; background: #1c2922f7; box-shadow: 0 12px 42px #04100988; pointer-events: auto; }
+.immersive-game .tool-backdrop[data-tool=journal] .tool-window,
+.immersive-game .tool-backdrop[data-tool=recruits] .tool-window { width: min(620px, 100%); }
+.immersive-game .tool-backdrop[data-tool=achievements] .tool-window,
+.immersive-game .tool-backdrop[data-tool=squad] .tool-window,
+.immersive-game .tool-backdrop[data-tool=contracts] .tool-window { width: min(820px, 100%); }
+.immersive-game .tool-backdrop[data-room-tool=true] .tool-window { width: min(440px, 100%); }
 .immersive-game .tool-head { min-height: 48px; padding: 8px 14px; }
 .immersive-game .tool-head h2 { font-size: 18px; }
 .immersive-game .tool-head>.icon-button { height: 30px; width: 30px; min-width: 30px; }
