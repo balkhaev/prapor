@@ -4,6 +4,7 @@
 .scene-light-control[hidden] { display: none; }
 .environment-toolbar .scene-light-control { min-width: 0; display: flex; flex: 0 0 auto; align-items: center; gap: 7px; padding-bottom: 1px; }
 .environment-toolbar .scene-light-control select { width: 125px; }
+.environment-toolbar .scene-light-control[hidden] { display: none; }
 .world-head:has([data-view="map"][aria-pressed="true"]) > .scene-light-control { display: none; }
 @media(max-width:700px) { .scene-light-control select { min-height: 40px; max-width: 120px; } }
 @media(max-width:640px) {
