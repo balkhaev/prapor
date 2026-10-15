@@ -10,7 +10,8 @@ import { weaponBuildArt } from './armory-art';
 import { MODULE_DISPLAY_SLOTS } from './module-catalog';
 import { PixelRaster } from './pixel-art';
 import { PIXEL_FACINGS, type PixelActorMode, type PixelFacing } from './pixel-animation';
-import { PixelActorArt, PIXEL_ACTOR_ANCHOR, PIXEL_ACTOR_NATIVE_SIZE, PIXEL_ACTOR_FRAMES, type PixelActorGear } from './pixel-actors';
+import { PixelActorArt, type PixelActorGear } from './pixel-actors';
+import { PIXEL_ACTOR_ANCHOR, PIXEL_ACTOR_NATIVE_SIZE, PIXEL_ACTOR_FRAMES, PIXEL_ACTOR_FRAME_MS } from './pixel-actor-config';
 import { paintPixelWeapon, type PixelWeaponInput } from './pixel-weapons';
 import { changePixelPreviewModule, copyPixelPreviewBuild, pixelPreviewModuleOptions } from './pixel-model-builds';
 import { readPixelArsenalPreview } from './pixel-arsenal-preview';
@@ -23,12 +24,11 @@ const weaponLabels: Readonly<Record<string, { name: string; detail: string }>> =
 const facingLabels: Record<PixelFacing, string> = { e: 'Справа', se: 'Спереди справа', s: 'Спереди', sw: 'Спереди слева', w: 'Слева', nw: 'Сзади слева', n: 'Сзади', ne: 'Сзади справа' };
 const poseLabels: Record<PixelActorMode, string> = { idle: 'Стоит', walk: 'Идёт', aim: 'Целится', fire: 'Стреляет', hit: 'Получает попадание', downed: 'Ранен на земле' };
 const profileLabels: Record<PixelActorGear['profile'], string> = { light: 'Налегке', assault: 'Штурм', scout: 'Разведка' };
-const frameDuration: Record<PixelActorMode, number> = { idle: 440, walk: 110, aim: 380, fire: 90, hit: 160, downed: 1000 };
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 const art = new PixelActorArt();
 type Figure = 'scav' | 'raider' | BossId;
 type BuildPreset = WeaponShowcasePreset | 'custom';
-const state = { figure: 'scav' as Figure, appearance: 0, weapon: 'akm', preset: 'factory' as BuildPreset, source: 'catalog' as 'catalog' | 'arsenal', mode: 'walk' as PixelActorMode, facing: 'se' as PixelFacing, frame: 0, playing: !reducedMotion.matches, rotating: !reducedMotion.matches, gear: { profile: 'assault', helmet: true, armor: true, backpack: true } as PixelActorGear };
+const state = { figure: 'scav' as Figure, appearance: 0, weapon: 'akm', preset: 'factory' as BuildPreset, source: 'catalog' as 'catalog' | 'arsenal', mode: 'walk' as PixelActorMode, facing: 'se' as PixelFacing, frame: 0, speed: 1, limping: false, playing: !reducedMotion.matches, rotating: !reducedMotion.matches, gear: { profile: 'assault', helmet: true, armor: true, backpack: true } as PixelActorGear };
 const customBuilds = new Map<string, WeaponInstance>();
 let selectedBuild: WeaponInstance | null = createWeaponShowcaseBuild(state.weapon);
 const importedBuild = readPixelArsenalPreview(window.location.hash);
@@ -51,6 +51,9 @@ const facingSelect = element<HTMLSelectElement>('model-facing');
 const playButton = element<HTMLButtonElement>('play-animation');
 const rotateButton = element<HTMLButtonElement>('rotate-model');
 const frameInput = element<HTMLInputElement>('animation-frame');
+const speedSelect = element<HTMLSelectElement>('animation-speed');
+const previousFrame = element<HTMLButtonElement>('previous-frame');
+const nextFrame = element<HTMLButtonElement>('next-frame');
 const selectedCanvas = element<HTMLCanvasElement>('selected-model');
 const stage = element<HTMLDivElement>('model-stage');
 const profileButtons = [...document.querySelectorAll<HTMLButtonElement>('[data-profile]')];
@@ -137,15 +140,15 @@ function filterWeapons(): void {
   element('model-weapon-count').textContent = `${count} из ${WEAPONS.length} платформ`;
 }
 
-function identity(): Pick<LiveEntity, 'appearance' | 'faction' | 'bossId' | 'role'> {
+function identity(): Pick<LiveEntity, 'appearance' | 'faction' | 'bossId' | 'role' | 'limping'> {
   const boss = getBoss(state.figure);
-  return { appearance: state.appearance, faction: state.figure === 'scav' ? 'scavs' : 'raiders', role: state.figure === 'scav' ? 'patrol' : 'guard', ...(boss ? { bossId: boss.id } : {}) };
+  return { appearance: state.appearance, limping: state.limping, faction: state.figure === 'scav' ? 'scavs' : 'raiders', role: state.figure === 'scav' ? 'patrol' : 'guard', ...(boss ? { bossId: boss.id } : {}) };
 }
 let framing: { left: number; right: number; top: number; bottom: number } | null = null;
 /** Frame every bearing and pose frame together so walking never recentres the feet. */
 function modelBounds(): NonNullable<typeof framing> {
   if (framing) return framing;
-  const bounds = { left: 0, right: 0, top: 0, bottom: 0 }, entity = identity();
+  const bounds = { left: Infinity, right: -Infinity, top: Infinity, bottom: -Infinity }, entity = identity();
   for (const facing of PIXEL_FACINGS) for (let frame = 0; frame < PIXEL_ACTOR_FRAMES[state.mode]; frame++) {
     const sprite = art.get(entity, { mode: state.mode, frame, facing }, weaponInput(), state.gear);
     bounds.left = Math.min(bounds.left, -sprite.anchor.x); bounds.right = Math.max(bounds.right, sprite.image.width - sprite.anchor.x);
@@ -157,8 +160,8 @@ function drawActor(canvas: HTMLCanvasElement, facing: PixelFacing, large: boolea
   const context = canvas.getContext('2d'); if (!context) return;
   context.clearRect(0, 0, canvas.width, canvas.height);
   const bounds = modelBounds(), modelWidth = bounds.right - bounds.left, modelHeight = bounds.bottom - bounds.top;
-  const scale = large ? Math.max(1, Math.min(2, Math.floor(Math.min((canvas.width - 32) / modelWidth, (canvas.height - 32) / modelHeight)))) : 1;
-  const anchor = large ? { x: Math.floor((canvas.width - modelWidth * scale) / 2) - bounds.left * scale, y: Math.floor((canvas.height - modelHeight * scale) / 2) - bounds.top * scale } : PIXEL_ACTOR_ANCHOR;
+  const scale = large ? Math.max(.125, Math.min(4, Math.floor(Math.min((canvas.width - 32) / modelWidth, (canvas.height - 54) / modelHeight) * 8) / 8)) : 1;
+  const anchor = large ? { x: Math.round((canvas.width - modelWidth * scale) / 2 - bounds.left * scale), y: Math.round((canvas.height - 22 - modelHeight * scale) / 2 - bounds.top * scale) } : PIXEL_ACTOR_ANCHOR;
   const ground = new PixelRaster(context, canvas.width, canvas.height);
   if (large) {
     for (let offset = -3; offset <= 3; offset++) {
@@ -173,7 +176,11 @@ function drawActor(canvas: HTMLCanvasElement, facing: PixelFacing, large: boolea
   ground.ellipse(anchor.x, anchor.y + 3, 34 * scale, 10 * scale, large ? '#2e3a29' : '#1e2c20');
   const sprite = art.get(identity(), { mode: state.mode, frame: state.frame, facing }, weaponInput(), state.gear);
   context.imageSmoothingEnabled = false;
-  context.drawImage(sprite.image, anchor.x - sprite.anchor.x * scale, anchor.y - sprite.anchor.y * scale, sprite.image.width * scale, sprite.image.height * scale);
+  context.save();
+  // One origin for the whole cycle keeps the pixel grid stable when tight crops change.
+  context.setTransform(scale, 0, 0, scale, anchor.x, anchor.y);
+  context.drawImage(sprite.image, -sprite.anchor.x, -sprite.anchor.y);
+  context.restore();
 }
 
 function render(): void {
@@ -183,6 +190,7 @@ function render(): void {
   const description = `${element('model-summary').textContent}. ${poseLabels[state.mode]}. ${facingLabels[state.facing]}.`;
   if (selectedCanvas.getAttribute('aria-label') !== description) selectedCanvas.setAttribute('aria-label', description);
   frameInput.value = String(state.frame + 1);
+  frameInput.setAttribute('aria-valuetext', `${state.frame + 1} из ${PIXEL_ACTOR_FRAMES[state.mode]}`);
   element<HTMLOutputElement>('frame-number').value = `${state.frame + 1} / ${PIXEL_ACTOR_FRAMES[state.mode]}`;
 }
 
@@ -195,6 +203,9 @@ function refreshControls(): void {
   element('model-summary').textContent = description;
   selectedCanvas.setAttribute('aria-label', `${description}. ${poseLabels[state.mode]}. ${facingLabels[state.facing]}.`);
   frameInput.max = String(PIXEL_ACTOR_FRAMES[state.mode]); frameInput.disabled = PIXEL_ACTOR_FRAMES[state.mode] === 1;
+  previousFrame.disabled = frameInput.disabled; nextFrame.disabled = frameInput.disabled;
+  speedSelect.value = String(state.speed);
+  element<HTMLInputElement>('model-limping').checked = state.limping;
   playButton.setAttribute('aria-pressed', String(state.playing)); playButton.textContent = state.playing ? 'Пауза' : 'Оживить';
   rotateButton.setAttribute('aria-pressed', String(state.rotating));
   const status = element('animation-status'); status.classList.toggle('paused', !state.playing);
@@ -216,7 +227,7 @@ function animate(at: number): void {
   requestId = 0;
   if (!state.playing || document.hidden) return;
   let redraw = false;
-  const duration = frameDuration[state.mode], frames = PIXEL_ACTOR_FRAMES[state.mode];
+  const duration = PIXEL_ACTOR_FRAME_MS[state.mode] / state.speed, frames = PIXEL_ACTOR_FRAMES[state.mode];
   if (at - lastFrameAt >= duration) {
     const steps = Math.floor((at - lastFrameAt) / duration); lastFrameAt += steps * duration;
     if (frames > 1) { state.frame = (state.frame + steps) % frames; redraw = true; }
@@ -230,6 +241,11 @@ function animate(at: number): void {
 }
 function changed(): void { state.frame = 0; framing = null; art.clear(); refreshControls(); refreshBuild(); render(); schedule(); }
 function selectFacing(facing: PixelFacing): void { state.facing = facing; state.rotating = false; refreshControls(); render(); schedule(); }
+function stepFrame(offset: number): void {
+  state.playing = false;
+  const frames = PIXEL_ACTOR_FRAMES[state.mode]; state.frame = (state.frame + offset + frames) % frames;
+  refreshControls(); render(); schedule();
+}
 
 appearanceSelect.addEventListener('change', () => { state.appearance = Number(appearanceSelect.value); changed(); });
 figureSelect.addEventListener('change', () => {
@@ -263,6 +279,17 @@ element('turn-right').addEventListener('click', () => selectFacing(PIXEL_FACINGS
 playButton.addEventListener('click', () => { state.playing = !state.playing; refreshControls(); schedule(); });
 rotateButton.addEventListener('click', () => { state.rotating = !state.rotating; refreshControls(); schedule(); });
 frameInput.addEventListener('input', () => { state.playing = false; state.frame = Math.max(0, Math.min(PIXEL_ACTOR_FRAMES[state.mode] - 1, Number(frameInput.value) - 1)); refreshControls(); render(); schedule(); });
+previousFrame.addEventListener('click', () => stepFrame(-1));
+nextFrame.addEventListener('click', () => stepFrame(1));
+speedSelect.addEventListener('change', () => {
+  const speed = Number(speedSelect.value); if (![.5, 1, 1.5, 2].includes(speed)) return;
+  state.speed = speed; refreshControls(); schedule();
+});
+element<HTMLInputElement>('model-limping').addEventListener('change', event => {
+  state.limping = (event.currentTarget as HTMLInputElement).checked;
+  if (state.limping) { state.mode = 'walk'; poseSelect.value = state.mode; }
+  changed();
+});
 document.addEventListener('visibilitychange', schedule);
 reducedMotion.addEventListener('change', () => { if (reducedMotion.matches) { state.playing = false; state.rotating = false; refreshControls(); schedule(); } });
 const resize = new ResizeObserver(entries => {

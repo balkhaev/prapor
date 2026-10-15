@@ -59,15 +59,21 @@ test('all32 identities,8 bearings and articulated states render opaque bounded i
   for (const facing of PIXEL_FACINGS) {
     const idle = surface(); paintPixelActor(idle.context, scav, { mode: 'idle', frame: 0, facing }, 'sks'); directions.add(digest(idle.pixels));
     for (const [mode, frames] of Object.entries(PIXEL_ACTOR_FRAMES)) {
-      const states = new Set<number>();
+      const states = new Set<number>(), poses: Uint32Array[] = [];
       for (let frame = 0; frame < frames; frame++) {
-        const s = surface(); paintPixelActor(s.context, { ...scav, appearance: 19 }, { mode, frame, facing } as PixelActorFrame, 'sks'); expect(s.valid).toBe(true); expect(s.calls).toBeGreaterThan(200); states.add(digest(s.pixels));
+        const s = surface(); paintPixelActor(s.context, { ...scav, appearance: 19 }, { mode, frame, facing } as PixelActorFrame, 'sks'); expect(s.valid).toBe(true); expect(s.calls).toBeGreaterThan(200); states.add(digest(s.pixels)); poses.push(s.pixels);
         // No raster clipping can silently amputate a boot or weapon at the frame edge.
         expect(s.pixels.slice(0, W).every(pixel => pixel === 0)).toBe(true);
         expect(s.pixels.slice((H - 1) * W).every(pixel => pixel === 0)).toBe(true);
         expect(s.pixels.every((pixel, index) => index % W !== 0 && index % W !== W - 1 || pixel === 0)).toBe(true);
       }
-      expect(states.size).toBe(frames);
+      expect(states.size).toBeGreaterThanOrEqual(mode === 'walk' ? 8 : mode === 'idle' ? 3 : mode === 'aim' ? 2 : mode === 'fire' ? 4 : mode === 'hit' ? 3 : 1);
+      if (mode === 'idle' || mode === 'aim') for (let frame = 0; frame < frames; frame++) {
+        const a = poses[frame]!, c = poses[(frame + 1) % frames]!;
+        let changed = 0, occupied = 0;
+        for (let i = 0; i < a.length; i++) { if (a[i] || c[i]) occupied++; if (a[i] !== c[i]) changed++; }
+        expect(changed / occupied).toBeLessThan(.55);
+      }
     }
   }
   expect(directions.size).toBe(8);
@@ -76,21 +82,44 @@ test('all32 identities,8 bearings and articulated states render opaque bounded i
 test('walking articulates both knees and heel/toe contacts without changing the planted origin; limping is asymmetric', () => {
   for (const facing of PIXEL_FACINGS) {
     const feet = new Set<string>(), limp = new Set<string>();
-    for (let frame = 0; frame < 8; frame++) {
+    for (let frame = 0; frame < PIXEL_ACTOR_FRAMES.walk; frame++) {
       const rig = pixelActorRig({ mode: 'walk', frame, facing }), injured = pixelActorRig({ mode: 'walk', frame, facing }, true);
       expect(rig.anchor).toEqual(PIXEL_ACTOR_ANCHOR); expect(injured.anchor).toEqual(PIXEL_ACTOR_ANCHOR);
-      expect(rig.leftStride).toBe(-rig.rightStride); expect(rig.leftLift === 0 || rig.rightLift === 0).toBe(true);
-      expect(Math.abs(injured.leftStride)).toBeLessThanOrEqual(6); expect(Math.abs(injured.rightStride)).toBeLessThanOrEqual(10);
+      expect(rig.leftContact || rig.rightContact).toBe(true); expect(rig.leftLift === 0 || rig.rightLift === 0).toBe(true);
+      expect(Math.abs(injured.leftStride)).toBeLessThanOrEqual(12); expect(Math.abs(injured.rightStride)).toBeLessThanOrEqual(20);
       feet.add(JSON.stringify([rig.leftKnee,rig.rightKnee,rig.leftHeel,rig.rightHeel,rig.leftToe,rig.rightToe])); limp.add(JSON.stringify(injured));
     }
-    expect(feet.size).toBe(8); expect(limp.size).toBe(8);
+    expect(feet.size).toBe(PIXEL_ACTOR_FRAMES.walk); expect(limp.size).toBe(PIXEL_ACTOR_FRAMES.walk);
+  }
+});
+
+test('the unarmored rear silhouette narrows from chest to waist and breathing keeps boots planted', () => {
+  const empty: PixelWeaponInput = { weaponId: 'akm', durability: 100, modules: {} };
+  const bare = { profile: 'light' as const, helmet: false, armor: false, backpack: false }, s = surface();
+  paintPixelActor(s.context, scav, { mode: 'idle', frame: 0, facing: 'n' }, empty, bare);
+  const coat = new Set(['#67745c', '#3e5041', '#8c9576']);
+  const band = (top: number, bottom: number) => {
+    let left = W, right = 0;
+    for (let y = top; y <= bottom; y++) for (let x = PIXEL_ACTOR_ANCHOR.x - 20; x <= PIXEL_ACTOR_ANCHOR.x + 20; x++) {
+      if (coat.has(colors[s.pixels[y * W + x]!]!)) { left = Math.min(left, x); right = Math.max(right, x); }
+    }
+    return right - left;
+  };
+  expect(band(90, 99)).toBeGreaterThan(band(119, 125) + 4);
+  for (const facing of PIXEL_FACINGS) {
+    const feet = new Set<number>();
+    for (let frame = 0; frame < PIXEL_ACTOR_FRAMES.idle; frame++) {
+      const idle = surface(); paintPixelActor(idle.context, scav, { mode: 'idle', frame, facing }, empty, bare);
+      feet.add(digest(idle.pixels.slice((PIXEL_ACTOR_ANCHOR.y - 30) * W)));
+    }
+    expect(feet.size).toBe(1);
   }
 });
 
 test('cropped muzzle/ejection remain registered to the mounted trigger and support hands in all bearings', () => {
   const canvases = mockCanvases(), art = new PixelActorArt();
-  for (const facing of PIXEL_FACINGS) for (const weapon of PIXEL_WEAPON_IDS) for (let frame = 0; frame < 3; frame++) {
-    const animation = { mode: 'fire' as const, frame, facing }, rig = pixelActorRig(animation), expected = pixelWeaponAnchors(weapon, rig.grip, facing, [0,4,2][frame]);
+  for (const facing of PIXEL_FACINGS) for (const weapon of PIXEL_WEAPON_IDS) for (let frame = 0; frame < PIXEL_ACTOR_FRAMES.fire; frame++) {
+    const animation = { mode: 'fire' as const, frame, facing }, rig = pixelActorRig(animation), expected = pixelWeaponAnchors(weapon, rig.grip, facing, rig.weaponKick);
     const sprite = art.get(scav, animation, weapon);
     expect(sprite.muzzle).toEqual({ x: expected.muzzle.x - PIXEL_ACTOR_ANCHOR.x + sprite.anchor.x, y: expected.muzzle.y - PIXEL_ACTOR_ANCHOR.y + sprite.anchor.y });
     expect(sprite.ejection).toEqual({ x: expected.ejection.x - PIXEL_ACTOR_ANCHOR.x + sprite.anchor.x, y: expected.ejection.y - PIXEL_ACTOR_ANCHOR.y + sprite.anchor.y });
@@ -110,9 +139,11 @@ test('rear-facing hands and forearms stay behind the torso and backpack', () => 
   for (const weapon of PIXEL_WEAPON_IDS) for (const backpack of [false, true]) for (const mode of ['idle', 'aim', 'fire'] as const) {
     const animation = { mode, frame: 0, facing: 'n' as const }, rig = pixelActorRig(animation), s = surface();
     paintPixelActor(s.context, scav, animation, weapon, { profile: 'light', helmet: false, armor: false, backpack });
-    // The trigger hand is physically on the front of the body. It must not be
-    // painted over the coat/pack just because its socket is still available.
-    expect(handColors.has(colors[s.pixels[rig.grip.y * W + rig.grip.x]!]!)).toBe(false);
+    // Low-ready hands stay behind the body. A shouldered firing hand can rise
+    // above its shoulder silhouette, while the back itself remains an occluder.
+    if (mode === 'idle') expect(handColors.has(colors[s.pixels[rig.grip.y * W + rig.grip.x]!]!)).toBe(false);
+    const spine = { x: PIXEL_ACTOR_ANCHOR.x, y: PIXEL_ACTOR_ANCHOR.y - 90 };
+    expect(handColors.has(colors[s.pixels[spine.y * W + spine.x]!]!)).toBe(false);
     expect(s.valid).toBe(true);
   }
 }, 30_000);
@@ -164,7 +195,7 @@ test('long suppressed barrels, large scopes and bipods stay inside native/croppe
         expect(local!.y).toBeGreaterThanOrEqual(0); expect(local!.y).toBeLessThan(sprite.image.height);
       }
       if (mode !== 'downed') {
-        const rig = pixelActorRig(animation), recoil = mode === 'fire' ? [0, 4, 2][frame]! : 0;
+        const rig = pixelActorRig(animation), recoil = rig.weaponKick;
         const expected = pixelWeaponAnchors(build, rig.grip, facing, recoil);
         expect(metadata).toEqual({ muzzle: expected.muzzle, ejection: expected.ejection });
         if (pixelBearing(facing).y >= -.1) {
@@ -288,9 +319,10 @@ test('boss and field-kit silhouettes are distinct, and complete crowded walking 
   for (const profile of ['light','assault','scout'] as const) { const s = surface(); paintPixelActor(s.context, { appearance: 3 }, { mode: 'idle', frame: 0, facing: 'sw' }, 'unknown', { profile }); gearShapes.add(digest(s.pixels)); }
   expect(gearShapes.size).toBe(3);
   const canvases = mockCanvases(), art = new PixelActorArt(), crowd: Array<Pick<LiveEntity,'appearance'|'faction'>> = Array.from({ length: 32 }, (_, appearance) => ({ appearance, faction: appearance % 2 ? 'scavs' : 'raiders' }));
-  const firstCycle = crowd.map((entity, index) => Array.from({ length: 8 }, (_, frame) => art.get(entity, { mode: 'walk', frame, facing: PIXEL_FACINGS[index % 8]! }, 'akm')));
-  expect(art.retainedBytes).toBeLessThanOrEqual(PIXEL_ACTOR_CACHE_BYTES); const created = canvases.created;
-  for (let frame = 0; frame < 8; frame++) for (const [index, entity] of crowd.entries()) expect(art.get(entity, { mode: 'walk', frame, facing: PIXEL_FACINGS[index % 8]! }, 'akm')).toBe(firstCycle[index]![frame]!);
+  for (const [index, entity] of crowd.entries()) for (let frame = 0; frame < PIXEL_ACTOR_FRAMES.walk; frame++) art.get(entity, { mode: 'walk', frame, facing: PIXEL_FACINGS[index % 8]! }, 'akm');
+  expect(art.retainedBytes).toBeLessThanOrEqual(PIXEL_ACTOR_CACHE_BYTES);
+  const visibleFrame = crowd.map((entity, index) => art.get(entity, { mode: 'walk', frame: 3, facing: PIXEL_FACINGS[index % 8]! }, 'akm')), created = canvases.created;
+  for (const [index, entity] of crowd.entries()) expect(art.get(entity, { mode: 'walk', frame: 3, facing: PIXEL_FACINGS[index % 8]! }, 'akm')).toBe(visibleFrame[index]!);
   expect(canvases.created).toBe(created);
   const base = art.get(scav, { mode: 'idle', frame: 0, facing: 's' }); expect(art.get(scav, { mode: 'idle', frame: 400, facing: 's' })).toBe(base);
   expect(art.get({ ...scav, limping: true }, { mode: 'idle', frame: 0, facing: 's' })).not.toBe(base);

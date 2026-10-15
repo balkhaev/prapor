@@ -1,8 +1,9 @@
 import type { LiveEntity, LiveEvent, LivePoint } from './game/live';
+import { PIXEL_ACTOR_CYCLE_MS, PIXEL_ACTOR_FRAMES, PIXEL_ACTOR_LIMP_CYCLE_SCALE, PIXEL_ACTOR_WALK_CYCLE_DISTANCE, pixelActorTimedFrame, type PixelActorMode } from './pixel-actor-config';
+export type { PixelActorMode } from './pixel-actor-config';
 
 export const PIXEL_FACINGS = ['e', 'se', 's', 'sw', 'w', 'nw', 'n', 'ne'] as const;
 export type PixelFacing = typeof PIXEL_FACINGS[number];
-export type PixelActorMode = 'idle' | 'walk' | 'aim' | 'fire' | 'hit' | 'downed';
 export type PixelActorFrame = { mode: PixelActorMode; frame: number; facing: PixelFacing };
 
 /** The art bearing is screen space. World position stays in the server coordinate system. */
@@ -59,7 +60,7 @@ export function stopPixelMotion(old: PixelMotion | undefined, target: LivePoint,
 }
 
 export function isConfirmedPixelShot(event: LiveEvent): boolean {
-  return event.kind === 'combat' && !!event.actorId && !!event.targetId && !!event.from && !!event.to
+  return event.kind === 'combat' && typeof event.id === 'string' && !!event.id && !!event.actorId && !!event.targetId && Number.isFinite(event.at) && event.at >= 0 && !!event.from && !!event.to
     && [event.from.x, event.from.y, event.to.x, event.to.y, event.damage].every(value => typeof value === 'number' && Number.isFinite(value)) && event.damage! >= 0;
 }
 
@@ -76,8 +77,8 @@ export class PixelCombatAnimation {
       if (this.seen.has(event.id)) continue;
       this.seen.set(event.id, at);
       if (!isConfirmedPixelShot(event)) continue;
-      const age = Math.max(0, serverNow - event.at);
-      if (age > 850) continue;
+      const age = serverNow - event.at;
+      if (!Number.isFinite(age) || age < 0 || age > 850) continue;
       const started = at - age;
       this.shots.push({ event, at: started });
       this.fired.set(event.actorId!, Math.max(this.fired.get(event.actorId!) ?? -Infinity, started));
@@ -91,16 +92,19 @@ export class PixelCombatAnimation {
   active(at: number): readonly PixelShotEffect[] { return this.shots.filter(shot => at - shot.at >= 0 && at - shot.at < 850); }
   shotAge(id: string, at: number): number { return at - (this.fired.get(id) ?? -Infinity); }
   hitAge(id: string, at: number): number { return at - (this.hit.get(id) ?? -Infinity); }
-  frame(entity: Pick<LiveEntity, 'id' | 'health' | 'action' | 'aimUntil'>, motion: PixelMotion, at: number, serverNow: number): PixelActorFrame {
+  frame(entity: Pick<LiveEntity, 'id' | 'health' | 'action' | 'aimUntil' | 'limping'>, motion: PixelMotion, at: number, serverNow: number, walkCycleDistance = PIXEL_ACTOR_WALK_CYCLE_DISTANCE): PixelActorFrame {
     const sampled = samplePixelMotion(motion, at), shotAge = this.shotAge(entity.id, at), hitAge = this.hitAge(entity.id, at);
     if (entity.health <= 0 || entity.action === 'downed') return { mode: 'downed', frame: 0, facing: motion.facing };
-    if (shotAge >= 0 && shotAge < 190) return { mode: 'fire', frame: Math.min(2, Math.floor(shotAge / 65)), facing: motion.facing };
-    if (hitAge >= 0 && hitAge < 160) return { mode: 'hit', frame: Math.min(1, Math.floor(hitAge / 80)), facing: motion.facing };
+    if (shotAge >= 0 && shotAge < PIXEL_ACTOR_CYCLE_MS.fire) return { mode: 'fire', frame: pixelActorTimedFrame('fire', shotAge, false), facing: motion.facing };
+    if (hitAge >= 0 && hitAge < PIXEL_ACTOR_CYCLE_MS.hit) return { mode: 'hit', frame: pixelActorTimedFrame('hit', hitAge, false), facing: motion.facing };
     if (sampled.walking) {
       const next = sampled.remaining[1]!, dx = next.x - sampled.point.x, dy = next.y - sampled.point.y;
-      return { mode: 'walk', frame: Math.floor(sampled.distance / .55 * 8) % 8, facing: pixelFacing(dx - dy, (dx + dy) / 2, motion.facing) };
+      const cycle = clamp(Number.isFinite(walkCycleDistance) && walkCycleDistance > 0 ? walkCycleDistance : PIXEL_ACTOR_WALK_CYCLE_DISTANCE, .2, 2) * (entity.limping ? PIXEL_ACTOR_LIMP_CYCLE_SCALE : 1);
+      return { mode: 'walk', frame: Math.floor(sampled.distance / cycle * PIXEL_ACTOR_FRAMES.walk) % PIXEL_ACTOR_FRAMES.walk, facing: pixelFacing(dx - dy, (dx + dy) / 2, motion.facing) };
     }
-    if (entity.action === 'combat' || entity.aimUntil && entity.aimUntil > serverNow) return { mode: 'aim', frame: Math.floor(at / 380) % 2, facing: motion.facing };
-    return { mode: 'idle', frame: Math.floor(at / 440) % 4, facing: motion.facing };
+    let phase = 0;
+    for (let i = 0; i < entity.id.length; i++) phase = (Math.imul(phase, 31) + entity.id.charCodeAt(i)) >>> 0;
+    if (entity.action === 'combat' || entity.aimUntil && entity.aimUntil > serverNow) return { mode: 'aim', frame: pixelActorTimedFrame('aim', at + phase % PIXEL_ACTOR_CYCLE_MS.aim), facing: motion.facing };
+    return { mode: 'idle', frame: pixelActorTimedFrame('idle', at + phase % PIXEL_ACTOR_CYCLE_MS.idle), facing: motion.facing };
   }
 }

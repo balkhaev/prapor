@@ -7,6 +7,7 @@ import { buildingNeedsCutaway, buildingPalette, sceneBuildings, SceneryIndex } f
 import { PixelRaidRenderer, pixelSpriteRect, type PixelDetail } from './pixel-renderer';
 import { PixelContainerArt } from './pixel-containers';
 import { PixelActorArt, PIXEL_ACTOR_ANCHOR, PIXEL_ACTOR_NATIVE_SIZE } from './pixel-actors';
+import { pixelActorWalkCycleDistance } from './pixel-actor-config';
 import { pixelActorLoadout } from './pixel-loadout';
 import { PixelBuildingArt, pixelBuildingSpriteBytes, pixelBuildingWallHeight } from './pixel-buildings';
 import { PixelPropArt } from './pixel-props';
@@ -735,7 +736,7 @@ export class LiveScene {
     }
     c.beginPath(); c.ellipse(p.x, p.y, 13 * zoom, 6 * zoom, 0, 0, Math.PI * 2); c.fillStyle = '#0005'; c.fill();
     if (own || selected) { c.strokeStyle = color; c.lineWidth = 2; c.stroke(); }
-    const animation = this.combatAnimation.frame(entity, motion, now, snapshot.now + now - this.snapshotAt);
+    const animation = this.combatAnimation.frame(entity, motion, now, snapshot.now + now - this.snapshotAt, pixelActorWalkCycleDistance(this.width < 480 ? 48 : 64));
     const { weapon, gear } = pixelActorLoadout(entity, snapshot.self);
     const sprite = this.actorArt.get(entity, animation, weapon, gear), actorScale = .32 * zoom;
     const bounds = pixelSpriteRect(sprite, p, actorScale, this.renderer.deviceRatio);

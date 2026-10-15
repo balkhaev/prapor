@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import type { LiveEvent } from '../src/game/live';
 import { PIXEL_FACINGS, PixelCombatAnimation, isConfirmedPixelShot, pixelBearing, pixelFacing, samplePixelMotion, stopPixelMotion, updatePixelMotion } from '../src/pixel-animation';
+import { PIXEL_ACTOR_ANCHOR, PIXEL_ACTOR_CYCLE_MS, PIXEL_ACTOR_FRAME_MS, PIXEL_ACTOR_FRAMES, pixelActorFrameIndex, pixelActorTimedFrame, pixelActorWalkCycleDistance } from '../src/pixel-actor-config';
+import { pixelActorRig } from '../src/pixel-actor-rig';
 
 const actor = { id: 'self', health: 100, action: 'idle' as const };
 const shot = (id = 'shot', damage = 25): LiveEvent => ({ id, at: 10_000, kind: 'combat', text: 'Выстрел', actorId: 'self', targetId: 'guard', from: { x: 8, y: 8 }, to: { x: 12, y: 9 }, damage });
@@ -26,8 +28,9 @@ describe('server confirmed pixel combat animation', () => {
     effects.update([shot(), shot('other-shot', 0)], 10_160, 435);
     expect(effects.active(435)).toHaveLength(2);
     expect(effects.shotAge('self', 435)).toBe(160);
-    expect(effects.frame(actor, motion, 435, 10_160)).toMatchObject({ mode: 'fire', frame: 2 });
-    expect(effects.frame(actor, motion, 490, 10_215).mode).toBe('idle');
+    expect(effects.frame(actor, motion, 435, 10_160)).toMatchObject({ mode: 'fire', frame: 3 });
+    expect(effects.frame(actor, motion, 490, 10_215)).toMatchObject({ mode: 'fire', frame: PIXEL_ACTOR_FRAMES.fire - 1 });
+    expect(effects.frame(actor, motion, 500, 10_225).mode).toBe('idle');
   });
 
   test('blocked damage still fires but only positive damage flinches the visible target', () => {
@@ -49,6 +52,30 @@ describe('server confirmed pixel combat animation', () => {
     expect(effects.active(1260)).toHaveLength(0);
     effects.update([shot()], 11_000, 1400);
     expect(effects.active(1400)).toHaveLength(0);
+  });
+
+  test('five shot frames and four impact frames use shared durations and settle without repeated events', () => {
+    const effects = new PixelCombatAnimation(), motion = updatePixelMotion(undefined, { x: 8, y: 8 }, 0);
+    effects.update([shot()], 10_000, 300);
+    for (let frame = 0; frame < PIXEL_ACTOR_FRAMES.fire; frame++) {
+      const elapsed = frame * PIXEL_ACTOR_FRAME_MS.fire;
+      expect(effects.frame(actor, motion, 300 + elapsed, 10_000 + elapsed)).toMatchObject({ mode: 'fire', frame });
+    }
+    for (let frame = 0; frame < PIXEL_ACTOR_FRAMES.hit; frame++) {
+      const elapsed = frame * PIXEL_ACTOR_FRAME_MS.hit;
+      expect(effects.frame({ ...actor, id: 'guard' }, motion, 300 + elapsed, 10_000 + elapsed)).toMatchObject({ mode: 'hit', frame });
+    }
+    expect(effects.frame(actor, motion, 300 + PIXEL_ACTOR_CYCLE_MS.fire, 10_220).mode).toBe('idle');
+    expect(effects.frame({ ...actor, id: 'guard' }, motion, 300 + PIXEL_ACTOR_CYCLE_MS.hit, 10_220).mode).toBe('idle');
+    // Smoke/damage text can keep fading after the body has recovered.
+    expect(effects.active(600)).toHaveLength(1);
+  });
+
+  test('invalid and future timestamps never create a discharge or a hit reaction', () => {
+    const effects = new PixelCombatAnimation(), motion = updatePixelMotion(undefined, { x: 8, y: 8 }, 0);
+    for (const [index, at] of [NaN, Infinity, -1, 10_001].entries()) effects.update([{ ...shot(`bad-${index}`), at }], 10_000, 300);
+    expect(effects.active(300)).toHaveLength(0); expect(effects.frame(actor, motion, 300, 10_000).mode).toBe('idle');
+    expect(effects.frame({ ...actor, id: 'guard' }, motion, 300, 10_000).mode).toBe('idle');
   });
 });
 
@@ -100,5 +127,79 @@ describe('distance driven gait and retained confirmed path', () => {
     expect(samplePixelMotion(motion, 4100).point.x).toBeLessThan(6);
     const reconnect = updatePixelMotion(motion, { x: 7, y: 5 }, 7000);
     expect(samplePixelMotion(reconnect, 7000)).toMatchObject({ point: { x: 7, y: 5 }, walking: false });
+  });
+
+  test('walk cadence accepts the display scale without changing analytic movement or accepting invalid cycle lengths', () => {
+    const effects = new PixelCombatAnimation(), initial = updatePixelMotion(undefined, { x: 5, y: 5 }, 0), motion = updatePixelMotion(initial, { x: 6, y: 5 }, 500);
+    const before = structuredClone(motion), sampled = samplePixelMotion(motion, 750);
+    const desktop = effects.frame(actor, motion, 750, 10_000, pixelActorWalkCycleDistance(64)), mobile = effects.frame(actor, motion, 750, 10_000, pixelActorWalkCycleDistance(48));
+    expect(desktop.mode).toBe('walk'); expect(mobile.mode).toBe('walk'); expect(desktop.frame).not.toBe(mobile.frame);
+    for (const invalid of [NaN, Infinity, -3, 0]) expect(effects.frame(actor, motion, 750, 10_000, invalid)).toEqual(desktop);
+    expect(samplePixelMotion(motion, 750)).toEqual(sampled); expect(motion).toEqual(before);
+  });
+});
+
+describe('articulated fighter rig and shared phases', () => {
+  test('all phases stay bounded for negative or invalid cache frames, and every cycle uses the same clock', () => {
+    for (const mode of Object.keys(PIXEL_ACTOR_FRAMES) as Array<keyof typeof PIXEL_ACTOR_FRAMES>) {
+      const count = PIXEL_ACTOR_FRAMES[mode];
+      for (const frame of [-125, -1, 0, 999, NaN, Infinity]) {
+        const normalized = pixelActorFrameIndex({ mode, frame }); expect(normalized).toBeGreaterThanOrEqual(0); expect(normalized).toBeLessThan(count);
+        const rig = pixelActorRig({ mode, frame, facing: 'se' }); expect(rig.anchor).toEqual(PIXEL_ACTOR_ANCHOR);
+        expect(Object.values(rig).every(value => typeof value !== 'number' || Number.isFinite(value))).toBe(true);
+      }
+      for (let frame = 0; frame < count; frame++) expect(pixelActorTimedFrame(mode, frame * PIXEL_ACTOR_FRAME_MS[mode])).toBe(frame);
+      expect(pixelActorTimedFrame(mode, PIXEL_ACTOR_CYCLE_MS[mode])).toBe(0);
+      expect(pixelActorTimedFrame(mode, PIXEL_ACTOR_CYCLE_MS[mode], false)).toBe(count - 1);
+    }
+  });
+
+  test('support and swing transfer weight with a planted heel then toe on desktop and mobile', () => {
+    let doubleSupport = 0;
+    for (let frame = 0; frame < PIXEL_ACTOR_FRAMES.walk; frame++) {
+      const rig = pixelActorRig({ mode: 'walk', frame, facing: 'se' });
+      expect(rig.leftContact || rig.rightContact).toBe(true);
+      if (rig.leftContact && rig.rightContact) doubleSupport++;
+      if (rig.leftContact) expect(rig.leftLift).toBe(0); else expect(rig.leftLift).toBeGreaterThan(0);
+      if (rig.rightContact) expect(rig.rightLift).toBe(0); else expect(rig.rightLift).toBeGreaterThan(0);
+      expect(rig.sway * rig.hipSway).toBeLessThanOrEqual(0);
+    }
+    expect(doubleSupport).toBeGreaterThan(0); expect(doubleSupport).toBeLessThan(PIXEL_ACTOR_FRAMES.walk / 2);
+    for (const baseTile of [48, 64]) for (const [joint, phases] of [['leftHeel', [0, 1, 2, 3, 4, 5]], ['leftToe', [2, 3, 4, 5, 6, 7]]] as const) {
+      const points = phases.map(frame => {
+        const rig = pixelActorRig({ mode: 'walk', frame, facing: 'se' }), distance = pixelActorWalkCycleDistance(baseTile) * frame / PIXEL_ACTOR_FRAMES.walk;
+        return { x: distance * baseTile / 2 + (rig[joint].x - rig.anchor.x) * .32, y: distance * baseTile / 4 + (rig[joint].y - rig.anchor.y) * .32 };
+      });
+      expect(Math.max(...points.map(p => p.x)) - Math.min(...points.map(p => p.x))).toBeLessThan(.4);
+      expect(Math.max(...points.map(p => p.y)) - Math.min(...points.map(p => p.y))).toBeLessThan(.4);
+    }
+  });
+
+  test('fixed-length leg links bend at the knee throughout walking and a visibly asymmetric limp', () => {
+    const normal = new Set<string>(), injured = new Set<string>(); let injuredSupport = 0, healthySupport = 0;
+    for (let frame = 0; frame < PIXEL_ACTOR_FRAMES.walk; frame++) for (const limping of [false, true]) {
+      const rig = pixelActorRig({ mode: 'walk', frame, facing: 'e' }, limping);
+      for (const [hip, knee, ankle] of [[rig.leftHip, rig.leftKnee, rig.leftAnkle], [rig.rightHip, rig.rightKnee, rig.rightAnkle]]) {
+        expect(Math.abs(Math.hypot(knee!.x - hip!.x, knee!.y - hip!.y) - 29)).toBeLessThan(2);
+        expect(Math.abs(Math.hypot(ankle!.x - knee!.x, ankle!.y - knee!.y) - 28)).toBeLessThan(2);
+      }
+      (limping ? injured : normal).add(JSON.stringify([rig.leftHip, rig.rightHip, rig.leftKnee, rig.rightKnee, rig.leftHeel, rig.rightHeel]));
+      if (limping) { injuredSupport += Number(rig.leftContact); healthySupport += Number(rig.rightContact); }
+    }
+    expect(normal.size).toBe(PIXEL_ACTOR_FRAMES.walk); expect(injured.size).toBe(PIXEL_ACTOR_FRAMES.walk); expect(healthySupport).toBeGreaterThan(injuredSupport);
+  });
+
+  test('breathing moves the upper body while feet and hips stay still; aiming sights remain steady', () => {
+    for (const facing of PIXEL_FACINGS) {
+      const idle = Array.from({ length: PIXEL_ACTOR_FRAMES.idle }, (_, frame) => pixelActorRig({ mode: 'idle', frame, facing }));
+      expect(new Set(idle.map(rig => JSON.stringify([rig.leftShoulder, rig.rightShoulder, rig.headBob]))).size).toBe(PIXEL_ACTOR_FRAMES.idle);
+      expect(new Set(idle.map(rig => JSON.stringify([rig.leftHip, rig.rightHip, rig.leftKnee, rig.rightKnee, rig.leftHeel, rig.rightToe]))).size).toBe(1);
+      const aim = Array.from({ length: PIXEL_ACTOR_FRAMES.aim }, (_, frame) => pixelActorRig({ mode: 'aim', frame, facing }));
+      expect(new Set(aim.map(rig => JSON.stringify(rig.grip))).size).toBe(1);
+      expect(new Set(aim.map(rig => JSON.stringify([rig.leftShoulder, rig.rightShoulder]))).size).toBe(PIXEL_ACTOR_FRAMES.aim);
+      const fire = Array.from({ length: PIXEL_ACTOR_FRAMES.fire }, (_, frame) => pixelActorRig({ mode: 'fire', frame, facing }));
+      expect(fire.map(rig => rig.weaponKick)).toEqual([0, 4, 2.5, 1, 0]); expect(fire.at(-1)!.grip).toEqual(aim[0]!.grip);
+      expect(fire[1]!.grip).not.toEqual(fire[0]!.grip);
+    }
   });
 });
