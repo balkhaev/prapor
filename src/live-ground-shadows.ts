@@ -3,6 +3,7 @@ import { buildingArchitecture, type BuildingVolume } from './building-architectu
 import { BUILDING_EXTERIOR_HEIGHT_SCALE, SceneryIndex } from './live-map-art';
 import { pixelPropHeight } from './pixel-props';
 import { treeCrownProfile } from './pixel-plant-form';
+import { distantStreetPropSurfaces } from './live-distant-street-props';
 import type { WorldSunlight } from './world-ambience';
 
 type Rect = LivePoint & { width: number; height: number };
@@ -98,6 +99,16 @@ export function projectGroundShadowPart(part: GroundShadowPart, light: GroundSha
 function propGeometry(prop: LiveWorldProp): { parts: GroundShadowPart[]; contact: Float32Array } {
   const cx = prop.x + prop.width / 2, cy = prop.y + prop.height / 2;
   const artHeight = pixelPropHeight(prop.kind) / 128;
+  if (prop.kind === 'bench' || prop.kind === 'fence' || prop.kind === 'playground') {
+    // Open rails, swing frames and low carousels must cast their own form,
+    // rather than the former full-height box across the whole playground.
+    // Model surfaces use the scene's -.5 anchor; this painter uses cell edges.
+    const parts = distantStreetPropSurfaces(prop).map(surface => packed(surface.points.map(p => [p.x + .5, p.y + .5, p.z] as const)));
+    const contact = prop.kind === 'playground' && prop.variant < 2
+      ? rectPoints({ x: prop.x + prop.width * .06, y: prop.y + prop.height * .08, width: .08, height: .08 })
+      : rectPoints(prop, .015);
+    return { parts, contact };
+  }
   if (prop.kind === 'tree') {
     const profile = treeCrownProfile(prop.variant), radius = Math.max(.3, (prop.width + prop.height) * .331 * profile.spread);
     const stem = { x: cx - .045, y: cy - .045, width: .09, height: .09 }, crown = ellipsePart(cx, cy, radius, radius, prop.variant === 3 ? 1.05 : profile.center / 128);
@@ -119,7 +130,7 @@ function propGeometry(prop: LiveWorldProp): { parts: GroundShadowPart[]; contact
     return { parts, contact: rectPoints({ x: cx - .11, y: cy - .11, width: .22, height: .22 }, .025) };
   }
   const height = prop.kind === 'car' ? 69 / 128 : prop.kind === 'van' ? 88 / 128 : prop.kind === 'truck' ? 89 / 128
-    : prop.kind === 'bus' ? 106 / 128 : prop.kind === 'bench' || prop.kind === 'workbench' ? .42 : artHeight * .88;
+    : prop.kind === 'bus' ? 106 / 128 : prop.kind === 'workbench' ? .42 : artHeight * .88;
   return { parts: [boxPart(prop, 0, height)], contact: rectPoints(prop, .07) };
 }
 
