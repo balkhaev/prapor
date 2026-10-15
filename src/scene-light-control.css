@@ -1,6 +1,7 @@
 .scene-light-control { display: inline-flex; align-items: center; gap: 7px; color: var(--game-muted, #a5b0a6); font-size: 10px; flex: 0 0 auto; }
 .scene-light-control select { min-height: 36px; max-width: 130px; padding: 6px 24px 6px 9px; border: 1px solid var(--game-line-strong, #52654e); border-radius: 5px; background: var(--game-inset, #263532); color: var(--game-text, #dad0ac); font: inherit; cursor: pointer; }
 .scene-light-control select:focus-visible { outline: 2px solid var(--game-brass-light, #b7a56b); outline-offset: 2px; }
+.scene-light-control[hidden] { display: none; }
 .environment-toolbar .scene-light-control { min-width: 0; display: flex; flex: 0 0 auto; align-items: center; gap: 7px; padding-bottom: 1px; }
 .environment-toolbar .scene-light-control select { width: 125px; }
 @media(max-width:700px) { .scene-light-control select { min-height: 40px; max-width: 120px; } .world-head > .scene-light-control { margin-left: auto; } }

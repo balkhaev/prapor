@@ -132,7 +132,7 @@ export function sampleShelterAtmosphere(input: ShelterAtmosphereInput): ShelterA
 		// its glowing bulb only; it never lifts the illumination off the yard.
 		const width = (fire ? 66 : 38 + height * 1.2) * pulse;
 		frame.groundLights.push({ x: clamp(light.x, -1e6, 1e6), y: clamp(light.y, -1e6, 1e6),
-			width, height: width * .5, alpha: (fire ? .24 : .19) * pulse * lightStrength, color });
+			width, height: width * .5, alpha: (fire ? .32 : .28) * pulse * lightStrength, color });
 		frame.glows.push({
 			x: clamp(light.x, -1e6, 1e6), y: clamp(light.y, -1e6, 1e6) - height,
 			width: (fire ? 22 : 16) * pulse, height: (fire ? 15 : 12) * pulse,
