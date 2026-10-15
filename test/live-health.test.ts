@@ -11,21 +11,27 @@ import { getLiveMap } from "../src/game/live-maps";
 const ORIGIN = "https://game.delopusk.ru";
 interface Session { cookie: string; id: string }
 let folder: string, dbPath: string, service: LiveService, time: number;
+let cachedWorld: LiveSnapshot["world"] | undefined;
 const options = () => ({ dbPath, secureCookies: true, allowedOrigins: [ORIGIN], now: () => time, random: () => 0, automaticTicks: false });
 async function call(path: string, session?: Session, body?: unknown): Promise<Response> {
   const method = ["state", "status"].includes(path) ? "GET" : "POST";
   return (await service.fetch(new Request(`${ORIGIN}/api/live/${path}`, { method, headers: {
+    ...(["state", "action"].includes(path) && cachedWorld ? { "x-prapor-world-version": cachedWorld.version } : {}),
     ...(session ? { cookie: session.cookie, "x-prapor-live": session.id } : {}),
     ...(method === "POST" ? { origin: ORIGIN, "content-type": "application/json" } : {}),
   }, ...(method === "POST" ? { body: JSON.stringify(body ?? {}) } : {}) }), "192.0.2.18"))!;
 }
 async function enter(session?: Session): Promise<{ session: Session; state: LiveSnapshot }> {
   const reply = await call("join", session); expect(reply.status).toBe(200);
-  const state = await reply.json() as LiveSnapshot;
+  const state = await reply.json() as LiveSnapshot; cachedWorld = state.world;
   return { session: session ?? { id: state.selfId, cookie: reply.headers.get("set-cookie")!.split(";")[0]! }, state };
 }
 async function state(session: Session): Promise<LiveSnapshot> {
-  const reply = await call("state", session); expect(reply.status).toBe(200); return reply.json() as Promise<LiveSnapshot>;
+  // Medical simulation follows versioned updates, without re-reading megabytes of immutable geometry.
+  const reply = await call("state", session); expect(reply.status).toBe(200);
+  const snapshot = await reply.json() as LiveSnapshot;
+  if (snapshot.world) cachedWorld = snapshot.world;
+  return { ...snapshot, world: snapshot.world ?? cachedWorld! };
 }
 async function act(session: Session, command: unknown): Promise<LiveSnapshot> {
   const reply = await call("action", session, command); expect(reply.status).toBe(200); return reply.json() as Promise<LiveSnapshot>;
@@ -48,7 +54,7 @@ function setBody(session: Session, body: HealthState, medicine = createMedicalIn
   });
 }
 beforeEach(async () => {
-  folder = await mkdtemp(join(tmpdir(), "prapor-health-")); dbPath = join(folder, "live.sqlite"); time = 1_800_000_000_000;
+  folder = await mkdtemp(join(tmpdir(), "prapor-health-")); dbPath = join(folder, "live.sqlite"); time = 1_800_000_000_000; cachedWorld = undefined;
   service = createLiveService(options());
   editStorage(db => db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify({ version: 3, geometryVersion: getLiveMap("perimeter").version, startedAt: time, events: [],
     scavs: [{ id: "scav-0", mapId: "perimeter", kind: "scav", name: "Косой", appearance: 0, faction: "scavs", role: "guard", home: { x: 127, y: 0 }, route: [{ x: 127, y: 0 }], routeIndex: 0, spawnIndex: 0, x: 127, y: 0, health: 100, body: createHealth(), healthAt: time, action: "idle", safeUntil: 0, respawnAt: 0, nextMove: time + 1_000_000, nextAttack: time + 1_000_000 }],

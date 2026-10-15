@@ -19,6 +19,7 @@ interface Session { cookie: string; id: string; accountId?: string }
 const options = () => ({ dbPath, secureCookies: true, allowedOrigins: [ORIGIN], now: () => time, random: () => 0, automaticTicks: false, accounts });
 function request(path: string, method = "GET", body?: unknown, session?: Session, headers: Record<string, string> = {}): Request {
   return new Request(`${ORIGIN}${path}`, { method, headers: {
+    ...(path === "action" && cachedWorld ? { "x-prapor-world-version": cachedWorld.version } : {}),
     ...(method !== "GET" ? { origin: ORIGIN, "content-type": "application/json" } : {}),
     ...(session ? { cookie: session.cookie, "x-prapor-live": session.id } : {}),
     ...(session?.accountId ? { "x-prapor-account": session.accountId } : {}), ...headers,
@@ -46,7 +47,8 @@ async function state(session: Session): Promise<LiveSnapshot> {
 async function act(session: Session, command: LiveCommand): Promise<LiveSnapshot> {
   const reply = await call("action", "POST", command, session);
   expect(reply.status).toBe(200);
-  return reply.json() as Promise<LiveSnapshot>;
+  const snapshot = await reply.json() as LiveSnapshot;
+  return { ...snapshot, world: snapshot.world ?? cachedWorld! };
 }
 async function advance(ms: number, sessions: Session[] = []): Promise<void> {
   for (let step = 0; step < ms; step += 250) {

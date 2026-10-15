@@ -56,6 +56,8 @@ const options = () => ({ dbPath, now: () => time, random: () => 0, automaticTick
 async function call(path: string, body?: unknown, session?: Session): Promise<Response> {
   const response = await service.fetch(new Request(`${ORIGIN}/api/live/${path}`, {
     method: body === undefined ? 'GET' : 'POST', headers: {
+      // The gallery-sized geometry is already known; paced movement uses real cached client updates.
+      ...(["state", "action"].includes(path) ? { "x-prapor-world-version": map.version } : {}),
       ...(session ? { cookie: session.cookie, 'x-prapor-live': session.id } : {}),
       ...(body === undefined ? {} : { origin: ORIGIN, 'content-type': 'application/json' }),
     }, ...(body === undefined ? {} : { body: JSON.stringify(body) }),
