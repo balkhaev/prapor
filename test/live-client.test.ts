@@ -4,6 +4,7 @@ import { LIVE_TERRAIN_CODES, type LiveSnapshot } from '../src/game/live';
 import { getLiveMap } from '../src/game/live-maps';
 import { createHealth, createMedicalInventory } from '../src/game/health';
 import { FACTORY_KITS } from '../src/game/modules';
+import { LIVE_WORLD_LIMITS } from '../src/game/live-world-limits';
 
 const fixture = (): LiveSnapshot => {
   const { npcSpawns, lootSpawns: _loot, ...world } = structuredClone(getLiveMap('perimeter'));
@@ -141,7 +142,7 @@ describe('live wire parser', () => {
       value => { value.world.paths![0]!.points[0]!.x = value.world.width; },
       value => { value.world.paths![0]!.points[0]!.y = -1; },
       value => { value.world.paths![0]!.points = Array.from({ length: 257 }, () => ({ x: 1, y: 1 })); },
-      value => { value.world.paths = Array.from({ length: 385 }, (_, index) => ({ ...value.world.paths![0]!, id: `path-${index}` })); },
+      value => { value.world.paths = Array.from({ length: LIVE_WORLD_LIMITS.paths + 1 }, (_, index) => ({ ...value.world.paths![0]!, id: `path-${index}` })); },
       value => { Object.assign(value.world.obstacles[0]!, { kind: 'lava' }); },
       value => { Object.assign(value.world.zones[0]!, { terrain: 'private-loot' }); },
     ];

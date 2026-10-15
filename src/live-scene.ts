@@ -3,7 +3,7 @@ import { PixelCombatAnimation, pixelFacing, samplePixelMotion, stopPixelMotion, 
 import { liveDropLabel, liveLootTotals } from './live-loot-ui';
 import { getBoss } from './game/bosses';
 import { WEAPON_BY_ID } from './game/data';
-import { buildingNeedsCutaway, buildingPalette, sceneBuildings, SceneryIndex } from './live-map-art';
+import { buildingNeedsCutaway, buildingPalette, liveMapRasterPlan, paintMapFootprints, sceneBuildings, SceneryIndex } from './live-map-art';
 import { PixelRaidRenderer, pixelSpriteRect, type PixelDetail } from './pixel-renderer';
 import { PixelContainerArt } from './pixel-containers';
 import { PixelActorArt, PIXEL_ACTOR_ANCHOR, PIXEL_ACTOR_NATIVE_SIZE } from './pixel-actors';
@@ -75,6 +75,8 @@ export class LiveScene {
   private buildingForObstacle = new Map<number, LiveCityBuilding>();
   private buildingWalls = new Map<string, LiveObstacle[]>();
   private scenery = new SceneryIndex<StaticScenery>([]);
+  private lampScenery = new SceneryIndex<LiveWorldProp>([]);
+  private siteScenery = new SceneryIndex<NonNullable<LiveWorld['citySites']>[number]>([]);
   private propArt = new PixelPropArt();
   private buildingArt = new PixelBuildingArt();
   private buildingDetail: PixelDetail = 64;
@@ -89,16 +91,17 @@ export class LiveScene {
   private lampProps: LiveWorldProp[] = [];
   private reducedMotion = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
 
-  constructor(private host: HTMLElement, _command: (command: LiveCommand) => void, private select: (id: string) => void) {
+  constructor(private host: HTMLElement, _command: (command: LiveCommand) => void, private select: (id: string) => void, private options: { observer?: boolean; controls?: boolean } = {}) {
     const context = this.canvas.getContext('2d');
     if (!context) throw new Error('Canvas unavailable');
     this.context = context;
     this.renderer = new PixelRaidRenderer(context);
     this.canvas.setAttribute('data-renderer', 'pixel-isometric');
     this.canvas.tabIndex = 0;
-    this.canvas.setAttribute('aria-label', 'Карта рейда. Боец действует автоматически. Выбери бойца для наблюдения, потяни карту для обзора. Колесо мыши меняет масштаб.');
+    this.canvas.setAttribute('aria-label', options.observer ? 'Обзор города. Потяни карту для перемещения, колесо мыши меняет масштаб. Нажми на квартал для приближения.' : 'Карта рейда. Боец действует автоматически. Выбери бойца для наблюдения, потяни карту для обзора. Колесо мыши меняет масштаб.');
     this.canvas.setAttribute('role', 'application');
     this.controls.className = 'live-camera';
+    this.controls.hidden = options.controls === false;
     this.controls.innerHTML = '<button data-live-zoom="out" aria-label="Отдалить карту">−</button><button data-live-zoom="follow" aria-label="Следовать за своим бойцом">Боец</button><button data-live-zoom="overview" aria-label="Показать всю карту">Периметр</button><button data-live-zoom="city" aria-label="Показать город" hidden>Город</button><button data-live-zoom="in" aria-label="Приблизить карту">+</button>';
     host.append(this.canvas, this.controls);
     this.observer = new ResizeObserver(() => this.resize());
@@ -117,7 +120,7 @@ export class LiveScene {
 
   show(): void { if (this.active) return; this.active = true; this.resize(); this.animate(); }
   hide(): void { this.active = false; cancelAnimationFrame(this.frame); this.frame = 0; this.weatherCache.clear(); }
-  clear(): void { this.snapshot = null; this.weatherCache.clear(); this.clearWetGround(); this.motions.clear(); this.selected = null; this.routePoiIds = []; this.waypointTargets = []; this.hitTargets = []; this.combatAnimation.clear(); this.weaponMounts.clear(); this.shotRigs.clear(); this.paint(); }
+  clear(): void { this.snapshot = null; this.weatherCache.clear(); this.clearWorldArt(); this.motions.clear(); this.selected = null; this.routePoiIds = []; this.waypointTargets = []; this.hitTargets = []; this.combatAnimation.clear(); this.weaponMounts.clear(); this.shotRigs.clear(); this.paint(); }
   setSelected(id: string | null): void { this.selected = id; }
   /** Inspect public architecture without issuing a movement command. */
   focusPoint(point: LivePoint): void {
@@ -126,6 +129,20 @@ export class LiveScene {
     this.camera = { ...point }; this.following = false; this.overview = false; this.cityOverview = false;
     this.zoom = this.width < 480 ? .75 : .85; this.waypointTargets = []; this.hitTargets = [];
     this.updateCameraControls(); this.canvas.focus({ preventScroll: true });
+  }
+  /** Camera-only controls are also used by the public, read-only city gallery. */
+  showOverview(city = false): void {
+    if (!this.snapshot) return;
+    this.following = false; this.overview = true; this.cityOverview = city && !!this.snapshot.world.city;
+    this.waypointTargets = []; this.hitTargets = []; this.updateCameraControls(); this.paint();
+  }
+  zoomBy(factor: number): void {
+    if (!this.snapshot || !Number.isFinite(factor) || factor <= 0) return;
+    const base = this.width < 480 ? 48 : 64, scale = this.viewTile(this.snapshot.world) / base;
+    if (this.overview) { const frame = this.viewFrame(this.snapshot.world); this.camera = { x: frame.x + frame.width / 2, y: frame.y + frame.height / 2 }; }
+    this.overview = false; this.cityOverview = false;
+    this.zoom = clamp(scale * factor, .005, this.width < 480 ? 2.2 : 2.8);
+    this.waypointTargets = []; this.hitTargets = []; this.updateCameraControls(); this.paint();
   }
   setRoute(poiIds: readonly string[]): void {
     if (poiIds.length === this.routePoiIds.length && poiIds.every((id, index) => id === this.routePoiIds[index])) return;
@@ -153,7 +170,19 @@ export class LiveScene {
     this.snapshot = snapshot;
     if (!this.active) this.paint();
   }
-  destroy(): void { this.hide(); this.clearWetGround(); this.lightBuffer.clear(); this.lampProps = []; this.observer.disconnect(); this.overlayObserver.disconnect(); this.canvas.removeEventListener('click', this.click); this.canvas.removeEventListener('pointerdown', this.pointerDown); this.canvas.removeEventListener('pointermove', this.pointerMove); this.canvas.removeEventListener('pointerup', this.pointerUp); this.canvas.removeEventListener('pointercancel', this.pointerCancel); this.canvas.removeEventListener('wheel', this.wheel); this.controls.removeEventListener('click', this.zoomClick); this.canvas.remove(); this.controls.remove(); }
+  destroy(): void { this.hide(); this.clear(); this.lightBuffer.clear(); this.observer.disconnect(); this.overlayObserver.disconnect(); this.canvas.removeEventListener('click', this.click); this.canvas.removeEventListener('pointerdown', this.pointerDown); this.canvas.removeEventListener('pointermove', this.pointerMove); this.canvas.removeEventListener('pointerup', this.pointerUp); this.canvas.removeEventListener('pointercancel', this.pointerCancel); this.canvas.removeEventListener('wheel', this.wheel); this.controls.removeEventListener('click', this.zoomClick); this.canvas.remove(); this.controls.remove(); }
+
+  private clearWorldArt(): void {
+    for (const bitmap of [this.terrainTexture, this.minimapTerrain, this.overviewTerrain]) if (bitmap) { bitmap.width = 0; bitmap.height = 0; }
+    this.terrainTexture = this.minimapTerrain = this.overviewTerrain = null;
+    this.terrain = []; this.walkableGround = new Uint8Array();
+    this.surfaceMasks = { road: new Uint8Array(), indoor: new Uint8Array(), roadRuns: [] };
+    this.scenery = new SceneryIndex<StaticScenery>([]); this.lampScenery = new SceneryIndex<LiveWorldProp>([]);
+    this.siteScenery = new SceneryIndex<NonNullable<LiveWorld['citySites']>[number]>([]);
+    this.buildingForObstacle.clear(); this.buildingWalls.clear(); this.cutawayBuildings.clear();
+    this.propArt.clear(); this.buildingArt.clear(); this.obstacleArt.clear(); this.actorArt.clear(); this.containerArt.clear();
+    this.clearWetGround(); this.lampProps = [];
+  }
 
   private resize(): void {
     const box = this.host.getBoundingClientRect();
@@ -167,12 +196,8 @@ export class LiveScene {
     const action = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-live-zoom]')?.dataset.liveZoom;
     if (!action) return;
     if (action === 'follow') { this.following = true; this.overview = false; this.cityOverview = false; this.zoom = 1; }
-    else if (action === 'overview' || action === 'city' && this.snapshot?.world.city) { this.following = false; this.overview = true; this.cityOverview = action === 'city'; }
-    else {
-      const scale = this.overview && this.snapshot ? this.viewTile(this.snapshot.world) / (this.width < 480 ? 48 : 64) : this.zoom;
-      if (this.overview && this.snapshot) { const frame = this.viewFrame(this.snapshot.world); this.camera = { x: frame.x + frame.width / 2, y: frame.y + frame.height / 2 }; }
-      this.overview = false; this.cityOverview = false; this.zoom = clamp(scale * (action === 'in' ? 1.25 : .8), .02, this.width < 480 ? 2.2 : 2.8);
-    }
+    else if (action === 'overview' || action === 'city' && this.snapshot?.world.city) this.showOverview(action === 'city');
+    else this.zoomBy(action === 'in' ? 1.25 : .8);
     this.waypointTargets = []; this.hitTargets = []; this.updateCameraControls();
     this.canvas.focus({ preventScroll: true });
   };
@@ -209,7 +234,7 @@ export class LiveScene {
     const rect = this.canvas.getBoundingClientRect(), x = event.clientX - rect.left, y = event.clientY - rect.top;
     const before = this.unproject(x, y);
     const base = this.width < 480 ? 48 : 64;
-    this.zoom = clamp(this.viewTile(this.snapshot.world) / base * Math.exp(-clamp(event.deltaY, -120, 120) * .002), .02, this.width < 480 ? 2.2 : 2.8);
+    this.zoom = clamp(this.viewTile(this.snapshot.world) / base * Math.exp(-clamp(event.deltaY, -120, 120) * .002), .005, this.width < 480 ? 2.2 : 2.8);
     this.overview = false; this.cityOverview = false;
     if (!this.following) {
       this.tile = base * this.zoom;
@@ -257,26 +282,30 @@ export class LiveScene {
     return { x: (dx + dy) / 2 + this.camera.x, y: (dy - dx) / 2 + this.camera.y };
   }
   private cacheTerrain(world: LiveWorld): void {
+    this.clearWorldArt();
     const zones = [...world.zones].reverse();
-    this.terrain = [];
+    this.terrain = new Array<LiveTerrain>(world.width * world.height);
     for (let y = 0; y < world.height; y++) for (let x = 0; x < world.width; x++) {
       const code = world.terrainRows?.[y]?.[x] as keyof typeof LIVE_TERRAIN_CODES | undefined;
-      if (code) { this.terrain.push(LIVE_TERRAIN_CODES[code]); continue; }
+      if (code) { this.terrain[y * world.width + x] = LIVE_TERRAIN_CODES[code]; continue; }
       const zone = zones.find(zone => x >= zone.x && x < zone.x + zone.width && y >= zone.y && y < zone.y + zone.height);
       const district = world.districts.find(district => x >= district.x && x < district.x + district.width && y >= district.y && y < district.y + district.height);
-      this.terrain.push(zone?.terrain ?? (district?.theme === 'forest' ? 'forest' : district?.theme === 'industrial' ? 'yard' : 'concrete'));
+      this.terrain[y * world.width + x] = zone?.terrain ?? (district?.theme === 'forest' ? 'forest' : district?.theme === 'industrial' ? 'yard' : 'concrete');
     }
     this.walkableGround = Uint8Array.from(this.terrain, terrain => Number(terrain !== 'water'));
     this.buildingForObstacle.clear(); this.buildingWalls.clear();
     const buildings = sceneBuildings(world);
+    const buildingIndex = new SceneryIndex(buildings, world.chunkSize);
     for (const [index, obstacle] of world.obstacles.entries()) {
       for (let y = obstacle.y; y < obstacle.y + obstacle.height; y++) for (let x = obstacle.x; x < obstacle.x + obstacle.width; x++) this.walkableGround[y * world.width + x] = 0;
       const cx = obstacle.x + obstacle.width / 2, cy = obstacle.y + obstacle.height / 2;
-      const building = buildings.find(building => cx >= building.x && cy >= building.y && cx < building.x + building.width && cy < building.y + building.height
+      const building = buildingIndex.visible(obstacle).find(building => cx >= building.x && cy >= building.y && cx < building.x + building.width && cy < building.y + building.height
         && obstacle.x >= building.x && obstacle.y >= building.y && obstacle.x + obstacle.width <= building.x + building.width && obstacle.y + obstacle.height <= building.y + building.height);
       if (building) {
         this.buildingForObstacle.set(index, building);
-        if (obstacle.kind === 'wall') { const walls = this.buildingWalls.get(building.id) ?? []; walls.push(obstacle); this.buildingWalls.set(building.id, walls); }
+        if (obstacle.kind === 'wall' || obstacle.kind === 'building' && (obstacle.width < building.width || obstacle.height < building.height)) {
+          const walls = this.buildingWalls.get(building.id) ?? []; walls.push(obstacle); this.buildingWalls.set(building.id, walls);
+        }
       }
     }
     const scenery: StaticScenery[] = [];
@@ -287,8 +316,10 @@ export class LiveScene {
     for (const prop of world.props ?? []) scenery.push({ ...prop, type: 'prop', prop, depth: prop.x + prop.y + (prop.width + prop.height) / 2 });
     for (const building of buildings) scenery.push({ ...building, type: 'architecture', building, depth: building.x + building.y + building.width + building.height - 1.1 });
     this.scenery = new SceneryIndex(scenery, world.chunkSize); this.propArt.clear(); this.buildingArt.clear(); this.obstacleArt.clear(); this.actorArt.clear(); this.containerArt.clear(); this.cutawayBuildings.clear();
+    this.siteScenery = new SceneryIndex(world.citySites ?? [], world.chunkSize);
     this.surfaceMasks = buildSurfaceMasks(world, this.terrain, this.walkableGround, buildings);
     this.lampProps = (world.props ?? []).filter(prop => prop.kind === 'lamp');
+    this.lampScenery = new SceneryIndex(this.lampProps, world.chunkSize);
     this.wetLamps = this.lampProps.flatMap(prop => {
       const origin = pixelIso(prop.x, prop.y);
       return propLampSources(prop).map(lamp => ({ x: origin.x + lamp.x, y: origin.y + lamp.y, headY: origin.y + lamp.headY, radius: lamp.radius }));
@@ -305,26 +336,19 @@ export class LiveScene {
       this.paintSiteGround(world, ground); this.paintLandscape(world, ground); this.paintGroundDetails(world, ground); ground.restore();
     }
     this.terrainTexture = texture;
-    const minimap = document.createElement('canvas'); minimap.width = world.width * 4; minimap.height = world.height * 4;
+    const budget = liveMapRasterPlan(world.width, world.height);
+    const minimap = document.createElement('canvas'); minimap.width = budget.minimap.width; minimap.height = budget.minimap.height;
     const map = minimap.getContext('2d');
     if (map) {
-      map.drawImage(texture, 0, 0, minimap.width, minimap.height); map.save(); map.scale(4, 4);
-      for (const obstacle of world.obstacles) {
-        if (obstacle.kind === 'water' || obstacle.kind === 'tree' || obstacle.propId) continue;
-        map.fillStyle = obstacle.kind === 'building' ? '#bab7a0b0' : '#9b9e7c99'; map.fillRect(obstacle.x, obstacle.y, obstacle.width, obstacle.height);
-      }
-      for (const building of buildings) { map.fillStyle = buildingPalette(building)[2]; map.fillRect(building.x, building.y, building.width, building.height); map.strokeStyle = '#2e4b37bb'; map.lineWidth = .16; map.strokeRect(building.x, building.y, building.width, building.height); }
-      for (const prop of world.props ?? []) {
-        if (!prop.blocking && !['garden', 'playground', 'planter', 'tree', 'shrub'].includes(prop.kind)) continue;
-        map.fillStyle = ['tree', 'shrub', 'garden', 'planter'].includes(prop.kind) ? '#47643a9a' : prop.kind === 'car' || prop.kind === 'van' || prop.kind === 'truck' ? '#a2ada097' : '#747f6aaa';
-        map.fillRect(prop.x, prop.y, prop.width, prop.height);
-      }
+      map.imageSmoothingEnabled = false; map.drawImage(texture, 0, 0, minimap.width, minimap.height);
+      map.save(); map.scale(budget.minimap.scale, budget.minimap.scale);
+      paintMapFootprints(map, world, buildings);
       map.restore();
     }
     this.minimapTerrain = minimap;
-    const overview = document.createElement('canvas'); overview.width = (world.width + world.height) * 4; overview.height = (world.width + world.height) * 2;
+    const overview = document.createElement('canvas'); overview.width = budget.overview.width; overview.height = budget.overview.height;
     const overviewContext = overview.getContext('2d');
-    if (overviewContext) { overviewContext.save(); overviewContext.transform(4, 2, -4, 2, world.height * 4, 0); overviewContext.drawImage(texture, 0, 0, world.width, world.height); overviewContext.restore(); }
+    if (overviewContext) { const scale = budget.overview.scale; overviewContext.imageSmoothingEnabled = false; overviewContext.save(); overviewContext.transform(scale, scale / 2, -scale, scale / 2, world.height * scale, 0); overviewContext.drawImage(minimap, 0, 0, world.width, world.height); overviewContext.restore(); }
     this.overviewTerrain = overview;
   }
   /** All surface marks are cached once; free ground remains free ground. */
@@ -334,6 +358,11 @@ export class LiveScene {
       const material = this.terrain[y * world.width + x]!, hash = (Math.imul(x + 107, 73856093) ^ Math.imul(y + 29, 19349663)) >>> 0;
       const px = x + .15 + (hash % 89) / 130, py = y + .15 + ((hash >>> 10) % 89) / 130;
       if (!this.walkableGround[y * world.width + x] && material !== 'water' || hash % 3) continue;
+      // Most world cells have no authored mark. Avoid a clip/save pair for each of the million cells.
+      const detail = material === 'concrete' ? hash % 13 === 0 || hash % 47 === 0 : material === 'road' ? hash % 17 === 0 || hash % 31 === 0
+        : material === 'yard' || material === 'path' || material === 'grass' || material === 'forest' ? hash % 11 === 0
+          : material === 'sand' ? hash % 5 === 0 : material === 'water';
+      if (!detail) continue;
       c.save(); c.beginPath(); c.rect(x, y, 1, 1); c.clip();
       if (material === 'concrete') {
         if (hash % 13 === 0) {
@@ -371,10 +400,19 @@ export class LiveScene {
     const sites = world.citySites ?? [];
     if (!sites.length) return;
     c.save(); c.beginPath();
-    const included = new Set<number>();
+    const included = new Uint8Array(world.width * world.height);
     for (const site of sites) for (let y = site.y; y < site.y + site.height; y++) for (let x = site.x; x < site.x + site.width; x++) {
       const index = y * world.width + x;
-      if (this.walkableGround[index] && !included.has(index)) { c.rect(x, y, 1, 1); included.add(index); }
+      if (this.walkableGround[index]) included[index] = 1;
+    }
+    // Compact union runs preserve exact free cells without a path segment/Set entry per city cell.
+    for (let y = 0; y < world.height; y++) {
+      let start = -1;
+      for (let x = 0; x <= world.width; x++) {
+        const inside = x < world.width && included[y * world.width + x];
+        if (inside && start < 0) start = x;
+        else if (!inside && start >= 0) { c.rect(start, y, x - start, 1); start = -1; }
+      }
     }
     c.clip();
     const floorColors: Record<LiveCityBuilding['kind'], string> = { apartment: '#b8a68eaa', shop: '#a6ae94aa', workshop: '#879ca0b8', garage: '#87908aba', service: '#babda9b8' };
@@ -403,9 +441,9 @@ export class LiveScene {
     }
     c.restore();
   }
-  private paintDoorways(world: LiveWorld): void {
+  private paintDoorways(world: LiveWorld, area: LabelBox): void {
     if (this.overview || this.tile < 24) return;
-    for (const site of world.citySites ?? []) for (const building of site.buildings) for (const entry of building.entrances) {
+    for (const site of this.siteScenery.visible(area)) for (const building of site.buildings) for (const entry of building.entrances) {
       if (!this.walkableGround[entry.y * world.width + entry.x]) continue;
       const point = this.project(entry);
       if (point.x < -10 || point.x > this.width + 10 || point.y < -10 || point.y > this.height + 10) continue;
@@ -538,7 +576,9 @@ export class LiveScene {
     const corners = [this.unproject(-this.tile, -this.tile), this.unproject(this.width + this.tile, -this.tile), this.unproject(-this.tile, this.height + this.tile), this.unproject(this.width + this.tile, this.height + this.tile)];
     const minX = clamp(Math.floor(Math.min(...corners.map(point => point.x))), 0, world.width - 1), maxX = clamp(Math.ceil(Math.max(...corners.map(point => point.x))), 0, world.width - 1);
     const minY = clamp(Math.floor(Math.min(...corners.map(point => point.y))), 0, world.height - 1), maxY = clamp(Math.ceil(Math.max(...corners.map(point => point.y))), 0, world.height - 1);
-    if (this.overviewTerrain && (this.overview || this.tile < 16)) {
+    const distant = this.tile < 6;
+    const area = { x: minX - 7, y: minY - 7, width: maxX - minX + 14, height: maxY - minY + 14 };
+    if (this.overviewTerrain && distant) {
       const anchor = this.project({ x: -.5, y: -.5 });
       c.drawImage(this.overviewTerrain, anchor.x - world.height * this.tile / 2, anchor.y, (world.width + world.height) * this.tile / 2, (world.width + world.height) * this.tile / 4);
     } else if (this.terrainTexture) {
@@ -552,7 +592,7 @@ export class LiveScene {
       c.restore();
     }
     this.paintWetGround(climate, { x: minX - 1, y: minY - 1, width: maxX - minX + 3, height: maxY - minY + 3 });
-    this.paintDoorways(world);
+    this.paintDoorways(world, area);
     for (const [index, extract] of world.extracts.entries()) {
       const p = this.project(extract); this.polygon(this.quad(extract.x - .7, extract.y - .7, 1.4, 1.4), `${T.extract}55`, T.extract);
       const flagHeight = this.overview ? 12 : 40;
@@ -560,7 +600,8 @@ export class LiveScene {
       this.polygon([{ x: p.x, y: p.y - flagHeight }, { x: p.x + flagHeight * .6, y: p.y - flagHeight * .87 }, { x: p.x, y: p.y - flagHeight * .72 }], T.extract); this.label(`ВЫХОД ${index + 1}`, p.x, p.y + (this.overview ? 12 : 21), T.text, this.overview ? 7 : 10);
     }
     const objects: { depth: number; paint: () => void }[] = [];
-    const visible = this.scenery.visible({ x: minX - 7, y: minY - 7, width: maxX - minX + 14, height: maxY - minY + 14 });
+    // Far views already contain every real footprint. Never sort thousands of invisible detail sprites.
+    const visible = distant ? [] : this.scenery.visible(area);
     const activity: LivePoint[] = [...snapshot.drops];
     for (const entity of snapshot.entities) {
       activity.push(entity);
@@ -589,18 +630,18 @@ export class LiveScene {
       objects.push({ depth: point.x + point.y + activityDepth + .1, paint: () => this.paintEntity(entity, now) });
     }
     objects.sort((a, b) => a.depth - b.depth).forEach(object => object.paint());
-    this.paintLighting(climate);
+    this.paintLighting(climate, area, distant);
     paintCanvasSceneWeather(c, this.weatherCache.get({ width: this.width, height: this.height, timeMs: climate.timeMs,
       rain: climate.rain, fog: climate.fog, wind: climate.wind, reducedMotion: this.reducedMotion?.matches }));
     this.paintIntent(snapshot, now);
-    this.paintLandmarks(world);
+    this.paintLandmarks(world, area);
     this.paintWaypoints(world);
     this.paintCombat(now);
     this.minimap(snapshot);
   }
-  private paintLighting(climate: ReturnType<typeof readSceneClimate>): void {
+  private paintLighting(climate: ReturnType<typeof readSceneClimate>, area: LabelBox, distant: boolean): void {
     const scale = this.tile / PIXEL_TILE;
-    const lamps = this.lampProps.flatMap(prop => {
+    const lamps = (distant ? [] : this.lampScenery.visible(area)).flatMap(prop => {
       const origin = this.project({ x: prop.x - .5, y: prop.y - .5 });
       return propLampSources(prop).map(lamp => ({ x: origin.x + lamp.x * scale, y: origin.y + lamp.y * scale, headY: origin.y + lamp.headY * scale, radius: lamp.radius * scale }));
     });
@@ -623,7 +664,7 @@ export class LiveScene {
     this.context.save(); this.context.translate(origin.x, origin.y); this.context.scale(scale, scale);
     paintCanvasWetSurfaces(this.context, frame); this.context.restore();
   }
-  private paintLandmarks(world: LiveWorld): void {
+  private paintLandmarks(world: LiveWorld, area: LabelBox): void {
     const c = this.context, small = this.overview || this.tile < 12;
     // UI rendering follows the snapshot update. Read its final layout on the next paint,
     // then reuse these bounds until the overlay changes or the viewport is resized.
@@ -675,12 +716,12 @@ export class LiveScene {
       const p = this.project(district.labelPoint ?? { x: district.x + district.width / 2, y: district.y + district.height / 2 });
       placeLabel(district.name.toUpperCase(), { x: p.x, y: p.y - 24 }, this.width < 480 ? 11 : 14, T.text, true);
     }
-    if (small && this.cityOverview && world.city) for (const quarter of world.city.quarters) {
+    if (small && world.city && (this.cityOverview || !this.overview && this.tile >= 1.2)) for (const quarter of world.city.quarters) {
       const p = this.project({ x: quarter.x + quarter.width / 2, y: quarter.y + quarter.height / 2 });
       placeLabel(quarter.name, { x: p.x, y: p.y - 16 }, this.width < 480 ? 9 : 11, T.text, true);
     }
     const sitePoiIds = new Set<string>();
-    if (!this.overview && this.tile >= 12) for (const site of world.citySites ?? []) {
+    if (!this.overview && this.tile >= 12) for (const site of this.siteScenery.visible(area)) {
       const p = this.project({ x: site.courtyard.x + site.courtyard.width / 2, y: site.courtyard.y + site.courtyard.height / 2 });
       if (p.x < -50 || p.x > this.width + 50 || p.y < -30 || p.y > this.height + 30) continue;
       sitePoiIds.add(site.poiId);
@@ -698,7 +739,7 @@ export class LiveScene {
       if (p.x < -60 || p.x > this.width + 60 || p.y < -30 || p.y > this.height + 30) continue;
       if (small) {
         c.fillStyle = chosen ? T.self : poi.danger === 3 ? T.hostile : T.loot; c.fillRect(p.x - 2, p.y - 2, 4, 4);
-        if ((chosen || this.width >= 480 && labelCount < 12) && placeLabel(poi.name, { x: p.x, y: p.y + 13 }, chosen ? 10 : 8, chosen ? T.text : T.muted)) labelCount++;
+        if ((chosen || !this.cityOverview && this.width >= 480 && labelCount < 12) && placeLabel(poi.name, { x: p.x, y: p.y + 13 }, chosen ? 10 : 8, chosen ? T.text : T.muted)) labelCount++;
       } else if (this.tile > 30 && !sitePoiIds.has(poi.id)) placeLabel(poi.name, p, chosen ? 11 : 9, chosen ? T.text : T.text);
     }
   }
@@ -885,7 +926,7 @@ export class LiveScene {
     }
     c.restore();
     c.font = '700 8px Manrope, sans-serif'; c.textAlign = 'left';
-    for (const [index, name, color] of [[0, 'Ты', T.self], [1, 'Цель', T.self], [2, 'Выход', T.extract]] as const) {
+    for (const [index, name, color] of this.options.observer ? [] : [[0, 'Ты', T.self], [1, 'Цель', T.self], [2, 'Выход', T.extract]] as const) {
       const px = x + index * width / 3;
       if (index === 1) diamond({ x: px + 3, y: y + height + 12 }, 2.5, color);
       else { c.fillStyle = color; c.fillRect(px + 1, y + height + 10, 4, 4); }

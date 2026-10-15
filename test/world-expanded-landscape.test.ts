@@ -1,5 +1,6 @@
+// These fixtures protect the preserved G9 city core; full G10 coverage is in world-metropolis tests.
 import { describe, expect, test } from 'bun:test';
-import { generateLiveWorld, validateGeneratedWorld } from '../src/game/world-generation';
+import { generatePerimeterCore, validateGeneratedWorld } from '../src/game/world-generation';
 import { cityStreetPlan, regionalStreetPlan, regionalRailPlan } from '../src/game/world-landscape';
 import type { LiveLandscapePath, LivePoint } from '../src/game/live';
 
@@ -12,7 +13,7 @@ const onPath = (point: LivePoint, path: LiveLandscapePath): boolean => path.poin
 
 describe('authored district road hierarchy', () => {
   for (const seed of ['perimeter-alpha-01', 'outer-road-check', 'river-bank-check']) test(`parcels, banks and transport share a coherent plan for ${seed}`, () => {
-    const world = generateLiveWorld(seed), city = world.city!;
+    const world = generatePerimeterCore(seed), city = world.city!;
     expect(world.width).toBe(512); expect(world.height).toBe(512);
     expect(validateGeneratedWorld(world).chunks).toBe(256);
     expect(world.paths!.length).toBeLessThanOrEqual(384);

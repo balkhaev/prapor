@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { buildingFacadeCadence, buildingNeedsCutaway, buildingPalette, buildingWallHeight, paintPropModel, PropArtCache, sceneBuildings, SceneryIndex } from '../src/live-map-art';
+import { buildingFacadeCadence, buildingNeedsCutaway, buildingPalette, buildingWallHeight, liveMapRasterPlan, paintMapFootprints, paintPropModel, PropArtCache, sceneBuildings, SceneryIndex } from '../src/live-map-art';
 import type { LiveCityBuilding, LiveObstacle, LiveWorld, LiveWorldProp } from '../src/game/live';
 import { prefabObstacles } from '../src/game/world-prefabs';
 
@@ -32,6 +32,17 @@ describe('raid architecture visibility', () => {
     expect(buildingPalette(legacy)).toHaveLength(3);
     expect(buildingPalette({ ...legacy, kind: 'workshop' })).toEqual(buildingPalette({ ...building, facade: 'metal' }));
   });
+  test('authored open houses own their collider segments without acquiring duplicate solid roofs', () => {
+    const map = { chunkSize: 32, pois: [], citySites: [{ buildings: [building] }], obstacles: [
+      { x: 10, y: 12, width: 3, height: 1, kind: 'building' },
+      { x: 14, y: 12, width: 4, height: 1, kind: 'building' },
+      { x: 10, y: 13, width: 1, height: 5, kind: 'wall' },
+      { x: 80, y: 81, width: 7, height: 6, kind: 'building' },
+    ] } as unknown as LiveWorld;
+    const actual = sceneBuildings(map);
+    expect(actual).toHaveLength(2); expect(actual[0]).toEqual(building);
+    expect(actual[1]).toMatchObject({ x: 80, y: 81, width: 7, height: 6, id: 'solid-3' });
+  });
 });
 
 test('legacy hall roofs require all six exact perimeter pieces through rotation and shrinking', () => {
@@ -57,6 +68,16 @@ test('a POI bounds box and incomplete courtyard walls never acquire an invented 
 });
 
 describe('static map culling', () => {
+  test('metropolis views retain only nearby scenery across translated quarters and edges', () => {
+    const items = Array.from({ length: 15000 }, (_, id) => ({ id, x: id % 125 * 8, y: Math.floor(id / 125) * 8, width: id % 19 === 0 ? 14 : 2, height: 3 }));
+    const index = new SceneryIndex(items, 32);
+    for (const area of [{ x: 4, y: 7, width: 24, height: 30 }, { x: 720, y: 512, width: 43, height: 39 }, { x: 998, y: 944, width: 40, height: 50 }]) {
+      const expected = items.filter(item => item.x <= area.x + area.width && item.y <= area.y + area.height && item.x + item.width >= area.x && item.y + item.height >= area.y);
+      const visible = index.visible(area);
+      expect(visible.map(item => item.id).sort((a, b) => a - b)).toEqual(expected.map(item => item.id));
+      expect(visible.length).toBeLessThan(80);
+    }
+  });
   test('a spanning footprint is found at either end and is returned once across several chunks', () => {
     const wide = { x: 5, y: 6, width: 35, height: 3, id: 'railcar' }, nearby = { x: 2, y: 4, width: 1, height: 1, id: 'lamp' }, far = { x: 240, y: 240, width: 4, height: 4, id: 'truck' };
     const index = new SceneryIndex([wide, nearby, far]);
@@ -64,6 +85,34 @@ describe('static map culling', () => {
     expect(index.visible({ x: 0, y: 0, width: 44, height: 30 })).toHaveLength(2);
     expect(index.visible({ x: 100, y: 100, width: 30, height: 20 })).toEqual([]);
     expect(index.visible({ x: -10, y: -10, width: 12, height: 14 })).toEqual([nearby]);
+  });
+});
+
+describe('bounded city navigation art', () => {
+  test('1024-cell world keeps navigation bitmaps under 12 MiB with a correct isometric origin', () => {
+    for (const [width, height] of [[256, 256], [512, 512], [1024, 1024], [1024, 512], [512, 1024]] as const) {
+      const { minimap, overview } = liveMapRasterPlan(width, height);
+      expect(Math.max(minimap.width, minimap.height)).toBeLessThanOrEqual(1024);
+      expect(Math.max(overview.width, overview.height)).toBeLessThanOrEqual(2048);
+      expect(4 * (minimap.width * minimap.height + overview.width * overview.height)).toBeLessThanOrEqual(12 * 1024 * 1024);
+      const project = (x: number, y: number) => ({ x: (x - y + height) * overview.scale, y: (x + y) * overview.scale / 2 });
+      expect(project(0, height).x).toBe(0); expect(project(width, 0).x).toBe(overview.width);
+      expect(project(width, height).y).toBe(overview.height);
+      expect(minimap.width / width).toBe(minimap.height / height);
+    }
+    expect(liveMapRasterPlan(1024, 1024)).toEqual({ minimap: { width: 1024, height: 1024, scale: 1 }, overview: { width: 2048, height: 1024, scale: 1 } });
+  });
+  test('distant LOD contains real buildings and blocking props without inventing footprint or water cover', () => {
+    const fills: number[][] = [], roofs: number[][] = [];
+    const map = { width: 1024, height: 1024, obstacles: [{ x: 260, y: 264, width: 2, height: 4, kind: 'wall' }, { x: 500, y: 502, width: 10, height: 8, kind: 'water' }],
+      props: [{ x: 702, y: 108, width: 2, height: 1, kind: 'car', blocking: true }, { x: 703, y: 113, width: 1, height: 1, kind: 'lamp', blocking: false }] } as LiveWorld;
+    const buildings = [{ ...building, x: 840, y: 740 }, { ...building, id: 'west', x: 120, y: 360, width: 30, height: 15 }];
+    const before = structuredClone({ map, buildings });
+    const c = { fillRect: (...values: number[]) => fills.push(values), strokeRect: (...values: number[]) => roofs.push(values) } as unknown as CanvasRenderingContext2D;
+    paintMapFootprints(c, map, buildings);
+    expect(roofs).toEqual([[840, 740, 8, 6], [120, 360, 30, 15]]);
+    expect(fills).toEqual([[260, 264, 2, 4], [702, 108, 2, 1], ...roofs]);
+    expect({ map, buildings }).toEqual(before);
   });
 });
 

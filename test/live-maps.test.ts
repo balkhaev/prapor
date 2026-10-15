@@ -4,17 +4,19 @@ import type { LiveWorld } from '../src/game/live';
 import { createLiveNavigation } from '../server/live-navigation';
 
 describe('shared generated perimeter', () => {
-  test('one persistent world contains a central city, four connected districts and 256 streaming chunks', () => {
+  test('one persistent world contains a central city, four connected districts and 1024 streaming chunks', () => {
     expect(LIVE_MAPS).toHaveLength(1);
     const world = getLiveMap('perimeter');
     expect(world).toBe(LIVE_MAPS[0]!); expect(isLiveMapId('perimeter')).toBe(true); expect(isLiveMapId('customs')).toBe(false);
-    expect(world).toMatchObject({ width: 512, height: 512, chunkSize: 32, theme: 'mixed', city: { name: 'Ольховск', x: 112, y: 112, width: 288, height: 288 } });
-    expect(world.width / world.chunkSize * world.height / world.chunkSize).toBe(256);
+    expect(world).toMatchObject({ width: 1024, height: 1024, chunkSize: 32, theme: 'mixed', city: { name: 'Ольховск', x: 128, y: 128, width: 768, height: 768 } });
+    expect(world.width / world.chunkSize * world.height / world.chunkSize).toBe(1024);
     expect(world.districts.map(district => district.id).sort()).toEqual(['customs', 'depot', 'sawmill', 'village']);
-    expect(world.pois).toHaveLength(100);
-    expect(world.containers).toHaveLength(376);
-    expect(world.npcSpawns).toHaveLength(208);
-    expect(world.citySites).toHaveLength(24);
+    expect(world.pois).toHaveLength(199);
+    expect(world.containers).toHaveLength(1048);
+    expect(world.npcSpawns).toHaveLength(304);
+    expect(world.citySites).toHaveLength(120);
+    expect(world.city!.quarters).toHaveLength(16);
+    expect(world.citySites!.flatMap(site => site.buildings)).toHaveLength(742);
     expect(new Set(world.containers.map(container => container.kind))).toEqual(new Set(['duffel', 'jacket', 'toolbox', 'medbag', 'cabinet', 'crate']));
     expect(world.containers.every(container => container.searchMs >= 2000 && container.searchMs <= 5000)).toBe(true);
     for (const district of world.districts) {

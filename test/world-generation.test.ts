@@ -1,5 +1,6 @@
+// These fixtures protect the preserved G9 city core; full G10 coverage is in world-metropolis tests.
 import { describe, expect, test } from 'bun:test';
-import { generateLiveWorld, LIVE_WORLD_SEED, validateGeneratedWorld, worldChunks } from '../src/game/world-generation';
+import { generatePerimeterCore, LIVE_WORLD_SEED, validateGeneratedWorld, worldChunks } from '../src/game/world-generation';
 import type { LiveMapDefinition } from '../src/game/live-maps';
 import { hasLiveLineOfSight, isLiveWalkable } from '../src/game/live-maps';
 import { createLiveNavigation } from '../server/live-navigation';
@@ -262,16 +263,16 @@ function inspect(world: LiveMapDefinition): void {
 
 describe('deterministic world generation', () => {
   test('seed and version reproduce the same geometry and stable anchor identifiers', () => {
-    const first = generateLiveWorld('reproducible-seed'), second = generateLiveWorld('reproducible-seed');
+    const first = generatePerimeterCore('reproducible-seed'), second = generatePerimeterCore('reproducible-seed');
     expect(second).toEqual(first); expect(second).not.toBe(first);
-    const other = generateLiveWorld('another-seed');
+    const other = generatePerimeterCore('another-seed');
     expect(other.version).not.toBe(first.version); expect(other.obstacles).not.toEqual(first.obstacles);
     expect(first).toMatchObject({ id: 'perimeter', width: 512, height: 512, chunkSize: 32 });
     expect(first.generatorVersion).toBeGreaterThan(0);
   });
   test('POI footprints and placement are independent of streaming chunk origins', () => {
     for (const seed of ['organic-layout', 'another-layout', 'district-roads']) {
-      const world = generateLiveWorld(seed);
+      const world = generatePerimeterCore(seed);
       expect(world.generatorVersion).toBe(9);
       expect(world.pois).toHaveLength(100); expect(world.containers).toHaveLength(376); expect(world.npcSpawns).toHaveLength(208);
       expect(new Set(world.pois.map(poi => `${poi.width}x${poi.height}`)).size).toBeGreaterThanOrEqual(4);
@@ -282,18 +283,18 @@ describe('deterministic world generation', () => {
   });
   test('one hundred seeds keep every interior, route, loot anchor and extraction connected and bounded', () => {
     for (let seed = 0; seed < 100; seed++) {
-      try { inspect(generateLiveWorld(`seed-${seed}`)); }
+      try { inspect(generatePerimeterCore(`seed-${seed}`)); }
       catch (cause) { throw new Error(`Generated world seed-${seed} failed validation: ${cause instanceof Error ? cause.message : String(cause)}`, { cause }); }
     }
   }, 180_000);
   test('default and seed-nine city guidance retains connected stops and an accessible first supply', () => {
-    for (const seed of [LIVE_WORLD_SEED, 'seed-9']) inspect(generateLiveWorld(seed));
-    const world = generateLiveWorld('seed-9'), firstForestSupplyId = world.routes!.find(route => route.id === 'route-sawmill-loot')!.poiIds[0]!, firstForestSupply = world.pois.find(poi => poi.id === firstForestSupplyId)!;
+    for (const seed of [LIVE_WORLD_SEED, 'seed-9']) inspect(generatePerimeterCore(seed));
+    const world = generatePerimeterCore('seed-9'), firstForestSupplyId = world.routes!.find(route => route.id === 'route-sawmill-loot')!.poiIds[0]!, firstForestSupply = world.pois.find(poi => poi.id === firstForestSupplyId)!;
     expect(firstForestSupply.danger).toBe(1);
     expect(getLiveBossArena(world, 'lesnik').poiId).not.toBe(firstForestSupply.id);
   });
   test('architecture validation rejects a blocked doorway and a passage that jumps through its wall', () => {
-    const world = generateLiveWorld();
+    const world = generatePerimeterCore();
     expect(validateGeneratedWorld(world).containers).toBe(376);
     const firstBuilding = world.citySites![0]!.buildings[0]!, door = firstBuilding.entrances[0]!;
     const sideDoors = firstBuilding.entrances[0]!.y === firstBuilding.entrances[1]!.y;
@@ -338,13 +339,13 @@ describe('deterministic world generation', () => {
       ['poi-8-3', ['jacket', 'duffel', 'toolbox', 'crate']], ['poi-9-3', ['jacket', 'duffel', 'toolbox', 'cabinet']],
       ['poi-10-3', ['duffel', 'toolbox', 'crate', 'medbag']], ['poi-11-3', ['jacket', 'duffel', 'toolbox', 'cabinet']],
     ] as const;
-    const world = generateLiveWorld(LIVE_WORLD_SEED);
+    const world = generatePerimeterCore(LIVE_WORLD_SEED);
     const categories = { duffel: 'mixed', toolbox: 'tools', crate: 'provisions', medbag: 'medical', jacket: 'valuables', cabinet: 'intel' } as const;
     for (const [poiId, kinds] of legacy) kinds.forEach((kind, slot) => expect(world.containers.find(anchor => anchor.id === `${poiId}-${kind}-${slot}`)).toMatchObject({ poiId, kind, lootTable: categories[kind] }));
     expect(world.containers.filter(anchor => /^poi-(?:[0-9]|10|11)-[0-3]-/.test(anchor.id))).toHaveLength(192);
   });
   test('cached collision and visibility agree with map geometry, and navigation avoids occupied route cells', () => {
-    const world = generateLiveWorld('navigation-regression'), navigation = createLiveNavigation(world);
+    const world = generatePerimeterCore('navigation-regression'), navigation = createLiveNavigation(world);
     for (let index = 0; index < 400; index++) {
       const a = { x: index * 53 % world.width, y: index * 71 % world.height }, b = { x: (index * 31 + 17) % world.width, y: (index * 23 + 49) % world.height };
       expect(navigation.walkable(a)).toBe(isLiveWalkable(world, a)); expect(navigation.hasLineOfSight(a, b)).toBe(hasLiveLineOfSight(world, a, b));
@@ -361,7 +362,7 @@ describe('deterministic world generation', () => {
     expect(open.findPath({ x: 0, y: 0 }, { x: 3, y: 0 }, occupied)).toBeNull();
   });
   test('reused navigation searches retain shortest paths when direction, targets and occupied doorways change', () => {
-    const world = { ...generateLiveWorld('reused-navigation'), width: 16, height: 12, terrainRows: undefined, obstacles: [{ x: 6, y: 0, width: 1, height: 8 }, { x: 6, y: 9, width: 1, height: 3 }, { x: 10, y: 3, width: 1, height: 9 }] };
+    const world = { ...generatePerimeterCore('reused-navigation'), width: 16, height: 12, terrainRows: undefined, obstacles: [{ x: 6, y: 0, width: 1, height: 8 }, { x: 6, y: 9, width: 1, height: 3 }, { x: 10, y: 3, width: 1, height: 9 }] };
     const navigation = createLiveNavigation(world), corners = [{ x: 0, y: 0 }, { x: 15, y: 11 }, { x: 0, y: 11 }, { x: 15, y: 0 }];
     const shortest = (start: LivePoint, target: LivePoint, occupied: Set<number>): number | null => {
       if (occupied.has(target.y * world.width + target.x)) return null;
