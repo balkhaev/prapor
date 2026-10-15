@@ -142,7 +142,7 @@ export function cityGardenTrees(world: Pick<LiveWorld, 'citySites' | 'props'>, g
   for (const garden of gardens) {
     if (result.length >= 256) break;
     const site = sites.get(garden.sourceId), count = counts.get(garden.sourceId) ?? 0;
-    if (!site || count >= (site.kind === 'courtyard' ? 2 : 1)) continue;
+    if (!site || count >= (site.kind === 'courtyard' ? 4 : 2)) continue;
     let best: LivePoint | undefined, distance = Infinity;
     const center = { x: garden.x + garden.width / 2, y: garden.y + garden.height / 2 };
     for (const run of garden.clip) for (let x = run.x; x < run.x + run.width; x++) {
@@ -153,7 +153,7 @@ export function cityGardenTrees(world: Pick<LiveWorld, 'citySites' | 'props'>, g
     }
     if (!best) continue;
     result.push({ id: `garden-tree:${site.id}:${count}`, kind: 'tree', x: best.x - .375, y: best.y - .375,
-      width: .75, height: .75, orientation: 'x', variant: (garden.seed + count) % 3, blocking: false });
+      width: .75, height: .75, orientation: 'x', variant: (garden.seed + count) % 2 ? 2 : 0, blocking: false });
     reserve(best.x, best.y, 2.5); counts.set(site.id, count + 1);
   }
   return result;
