@@ -455,7 +455,7 @@ export class RaidStreetRenderer {
 		const animation = raidPixelFrame(this.plan!, frame, { facing: pawn.direction, appearance: pawn.appearance, hostile, downed: presentation.downed, limping: presentation.limping,
 			reducedMotion: this.reducedMotion, shotAge: pawn.firedAt === undefined ? undefined : clock - pawn.firedAt });
 		pawn.actor.update({ appearance: pawn.appearance, faction: hostile ? 'raiders' : 'scavs', limping: presentation.limping, bossId: presentation.bossId }, animation,
-			presentation.lostWeapon ? null : loadout.weapon, scavPixelGear(loadout));
+			presentation.lostWeapon ? null : loadout.weapon, scavPixelGear(loadout), 48, { screenScale: this.camera.zoom * this.hudCssScale, deviceRatio: window.devicePixelRatio || 1 });
 		pawn.point = { ...point }; pawn.root.setPosition(point.x, point.y).setDepth(point.y + .5);
 	}
 	private gunMuzzle(pawn: Pawn): Point | undefined {
