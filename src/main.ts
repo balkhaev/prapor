@@ -387,7 +387,6 @@ document.querySelector(".world-head .view-switch")!.insertAdjacentHTML("afterend
 const worldViewport = document.querySelector<HTMLElement>("#world")!;
 mountSceneLightControl(document.querySelector('.world-head')!);
 worldViewport.insertAdjacentHTML("afterend", '<div id="live-world" aria-label="Общий онлайн-периметр" hidden></div>');
-document.querySelector(".world-head .view-switch")!.insertAdjacentHTML("beforeend", '<button data-view="live" aria-label="Автоматический рейд" title="Общий Периметр · автобаттлер" aria-pressed="false"><span class="live-tab-dot" aria-hidden="true"></span> Рейд · автобой</button>');
 document.querySelector('.camera-controls [data-camera="fit"]')!.insertAdjacentHTML("beforebegin", `<button data-camera="near" class="camera-fit camera-near" aria-label="Рабочий вид базы" title="Рабочий вид базы: ближе к постройкам">${icon("base",15)}<span>К постройкам</span></button>`);
 document.querySelector(".world-head")!.insertAdjacentHTML("beforeend", `<button class="scene-sound" data-action="toggle-sound" aria-label="Звуки игры" aria-pressed="false" title="Включить звуки игры">${icon("sound",17)}<span>Звук</span></button>`);
 worldViewport.insertAdjacentHTML("afterend", '<div id="scene-hover" class="scene-hover" hidden><strong></strong><span></span></div>');

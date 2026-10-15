@@ -42,9 +42,12 @@ export function paintShelterBackdropTile(g: Phaser.GameObjects.Graphics): void {
   for (let row = 0; row < 4; row++) for (let column = 0; column < 4; column++) {
     const seed = hash(column + 81, row + 23), x = column * 128 + 24 + seed % 22, y = row * 128 + 32 + (seed >>> 8) % 20;
     const width = 43 + seed % 39, height = 14 + (seed >>> 12) % 16;
-    g.fillStyle(pigment(seed % 3 ? P.leafShade : P.soil), .15).fillRect(x, y, width, height);
-    g.fillRect(x + 11, y - 4, width - 21, height + 9);
-    g.fillStyle(pigment(P.leaf), .11).fillRect(x + 7, y + 3, width - 13, 3);
+    g.fillStyle(pigment(seed % 3 ? P.leafShade : P.soil), .1);
+    for (let band = 0; band < 5; band++) {
+      const inset = Math.round(width * [.24, .09, 0, .12, .29][band]!);
+      g.fillRect(x + inset + band % 2 * 3, y + Math.round(band * height / 5), width - inset * 2, Math.ceil(height / 5));
+    }
+    g.fillStyle(pigment(P.leaf), .08).fillRect(x + 14, y + 5, width - 29, 2);
     for (let blade = 0; blade < 7; blade++) {
       const px = x + 5 + (seed >>> blade % 12) % Math.max(6, width - 10), py = y + 3 + blade * 3 % height;
       g.fillStyle(pigment(P.leaf), .45).fillRect(px, py, 1, 3).fillRect(px - 2, py + 1, 2, 1);

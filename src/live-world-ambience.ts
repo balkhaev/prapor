@@ -30,7 +30,7 @@ export function liveAmbientGround(world: Pick<LiveWorld, 'width' | 'height' | 's
  * cell by the adapter. They create neither props nor collision/loot geometry. */
 export function liveAmbientGroundMarks(accent: LiveAmbientGround, timeMs: number, wind: number, daylight: number, rain: number, reducedMotion = false): LiveAmbientMark[] {
   const time = reducedMotion ? 0 : Math.max(0, Number.isFinite(timeMs) ? timeMs : 0), marks: LiveAmbientMark[] = [];
-  const gust = reducedMotion ? 0 : Math.sin(time / 1700 + accent.seed % 31) * (.35 + clamp(wind) * 1.6);
+  const gust = reducedMotion ? 0 : Math.sin(time / 1700 + accent.seed % 31) * (.35 + Math.abs(clamp(wind, -1, 1)) * 1.6);
   if (accent.kind === 'grass') {
     // Three isolated tufts, not a noisy waving texture over the entire map.
     for (let blade = 0; blade < 3; blade++) {
