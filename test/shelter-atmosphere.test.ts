@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
 	SHELTER_ATMOSPHERE_LIMITS, sampleShelterAtmosphere, sampleShelterWind,
+	paintShelterAtmosphereGround, paintShelterAtmosphereAir, paintShelterAtmosphereGlows,
 	type ShelterAtmosphereInput,
 } from "../src/shelter-atmosphere";
+import type Phaser from "phaser";
+import { PIXEL_PALETTE } from "../src/pixel-art";
 
 const input: ShelterAtmosphereInput = {
 	timeMs: 12000,
@@ -19,6 +22,18 @@ function allNumbers(value: unknown): number[] {
 }
 
 describe("shelter atmosphere", () => {
+	test("atmospheric silhouettes use bounded integer pixel bands and shared pigments", () => {
+		const rectangles: number[][] = [], lines: number[][] = [], colors: number[] = [];
+		const g = { clear() { return g; }, fillStyle(color: number) { colors.push(color); return g; }, lineStyle(_width: number, color: number) { colors.push(color); return g; },
+			fillRect(...values: number[]) { rectangles.push(values); return g; }, lineBetween(...values: number[]) { lines.push(values); return g; } };
+		const frame = sampleShelterAtmosphere(input);
+		for (const paint of [paintShelterAtmosphereGround, paintShelterAtmosphereAir, paintShelterAtmosphereGlows]) paint(g as unknown as Phaser.GameObjects.Graphics, frame);
+		expect(rectangles.length).toBeGreaterThan(20); expect(rectangles.length).toBeLessThan(200);
+		expect([...rectangles, ...lines].every(values => values.every(Number.isInteger))).toBe(true);
+		expect(rectangles.every(([, , width, height]) => width! > 0 && height! > 0)).toBe(true);
+		const palette = new Set(Object.values(PIXEL_PALETTE).map(hex => Number.parseInt(hex.slice(1), 16)));
+		expect(colors.every(color => palette.has(color))).toBe(true);
+	});
 	test("samples are deterministic and never mutate the anchors", () => {
 		const before = structuredClone(input), first = sampleShelterAtmosphere(input);
 		expect(sampleShelterAtmosphere(input)).toEqual(first);
@@ -36,7 +51,7 @@ describe("shelter atmosphere", () => {
 			expect(puff.alpha).toBeGreaterThanOrEqual(0);
 			expect(puff.alpha).toBeLessThanOrEqual(.15);
 		}
-		expect(sample.glows.map(glow => glow.color)).toEqual([0xffd39a, 0xf4b361]);
+		expect(sample.glows.map(glow => glow.color)).toEqual([PIXEL_PALETTE.yellow, PIXEL_PALETTE.woodLight].map(hex => Number.parseInt(hex.slice(1), 16)));
 		expect(sample.flames).toHaveLength(1);
 		expect(sample.flames[0]!.height).toBeGreaterThan(6);
 		expect(sample.clouds.every(cloud => cloud.alpha <= .028)).toBe(true);

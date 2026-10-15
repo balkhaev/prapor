@@ -1,6 +1,8 @@
 import type Phaser from "phaser";
 import type { ShelterRect } from "./shelter-camera";
 import type { ShelterPoint } from "./shelter-motion";
+import { PIXEL_PALETTE as P } from "./pixel-art";
+const pigment = (hex: string): number => Number.parseInt(hex.slice(1), 16);
 
 /** These points are already projected into the shelter's world, before camera zoom. */
 export interface ShelterSmokeEmitter extends ShelterPoint {
@@ -102,7 +104,7 @@ export function sampleShelterAtmosphere(input: ShelterAtmosphereInput): ShelterA
 				y: clamp(emitter.y, -1e6, 1e6) - sourceHeight - rise + wind.y * rise,
 				width: 5 + p * (fire ? 16 : 19), height: 3.8 + p * 10,
 				alpha: (fire ? .1 : .15) * strength * envelope(p, .24) * (1 - p * .58),
-				color: fire ? 0xc4c6b2 : 0xd0d5c8,
+				color: pigment(fire ? P.panel : P.steelLight),
 			});
 		}
 	}
@@ -114,7 +116,7 @@ export function sampleShelterAtmosphere(input: ShelterAtmosphereInput): ShelterA
 		frame.glows.push({
 			x: clamp(light.x, -1e6, 1e6), y: clamp(light.y, -1e6, 1e6) - clamp(finite(light.height ?? (fire ? 7 : 21)), 0, 100),
 			width: (fire ? 22 : 16) * pulse, height: (fire ? 15 : 12) * pulse,
-			alpha: (fire ? .13 : .1) * pulse, coreAlpha: (fire ? .7 : .57) * pulse, color: fire ? 0xf4b361 : 0xffd39a,
+			alpha: (fire ? .13 : .1) * pulse, coreAlpha: (fire ? .7 : .57) * pulse, color: pigment(fire ? P.woodLight : P.yellow),
 		});
 	}
 	if (input.birdBounds && !input.reducedMotion) {
@@ -136,42 +138,58 @@ export function sampleShelterAtmosphere(input: ShelterAtmosphereInput): ShelterA
 	return frame;
 }
 
+/** Five integer bands form an airy stepped silhouette without blurred ellipses. */
+function patch(g: Phaser.GameObjects.Graphics, x: number, y: number, width: number, height: number): void {
+	const w = Math.max(1, Math.round(width)), h = Math.max(1, Math.round(height));
+	const left = Math.round(x - w / 2), top = Math.round(y - h / 2), bands = Math.min(5, h);
+	for (let row = 0; row < bands; row++) {
+		const inset = Math.round(w * ([.24, .08, 0, .08, .24][Math.floor(row / bands * 5)] ?? 0));
+		const from = Math.round(row * h / bands), to = Math.round((row + 1) * h / bands);
+		g.fillRect(left + inset, top + from, Math.max(1, w - inset * 2), Math.max(1, to - from));
+	}
+}
+
 /** A separate, low ground layer leaves roofs, characters, and controls unobscured. */
 export function paintShelterAtmosphereGround(g: Phaser.GameObjects.Graphics, frame: ShelterAtmosphereFrame): void {
 	g.clear();
 	for (const cloud of frame.clouds) {
-		g.fillStyle(0x314c3c, cloud.alpha * .35).fillEllipse(cloud.x, cloud.y, cloud.width * 1.22, cloud.height * 1.3);
-		g.fillStyle(0x314c3c, cloud.alpha * .55).fillEllipse(cloud.x - cloud.width * .16, cloud.y + 3, cloud.width * .68, cloud.height);
-		g.fillStyle(0x314c3c, cloud.alpha * .6).fillEllipse(cloud.x + cloud.width * .16, cloud.y - 2, cloud.width * .76, cloud.height * .88);
+		g.fillStyle(pigment(P.ink), cloud.alpha);
+		patch(g, cloud.x, cloud.y, cloud.width, cloud.height);
 	}
 }
 
 export function paintShelterAtmosphereAir(g: Phaser.GameObjects.Graphics, frame: ShelterAtmosphereFrame): void {
 	g.clear();
 	for (const mist of frame.mist) {
-		for (const [size, opacity] of [[1.3, .16], [1, .2], [.72, .22], [.44, .18]]) g.fillStyle(0xd3dfce, mist.alpha * opacity!).fillEllipse(mist.x, mist.y, mist.width * size!, mist.height * size!);
+		g.fillStyle(pigment(P.steelLight), mist.alpha * .3);
+		patch(g, mist.x, mist.y, mist.width, mist.height);
 	}
 	for (const puff of frame.smoke) {
-		g.fillStyle(puff.color, puff.alpha * .42).fillEllipse(puff.x, puff.y, puff.width * 1.3, puff.height * 1.3);
-		g.fillStyle(puff.color, puff.alpha * .7).fillEllipse(puff.x - 1, puff.y, puff.width, puff.height);
+		g.fillStyle(puff.color, puff.alpha);
+		patch(g, puff.x, puff.y, puff.width, puff.height);
+		g.fillStyle(puff.color, puff.alpha * .45);
+		patch(g, puff.x - puff.width * .2, puff.y - puff.height * .2, puff.width * .55, puff.height * .45);
 	}
 	for (const flame of frame.flames) {
-		g.fillStyle(0xd97837, flame.alpha).fillTriangle(flame.x - flame.width * .5, flame.y, flame.x + flame.width * .5, flame.y, flame.x + flame.lean, flame.y - flame.height);
-		g.fillStyle(0xffd488, flame.alpha).fillTriangle(flame.x - flame.width * .26, flame.y, flame.x + flame.width * .26, flame.y, flame.x + flame.lean * .45, flame.y - flame.height * .62);
+		g.fillStyle(pigment(P.rust), flame.alpha);
+		patch(g, flame.x, flame.y - flame.height * .35, flame.width, flame.height * .7);
+		g.fillStyle(pigment(P.yellow), flame.alpha);
+		patch(g, flame.x + flame.lean, flame.y - flame.height * .66, flame.width * .55, flame.height * .7);
+		g.fillStyle(pigment(P.cream), flame.alpha).fillRect(Math.round(flame.x - 1), Math.round(flame.y - 3), 2, 3);
 	}
 	for (const bird of frame.birds) {
 		if (bird.alpha <= 0) continue;
-		g.lineStyle(.8, 0x354b3d, bird.alpha);
-		g.lineBetween(bird.x - bird.size, bird.y + bird.wing, bird.x, bird.y);
-		g.lineBetween(bird.x, bird.y, bird.x + bird.size, bird.y + bird.wing);
+		g.lineStyle(1, pigment(P.ink), bird.alpha);
+		g.lineBetween(Math.round(bird.x - bird.size), Math.round(bird.y + bird.wing), Math.round(bird.x), Math.round(bird.y));
+		g.lineBetween(Math.round(bird.x), Math.round(bird.y), Math.round(bird.x + bird.size), Math.round(bird.y + bird.wing));
 	}
 }
 
 export function paintShelterAtmosphereGlows(g: Phaser.GameObjects.Graphics, frame: ShelterAtmosphereFrame): void {
 	g.clear();
 	for (const glow of frame.glows) {
-		g.fillStyle(glow.color, glow.alpha * .35).fillEllipse(glow.x, glow.y, glow.width * 1.65, glow.height * 1.65);
-		g.fillStyle(glow.color, glow.alpha).fillEllipse(glow.x, glow.y, glow.width, glow.height);
-		g.fillStyle(0xffe8b7, glow.coreAlpha).fillEllipse(glow.x, glow.y, 2.8, 2.1);
+		g.fillStyle(glow.color, glow.alpha);
+		patch(g, glow.x, glow.y, glow.width, glow.height);
+		g.fillStyle(pigment(P.cream), glow.coreAlpha).fillRect(Math.round(glow.x - 1), Math.round(glow.y - 1), 3, 2);
 	}
 }

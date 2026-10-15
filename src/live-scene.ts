@@ -12,7 +12,8 @@ import { pixelActorLoadout } from './pixel-loadout';
 import { PixelBuildingArt, pixelBuildingSpriteBytes, pixelBuildingWallHeight } from './pixel-buildings';
 import { PixelPropArt } from './pixel-props';
 import { PixelObstacleArt } from './pixel-obstacles';
-import { PIXEL_TILE } from './pixel-art';
+import { PIXEL_TILE, PIXEL_PALETTE as P } from './pixel-art';
+import { PIXEL_SCENE_THEME as T } from './pixel-scene-theme';
 import { buildSurfaceMasks, paintRoadSurface, paintTerrainTexture, terrainTextureResolution, type SurfaceMasks } from './live-ground-art';
 
 type Motion = PixelMotion;
@@ -390,7 +391,7 @@ export class LiveScene {
   private paintProp(prop: LiveWorldProp): void {
     if (this.tile < 14) {
       if (!prop.blocking && !['tree', 'shrub', 'garden', 'playground'].includes(prop.kind)) return;
-      this.polygon(this.quad(prop.x - .5, prop.y - .5, prop.width, prop.height), ['tree', 'shrub', 'garden'].includes(prop.kind) ? '#536c45' : '#75867d'); return;
+      this.polygon(this.quad(prop.x - .5, prop.y - .5, prop.width, prop.height), ['tree', 'shrub', 'garden'].includes(prop.kind) ? P.leafShade : P.panelShade); return;
     }
     const anchor = this.project({ x: prop.x - .5, y: prop.y - .5 });
     const extent = (prop.width + prop.height) * this.tile / 2;
@@ -459,14 +460,14 @@ export class LiveScene {
   private paintContainer(drop: LiveDrop): void {
     const p = this.project(drop), c = this.context, scale = this.tile / 64;
     if (p.x < -30 || p.x > this.width + 30 || p.y < -30 || p.y > this.height + 112 * scale) return;
-    if (this.tile < 12) { c.fillStyle = '#e0c17e'; c.fillRect(p.x - 1.5, p.y - 1.5, 3, 3); return; }
+    if (this.tile < 12) { c.fillStyle = T.loot; c.fillRect(p.x - 1.5, p.y - 1.5, 3, 3); return; }
     this.renderer.sprite(this.containerArt.get(drop), p, scale * .55, this.width, this.height);
     if (scale > .55) {
       const known = !drop.containerId || drop.searched;
       const kindLabels = { duffel: 'СУМКА', jacket: 'КУРТКА', toolbox: 'ИНСТРУМЕНТЫ', medbag: 'МЕДСУМКА', cabinet: 'ШКАФ', crate: 'ЯЩИК' };
       const label = !known ? drop.containerKind ? kindLabels[drop.containerKind] : 'ОБЫСКАТЬ' : drop.amount || drop.items?.length ? liveDropLabel(drop) : 'ПУСТО';
-      this.label(label.length > 35 ? `${label.slice(0, 32)}…` : label, p.x, p.y + 19, '#e6d19a', 8);
-      if (known && drop.items?.length && scale > .9) this.label(`≈ ${liveLootTotals(drop.items).guide.toLocaleString('ru-RU')} ₽`, p.x, p.y + 31, '#c6bd9a', 7);
+      this.label(label.length > 35 ? `${label.slice(0, 32)}…` : label, p.x, p.y + 19, T.loot, 8);
+      if (known && drop.items?.length && scale > .9) this.label(`≈ ${liveLootTotals(drop.items).guide.toLocaleString('ru-RU')} ₽`, p.x, p.y + 31, T.muted, 7);
     }
   }
   private obstacle(obstacle: LiveObstacle, index: number): void {
@@ -477,7 +478,7 @@ export class LiveScene {
       this.paintProp({ ...obstacle, id: `tree-${index}`, kind: 'tree', orientation: 'x', variant: (index % 4) as 0 | 1 | 2 | 3, blocking: true }); return;
     }
     const anchor = this.project({ x: obstacle.x - .5, y: obstacle.y - .5 });
-    if (this.tile < 14) { this.polygon(this.quad(obstacle.x - .5, obstacle.y - .5, obstacle.width, obstacle.height), kind === 'container' ? '#809691' : '#8f9b83'); return; }
+    if (this.tile < 14) { this.polygon(this.quad(obstacle.x - .5, obstacle.y - .5, obstacle.width, obstacle.height), kind === 'container' ? P.steel : P.concreteShade); return; }
     const corners = this.quad(obstacle.x - .5, obstacle.y - .5, obstacle.width, obstacle.height);
     if (Math.max(...corners.map(p => p.x)) < -8 || Math.min(...corners.map(p => p.x)) > this.width + 8 || Math.max(...corners.map(p => p.y)) < -8 || Math.min(...corners.map(p => p.y)) - this.tile > this.height + 8) return;
     const sprite = this.obstacleArt.get(obstacle, index, this.renderer.detail(this.tile));
@@ -487,7 +488,7 @@ export class LiveScene {
   private paint(): void {
     const c = this.context, now = performance.now();
     c.clearRect(0, 0, this.width, this.height);
-    c.fillStyle = '#263c36'; c.fillRect(0, 0, this.width, this.height);
+    c.fillStyle = T.background; c.fillRect(0, 0, this.width, this.height);
     c.imageSmoothingEnabled = false;
     if (!this.snapshot) return;
     const snapshot = this.snapshot, self = snapshot.entities.find(entity => entity.id === snapshot.selfId);
@@ -515,10 +516,10 @@ export class LiveScene {
     }
     this.paintDoorways(world);
     for (const [index, extract] of world.extracts.entries()) {
-      const p = this.project(extract); this.polygon(this.quad(extract.x - .7, extract.y - .7, 1.4, 1.4), '#5b8d5655', '#a4cf76');
+      const p = this.project(extract); this.polygon(this.quad(extract.x - .7, extract.y - .7, 1.4, 1.4), `${T.extract}55`, T.extract);
       const flagHeight = this.overview ? 12 : 40;
-      c.strokeStyle = '#c3d991'; c.lineWidth = 2; c.beginPath(); c.moveTo(p.x, p.y); c.lineTo(p.x, p.y - flagHeight); c.stroke();
-      this.polygon([{ x: p.x, y: p.y - flagHeight }, { x: p.x + flagHeight * .6, y: p.y - flagHeight * .87 }, { x: p.x, y: p.y - flagHeight * .72 }], '#b2ce7e'); this.label(`ВЫХОД ${index + 1}`, p.x, p.y + (this.overview ? 12 : 21), '#cce5a2', this.overview ? 7 : 10);
+      c.strokeStyle = T.extract; c.lineWidth = 2; c.beginPath(); c.moveTo(p.x, p.y); c.lineTo(p.x, p.y - flagHeight); c.stroke();
+      this.polygon([{ x: p.x, y: p.y - flagHeight }, { x: p.x + flagHeight * .6, y: p.y - flagHeight * .87 }, { x: p.x, y: p.y - flagHeight * .72 }], T.extract); this.label(`ВЫХОД ${index + 1}`, p.x, p.y + (this.overview ? 12 : 21), T.text, this.overview ? 7 : 10);
     }
     const objects: { depth: number; paint: () => void }[] = [];
     const visible = this.scenery.visible({ x: minX - 7, y: minY - 7, width: maxX - minX + 14, height: maxY - minY + 14 });
@@ -602,26 +603,26 @@ export class LiveScene {
     };
     if (small && world.city) {
       const p = this.project({ x: world.city.x + world.city.width / 2, y: world.city.y + world.city.height / 2 });
-      placeLabel(world.city.name.toUpperCase(), { x: p.x, y: p.y - 25 }, this.width < 480 ? 15 : 18, '#f0dab0', true);
+      placeLabel(world.city.name.toUpperCase(), { x: p.x, y: p.y - 25 }, this.width < 480 ? 15 : 18, T.text, true);
     }
     if (small) for (const district of world.districts) {
       const p = this.project(district.labelPoint ?? { x: district.x + district.width / 2, y: district.y + district.height / 2 });
-      placeLabel(district.name.toUpperCase(), { x: p.x, y: p.y - 24 }, this.width < 480 ? 11 : 14, '#e5e8c2', true);
+      placeLabel(district.name.toUpperCase(), { x: p.x, y: p.y - 24 }, this.width < 480 ? 11 : 14, T.text, true);
     }
     if (small && this.cityOverview && world.city) for (const quarter of world.city.quarters) {
       const p = this.project({ x: quarter.x + quarter.width / 2, y: quarter.y + quarter.height / 2 });
-      placeLabel(quarter.name, { x: p.x, y: p.y - 16 }, this.width < 480 ? 9 : 11, '#e3d3b5', true);
+      placeLabel(quarter.name, { x: p.x, y: p.y - 16 }, this.width < 480 ? 9 : 11, T.text, true);
     }
     const sitePoiIds = new Set<string>();
     if (!this.overview && this.tile >= 12) for (const site of world.citySites ?? []) {
       const p = this.project({ x: site.courtyard.x + site.courtyard.width / 2, y: site.courtyard.y + site.courtyard.height / 2 });
       if (p.x < -50 || p.x > this.width + 50 || p.y < -30 || p.y > this.height + 30) continue;
       sitePoiIds.add(site.poiId);
-      if (this.tile < 24) { placeLabel(site.name, p, 9, '#e2d6b5'); continue; }
-      placeLabel(`${siteKinds[site.kind]} · ${site.name}`, p, 10, '#eadcb6');
+      if (this.tile < 24) { placeLabel(site.name, p, 9, T.text); continue; }
+      placeLabel(`${siteKinds[site.kind]} · ${site.name}`, p, 10, T.text);
       for (const building of site.buildings) {
         const center = this.project({ x: building.x + building.width / 2, y: building.y + building.height / 2 });
-        if (center.x >= 0 && center.x <= this.width && center.y >= 45 && center.y <= this.height - 35) placeLabel(building.name, center, 8, '#d6d7bd');
+        if (center.x >= 0 && center.x <= this.width && center.y >= 45 && center.y <= this.height - 35) placeLabel(building.name, center, 8, T.muted);
       }
     }
     const pois = [...world.pois].sort((a, b) => Number(this.routePoiIds.includes(b.id)) - Number(this.routePoiIds.includes(a.id)) || b.danger - a.danger || b.width * b.height - a.width * a.height);
@@ -630,9 +631,9 @@ export class LiveScene {
       const p = this.project({ x: poi.x + poi.width / 2, y: poi.y + poi.height / 2 }), chosen = this.routePoiIds.includes(poi.id);
       if (p.x < -60 || p.x > this.width + 60 || p.y < -30 || p.y > this.height + 30) continue;
       if (small) {
-        c.fillStyle = chosen ? '#f2d596' : poi.danger === 3 ? '#d6a17c' : '#c2ca95'; c.fillRect(p.x - 2, p.y - 2, 4, 4);
-        if ((chosen || this.width >= 480 && labelCount < 12) && placeLabel(poi.name, { x: p.x, y: p.y + 13 }, chosen ? 10 : 8, chosen ? '#f2dfb1' : '#c5d3b0')) labelCount++;
-      } else if (this.tile > 30 && !sitePoiIds.has(poi.id)) placeLabel(poi.name, p, chosen ? 11 : 9, chosen ? '#f2dfb1' : '#d6d3ac');
+        c.fillStyle = chosen ? T.self : poi.danger === 3 ? T.hostile : T.loot; c.fillRect(p.x - 2, p.y - 2, 4, 4);
+        if ((chosen || this.width >= 480 && labelCount < 12) && placeLabel(poi.name, { x: p.x, y: p.y + 13 }, chosen ? 10 : 8, chosen ? T.text : T.muted)) labelCount++;
+      } else if (this.tile > 30 && !sitePoiIds.has(poi.id)) placeLabel(poi.name, p, chosen ? 11 : 9, chosen ? T.text : T.text);
     }
   }
   private paintWaypoints(world: LiveWorld): void {
@@ -643,8 +644,8 @@ export class LiveScene {
       const p = this.project(point);
       if (p.x < -20 || p.x > this.width + 20 || p.y < -20 || p.y > this.height + 20) continue;
       const done = !!this.snapshot?.self.automation?.enabled && index < this.snapshot.self.automation.stopIndex;
-      c.beginPath(); c.arc(p.x, p.y, this.overview ? 9 : 11, 0, Math.PI * 2); c.fillStyle = done ? '#658477' : '#e8ce90'; c.fill(); c.strokeStyle = '#193b2f'; c.lineWidth = 2; c.stroke();
-      c.font = '800 10px Manrope, sans-serif'; c.textAlign = 'center'; c.fillStyle = done ? '#d9e1c7' : '#23331f'; c.fillText(done ? '✓' : String(index + 1), p.x, p.y + 3.5);
+      c.beginPath(); c.arc(p.x, p.y, this.overview ? 9 : 11, 0, Math.PI * 2); c.fillStyle = done ? T.healthy : T.self; c.fill(); c.strokeStyle = T.panel; c.lineWidth = 2; c.stroke();
+      c.font = '800 10px Manrope, sans-serif'; c.textAlign = 'center'; c.fillStyle = done ? T.text : T.panel; c.fillText(done ? '✓' : String(index + 1), p.x, p.y + 3.5);
       this.waypointTargets.push({ point, x: p.x, y: p.y });
     }
   }
@@ -653,12 +654,12 @@ export class LiveScene {
     if (self) {
       const motion = this.motions.get(self.id), point = this.project(motion ? this.interpolated(motion, now) : self), radius = Math.max(9, this.tile * .3);
       if (point.x > 0 && point.x < this.width && point.y > 0 && point.y < this.height) {
-        c.save(); c.strokeStyle = '#f0d9a8'; c.lineWidth = 1.3; c.setLineDash([3, 4]); c.beginPath(); c.ellipse(point.x, point.y + 2, radius, radius * .48, 0, 0, Math.PI * 2); c.stroke(); c.restore();
+        c.save(); c.strokeStyle = T.self; c.lineWidth = 1.3; c.setLineDash([3, 4]); c.beginPath(); c.ellipse(point.x, point.y + 2, radius, radius * .48, 0, 0, Math.PI * 2); c.stroke(); c.restore();
       }
     }
     const auto = snapshot.self.automation;
     if (!auto?.enabled || !auto.target || auto.stage === 'complete' || auto.stage === 'downed') return;
-    const p = this.project(auto.target), radius = Math.max(this.overview ? 7 : 11, this.tile * .25), color = auto.stage === 'extract' ? '#a9d9a7' : auto.stage === 'combat' ? '#ed997c' : '#e3c989';
+    const p = this.project(auto.target), radius = Math.max(this.overview ? 7 : 11, this.tile * .25), color = auto.stage === 'extract' ? T.extract : auto.stage === 'combat' ? T.hostile : T.loot;
     if (p.x < -30 || p.x > this.width + 30 || p.y < -30 || p.y > this.height + 30) return;
     c.save(); c.strokeStyle = color; c.lineWidth = 1.7; c.globalAlpha = .7 + Math.sin(now / 450) * .17;
     c.beginPath();
@@ -688,33 +689,33 @@ export class LiveScene {
       c.save();
       if (age < 115) {
         const head = Math.min(1, .18 + age / 75), tail = Math.max(0, head - .36), dx = target.x - from.x, dy = target.y - from.y;
-        c.globalAlpha = Math.max(.15, 1 - age / 140); c.strokeStyle = event.actorId === this.snapshot?.selfId ? '#ffe9a6' : '#e1be8b'; c.lineWidth = small ? 1 : Math.max(1, scale * .9);
+        c.globalAlpha = Math.max(.15, 1 - age / 140); c.strokeStyle = event.actorId === this.snapshot?.selfId ? T.tracer : P.woodLight; c.lineWidth = small ? 1 : Math.max(1, scale * .9);
         c.beginPath(); c.moveTo(Math.round(from.x + dx * tail), Math.round(from.y + dy * tail)); c.lineTo(Math.round(from.x + dx * head), Math.round(from.y + dy * head)); c.stroke();
       }
       if (!small && age < 85) {
         const dx = target.x - from.x, dy = target.y - from.y, length = Math.hypot(dx, dy) || 1, size = Math.max(2, Math.round(scale * (age < 35 ? 5 : 3)));
         const mx = Math.round(flash.x), my = Math.round(flash.y);
-        c.globalAlpha = 1; c.fillStyle = '#ef9c50'; c.fillRect(mx - size, my - 1, size * 2 + 1, 3); c.fillRect(mx - 1, my - size, 3, size * 2 + 1);
-        c.fillStyle = '#fff0b1'; c.fillRect(mx - 1, my - 1, 3, 3);
-        c.fillStyle = '#f0c175'; c.fillRect(Math.round(mx + dx / length * size * 1.5), Math.round(my + dy / length * size * 1.5), Math.max(1, Math.round(scale)), Math.max(1, Math.round(scale)));
+        c.globalAlpha = 1; c.fillStyle = P.yellow; c.fillRect(mx - size, my - 1, size * 2 + 1, 3); c.fillRect(mx - 1, my - size, 3, size * 2 + 1);
+        c.fillStyle = T.flash; c.fillRect(mx - 1, my - 1, 3, 3);
+        c.fillStyle = P.cream; c.fillRect(Math.round(mx + dx / length * size * 1.5), Math.round(my + dy / length * size * 1.5), Math.max(1, Math.round(scale)), Math.max(1, Math.round(scale)));
       }
       if (!small && age < 620) {
         const t = age / 480, side = seed % 2 ? 1 : -1, ex = Math.round(eject.x + side * (9 + seed % 5) * scale * t), ey = Math.round(eject.y - 12 * scale * t + 18 * scale * t * t);
-        c.globalAlpha = Math.min(1, (620 - age) / 140); c.fillStyle = '#d5b36d'; c.fillRect(ex, ey, Math.max(1, Math.round(2 * scale)), Math.max(1, Math.round(scale))); c.fillStyle = '#806b43'; c.fillRect(ex + Math.max(1, Math.round(scale)), ey + Math.max(1, Math.round(scale)), Math.max(1, Math.round(scale)), 1);
+        c.globalAlpha = Math.min(1, (620 - age) / 140); c.fillStyle = P.woodLight; c.fillRect(ex, ey, Math.max(1, Math.round(2 * scale)), Math.max(1, Math.round(scale))); c.fillStyle = P.woodShade; c.fillRect(ex + Math.max(1, Math.round(scale)), ey + Math.max(1, Math.round(scale)), Math.max(1, Math.round(scale)), 1);
       }
       if (age >= 45 && age < 330) {
         const t = (age - 45) / 285, reach = (small ? 3 : 7 * scale) * t;
-        c.globalAlpha = 1 - t; c.fillStyle = event.damage! > 0 ? '#c8aa82' : '#a9b8ae';
+        c.globalAlpha = 1 - t; c.fillStyle = event.damage! > 0 ? P.sand : P.steelLight;
         for (let spark = 0; spark < (small ? 2 : 5); spark++) {
           const angle = ((seed >>> (spark * 3)) % 360 + spark * 71) * Math.PI / 180;
           c.fillRect(Math.round(target.x + Math.cos(angle) * reach), Math.round(target.y + Math.sin(angle) * reach * .6), small ? 1 : Math.max(1, Math.round(scale * 1.5)), small ? 1 : Math.max(1, Math.round(scale)));
         }
       }
       if (!small && age < 440) {
-        const t = age / 440; c.globalAlpha = (1 - t) * .28; c.fillStyle = '#d6d5bb';
+        const t = age / 440; c.globalAlpha = (1 - t) * .28; c.fillStyle = P.white;
         c.fillRect(Math.round(from.x + (seed % 5 - 2) * scale * t), Math.round(from.y - 11 * scale * t), Math.max(1, Math.round((2 + t * 3) * scale)), Math.max(1, Math.round((1 + t * 2) * scale)));
       }
-      if (!small && event.damage! > 0) { c.globalAlpha = Math.max(0, 1 - age / 850); this.label(`−${Math.round(event.damage!)}`, target.x, target.y - 15 - age / 55, '#f4c497', 12); }
+      if (!small && event.damage! > 0) { c.globalAlpha = Math.max(0, 1 - age / 850); this.label(`−${Math.round(event.damage!)}`, target.x, target.y - 15 - age / 55, T.injured, 12); }
       c.restore();
     }
   }
@@ -727,10 +728,10 @@ export class LiveScene {
     if (p.x < -horizontal || p.x > this.width + horizontal || p.y < -(PIXEL_ACTOR_NATIVE_SIZE.height - PIXEL_ACTOR_ANCHOR.y) * scale - 40
       || p.y > this.height + PIXEL_ACTOR_ANCHOR.y * scale + 40) return;
     const boss=entity.bossId?getBoss(entity.bossId):null;
-    const own = entity.id === snapshot.selfId, selected = entity.id === this.selected, color = own ? '#f2d49a' : boss ? '#f0b267' : entity.kind === 'player' ? '#8dd5e4' : entity.faction === 'raiders' ? '#e48971' : '#d2a082';
+    const own = entity.id === snapshot.selfId, selected = entity.id === this.selected, color = own ? T.self : boss ? T.boss : entity.kind === 'player' ? T.ally : entity.faction === 'raiders' ? T.hostile : T.hostile;
     if (this.overview || this.tile < 28) {
-      c.fillStyle = color; c.strokeStyle = '#15241a'; c.lineWidth = 1.5; c.beginPath(); c.arc(p.x, p.y, own || selected ? 4.5 : 2.8, 0, Math.PI * 2); c.fill(); c.stroke();
-      if (entity.aimUntil && entity.aimUntil > snapshot.now && entity.aimTargetId === snapshot.selfId) this.label('ЦЕЛИТСЯ В ТЕБЯ', p.x, p.y - 14, '#fac09b', 8);
+      c.fillStyle = color; c.strokeStyle = T.panel; c.lineWidth = 1.5; c.beginPath(); c.arc(p.x, p.y, own || selected ? 4.5 : 2.8, 0, Math.PI * 2); c.fill(); c.stroke();
+      if (entity.aimUntil && entity.aimUntil > snapshot.now && entity.aimTargetId === snapshot.selfId) this.label('ЦЕЛИТСЯ В ТЕБЯ', p.x, p.y - 14, T.injured, 8);
       if (own || selected || boss) this.label(own ? 'ТЫ' : boss?`БОСС · ${boss.name}`:entity.name, p.x, p.y - 10, color, 9);
       this.hitTargets.push({ entity, x: p.x, y: p.y }); return;
     }
@@ -749,13 +750,13 @@ export class LiveScene {
     this.label(own ? `ТЫ · ${entity.name}` : entity.name, p.x, top, color, own ? 11 : 10);
     const role = boss ? 'БОСС' : entity.kind === 'player' ? own ? 'ТВОЙ БОЕЦ' : 'ИГРОК' : entity.faction === 'raiders' ? 'РЕЙДЕР' : 'ДИКИЙ';
     const weaponName = WEAPON_BY_ID[typeof weapon === 'string' ? weapon : weapon.weaponId]?.name;
-    this.label(`${role}${weaponName ? ` · ${weaponName}` : ''}`, p.x, top + 13, boss?'#e7bc86':own ? '#e8d8b6' : entity.kind === 'player' ? '#90c4ce' : '#ad9b88', 7);
-    c.fillStyle = '#14271a'; c.fillRect(p.x - 17, top + 18, 34, 3); c.fillStyle = entity.health > 35 ? '#b6cc85' : '#e09d82'; c.fillRect(p.x - 17, top + 18, 34 * entity.health / 100, 3);
-    if (entity.safeUntil > snapshot.now) this.label('ЗАЩИТА', p.x, p.y + 20, '#bddbb7', 8);
+    this.label(`${role}${weaponName ? ` · ${weaponName}` : ''}`, p.x, top + 13, boss?T.boss:own ? T.text : entity.kind === 'player' ? T.ally : T.muted, 7);
+    c.fillStyle = T.panel; c.fillRect(p.x - 17, top + 18, 34, 3); c.fillStyle = entity.health > 35 ? T.healthy : T.injured; c.fillRect(p.x - 17, top + 18, 34 * entity.health / 100, 3);
+    if (entity.safeUntil > snapshot.now) this.label('ЗАЩИТА', p.x, p.y + 20, T.extract, 8);
     if (entity.aimUntil && entity.aimUntil > snapshot.now) {
-      c.strokeStyle = '#f2a07f'; c.lineWidth = 2; c.beginPath(); c.ellipse(p.x, p.y, 18 * zoom, 9 * zoom, 0, 0, Math.PI * 2); c.stroke();
-      this.label(entity.aimTargetId === snapshot.selfId ? 'ЦЕЛИТСЯ В ТЕБЯ' : 'ПРИЦЕЛИВАЕТСЯ', p.x, p.y + 22, '#fac09b', 8);
-    } else if (entity.bleeding || entity.limping) this.label(entity.bleeding ? 'КРОВОТЕЧЕНИЕ' : 'ХРОМАЕТ', p.x, p.y + 22, '#e4b19a', 7);
+      c.strokeStyle = T.hostile; c.lineWidth = 2; c.beginPath(); c.ellipse(p.x, p.y, 18 * zoom, 9 * zoom, 0, 0, Math.PI * 2); c.stroke();
+      this.label(entity.aimTargetId === snapshot.selfId ? 'ЦЕЛИТСЯ В ТЕБЯ' : 'ПРИЦЕЛИВАЕТСЯ', p.x, p.y + 22, T.injured, 8);
+    } else if (entity.bleeding || entity.limping) this.label(entity.bleeding ? 'КРОВОТЕЧЕНИЕ' : 'ХРОМАЕТ', p.x, p.y + 22, T.injured, 7);
     this.hitTargets.push({ entity, x: p.x, y: p.y, bounds });
   }
   private minimapBounds(snapshot: LiveSnapshot): { x: number; y: number; width: number; height: number; scale: number } {
@@ -765,24 +766,24 @@ export class LiveScene {
   }
   private minimap(snapshot: LiveSnapshot): void {
     const c = this.context, { x, y, scale, width, height } = this.minimapBounds(snapshot);
-    c.fillStyle = '#14241fe6'; c.fillRect(x - 8, y - 8, width + 16, height + 29); c.strokeStyle = '#7c8c6166'; c.strokeRect(x - 8, y - 8, width + 16, height + 29);
+    c.fillStyle = `${T.panel}e6`; c.fillRect(x - 8, y - 8, width + 16, height + 29); c.strokeStyle = `${T.border}66`; c.strokeRect(x - 8, y - 8, width + 16, height + 29);
     if (this.minimapTerrain ?? this.terrainTexture) c.drawImage((this.minimapTerrain ?? this.terrainTexture)!, x, y, width, height);
-    for (const extract of snapshot.world.extracts) { c.fillStyle = '#a9d380'; c.fillRect(x + extract.x * scale - 2, y + extract.y * scale - 2, 4, 4); }
-    for (const poi of snapshot.world.pois) { c.fillStyle = poi.danger === 3 ? '#b78665' : '#a6af84'; c.fillRect(x + (poi.x + poi.width / 2) * scale - 1, y + (poi.y + poi.height / 2) * scale - 1, 2, 2); }
+    for (const extract of snapshot.world.extracts) { c.fillStyle = T.extract; c.fillRect(x + extract.x * scale - 2, y + extract.y * scale - 2, 4, 4); }
+    for (const poi of snapshot.world.pois) { c.fillStyle = poi.danger === 3 ? T.hostile : T.loot; c.fillRect(x + (poi.x + poi.width / 2) * scale - 1, y + (poi.y + poi.height / 2) * scale - 1, 2, 2); }
     for (const [index, id] of this.routePoiIds.entries()) {
       const point = snapshot.world.pois.find(poi => poi.id === id)?.entrances[0];
       if (!point) continue;
       const px = x + point.x * scale, py = y + point.y * scale;
-      c.fillStyle = '#e8ce90'; c.beginPath(); c.arc(px, py, 3.5, 0, Math.PI * 2); c.fill(); c.fillStyle = '#24321f'; c.textAlign = 'center'; c.font = '700 6px Manrope, sans-serif'; c.fillText(String(index + 1), px, py + 2);
+      c.fillStyle = T.self; c.beginPath(); c.arc(px, py, 3.5, 0, Math.PI * 2); c.fill(); c.fillStyle = T.panel; c.textAlign = 'center'; c.font = '700 6px Manrope, sans-serif'; c.fillText(String(index + 1), px, py + 2);
     }
     c.save(); c.beginPath(); c.rect(x, y, width, height); c.clip();
     const corners = [this.unproject(0, 0), this.unproject(this.width, 0), this.unproject(this.width, this.height), this.unproject(0, this.height)];
-    c.beginPath(); corners.forEach((point, index) => index ? c.lineTo(x + point.x * scale, y + point.y * scale) : c.moveTo(x + point.x * scale, y + point.y * scale)); c.closePath(); c.fillStyle = '#dbe8c20f'; c.fill(); c.strokeStyle = '#e6dcb8aa'; c.lineWidth = .8; c.stroke();
+    c.beginPath(); corners.forEach((point, index) => index ? c.lineTo(x + point.x * scale, y + point.y * scale) : c.moveTo(x + point.x * scale, y + point.y * scale)); c.closePath(); c.fillStyle = `${T.text}0f`; c.fill(); c.strokeStyle = `${T.text}aa`; c.lineWidth = .8; c.stroke();
     const target = snapshot.self.automation?.target;
-    if (target) { c.strokeStyle = snapshot.self.automation?.stage === 'extract' ? '#b2dca1' : '#f2d18b'; c.lineWidth = 1; c.strokeRect(x + target.x * scale - 3, y + target.y * scale - 3, 6, 6); }
+    if (target) { c.strokeStyle = snapshot.self.automation?.stage === 'extract' ? T.extract : T.self; c.lineWidth = 1; c.strokeRect(x + target.x * scale - 3, y + target.y * scale - 3, 6, 6); }
     c.restore();
-    for (const entity of snapshot.entities) { c.fillStyle = entity.id === snapshot.selfId ? '#ffe0a4' : entity.bossId?'#f0b267':entity.kind === 'player' ? '#81d0e3' : entity.faction === 'raiders' ? '#e48971' : '#ce9778'; c.beginPath(); const px=x+entity.x*scale,py=y+entity.y*scale;if(entity.bossId){c.moveTo(px,py-3);c.lineTo(px+3,py);c.lineTo(px,py+3);c.lineTo(px-3,py);c.closePath();}else c.arc(px,py,entity.id===snapshot.selfId?2.8:1.6,0,Math.PI*2);c.fill(); }
-    this.label(snapshot.world.name.toUpperCase(), x + width / 2, y + height + 14, '#a9b596', 8);
-    c.font = '600 8px "IBM Plex Mono", monospace'; c.textAlign = 'right'; c.fillStyle = '#c9d4b6'; c.fillText('С ↑', x + width - 3, y + 10);
+    for (const entity of snapshot.entities) { c.fillStyle = entity.id === snapshot.selfId ? T.self : entity.bossId?T.boss:entity.kind === 'player' ? T.ally : entity.faction === 'raiders' ? T.hostile : T.hostile; c.beginPath(); const px=x+entity.x*scale,py=y+entity.y*scale;if(entity.bossId){c.moveTo(px,py-3);c.lineTo(px+3,py);c.lineTo(px,py+3);c.lineTo(px-3,py);c.closePath();}else c.arc(px,py,entity.id===snapshot.selfId?2.8:1.6,0,Math.PI*2);c.fill(); }
+    this.label(snapshot.world.name.toUpperCase(), x + width / 2, y + height + 14, T.muted, 8);
+    c.font = '600 8px "IBM Plex Mono", monospace'; c.textAlign = 'right'; c.fillStyle = T.text; c.fillText('С ↑', x + width - 3, y + 10);
   }
 }

@@ -1,24 +1,26 @@
 import type Phaser from "phaser";
 import type { ModuleSlot } from "./game/modules";
-import { ROOM_DEFINITIONS, getRoomLocalPoint, getRoomLocalSize, type RoomInstance } from "./game/shelter";
+import { getRoomLocalPoint, getRoomLocalSize, type RoomInstance } from "./game/shelter";
 import { projectShelterPoint } from "./shelter-isometric";
 import type { ProductionPresentation } from "./shelter-production";
+import { PIXEL_PALETTE as P } from "./pixel-art";
 
 type Point = { x: number; y: number };
 type Vertex = readonly [number, number, number?];
 type Material = readonly [number, number, number];
 type WallSide = "north" | "east" | "south" | "west";
+const pigment = (hex: string): number => Number.parseInt(hex.slice(1), 16);
 const C = {
-	ink: 0x26302b, seam: 0x4b5145, concrete: 0x929482, floor: 0x8c795a,
-	steel: 0xa2aba0, pale: 0xe2d9bc, amber: 0xf2c27d, cyan: 0x9cc8be,
-	green: 0xafca7b, wood: 0xac8655, dark: 0x465247,
+	ink: pigment(P.ink), seam: pigment(P.shadow), concrete: pigment(P.concrete), floor: pigment(P.wood),
+	steel: pigment(P.steel), pale: pigment(P.cream), amber: pigment(P.yellow), cyan: pigment(P.glassLight),
+	green: pigment(P.leafLight), wood: pigment(P.wood), dark: pigment(P.panelShade),
 };
-const STEEL: Material = [0xa2a99a, 0x7a887d, 0x576b61];
-const OLIVE: Material = [0x6a7d58, 0x475e41, 0x314936];
-const WOOD: Material = [0xb49768, 0x8e704b, 0x6e553b];
-const PALE: Material = [0xdfddc6, 0xb7bca7, 0x8f9e8d];
-const BLACK: Material = [0x344d3a, 0x233c2c, 0x193224];
-const STONE: Material = [0x9a9987, 0x747566, 0x5b6256];
+const STEEL: Material = [pigment(P.steelLight), pigment(P.steel), pigment(P.steelShade)];
+const OLIVE: Material = [pigment(P.leaf), pigment(P.shadow), pigment(P.leafShade)];
+const WOOD: Material = [pigment(P.woodLight), pigment(P.wood), pigment(P.woodShade)];
+const PALE: Material = [pigment(P.cream), pigment(P.plaster), pigment(P.plasterShade)];
+const BLACK: Material = [pigment(P.rubber), pigment(P.black), pigment(P.ink)];
+const STONE: Material = [pigment(P.concrete), pigment(P.concreteShade), pigment(P.shadow)];
 
 function mixColor(color: number, target: number, amount: number): number {
 	const channel = (shift: number) => Math.round(((color >> shift) & 255) * (1 - amount) + ((target >> shift) & 255) * amount);
@@ -27,15 +29,16 @@ function mixColor(color: number, target: number, amount: number): number {
 
 interface BuildingFinish { wall: Material; roof: Material; accent: number; timber: boolean }
 function buildingFinish(type: RoomInstance["type"]): BuildingFinish {
-	const accent = Number.parseInt(ROOM_DEFINITIONS[type].color.slice(1), 16);
+	const accent = pigment({ workshop: P.yellow, ammo: P.leafLight, recycler: P.rust, medbay: P.red,
+		radio: P.blue, storage: P.sand, dormitory: P.woodLight, hangar: P.steelLight }[type]);
 	const facade = {
-		workshop: 0xbb9866, ammo: 0x9b9d77, recycler: 0xac8266, medbay: 0xd1d4ba,
-		radio: 0x9fbbc0, storage: 0xaaad96, dormitory: 0xc9ae8e, hangar: 0x9aaeb3,
+		workshop: pigment(P.wood), ammo: pigment(P.grass), recycler: pigment(P.brick), medbay: pigment(P.plaster),
+		radio: pigment(P.panel), storage: pigment(P.concrete), dormitory: pigment(P.plasterShade), hangar: pigment(P.steel),
 	}[type];
-	const roofColor = type === "dormitory" ? 0x856e58 : type === "medbay" ? 0x82978e : type === "workshop" ? 0x7d8273 : 0x718a87;
+	const roofColor = pigment(type === "dormitory" ? P.woodShade : type === "medbay" ? P.roof : type === "workshop" ? P.panelShade : P.steelShade);
 	return {
-		wall: [mixColor(facade, 0xf3e6c9, .25), facade, mixColor(facade, 0x34483e, .35)],
-		roof: [mixColor(roofColor, 0xb5c3b5, .22), roofColor, mixColor(roofColor, 0x354c44, .25)],
+		wall: [mixColor(facade, pigment(P.cream), .25), facade, mixColor(facade, C.ink, .35)],
+		roof: [mixColor(roofColor, pigment(P.steelLight), .22), roofColor, mixColor(roofColor, C.ink, .25)],
 		accent,
 		timber: type === "workshop" || type === "dormitory" || type === "storage",
 	};
@@ -61,18 +64,22 @@ class RoomPainter {
 	face(vertices: readonly Vertex[], color: number, alpha = 1, outline = C.ink): void {
 		const points = vertices.map(([x, y, z = 0]) => this.p(x, y, z));
 		this.g.fillStyle(color, alpha).fillPoints(points, true);
-		this.g.lineStyle(.6, outline, alpha * .85).strokePoints(points, true);
+		this.g.lineStyle(1, outline, alpha * .85).strokePoints(points, true);
 	}
 	wash(vertices: readonly Vertex[], color: number, alpha: number): void {
 		this.g.fillStyle(color, alpha).fillPoints(vertices.map(([x, y, z = 0]) => this.p(x, y, z)), true);
 	}
 	line(a: Vertex, b: Vertex, color = C.steel, width = .7, alpha = 1): void {
 		const from = this.p(a[0], a[1], a[2] ?? 0), to = this.p(b[0], b[1], b[2] ?? 0);
-		this.g.lineStyle(width, color, alpha).lineBetween(from.x, from.y, to.x, to.y);
+		this.g.lineStyle(Math.max(1, Math.round(width)), color, alpha).lineBetween(from.x, from.y, to.x, to.y);
 	}
 	dot(x: number, y: number, z: number, radius: number, color: number, alpha = 1): void {
 		const point = this.p(x, y, z);
-		this.g.fillStyle(color, alpha).fillCircle(point.x, point.y, radius);
+		const size = Math.max(1, Math.round(radius * 2));
+		this.g.fillStyle(color, alpha).fillPoints([
+			{ x: point.x - size / 2, y: point.y - size / 2 }, { x: point.x + size / 2, y: point.y - size / 2 },
+			{ x: point.x + size / 2, y: point.y + size / 2 }, { x: point.x - size / 2, y: point.y + size / 2 },
+		], true);
 	}
 	plane(x: number, y: number, w: number, d: number, z: number, color: number, alpha = 1): void {
 		this.face([[x, y, z], [x + w, y, z], [x + w, y + d, z], [x, y + d, z]], color, alpha);

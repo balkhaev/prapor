@@ -1,0 +1,119 @@
+/* Shared field-workshop palette. Components use these values in their own rules;
+   layout and game-state selectors stay with the component that owns them. */
+:root {
+  color-scheme: dark;
+  font-family: Manrope, system-ui, sans-serif;
+  font-synthesis: none;
+  color: var(--game-text);
+  background: var(--game-bg);
+  --game-bg: #171c18;
+  --game-panel: #232a21;
+  --game-panel-raised: #2b3127;
+  --game-inset: #1c221d;
+  --game-hover: #343b2f;
+  --game-line: #49503c;
+  --game-line-strong: #70795c;
+  --game-text: #e3decb;
+  --game-muted: #aaa991;
+  --game-subtle: #9da58f;
+  --game-ink: #171c18;
+  --game-brass: #b7a56b;
+  --game-brass-light: #d7c58b;
+  --game-brass-surface: #393b2b;
+  --game-friendly: #93b7aa;
+  --game-friendly-surface: #24362e;
+  --game-danger: #ce9b80;
+  --game-danger-line: #a47860;
+  --game-danger-surface: #3d2d26;
+  --game-info: #99afb7;
+  --game-info-surface: #263238;
+  --game-radius-panel: 8px;
+  --game-radius-control: 6px;
+  --game-radius-small: 4px;
+  --game-shadow: 0 14px 38px #080d093d;
+  --game-scrim: #0a100ccc;
+  /* Older components and inline gameplay markup retain their semantic hooks. */
+  --muted: var(--game-muted);
+  --line: var(--game-line);
+  --panel: var(--game-panel);
+  --amber: var(--game-brass);
+  --green: var(--game-friendly);
+  --red: var(--game-danger);
+  --radius: var(--game-radius-panel);
+  --command-brass: var(--game-brass);
+  --command-edge: var(--game-line-strong);
+  --command-copper: var(--game-danger);
+  --command-paper: var(--game-text);
+  --worker-drop-green: var(--game-friendly);
+  --worker-drop-red: var(--game-danger);
+  /* Public planning maps use the same authored materials as PIXEL_PALETTE. */
+  --pixel-soil: #6c624b;
+  --pixel-leaf-shade: #415a3f;
+  --pixel-concrete: #9fa696;
+  --pixel-concrete-shade: #788475;
+  --pixel-roof: #849589;
+  --pixel-cream: #dad0ac;
+}
+
+body { background-color: var(--game-bg); }
+::selection { color: var(--game-ink); background: var(--game-brass-light); }
+:where(button, input, select, textarea) { font-family: inherit; }
+:where(button, a, input, select, textarea, summary) { -webkit-tap-highlight-color: transparent; }
+:where(input, select, textarea) { accent-color: var(--game-brass); caret-color: var(--game-brass-light); }
+:where(input, textarea)::placeholder { color: var(--game-subtle); opacity: 1; }
+:where(button, a, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--game-brass-light);
+  outline-offset: 3px;
+}
+:where(button:disabled, input:disabled, select:disabled, textarea:disabled) { cursor: not-allowed; }
+:where(input[aria-invalid=true], textarea[aria-invalid=true]) { border-color: var(--game-danger); }
+:where(progress) { accent-color: var(--game-brass); }
+
+/* These are the production button variants, also used in nested tool windows. */
+.button { background: var(--game-brass); color: var(--game-ink); border-color: var(--game-brass); }
+.button:hover:not(:disabled) { background: var(--game-brass-light); border-color: var(--game-brass-light); }
+.button.secondary { background: var(--game-panel-raised); color: var(--game-text); border-color: var(--game-line-strong); }
+.button.secondary:hover:not(:disabled) { background: var(--game-hover); border-color: var(--game-brass); }
+.button.ghost { background: transparent; color: var(--game-muted); border-color: var(--game-line); }
+.button.ghost:hover:not(:disabled) { background: var(--game-hover); color: var(--game-text); border-color: var(--game-line-strong); }
+.button.danger { background: var(--game-danger-surface); color: var(--game-danger); border-color: var(--game-danger-line); }
+.button.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--game-danger) 16%, var(--game-danger-surface)); border-color: var(--game-danger); }
+
+/* Portraits and room thumbnails use the same pixel models as the raid. */
+.scav-portrait { background-repeat: no-repeat; image-rendering: pixelated; }
+:is(.scav-avatar, .portrait, .recruit-dossier-portrait, .social-face) {
+  border-color: var(--game-line-strong);
+  background-color: var(--game-inset);
+  border-radius: var(--game-radius-control);
+}
+.command-room-banner > svg,
+.command-system > svg,
+.room-mini-art { image-rendering: pixelated; shape-rendering: crispEdges; }
+.command-room-banner > svg { filter: none; }
+
+/* A dialogue is a field panel, with the same neutral surface as the workbench. */
+.tool-window, .modal, .account-dialog {
+  background-color: var(--game-panel);
+  border-radius: var(--game-radius-panel);
+  box-shadow: var(--game-shadow);
+}
+.tool-backdrop, .context-shade { background-color: var(--game-scrim); }
+.account-dialog::backdrop { background: var(--game-scrim); }
+.tool-scroll, .command-dock-scroll, .live-dock-scroll, .account-dialog {
+  scrollbar-color: var(--game-line-strong) var(--game-inset);
+  scrollbar-width: thin;
+}
+
+@media (max-width: 640px) {
+  .command-dock .button,
+  .account-button,
+  .account-tabs button,
+  .flea-item-actions .button,
+  .context-tabs button { min-height: 40px; }
+  .account-field input { font-size: 16px; }
+  .tool-window, .account-dialog { border-radius: var(--game-radius-panel); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :where(button, summary, .progress i, .health-track i, .xp-track i) { transition: none; }
+}

@@ -4,6 +4,8 @@ import { ROOM_DEFINITIONS, getRoomBounds, getRoomEntrance, getRoomLocalPoint, ge
 import { getShelterChimney, paintIsometricProduction, paintIsometricRoom } from "../src/shelter-isometric-art";
 import { projectShelterPoint, shelterRectPolygon } from "../src/shelter-isometric";
 import type { ProductionPresentation } from "../src/shelter-production";
+import { PIXEL_PALETTE } from "../src/pixel-art";
+const pigment = (hex: string): number => Number.parseInt(hex.slice(1), 16);
 
 type Point = { x: number; y: number };
 function graphics() {
@@ -46,7 +48,7 @@ describe("oriented cutaway building artwork", () => {
 			const building = room("workshop", facing), drawing = graphics(), chimney = getShelterChimney(building)!;
 			paintIsometricRoom(drawing.g, building.column, building.row, building);
 			const at = projectShelterPoint(chimney.point);
-			expect(drawing.faces.some(face => face.color === 0x26302b && near(mean(face.points), { x: at.x, y: at.y - chimney.height }))).toBe(true);
+			expect(drawing.faces.some(face => face.color === pigment(PIXEL_PALETTE.ink) && near(mean(face.points), { x: at.x, y: at.y - chimney.height }))).toBe(true);
 		}
 		expect(getShelterChimney(room("hangar", 1))).toBeNull();
 	});
@@ -56,7 +58,7 @@ describe("oriented cutaway building artwork", () => {
 			paintIsometricRoom(drawing.g, 99, 99, building);
 			const entrance = projectShelterPoint(getRoomEntrance(building, 7));
 			// The outer step is 2.6 px below the ground plane; it remains centered on the route.
-			expect(drawing.faces.some((face) => face.color === 0x9a9987 && near(mean(face.points), { x: entrance.x, y: entrance.y + 2.6 }))).toBe(true);
+			expect(drawing.faces.some((face) => face.color === pigment(PIXEL_PALETTE.concrete) && near(mean(face.points), { x: entrance.x, y: entrance.y + 2.6 }))).toBe(true);
 		}
 	});
 
@@ -86,7 +88,7 @@ describe("oriented cutaway building artwork", () => {
 			const building = room("workshop", facing), drawing = graphics();
 			paintIsometricProduction(drawing.g, 99, 99, building, production, 1_337, false);
 			const indicator = projectShelterPoint(getRoomLocalPoint(building, 155, 57));
-			expect(drawing.points.some((point) => near(point, { x: indicator.x, y: indicator.y - 17 }))).toBe(true);
+			expect(drawing.faces.some((face) => near(mean(face.points), { x: indicator.x, y: indicator.y - 17 }))).toBe(true);
 		}
 	});
 });

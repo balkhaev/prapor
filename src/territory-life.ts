@@ -4,6 +4,11 @@ import { projectShelterPoint } from "./shelter-isometric";
 import type { ShelterPoint } from "./shelter-motion";
 import { getShelterActivityPose } from "./shelter-activity";
 import type { ShelterRoutineActivity, ShelterRoutineCargo } from "./shelter-routines";
+import type { ScavVisualLoadout } from './scav-loadout';
+import { PixelActorArt } from './pixel-actors';
+import { PIXEL_ACTOR_FRAMES, pixelActorTimedFrame } from './pixel-actor-config';
+import type { PixelActorFrame } from './pixel-animation';
+import { pixelWeaponSignature, type PixelWeaponInput } from './pixel-weapons';
 
 /** A view of the existing shelter actor, never a second roster or route simulation. */
 export interface ShelterPersonView {
@@ -22,6 +27,8 @@ export interface ShelterPersonView {
 	cargo?: ShelterRoutineCargo;
 	elapsedMs?: number;
 	activityPhase?: number;
+	visualLoadout?: ScavVisualLoadout;
+	pixelFrame?: PixelActorFrame;
 }
 export interface TerritoryLifeBounds { x: number; y: number; width: number; height: number }
 export interface TerritoryLifeOptions {
@@ -41,11 +48,10 @@ export interface TerritoryPersonAtlas {
 interface PersonNode {
 	button: HTMLButtonElement;
 	body: HTMLSpanElement;
-	sprite: HTMLSpanElement;
-	fallback: HTMLSpanElement;
+	sprite: HTMLCanvasElement;
 	prop: HTMLSpanElement;
 	label: HTMLSpanElement;
-	appearance: number;
+	spriteKey: string;
 	propKey: string;
 }
 const FRAME_INTERVAL = 1000 / 12;
@@ -91,11 +97,6 @@ export function getTerritoryPersonPose(person: Pick<ShelterPersonView, "walking"
 	return Math.sin(finite(person.walkPhase) * Math.PI * 2) >= 0 ? "walk-b" : "walk-a";
 }
 
-function fallbackBody(appearance: number): string {
-	const jackets = ["#69774d", "#95735b", "#667c6c", "#7a7d69"], jacket = jackets[appearance % jackets.length]!;
-	return svg(`<path d="M-5-17l-2 15m9-15l4 14" stroke="#29392c" stroke-width="5" stroke-linecap="round"/><path d="M-9-30l2 15h12l3-15-7-5Z" fill="${jacket}" stroke="#344733" stroke-width="1.2"/><path d="M-9-28l-3 12m19-12l4 11" stroke="${jacket}" stroke-width="5" stroke-linecap="round"/><path d="M-8-17l-4 1m24-1l1 2" stroke="#c4aa7e" stroke-width="3" stroke-linecap="round"/><ellipse cx="0" cy="-38" rx="6" ry="7" fill="#bca27b"/><path d="M-7-39l2-6h9l4 6Z" fill="#4c5b3d"/><path d="M-7-38h14" stroke="#35432e" stroke-width="2"/><path d="M-3-28h6v8h-6Z" fill="#435336"/>`);
-}
-
 function activityProp(person: ShelterPersonView): string {
 	const attachment = scavAttachment(person.direction, person.working), right = person.direction.endsWith("e") ? 1 : -1;
 	const prop = person.working ? person.role : person.walking ? /carry|suppl|haul/.test(person.activity) ? "carry" : "" : person.activity;
@@ -133,8 +134,8 @@ function boundsFor(host: HTMLElement): TerritoryLifeBounds | null {
 export function createTerritoryLife(options: TerritoryLifeOptions): TerritoryLifeController {
 	let host: HTMLElement | null = null, bounds: TerritoryLifeBounds | null = null;
 	let buildingDepths: number[] = [], frame = 0, paintedAt = -Infinity, destroyed = false, intersecting = true;
-	const people = new Map<string, PersonNode>(), atlases = new Map<number, TerritoryPersonAtlas | null>();
-	const requests = new Map<number, AbortController>();
+	const people = new Map<string, PersonNode>(), art = new PixelActorArt();
+	const emptyWeapon: PixelWeaponInput = { weaponId: 'pm', modules: {}, durability: 100 };
 	const stop = () => { if (frame) cancelAnimationFrame(frame); frame = 0; };
 	const visible = () => {
 		if (!host?.isConnected || document.hidden || !intersecting) return false;
@@ -144,26 +145,15 @@ export function createTerritoryLife(options: TerritoryLifeOptions): TerritoryLif
 		const box = host.getBoundingClientRect();
 		return box.width > 0 && box.height > 0 && box.bottom > 0 && box.top < window.innerHeight && box.right > 0 && box.left < window.innerWidth;
 	};
-	const requestAtlas = (appearance: number) => {
-		if (atlases.has(appearance) || requests.has(appearance)) return;
-		const controller = new AbortController(); requests.set(appearance, controller);
-		void fetch(`/art/scav-isometric-${appearance}.json`, { signal: controller.signal }).then(async response => {
-			if (!response.ok) throw new Error("Character atlas unavailable");
-			const atlas = await response.json() as TerritoryPersonAtlas;
-			if (!atlas?.frames || !atlas.meta?.size || !getTerritoryPersonSprite(atlas, "idle", "se")) throw new Error("Invalid character atlas");
-			if (!destroyed) { atlases.set(appearance, atlas); refresh(); }
-		}).catch(() => { if (!destroyed) atlases.set(appearance, null); }).finally(() => { requests.delete(appearance); });
-	};
-	const createPerson = (person: ShelterPersonView, appearance: number): PersonNode => {
+	const createPerson = (person: ShelterPersonView): PersonNode => {
 		const button = document.createElement("button"); button.className = "territory-person"; button.type = "button"; button.dataset.scav = person.id;
 		const body = document.createElement("span"); body.className = "territory-person-body"; body.setAttribute("aria-hidden", "true");
 		const shadow = document.createElement("span"); shadow.className = "territory-person-shadow"; shadow.innerHTML = svg('<ellipse cx="2" cy="2" rx="11" ry="3.4" fill="#112c22" opacity=".45"/>');
-		const sprite = document.createElement("span"); sprite.className = "territory-person-sprite";
-		const fallback = document.createElement("span"); fallback.className = "territory-person-fallback"; fallback.innerHTML = fallbackBody(appearance);
+		const sprite = document.createElement("canvas"); sprite.className = "territory-person-sprite";
 		const prop = document.createElement("span"); prop.className = "territory-person-prop";
 		const label = document.createElement("span"); label.className = "territory-person-label"; label.setAttribute("aria-hidden", "true");
-		body.append(shadow, fallback, sprite, prop); button.append(body, label); host!.append(button);
-		return { button, body, sprite, fallback, prop, label, appearance, propKey: "" };
+		body.append(shadow, sprite, prop); button.append(body, label); host!.append(button);
+		return { button, body, sprite, prop, label, spriteKey: '', propKey: "" };
 	};
 	const paint = () => {
 		if (!host || !bounds || !visible()) return;
@@ -174,27 +164,30 @@ export function createTerritoryLife(options: TerritoryLifeOptions): TerritoryLif
 			seen.add(person.id);
 			const appearance = isScavAppearance(person.appearance) ? person.appearance : 0;
 			let node = people.get(person.id);
-			if (!node) { node = createPerson(person, appearance); people.set(person.id, node); }
-			if (node.appearance !== appearance) { node.appearance = appearance; node.fallback.innerHTML = fallbackBody(appearance); }
-			const { button, body, sprite, fallback, prop, label } = node;
+			if (!node) { node = createPerson(person); people.set(person.id, node); }
+			const { button, body, sprite, prop, label } = node;
 			button.style.left = `${placement.left}%`; button.style.top = `${placement.top}%`; button.style.zIndex = String(placement.zIndex);
 			button.style.setProperty("--person-scale", String(scale));
 			button.dataset.activity = person.activity; button.dataset.walking = String(person.walking); button.dataset.working = String(person.working);
 			const caption = `${person.name} · ${person.label}`;
 			if (button.title !== caption) { button.title = caption; button.setAttribute("aria-label", `Личное дело: ${caption}`); label.textContent = caption; }
-			requestAtlas(appearance);
-			const direction = SCAV_DIRECTIONS.includes(person.direction) ? person.direction : "se", pose = getTerritoryPersonPose(person, options.reducedMotion);
-			const atlas = atlases.get(appearance), crop = atlas && getTerritoryPersonSprite(atlas, pose, direction);
-			if (crop) {
-				sprite.hidden = false; fallback.hidden = true;
-				sprite.style.width = `${crop.width}px`; sprite.style.height = `${crop.height}px`;
-				sprite.style.left = `${crop.x}px`; sprite.style.top = `${crop.y}px`;
-				sprite.style.backgroundImage = `url("/art/scav-isometric-${appearance}.png")`;
-				sprite.style.backgroundSize = `${crop.sheetWidth}px ${crop.sheetHeight}px`; sprite.style.backgroundPosition = `${crop.cropX}px ${crop.cropY}px`;
-			} else { sprite.hidden = true; fallback.hidden = false; }
+			const direction = SCAV_DIRECTIONS.includes(person.direction) ? person.direction : "se";
+			const animation: PixelActorFrame = person.pixelFrame ?? { mode: person.walking ? 'walk' : 'idle', facing: direction,
+				frame: person.walking ? Math.floor(finite(person.walkPhase) * PIXEL_ACTOR_FRAMES.walk) % PIXEL_ACTOR_FRAMES.walk : pixelActorTimedFrame('idle', performance.now() + appearance * 173) };
+			const pose = options.reducedMotion ? { ...animation, frame: 0 } : animation;
+			const loadout = person.visualLoadout, weapon = person.working ? emptyWeapon : loadout?.weapon ?? emptyWeapon;
+			const gear = { profile: 'light' as const, armor: Boolean(loadout?.armorModelId), helmet: Boolean(loadout?.helmetModelId), backpack: Boolean(loadout?.packModelId) };
+			const spriteKey = `${appearance}:${JSON.stringify(pose)}:${pixelWeaponSignature(weapon)}:${JSON.stringify(gear)}`;
+			if (node.spriteKey !== spriteKey) {
+				const image = art.get({ appearance, faction: 'scavs' }, pose, weapon, gear), scale = BODY_HEIGHT / 160;
+				sprite.width = image.image.width; sprite.height = image.image.height;
+				const context = sprite.getContext('2d'); if (context) { context.imageSmoothingEnabled = false; context.drawImage(image.image, 0, 0); }
+				sprite.style.width = `${sprite.width * scale}px`; sprite.style.height = `${sprite.height * scale}px`;
+				sprite.style.left = `${-image.anchor.x * scale}px`; sprite.style.top = `${-image.anchor.y * scale}px`;
+				sprite.style.imageRendering = 'pixelated'; node.spriteKey = spriteKey;
+			}
 			const activityPose = observedActivity(person, Boolean(options.reducedMotion));
-			const bob = options.reducedMotion || !person.walking ? 0 : Math.sin(finite(person.walkPhase) * Math.PI * 4) * .45;
-			body.style.setProperty("--person-bob", `${(bob + activityPose.bodyLift) * FIGURE_SCALE}px`); body.style.setProperty("--person-lean", `${activityPose.bodyTilt}deg`);
+			body.style.setProperty("--person-bob", `${activityPose.bodyLift * FIGURE_SCALE}px`); body.style.setProperty("--person-lean", `${activityPose.bodyTilt}deg`);
 			const attachment = scavAttachment(direction, person.working);
 			prop.style.transformOrigin = `${24 + attachment.x * FIGURE_SCALE}px ${52 + attachment.y * FIGURE_SCALE}px`;
 			prop.style.transform = `translate(${activityPose.toolX * FIGURE_SCALE}px,${activityPose.toolY * FIGURE_SCALE}px) rotate(${activityPose.toolAngle}deg)`;
@@ -240,7 +233,7 @@ export function createTerritoryLife(options: TerritoryLifeOptions): TerritoryLif
 			if (destroyed) return;
 			destroyed = true; stop(); mutations.disconnect(); intersection?.disconnect(); resize?.disconnect();
 			document.removeEventListener("visibilitychange", refresh); document.removeEventListener("toggle", refresh, true); window.removeEventListener("scroll", refresh, true);
-			for (const request of requests.values()) request.abort(); requests.clear();
+			art.clear();
 			for (const node of people.values()) node.button.remove(); people.clear(); host = null;
 		},
 	};

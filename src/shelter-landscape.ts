@@ -3,6 +3,7 @@ import type { ShelterRect } from "./shelter-camera";
 import { getShelterBuildingRect, getShelterCorridorSegments, getShelterOpenGroundPoints, getShelterRoomDoor, getShelterRoomEntranceDirection, getShelterTerritoryCell, getShelterWalkingRoute, type ShelterCorridorSegment, type ShelterLayoutBuilding, type ShelterLayoutSite } from "./shelter-layout";
 import { projectShelterPoint, shelterRoomPosition, SHELTER_COLUMN_STRIDE, SHELTER_ROW_STRIDE } from "./shelter-isometric";
 import type { ShelterPoint } from "./shelter-motion";
+import { PIXEL_PALETTE as P } from "./pixel-art";
 
 export interface ShelterLandscapeEdge extends ShelterCorridorSegment { side: "north" | "south" | "east" | "west" }
 export interface ShelterLandscapeDecoration {
@@ -22,12 +23,20 @@ export interface ShelterLandscape {
 	decorations: ShelterLandscapeDecoration[];
 }
 const ENTRANCE = { x: 318, y: 132 };
+const pigment = (hex: string): number => Number.parseInt(hex.slice(1), 16);
 const C = {
-	forest: 0x203e31, forestLight: 0x345140, grass: 0x617454, grassLight: 0x7d8c5d,
-	grassDark: 0x4c654b, soil: 0x928467, gravel: 0xb1a18a, pale: 0xdfd2ae,
-	damp: 0x596b55, litter: 0x9b8053, water: 0x7b9690,
-	ink: 0x223d32, bark: 0x82694a, wood: 0xb79768, steel: 0x748979,
+	forest: pigment(P.ink), forestLight: pigment(P.leafShade), grass: pigment(P.grass), grassLight: pigment(P.leafLight),
+	grassDark: pigment(P.shadow), soil: pigment(P.soil), gravel: pigment(P.sand), pale: pigment(P.cream),
+	damp: pigment(P.concreteShade), litter: pigment(P.wood), water: pigment(P.glass),
+	ink: pigment(P.ink), bark: pigment(P.woodShade), wood: pigment(P.woodLight), steel: pigment(P.steel),
 };
+
+/** Flat clusters keep leaves readable at the same pixel scale as the actors. */
+function foliage(g: Phaser.GameObjects.Graphics, x: number, y: number, width: number, height: number, color: number, alpha = 1): void {
+	const left = Math.round(x - width / 2), top = Math.round(y - height / 2), w = Math.max(2, Math.round(width)), h = Math.max(2, Math.round(height));
+	g.fillStyle(color, alpha).fillRect(left + 2, top, Math.max(1, w - 4), h);
+	g.fillRect(left, top + Math.max(1, Math.round(h / 4)), w, Math.max(1, Math.round(h / 2)));
+}
 const key = (site: ShelterLayoutSite) => `${site.column}:${site.row}`;
 const hash = (x: number, y: number, salt = 0): number => ((Math.imul(x + 1357, 73856093) ^ Math.imul(y + 2461, 19349663) ^ Math.imul(salt + 17, 83492791)) >>> 0);
 const random = (seed: number) => {
@@ -313,18 +322,21 @@ export function paintShelterDecoration(g: Phaser.GameObjects.Graphics, decoratio
 				for (const [z, width] of [[20, 19], [31, 16], [41, 12]]) {
 					const tip = at.y - Math.min(height, z! + 15), base = at.y - z! + 7, cx = at.x + sway * z! / height;
 					const points = [{ x: cx, y: tip }, { x: cx - width! * .45, y: base - 7 }, { x: cx - width!, y: base }, { x: cx - width! * .7, y: base + 1 }, { x: cx - 4, y: base - 1 }, { x: cx + 4, y: base + 2 }, { x: cx + width! * .85, y: base + 1 }, { x: cx + width!, y: base - 1 }, { x: cx + width! * .45, y: base - 9 }];
-					g.fillStyle(0x294d3c).fillPoints(points, true);
-					g.fillStyle(0x547250, .82).fillPoints([points[0]!, points[1]!, { x: cx - width! * .7, y: base - 1 }, { x: cx - 1, y: base - 5 }], true);
-					g.lineStyle(.7, 0x779065, .5).lineBetween(cx - 3, base - 8, cx - width! * .55, base - 3);
+					g.fillStyle(C.forestLight).fillPoints(points.map(point => ({ x: Math.round(point.x), y: Math.round(point.y) })), true);
+					g.fillStyle(C.grassDark).fillPoints([points[0]!, points[1]!, { x: cx - width! * .7, y: base - 1 }, { x: cx - 1, y: base - 5 }], true);
+					g.lineStyle(1, C.grass, .8).lineBetween(Math.round(cx - 3), Math.round(base - 8), Math.round(cx - width! * .55), Math.round(base - 3));
 				}
 			} else {
 				const centre = { x: at.x + sway, y: at.y - height + 20 }, width = birch ? 16 : 22, depth = birch ? 19 : 17;
-				const crown = Array.from({ length: 23 }, (_, i) => { const angle = i / 23 * Math.PI * 2, wobble = .8 + r() * .25; return { x: centre.x + Math.cos(angle) * width * wobble, y: centre.y + Math.sin(angle) * depth * wobble }; });
-				g.fillStyle(birch ? 0x456443 : 0x355b43).fillPoints(crown, true);
-				g.fillStyle(birch ? 0x7f9259 : 0x628052, .82).fillPoints(crown.map((point) => ({ x: centre.x - 3 + (point.x - centre.x) * .79, y: centre.y - 3 + (point.y - centre.y) * .76 })), true);
-				for (let i = 0; i < 16; i++) {
-					const angle = r() * Math.PI * 2, radius = Math.sqrt(r()) * .82;
-					g.fillStyle(i % 4 ? 0x829363 : 0xa2a871, .55).fillEllipse(centre.x - 2 + Math.cos(angle) * width * radius, centre.y - 2 + Math.sin(angle) * depth * radius, 2.5 + r() * 2, 1.2 + r());
+				// Overlapping lobes have stepped edges and solid lit/shaded planes,
+				// instead of a translucent smooth vector crown.
+				for (let i = 0; i < 9; i++) {
+					const angle = i / 9 * Math.PI * 2, cx = centre.x + Math.cos(angle) * width * .58, cy = centre.y + Math.sin(angle) * depth * .57;
+					foliage(g, cx, cy, width * .95, depth * .85, C.forestLight);
+				}
+				for (let i = 0; i < 7; i++) {
+					const angle = r() * Math.PI * 2, radius = Math.sqrt(r()) * .65;
+					foliage(g, centre.x - 3 + Math.cos(angle) * width * radius, centre.y - 4 + Math.sin(angle) * depth * radius, 8 + r() * 7, 5 + r() * 5, i % 3 ? C.grass : C.grassLight);
 				}
 			}
 			break;
@@ -332,10 +344,10 @@ export function paintShelterDecoration(g: Phaser.GameObjects.Graphics, decoratio
 		case "bush":
 			for (let i = 0; i < 5; i++) {
 				const dx = Math.cos(i * 2.7) * 7, dy = Math.sin(i * 2.7) * 3;
-				g.fillStyle(0x3a6649).fillEllipse(at.x + dx + sway * .35, at.y - 5 + dy, 15, 12);
-				g.fillStyle(0x82925c, .65).fillEllipse(at.x + dx - 2 + sway * .55, at.y - 8 + dy, 9, 5);
+				foliage(g, at.x + dx + sway * .35, at.y - 5 + dy, 15, 12, C.forestLight);
+				foliage(g, at.x + dx - 2 + sway * .55, at.y - 8 + dy, 9, 5, C.grass);
 			}
-			for (let i = 0; i < 6; i++) g.fillStyle(seed % 2 ? 0xd7b787 : 0xb6bc89, .85).fillCircle(at.x + r() * 22 - 11 + sway * .55, at.y - 4 - r() * 8, .8);
+			for (let i = 0; i < 4; i++) g.fillStyle(seed % 2 ? C.litter : C.pale).fillRect(Math.round(at.x + r() * 22 - 11 + sway * .55), Math.round(at.y - 4 - r() * 8), 1, 1);
 			break;
 		case "fern": {
 			for (let i = 0; i < 7; i++) {

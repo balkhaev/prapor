@@ -405,4 +405,4 @@ class ScavPreview extends Phaser.Scene {
 }
 
 await Promise.all([document.fonts.ready, preloadModularWeaponArt([controls.weapon.value])]);
-new Phaser.Game({ type: Phaser.AUTO, parent: gallery, width: gallery.clientWidth, height: 750, backgroundColor: "#17221b", transparent: true, antialias: true, pixelArt: false, scene: ScavPreview, banner: false, audio: { noAudio: true }, scale: { mode: Phaser.Scale.NONE } });
+new Phaser.Game({ type: Phaser.AUTO, parent: gallery, width: gallery.clientWidth, height: 750, backgroundColor: "#171c18", transparent: true, antialias: false, pixelArt: true, roundPixels: true, scene: ScavPreview, banner: false, audio: { noAudio: true }, scale: { mode: Phaser.Scale.NONE } });

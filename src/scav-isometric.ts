@@ -1,9 +1,24 @@
 import { SCAV_APPEARANCES, defaultScavAppearance, isScavAppearance } from "./game/scav-appearances";
+import { WEAPON_BY_ID } from './game/data';
+import type { ScavVisualLoadout } from './scav-loadout';
+import type { PixelActorGear } from './pixel-actors';
+import type { PixelActorFrame } from './pixel-animation';
+import { PIXEL_ACTOR_FRAMES, pixelActorTimedFrame } from './pixel-actor-config';
 
 export type ScavDirection = "se" | "sw" | "ne" | "nw";
 export const SCAV_DIRECTIONS = ["se", "sw", "ne", "nw"] as const satisfies readonly ScavDirection[];
 export const SCAV_POSES = ["idle", "walk-a", "walk-b", "work"] as const;
 export type ScavPose = typeof SCAV_POSES[number];
+
+/** The shelter and paid raid use the same physical gear, including empty slots. */
+export function scavPixelGear(loadout: ScavVisualLoadout): PixelActorGear {
+	return { profile: loadout.weapon && WEAPON_BY_ID[loadout.weapon.weaponId]?.category === 'sniper' ? 'scout' : loadout.armorModelId ? 'assault' : 'light',
+		helmet: Boolean(loadout.helmetModelId), armor: Boolean(loadout.armorModelId), backpack: Boolean(loadout.packModelId) };
+}
+
+export function scavPixelFrame(direction: ScavDirection, stride: number, idleMs: number, walking: boolean, reducedMotion = false): PixelActorFrame {
+	return { facing: direction, mode: walking && !reducedMotion ? 'walk' : 'idle', frame: reducedMotion ? 0 : walking ? Math.floor((((stride % 1) + 1) % 1) * PIXEL_ACTOR_FRAMES.walk) : pixelActorTimedFrame('idle', idleMs) };
+}
 
 /** Every atlas frame shares a source canvas and a ground contact at the feet. */
 export const SCAV_ORIGIN = { x: .5, y: 480 / 512 } as const;
