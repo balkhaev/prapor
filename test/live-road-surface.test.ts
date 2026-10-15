@@ -1,9 +1,10 @@
 import { expect, test } from 'bun:test';
 import type { LiveLandscapePath, LivePoint, LiveTerrain, LiveWorld } from '../src/game/live';
 import { buildSurfaceMasks, type GroundWorld } from '../src/live-ground-art';
-import { buildRoadSurfaceArt, paintRoadSurfaceArt } from '../src/live-road-surface';
+import { buildRoadSurfaceArt, paintRoadSurfaceArt, roadAsphaltHalfWidth } from '../src/live-road-surface';
 import { LIVE_MAPS } from '../src/game/live-maps';
 import { LIVE_TERRAIN_CODES } from '../src/game/live';
+import { PIXEL_PALETTE as P } from '../src/pixel-art';
 
 const path = (id: string, points: LivePoint[], width = 5): LiveLandscapePath => ({ id, name: id, kind: 'road', width, points });
 function fixture(paths: LiveLandscapePath[], width = 40, height = 32) {
@@ -46,6 +47,48 @@ test('a whole dash stays outside broad intersections and even unmarked narrow T 
   }
   expect(art.strokes.filter(stroke => stroke.kind === 'crosswalk').length).toBeGreaterThan(10);
   expect(art.strokes.filter(stroke => stroke.kind === 'crosswalk').every(stroke => Math.abs(stroke.a.x - 29.5) > 2 || Math.abs(stroke.a.y - 15.5) > 5)).toBe(true);
+});
+
+test('diagonal asphalt keeps its complete smooth edge inside the raster while outer steps use the adjacent paving tone', () => {
+  for (const angle of [Math.PI / 12, Math.PI / 6, Math.PI / 4, Math.PI / 3, Math.PI * 5 / 12]) {
+    const dx = Math.cos(angle), dy = Math.sin(angle), a = { x: 7, y: 5 }, b = { x: 7 + dx * 23, y: 5 + dy * 23 };
+    const f = fixture([path('metro-diagonal', [a, b])]), masks = buildSurfaceMasks(f.world, f.terrain, f.walkable), art = buildRoadSurfaceArt(f.world, masks);
+    expect(art.paths[0]!.shoulderColor).toBe(P.concrete);
+    for (let along = 2; along < 21; along += .2) for (const side of [-1, 1]) {
+      const x = a.x + .5 + dx * along - dy * roadAsphaltHalfWidth(5) * side, y = a.y + .5 + dy * along + dx * roadAsphaltHalfWidth(5) * side;
+      expect(masks.road[Math.floor(y) * f.world.width + Math.floor(x)]).toBe(1);
+    }
+    const paints: Array<{ color: string; width: number }> = []; let fill = '';
+    const c = { lineWidth: 0, strokeStyle: '', fillStyle: '', save() {}, restore() {}, beginPath() {}, rect() {}, clip() {}, moveTo() {}, lineTo() {},
+      fillRect(this: { fillStyle: string }) { fill = this.fillStyle; }, stroke(this: { strokeStyle: string; lineWidth: number }) { paints.push({ color: this.strokeStyle, width: this.lineWidth }); },
+    } as unknown as CanvasRenderingContext2D;
+    paintRoadSurfaceArt(c, art);
+    expect(fill).toBe(P.concrete);
+    expect(paints[0]).toEqual({ color: P.concrete, width: 8.4 });
+    expect(paints[2]).toEqual({ color: '#535e62', width: roadAsphaltHalfWidth(5) * 2 });
+    expect(paints[2]!.width).toBeLessThan(3.6);
+  }
+});
+
+test('native aggregate stays microscopic and crosswalks fit inside the narrower visible asphalt', () => {
+  const f = fixture([path('metro-main', [{ x: 1, y: 15 }, { x: 38, y: 15 }], 6), path('metro-cross', [{ x: 13, y: 1 }, { x: 13, y: 30 }], 4)]);
+  const art = buildRoadSurfaceArt(f.world, buildSurfaceMasks(f.world, f.terrain, f.walkable));
+  const grain = art.strokes.filter(stroke => stroke.kind === 'grain');
+  expect(grain.length).toBeGreaterThan(0); expect(grain.length).toBeLessThanOrEqual(8192);
+  for (const mark of grain) {
+    expect(mark.weight).toBeGreaterThanOrEqual(.025); expect(mark.weight).toBeLessThanOrEqual(.04);
+    expect(Math.hypot(mark.b.x - mark.a.x, mark.b.y - mark.a.y)).toBeLessThan(.04);
+  }
+  for (const mark of art.strokes.filter(stroke => stroke.kind === 'crosswalk')) {
+    if (Math.abs(mark.b.x - mark.a.x) > Math.abs(mark.b.y - mark.a.y)) expect(Math.max(Math.abs(mark.a.y - 15.5), Math.abs(mark.b.y - 15.5)) + mark.weight / 2).toBeLessThan(roadAsphaltHalfWidth(6));
+    else expect(Math.max(Math.abs(mark.a.x - 13.5), Math.abs(mark.b.x - 13.5)) + mark.weight / 2).toBeLessThan(roadAsphaltHalfWidth(4));
+  }
+  let grainsDrawn = 0;
+  const c = { lineWidth: 0, strokeStyle: '', save() {}, restore() {}, beginPath() {}, rect() {}, clip() {}, moveTo() {}, lineTo() {}, fillRect() {},
+    stroke(this: { lineWidth: number }) { if (this.lineWidth <= .04) grainsDrawn++; },
+  } as unknown as CanvasRenderingContext2D;
+  paintRoadSurfaceArt(c, art); expect(grainsDrawn).toBe(0);
+  paintRoadSurfaceArt(c, art, { display: true }); expect(grainsDrawn).toBe(grain.length);
 });
 
 test('asphalt accepts an actual rail crossing while water, interiors, cover and remote rails remain outside every paint clip', () => {
@@ -95,7 +138,7 @@ test('the complete metropolis builds bounded road art from its unchanged public 
   for (const obstacle of world.obstacles) for (let y = obstacle.y; y < obstacle.y + obstacle.height; y++) walkable.fill(0, y * world.width + obstacle.x, y * world.width + obstacle.x + obstacle.width);
   const masks = buildSurfaceMasks(world, terrain, walkable), art = buildRoadSurfaceArt(world, masks);
   expect(world.version).toBe(before); expect(world.props).toBe(props);
-  expect(art.paths.length).toBeLessThan(300); expect(art.strokes.length).toBeLessThan(8000); expect(art.runs.length).toBeLessThan(32768);
+  expect(art.paths.length).toBeLessThan(300); expect(art.strokes.length).toBeLessThan(16384); expect(art.runs.length).toBeLessThan(32768);
   expect(art.paths.length).toBeGreaterThan(100); expect(art.strokes.length).toBeGreaterThan(100);
   for (const run of art.runs) for (let x = run.x; x < run.x + run.width; x++) {
     expect(masks.road[run.y * world.width + x]).toBe(1); expect(masks.indoor[run.y * world.width + x]).toBe(0); expect(walkable[run.y * world.width + x]).toBe(1);

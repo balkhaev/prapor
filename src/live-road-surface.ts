@@ -1,9 +1,10 @@
-import type { LiveLandscapePath, LivePoint } from './game/live';
-import { buildRoadSurfacePlan, cityPedestrianCrossings, roadHasMarkings, type GroundWorld, type RoadSurfacePlan, type SurfaceMasks, type SurfaceRun } from './live-ground-art';
+import type { LiveLandscapePath, LivePoint, LiveWorld } from './game/live';
+import { buildRoadSurfacePlan, cityPedestrianCrossings, roadHasMarkings, TERRAIN_PIGMENTS, type GroundWorld, type RoadSurfacePlan, type SurfaceMasks, type SurfaceRun } from './live-ground-art';
+import { PIXEL_PALETTE as P } from './pixel-art';
 
 type Rect = LivePoint & { width: number; height: number };
-type RoadPathArt = Rect & { width: number; laneWidth: number; urban: boolean; points: readonly LivePoint[] };
-export type RoadArtStroke = Rect & { a: LivePoint; b: LivePoint; weight: number; color: string; kind: 'center-mark' | 'crosswalk' | 'stop-line' | 'wheel-wear' | 'repair' };
+type RoadPathArt = Rect & { laneWidth: number; urban: boolean; shoulderColor: string; points: readonly LivePoint[] };
+export type RoadArtStroke = Rect & { a: LivePoint; b: LivePoint; weight: number; color: string; kind: 'center-mark' | 'crosswalk' | 'stop-line' | 'wheel-wear' | 'repair' | 'grain' };
 export type RoadSurfaceArt = {
   width: number; height: number; paths: RoadPathArt[]; strokes: RoadArtStroke[];
   /** Exact road/rail-crossing cells, narrowed from the caller's safety mask. */
@@ -12,6 +13,9 @@ export type RoadSurfaceArt = {
 const SEGMENT_LIMIT = 2048, STROKE_LIMIT = 16384, BIN = 16;
 const hash = (x: number, y: number): number => { let value = Math.imul(x + 721, 374761393) ^ Math.imul(y + 191, 668265263); value = Math.imul(value ^ value >>> 13, 1274126177); return (value ^ value >>> 16) >>> 0; };
 const urban = (path: LiveLandscapePath): boolean => path.id.startsWith('city-') || path.id.startsWith('metro-');
+/** A diagonal raster boundary can intrude sqrt(2)/2 metres into the nominal
+ * corridor. Keep the smooth visible asphalt just inside that limiting corner. */
+export const roadAsphaltHalfWidth = (width: number): number => Math.max(.3, width / 2 - (width >= 3 ? .78 : Math.min(.55, width * .3)));
 const bounds = (a: LivePoint, b: LivePoint, padding: number): Rect => ({ x: Math.min(a.x, b.x) - padding, y: Math.min(a.y, b.y) - padding, width: Math.abs(b.x - a.x) + padding * 2, height: Math.abs(b.y - a.y) + padding * 2 });
 const touches = (a: Rect, b: Rect): boolean => a.x <= b.x + b.width && a.x + a.width >= b.x && a.y <= b.y + b.height && a.y + a.height >= b.y;
 const distanceToSegment = (point: LivePoint, a: LivePoint, b: LivePoint): number => {
@@ -54,9 +58,26 @@ function markingJunctions(plan: RoadSurfacePlan): Array<LivePoint & { radius: nu
   return result;
 }
 
+function shoulderColor(path: LiveLandscapePath, world: GroundWorld & Partial<Pick<LiveWorld, 'terrainRows'>>): string {
+  const counts = new Map<string, number>();
+  for (let i = 1; i < path.points.length; i++) {
+    const a = path.points[i - 1]!, b = path.points[i]!, dx = b.x - a.x, dy = b.y - a.y, span = Math.hypot(dx, dy);
+    if (span < .05) continue;
+    for (const ratio of [.2, .5, .8]) for (const side of [-1, 1]) {
+      const offset = path.width / 2 + 1.1, x = Math.round(a.x + dx * ratio - dy / span * offset * side), y = Math.round(a.y + dy * ratio + dx / span * offset * side);
+      const code = world.terrainRows?.[y]?.[x];
+      if (code && 'cygsf'.includes(code)) counts.set(code, (counts.get(code) ?? 0) + 1);
+    }
+  }
+  const code = [...counts].sort((a, b) => b[1] - a[1])[0]?.[0];
+  const material = code === 'g' ? 'grass' : code === 'f' ? 'forest' : code === 's' ? 'sand' : code === 'y' ? 'yard' : 'concrete';
+  if (!code && !urban(path)) return '#8a8975';
+  return `#${TERRAIN_PIGMENTS[material].map(channel => channel.toString(16).padStart(2, '0')).join('')}`;
+}
+
 /** Static art only. The original world, terrain and mask arrays remain untouched.
  * Runs include asphalt beneath an actual road/rail crossing, never remote rails. */
-export function buildRoadSurfaceArt(world: GroundWorld, masks: SurfaceMasks): RoadSurfaceArt {
+export function buildRoadSurfaceArt(world: GroundWorld & Partial<Pick<LiveWorld, 'terrainRows'>>, masks: SurfaceMasks): RoadSurfaceArt {
   const paths = boundedPaths(world.paths), plan = buildRoadSurfacePlan(paths, masks.road, world.width, world.height);
   const art: RoadSurfaceArt = { width: world.width, height: world.height, paths: [], strokes: [], runs: [], rowOffsets: new Uint32Array(world.height + 1) };
   const bins = new Map<string, typeof plan.segments>();
@@ -81,7 +102,7 @@ export function buildRoadSurfaceArt(world: GroundWorld, masks: SurfaceMasks): Ro
   for (const path of paths) {
     const points = path.points.map(point => ({ x: point.x + .5, y: point.y + .5 }));
     const xs = points.map(point => point.x), ys = points.map(point => point.y), padding = path.width / 2 + 1;
-    art.paths.push({ x: Math.min(...xs) - padding, y: Math.min(...ys) - padding, width: Math.max(...xs) - Math.min(...xs) + padding * 2, height: Math.max(...ys) - Math.min(...ys) + padding * 2, laneWidth: path.width, urban: urban(path), points });
+    art.paths.push({ x: Math.min(...xs) - padding, y: Math.min(...ys) - padding, width: Math.max(...xs) - Math.min(...xs) + padding * 2, height: Math.max(...ys) - Math.min(...ys) + padding * 2, laneWidth: path.width, urban: urban(path), shoulderColor: shoulderColor(path, world), points });
   }
   const junctions = markingJunctions(plan);
   const add = (kind: RoadArtStroke['kind'], a: LivePoint, b: LivePoint, weight: number, color: string): void => {
@@ -95,7 +116,8 @@ export function buildRoadSurfaceArt(world: GroundWorld, masks: SurfaceMasks): Ro
     for (let along = 5; along < segment.length - 2 && art.strokes.length < STROKE_LIMIT; along += 17) {
       const sample = hash(Math.floor(segment.a.x + ux * along), Math.floor(segment.a.y + uy * along));
       if (sample % 3) continue;
-      const a = point(along, segment.path.width * .24 * (sample % 2 ? 1 : -1)), b = point(Math.min(segment.length - .5, along + 3.2), segment.path.width * .24 * (sample % 2 ? 1 : -1));
+      const offset = roadAsphaltHalfWidth(segment.path.width) * .58 * (sample % 2 ? 1 : -1);
+      const a = point(along, offset), b = point(Math.min(segment.length - .5, along + 3.2), offset);
       if (clearJunction(a, b)) add('wheel-wear', a, b, .27, '#4f585a');
       if (sample % 5 === 0) add('repair', point(along + .45, -.3), point(along + 1.5, -.18), .42, '#4a5558');
     }
@@ -114,9 +136,9 @@ export function buildRoadSurfaceArt(world: GroundWorld, masks: SurfaceMasks): Ro
     const city = world.city;
     if (!city || crossing.x < city.x || crossing.y < city.y || crossing.x >= city.x + city.width || crossing.y >= city.y + city.height) continue;
     for (const [along, cross] of [[crossing.a, crossing.b], [crossing.b, crossing.a]] as const) {
-      const ux = along.dx / along.length, uy = along.dy / along.length, nx = -uy, ny = ux, half = Math.max(.7, along.path.width / 2 - .55);
+      const ux = along.dx / along.length, uy = along.dy / along.length, nx = -uy, ny = ux, half = Math.max(.35, roadAsphaltHalfWidth(along.path.width) - .23);
       for (const side of [-1, 1]) {
-        const position = cross.path.width / 2 + 1.2, center = { x: crossing.x + ux * position * side, y: crossing.y + uy * position * side };
+        const position = roadAsphaltHalfWidth(cross.path.width) + 1.05, center = { x: crossing.x + ux * position * side, y: crossing.y + uy * position * side };
         // A T junction only has markings on approaches which actually exist.
         const alongAt = (center.x - along.a.x) * ux + (center.y - along.a.y) * uy;
         if (alongAt < .6 || alongAt > along.length - .6) continue;
@@ -126,6 +148,19 @@ export function buildRoadSurfaceArt(world: GroundWorld, masks: SurfaceMasks): Ro
         if (stopAt > .5 && stopAt < along.length - .5) add('stop-line', { x: stop.x - nx * side * .12, y: stop.y - ny * side * .12 }, { x: stop.x - nx * side * half, y: stop.y - ny * side * half }, .095, '#c9c5ac');
       }
     }
+  }
+  // Tiny low-contrast aggregate is resolved only in the display pass. Stratified
+  // metre samples stay sparse; selecting the closest segment avoids a second
+  // grain layer where several roads share the same intersection.
+  let grains = 0;
+  for (const run of art.runs) for (let x = run.x; x < run.x + run.width && grains < 8192 && art.strokes.length < STROKE_LIMIT; x++) {
+    const sample = hash(x, run.y);
+    if (sample % 7) continue;
+    const a = { x: x + .22 + ((sample >>> 8) % 57) / 100, y: run.y + .22 + ((sample >>> 16) % 57) / 100 };
+    const local = bins.get(`${Math.floor(x / BIN)}:${Math.floor(run.y / BIN)}`);
+    if (!local?.some(segment => distanceToSegment(a, segment.a, segment.b) < roadAsphaltHalfWidth(segment.path.width) - .12)) continue;
+    const length = .025 + (sample >>> 24) % 12 / 1000;
+    add('grain', a, { x: a.x + length, y: a.y + (sample % 2 ? .012 : -.012) }, .025 + sample % 10 / 1000, sample % 3 ? '#596367' : '#4e5a5e'); grains++;
   }
   return art;
 }
@@ -146,24 +181,26 @@ export function paintRoadSurfaceArt(c: CanvasRenderingContext2D, art: RoadSurfac
   }
   if (!included) { c.restore(); return; }
   c.clip();
-  // An opaque union removes repeating atlas squares and lets every joining
-  // street share one asphalt field, including the centre of intersections.
-  c.fillStyle = '#596164'; c.fillRect(area.x, firstRow, area.width, lastRow - firstRow);
+  // The outer raster steps borrow the adjacent paving/earth tone. A smooth
+  // asphalt stroke is inset within this exact clip, so tile corners disappear
+  // into their shoulder instead of becoming the visible road silhouette.
+  c.fillStyle = P.concrete; c.fillRect(area.x, firstRow, area.width, lastRow - firstRow);
   c.lineCap = 'round'; c.lineJoin = 'round';
   const pathStroke = (path: RoadPathArt, width: number, color: string): void => {
     c.beginPath(); path.points.forEach((point, index) => index ? c.lineTo(point.x, point.y) : c.moveTo(point.x, point.y));
     c.lineWidth = width; c.strokeStyle = color; c.stroke();
   };
-  // All outer edges precede all lanes: one road can never draw its shoulder
-  // across another road at a bend, T junction or crossroads.
-  for (const path of art.paths) if (touches(path, area)) pathStroke(path, path.laneWidth + .45, path.urban ? '#69716c' : '#77766a');
-  for (const path of art.paths) if (touches(path, area)) pathStroke(path, Math.max(.45, path.laneWidth - .16), '#535e62');
+  // All foundations, then all curbs, then all asphalt: no internal shoulder
+  // stripe survives across another street's lane at a junction or bend.
+  for (const path of art.paths) if (touches(path, area)) pathStroke(path, path.laneWidth + 3.4, path.shoulderColor);
+  for (const path of art.paths) if (touches(path, area)) pathStroke(path, roadAsphaltHalfWidth(path.laneWidth) * 2 + .12, path.urban ? '#818a7e' : '#747c6e');
+  for (const path of art.paths) if (touches(path, area)) pathStroke(path, roadAsphaltHalfWidth(path.laneWidth) * 2, '#535e62');
   c.lineCap = 'butt';
   for (const stroke of art.strokes) {
     if (!touches(stroke, area)) continue;
     // Native wear is deliberately quiet. Thin markings share their cached
     // geometry but are resolved at the current pixel scale.
-    if (!options.display && stroke.kind === 'wheel-wear') continue;
+    if (!options.display && (stroke.kind === 'wheel-wear' || stroke.kind === 'grain')) continue;
     c.beginPath(); c.moveTo(stroke.a.x, stroke.a.y); c.lineTo(stroke.b.x, stroke.b.y);
     c.strokeStyle = stroke.color; c.lineWidth = stroke.weight; c.stroke();
   }
