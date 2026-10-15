@@ -18,7 +18,8 @@ import { paintIsometricRoom, paintIsometricProduction, getShelterChimney, getShe
 import { RaidStreetRenderer } from "./raid-scene";
 import { getShelterLandscape, paintShelterLandscape, paintShelterDecoration, type ShelterLandscape, type ShelterLandscapeDecoration } from "./shelter-landscape";
 import { sampleShelterAtmosphere, sampleShelterWind, paintShelterAtmosphereGround, paintShelterAtmosphereGroundLights, paintShelterAtmosphereAir, paintShelterAtmosphereGlows, type ShelterSmokeEmitter, type ShelterAtmosphereLight } from "./shelter-atmosphere";
-import { readSceneLightMode, sceneLightProfile, type SceneLightMode } from './pixel-lighting';
+import { readSceneClimate } from './scene-climate';
+import { sampleSceneWeather, paintSceneWeather } from './scene-weather';
 import { getShelterRoutine, restoreShelterRoutine, type ShelterRoutine } from "./shelter-routines";
 import { getShelterActivityPose } from "./shelter-activity";
 import type { ShelterPersonView } from "./territory-life";
@@ -310,13 +311,13 @@ export function createWorld(
 		private atmosphereShade!: Phaser.GameObjects.Graphics;
 		private atmosphereAir!: Phaser.GameObjects.Graphics;
 		private atmosphereGlows!: Phaser.GameObjects.Graphics;
+		private baseWeather!: Phaser.GameObjects.Graphics;
 		private landscape: ShelterLandscape | null = null;
 		private smokeEmitters: ShelterSmokeEmitter[] = [];
 		private atmosphereLights: ShelterAtmosphereLight[] = [];
 		private windProps: { art: Phaser.GameObjects.Graphics; decoration: ShelterLandscapeDecoration }[] = [];
 		private lastAtmospherePaint = -1000;
 		private lastWindPaint = -1000;
-		private baseLightMode: SceneLightMode | null = null;
 		private dragGhost!: Phaser.GameObjects.Graphics;
 		private placementGhost!: Phaser.GameObjects.Graphics;
 		private buildingGhost!: Phaser.GameObjects.Graphics;
@@ -390,6 +391,7 @@ export function createWorld(
 				this.viewportObserver?.disconnect();
 				if (this.viewportFrame) cancelAnimationFrame(this.viewportFrame);
 				this.nativeEvents.abort();
+				this.baseWeather?.destroy();
 				this.raidActors.clear();
 				this.places.clear();
 				this.cells.clear();
@@ -404,6 +406,8 @@ export function createWorld(
 			interactions.onHover?.(null);
 			if (!this.baseLayer) return;
 			this.baseLayer.setVisible(view === "base");
+			if (view !== "base") this.baseWeather.clear();
+			else this.lastAtmospherePaint = -1000;
 			this.mapLayer.setVisible(view === "map");
 			this.raidStreet.layer.setVisible(view === "raid");
 			this.input.setDefaultCursor("default");
@@ -547,6 +551,8 @@ export function createWorld(
 		private applyCamera(): void {
 			this.viewCamera = clampShelterCamera(this.viewCamera, this.viewport, this.worldBounds);
 			this.baseLayer?.setScale(this.viewCamera.zoom).setPosition(-this.viewCamera.x * this.viewCamera.zoom, -this.viewCamera.y * this.viewCamera.zoom);
+			// Weather retains viewport pixels despite the yard's world transform.
+			this.baseWeather?.setPosition(this.viewCamera.x, this.viewCamera.y).setScale(1 / this.viewCamera.zoom);
 			this.mapLayer?.setPosition((this.viewport.width - WIDTH) / 2, (this.viewport.height - HEIGHT) / 2 + 30);
 			this.input?.setDefaultCursor(this.buildingGesture?.active ? "grabbing" : this.panMode || this.spacePressed || requestedView === "raid" ? "grab" : "default");
 			if (this.panMode || this.spacePressed || requestedView !== "base") interactions.onHover?.(null);
@@ -570,6 +576,7 @@ export function createWorld(
 			this.viewCamera = resizeShelterCamera(this.viewCamera, this.viewport, next, this.worldBounds);
 			const changed = Math.abs(next.width - this.viewport.width) > .001 || Math.abs(next.height - this.viewport.height) > .001;
 			this.viewport = next;
+			this.lastAtmospherePaint = -1000;
 			// FIT still scales uniformly, but its logical viewport now occupies the
 			// whole stage. Only the fully visible overview keeps centered margins.
 			this.scale.getParentBounds();
@@ -991,7 +998,9 @@ export function createWorld(
 			this.atmosphereShade = this.add.graphics().setDepth(999_998);
 			this.atmosphereGlows = this.add.graphics().setDepth(999_999).setBlendMode(Phaser.BlendModes.ADD);
 			this.atmosphereAir = this.add.graphics().setDepth(1_000_002);
+			this.baseWeather = this.add.graphics().setDepth(2_000_000);
 			this.baseLayer.add([this.atmosphereGround, this.atmosphereGroundLights, this.atmosphereShade, this.atmosphereGlows, this.atmosphereAir]);
+			this.baseLayer.add(this.baseWeather);
 			this.ambient = this.add.graphics().setDepth(1_000_000); this.baseLayer.add(this.ambient);
 			this.dragGhost = this.add.graphics().setDepth(100_000_000); this.baseLayer.add(this.dragGhost);
 			this.placementGhost = this.add.graphics().setDepth(100_000_002); this.baseLayer.add(this.placementGhost);
@@ -1388,24 +1397,25 @@ export function createWorld(
 
 		private animateAtmosphere(time: number): void {
 			if (!this.landscape || !this.atmosphereAir) return;
-			const mode = readSceneLightMode(), profile = sceneLightProfile(mode), modeChanged = mode !== this.baseLightMode;
-			if (reducedMotion && this.lastAtmospherePaint >= 0 && !modeChanged) return;
+			if (time - this.lastAtmospherePaint < 50) return;
+			this.lastAtmospherePaint = time;
+			// Lighting and outdoor weather observe the global visual clock, even
+			// while local work/actor animation is paused or reduced motion is on.
+			const climate = readSceneClimate(), profile = climate.profile;
 			if (time - this.lastWindPaint >= 83) {
 				this.lastWindPaint = time;
-				const wind = sampleShelterWind(time, reducedMotion);
+				const wind = sampleShelterWind(climate.timeMs, reducedMotion, climate.wind);
 				for (const { art, decoration } of this.windProps) {
 					art.clear(); paintShelterDecoration(art, decoration, wind.sway * (1.1 + decoration.seed % 5 * .1));
 				}
 			}
-			if (time - this.lastAtmospherePaint < 50 && !modeChanged) return;
-			this.lastAtmospherePaint = time;
 			// One tint covers world art only. Chrome, controls and selection layers
 			// stay above it; individual light pools never add a second dark overlay.
-			this.baseLightMode = mode;
 			this.atmosphereShade.clear().fillStyle(pigment(profile.ambient), profile.ambientAlpha)
 				.fillRect(Math.floor(this.worldBounds.x) - 1, Math.floor(this.worldBounds.y) - 1, Math.ceil(this.worldBounds.width) + 2, Math.ceil(this.worldBounds.height) + 2);
-			const frame = sampleShelterAtmosphere({ timeMs: time, groundBounds: this.worldBounds, smokeEmitters: this.smokeEmitters, lights: this.atmosphereLights,
+			const frame = sampleShelterAtmosphere({ timeMs: climate.timeMs, groundBounds: this.worldBounds, smokeEmitters: this.smokeEmitters, lights: this.atmosphereLights,
 				lightStrength: profile.lights, shadowStrength: profile.shadowAlpha,
+				weatherRain: climate.rain, weatherFog: climate.fog, weatherWind: climate.wind,
 				birdBounds: { x: this.worldBounds.x + 60, y: this.worldBounds.y + 25, width: Math.max(100, this.worldBounds.width - 120), height: 55 },
 				mistZones: this.windProps.filter(prop => prop.decoration.kind === "tree" && !prop.decoration.owned).slice(-3).map(prop => {
 					const at = projectShelterPoint(prop.decoration.point);
@@ -1415,6 +1425,9 @@ export function createWorld(
 			paintShelterAtmosphereGroundLights(this.atmosphereGroundLights, frame);
 			this.atmosphereAir.clear(); paintShelterAtmosphereAir(this.atmosphereAir, frame);
 			this.atmosphereGlows.clear(); paintShelterAtmosphereGlows(this.atmosphereGlows, frame);
+			this.baseWeather.clear();
+			paintSceneWeather(this.baseWeather, sampleSceneWeather({ width: this.viewport.width, height: this.viewport.height,
+				timeMs: climate.timeMs, rain: climate.rain, fog: climate.fog, wind: climate.wind, reducedMotion }));
 		}
 
 		private animateShelter(time: number, delta: number): void {

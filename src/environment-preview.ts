@@ -8,7 +8,7 @@ import { getRaidFieldPlan } from './raid-field';
 const stage = document.querySelector<HTMLElement>('#environment-stage')!;
 const choice = document.querySelector<HTMLSelectElement>('#environment-scene')!;
 const locationLabel = document.querySelector<HTMLElement>('#environment-location')!;
-mountSceneLightControl(document.querySelector('.environment-toolbar')!);
+mountSceneLightControl(document.querySelector('.environment-toolbar')!, { preview: true });
 for (const map of MAPS) choice.add(new Option(map.name, map.id));
 choice.add(new Option('Карта маршрутов', 'map'));
 const requested = new URLSearchParams(location.search).get('scene');

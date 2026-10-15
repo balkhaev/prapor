@@ -22,6 +22,26 @@ function allNumbers(value: unknown): number[] {
 }
 
 describe("shelter atmosphere", () => {
+	test("epoch visual time keeps wind and outdoor atmosphere moving beyond the old local clock range", () => {
+		const timeMs = Date.UTC(2026, 9, 15, 12), later = timeMs + 1000;
+		expect(sampleShelterWind(timeMs)).not.toEqual(sampleShelterWind(later));
+		expect(sampleShelterAtmosphere({ ...input, timeMs })).not.toEqual(sampleShelterAtmosphere({ ...input, timeMs: later }));
+		expect(sampleShelterAtmosphere({ ...input, timeMs, reducedMotion: true })).toEqual(sampleShelterAtmosphere({ ...input, timeMs: later, reducedMotion: true }));
+	});
+
+	test("shared weather drives smoke direction and suppresses duplicate local fog without moving reduced-motion scenery", () => {
+		const dry = sampleShelterAtmosphere({ ...input, weatherFog: 0, weatherRain: 0, weatherWind: -1 });
+		const wet = sampleShelterAtmosphere({ ...input, weatherFog: 1, weatherRain: 1, weatherWind: 1 });
+		expect(dry.wind.x).toBeLessThan(-.7); expect(wet.wind.x).toBeGreaterThan(.7);
+		expect(wet.mist[0]!.alpha).toBeLessThan(dry.mist[0]!.alpha * .2);
+		expect(wet.birds.every(bird => bird.alpha === 0)).toBe(true);
+		expect(wet.clouds[0]!.alpha).toBeGreaterThan(dry.clouds[0]!.alpha);
+		for (const wind of [-1, 1, NaN, Infinity]) {
+			const still = sampleShelterAtmosphere({ ...input, weatherWind: wind, reducedMotion: true });
+			expect(still.wind).toEqual({ x: 0, y: 0, sway: 0 }); expect(allNumbers(still).every(Number.isFinite)).toBe(true);
+		}
+	});
+
 	test("real elevated lamps illuminate the ground below while their bulb stays at fixture height", () => {
 		const lights = [{ x: 100.5, y: 170.25, kind: 'lamp' as const, height: 30 }, { x: -10, y: 55, kind: 'lamp' as const, height: 12 }, { x: 80, y: 100, kind: 'fire' as const, height: 4 }];
 		const frame = sampleShelterAtmosphere({ ...input, lights, reducedMotion: true });
