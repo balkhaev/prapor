@@ -67,6 +67,28 @@ test('native and cached street passes share an exact physical clip and do not le
   expect(saves).toBe(0); expect(strokes).toBeGreaterThan(details.length * 2);
 });
 
+test('native pavement adds thin curb joints without repainting its cached broad foundation', () => {
+  const f = fixture(), pavement = buildCityStreetGround(f.world, f.terrain, f.walkable, f.indoor).find(detail => detail.kind === 'pavement')!;
+  const strokes: Array<{ color: string; width: number }> = []; let saves = 0;
+  const c = { lineWidth: 0, strokeStyle: '', save() { saves++; }, restore() { saves--; }, beginPath() {}, rect() {}, clip() {}, moveTo() {}, lineTo() {},
+    stroke(this: { strokeStyle: string; lineWidth: number }) { strokes.push({ color: this.strokeStyle, width: this.lineWidth }); },
+  } as unknown as CanvasRenderingContext2D;
+  paintCityStreetGroundDetail(c, pavement, true, false);
+  expect(strokes.length).toBeGreaterThan(2); expect(Math.max(...strokes.map(stroke => stroke.width))).toBeLessThanOrEqual(.17);
+  expect(strokes.some(stroke => stroke.color === '#a0a58f' || stroke.color === '#a5a792')).toBe(false); expect(saves).toBe(0);
+});
+
+test('offset paving pieces meet at one shared corner through a road bend', () => {
+  const f = fixture(); f.terrain.fill('concrete'); f.walkable.fill(1); f.indoor.fill(0); f.world.citySites = []; f.world.props = [];
+  f.world.paths = [{ id: 'metro-bend', name: '', kind: 'road', width: 5, points: [{ x: 8, y: 2 }, { x: 8, y: 14 }, { x: 20, y: 24 }] }];
+  const details = buildCityStreetGround(f.world, f.terrain, f.walkable, f.indoor).filter(detail => detail.kind === 'pavement' && detail.normal.x > 0);
+  expect(details.length).toBeGreaterThan(3);
+  for (let i = 1; i < details.length; i++) {
+    expect(details[i]!.a.x).toBeCloseTo(details[i - 1]!.b.x); expect(details[i]!.a.y).toBeCloseTo(details[i - 1]!.b.y);
+    expect(details[i]!.offset).toBeCloseTo(details[i - 1]!.offset + Math.hypot(details[i - 1]!.b.x - details[i - 1]!.a.x, details[i - 1]!.b.y - details[i - 1]!.a.y));
+  }
+});
+
 test('parking and stop markings use only the real paved pocket outside physical cover', () => {
   const f = fixture();
   const car = { id: 'street-park:avenue:1', kind: 'car' as const, x: 22, y: 20, width: 3, height: 1, orientation: 'x' as const, variant: 0, blocking: true };

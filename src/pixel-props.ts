@@ -55,11 +55,6 @@ class Model {
       for (const p of [left,front,right]) this.raster.line(p.x,p.y,p.x,p.y-height,C.ink);
     }
   }
-  shadow(scale = .86): void {
-    const center = this.point(.5,.5);
-    this.raster.ellipse(center.x,center.y,Math.max(2,Math.round((this.prop.width+this.prop.height)*32*scale)),
-      Math.max(1,Math.round((this.prop.width+this.prop.height)*12*scale)),C.shadow);
-  }
   wear(u0: number, v0: number, u1: number, v1: number, z: number, count: number, color: PixelColor = C.rust): void {
     for (let i=0; i<count; i++) {
       const p=this.point(u0+(u1-u0)*this.random(),v0+(v1-v0)*this.random(),z);
@@ -120,7 +115,6 @@ function vehicle(m: Model): void {
   const paint=paints[variant]!, shade=variant===2?C.plasterShade:variant===3?C.rustShade:C.steelShade;
   const bus=kind==='bus', truck=kind==='truck', van=kind==='van', rail=kind==='railcar';
   const bodyTop=bus?76:van?59:truck?43:rail?94:37;
-  m.shadow(.82);
   m.line([.12,.13,12],[.88,.13,12],C.ink,5);m.line([.12,.87,12],[.88,.87,12],C.ink,5);
   // Rear wheels precede the body; near wheels remain legible in either rotation.
   for (const u of rail?[.18,.32,.72,.86]:[.22,.77]) m.wheel(u,.1,15);
@@ -263,7 +257,7 @@ function vehicle(m: Model): void {
 
 function foliage(m: Model): void {
   const tree=m.prop.kind==='tree',variant=m.prop.variant,birch=tree&&variant===2;
-  m.shadow(tree?.88:.78);groundGrowth(m,tree?9:12);
+  groundGrowth(m,tree?9:12);
   const center=m.point(.5,.5),span=Math.max(12,(m.prop.width+m.prop.height)*30);
   // A mature urban tree has a broad crown above a legible bare trunk. The
   // immutable footprint and trunk anchor stay exactly where the server put it.
@@ -343,7 +337,6 @@ function foliage(m: Model): void {
 
 function container(m: Model): void {
   const kind=m.prop.kind;
-  m.shadow(.74);
   if(kind==='dumpster') {
     m.box(.08,.12,.92,.88,6,41,[C.green,C.steelShade,C.panelShade]);
     m.box(.025,.06,.975,.94,47,5,[C.panelShade,C.ink,C.steelShade]);
@@ -447,7 +440,6 @@ function container(m: Model): void {
 
 function furniture(m: Model): void {
   const kind=m.prop.kind;
-  m.shadow(.7);
   if(kind==='bench'||kind==='workbench') {
     for(const u of [.16,.82]) for(const v of [.17,.8]) m.post(u,v,0,27,kind==='bench'?C.steelShade:C.wood,3);
     m.box(.02,.02,.98,.98,27,5,WOOD,false);
@@ -552,7 +544,7 @@ function furniture(m: Model): void {
 
 function utility(m: Model): void {
   const kind=m.prop.kind, center=m.point(.5,.5);
-  m.shadow(kind==='transformer'?.8:.35);groundGrowth(m,kind==='transformer'?5:3);
+  groundGrowth(m,kind==='transformer'?5:3);
   if(kind==='transformer') {
     m.box(.08,.08,.92,.92,0,13,CONCRETE);
     m.box(.14,.14,.86,.86,13,77,METAL);
@@ -662,7 +654,6 @@ function utility(m: Model): void {
 
 function busStop(m: Model): void {
   const variant=m.prop.variant,paint=[C.green,C.blue,C.red,C.steel][variant]!,trim=variant===2?C.rustShade:C.steelShade;
-  m.shadow(.93);
   m.box(.055,.08,.945,.92,0,5,CONCRETE,false);
   // A compact shelter occupies its published stopping pocket. Its back panel,
   // seat and timetable make the blocked area a fixture, rather than an alley.
@@ -723,7 +714,7 @@ function busStop(m: Model): void {
 function smallBuilding(m: Model): void {
   const kind=m.prop.kind, shed=kind==='shed', variant=m.prop.variant;
   const height=shed?94:78;
-  m.shadow(.95);groundGrowth(m,5);
+  groundGrowth(m,5);
   m.box(.04,.04,.96,.96,0,8,CONCRETE);
   m.box(.07,.07,.93,.93,8,height,[C.steel,C.steelShade,variant%2?C.plasterShade:C.panelShade]);
   if(shed) {
@@ -848,7 +839,6 @@ function yard(m: Model): void {
     for(const [u,v] of [[.03,.03],[.97,.03],[.97,.97],[.03,.97]])m.post(u!,v!,0,12,C.woodShade,2);
     m.line([.05,.91,2],[.65,.91,2],C.rubber,2);m.line([.65,.91,2],[.84,.76,2],C.rubber,2);
   } else if(kind==='market-stall') {
-    m.shadow(.83);
     for(const u of [.1,.9]) for(const v of [.1,.9]) m.post(u,v,0,91,C.wood,4);
     m.box(.08,.2,.92,.85,0,38,WOOD);
     m.box(.03,.12,.97,.92,38,5,WOOD);
@@ -888,7 +878,7 @@ function yard(m: Model): void {
     m.box(.74,.72,.87,.87,44,9,METAL,false);m.slab(.7,.68,.9,.89,54,C.steelLight);
     m.grain(.08,.93,.91,44,7);
   } else {
-    m.shadow(.7);groundGrowth(m,6);
+    groundGrowth(m,6);
     const paint=m.prop.variant>=2?C.blue:C.red;
     if(m.prop.variant%2===0) {
       // A Soviet swing frame: two A frames and two suspended narrow seats.

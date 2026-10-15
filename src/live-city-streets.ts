@@ -39,14 +39,25 @@ export function buildCityStreetGround(world: StreetWorld, terrain: readonly Live
   // Six-metre pieces let the scene cull a long avenue without drawing its far
   // end. Joints use cumulative distance so bends and chunk edges never restart.
   const strip = (kind: 'pavement' | 'passage', points: readonly LivePoint[], side: number, distance: number, seed: number): void => {
+    // Adjacent offset segments meet at one restrained miter. Independent
+    // normal offsets left little wedges and doubled slabs at every road bend.
+    const offsetPoints = points.map((point, index): LivePoint => {
+      const previous = points[Math.max(0, index - 1)]!, next = points[Math.min(points.length - 1, index + 1)]!;
+      const before = Math.hypot(point.x - previous.x, point.y - previous.y), after = Math.hypot(next.x - point.x, next.y - point.y);
+      const a = before > .05 ? { x: -(point.y - previous.y) / before * side, y: (point.x - previous.x) / before * side } : after > .05 ? { x: -(next.y - point.y) / after * side, y: (next.x - point.x) / after * side } : { x: 0, y: 0 };
+      const b = after > .05 ? { x: -(next.y - point.y) / after * side, y: (next.x - point.x) / after * side } : a;
+      const nx = a.x + b.x, ny = a.y + b.y, size = Math.hypot(nx, ny), dot = size > .05 ? (nx * b.x + ny * b.y) / size : 1;
+      const shift = Math.min(distance * 1.6, distance / Math.max(.35, dot));
+      return { x: point.x + .5 + (size > .05 ? nx / size : b.x) * shift, y: point.y + .5 + (size > .05 ? ny / size : b.y) * shift };
+    });
     let offset = 0;
     for (let i = 1; i < points.length && details.length < DETAIL_LIMIT && candidates < 32768; i++) {
-      const a = points[i - 1]!, b = points[i]!, dx = b.x - a.x, dy = b.y - a.y, length = Math.hypot(dx, dy);
+      const a = offsetPoints[i - 1]!, b = offsetPoints[i]!, dx = b.x - a.x, dy = b.y - a.y, length = Math.hypot(dx, dy);
       if (length < .05 || !Number.isFinite(length)) continue;
       const ux = dx / length, uy = dy / length, normal = { x: -uy * side, y: ux * side };
       for (let along = 0; along < length && details.length < DETAIL_LIMIT && candidates < 32768; along += CHUNK_LENGTH) {
         const end = Math.min(length, along + CHUNK_LENGTH);
-        const point = (d: number) => ({ x: a.x + .5 + ux * d + normal.x * distance, y: a.y + .5 + uy * d + normal.y * distance });
+        const point = (d: number) => ({ x: a.x + ux * d, y: a.y + uy * d });
         const pa = point(along), pb = point(end);
         // The bounding rectangle is only a culling envelope; clips above still
         // decide which actual cells can receive a single pigment mark.
@@ -99,7 +110,7 @@ export function buildCityStreetGround(world: StreetWorld, terrain: readonly Live
 
 /** Ground-cell canvas coordinates match road surface painting. Broad paving
  * goes into the bounded terrain cache; fine joints are drawn at display scale. */
-export function paintCityStreetGroundDetail(c: CanvasRenderingContext2D, detail: CityStreetGroundDetail, fine = true): void {
+export function paintCityStreetGroundDetail(c: CanvasRenderingContext2D, detail: CityStreetGroundDetail, fine = true, foundation = true): void {
   if (!fine && (detail.kind === 'play-chalk' || detail.kind === 'bench-leaves')) return;
   const { a, b, normal: n, seed } = detail, length = Math.hypot(b.x - a.x, b.y - a.y);
   if (length < .05) return;
@@ -112,15 +123,14 @@ export function paintCityStreetGroundDetail(c: CanvasRenderingContext2D, detail:
   for (const run of detail.clip) c.rect(run.x, run.y, run.width, run.height);
   c.clip(); c.lineCap = 'butt';
   if (detail.kind === 'pavement') {
-    line(a, b, seed % 3 === 0 ? '#aaad98' : '#b0b09b', 1.25);
-    // Shadow at the road edge and a warm coping edge read as a curb, rather
-    // than another luminous traffic stripe across the entire town.
-    line(point(0, -.57), point(length, -.57), '#6b7b70', .15);
-    line(point(0, -.43), point(length, -.43), '#d1cbb0', .12);
-    line(point(0, .52), point(length, .52), '#929c85', .12);
+    if (foundation) line(a, b, seed % 3 === 0 ? '#a0a58f' : '#a5a792', 1.12);
     if (fine) {
+      // A thin, neutral curb belongs to actual paving. It cannot become a
+      // second bright road stripe or repaint the asphalt at native scale.
+      line(point(0, -.55), point(length, -.55), '#727e72', .085);
+      line(point(0, -.45), point(length, -.45), '#b8b59d', .045);
       for (let along = (1.2 - detail.offset % 1.2) % 1.2; along < length; along += 1.2) {
-        line(point(along, -.33), point(along, .45), '#808d7a91', .025);
+        line(point(along, -.33), point(along, .45), '#7b87745c', .022);
       }
       // A few worn slab corners and gutter deposits, never every tile.
       if (seed % 5 === Math.floor(detail.offset / CHUNK_LENGTH) % 5) {
@@ -141,16 +151,16 @@ export function paintCityStreetGroundDetail(c: CanvasRenderingContext2D, detail:
   } else if (detail.kind === 'passage') {
     // Use follows the actual authored way through a yard, with soft, quiet
     // value grouping that leaves fighters' silhouettes in front of it.
-    line(a, b, '#c0b59629', .96);
+    if (foundation) line(a, b, '#c0b59629', .96);
     if (fine && seed % 3 === 0) for (let along = (2 - detail.offset % 2) % 2; along < length; along += 2) {
       line(point(along, -.32), point(along + .24, -.21), '#8a927849', .035);
     }
   } else if (detail.kind === 'shop-apron' || detail.kind === 'bench-pad') {
     const shop = detail.kind === 'shop-apron';
-    line(a, b, shop ? '#b0aa8c' : '#a3aa91', .88);
-    line(point(0, -.42), point(length, -.42), shop ? '#777e68' : '#7b8c74', .07);
-    line(point(0, .42), point(length, .42), '#c6bea1', .08);
+    if (foundation) line(a, b, shop ? '#a8a48d' : '#a0a68f', .88);
     if (fine) {
+      line(point(0, -.42), point(length, -.42), shop ? '#777e68' : '#7b8c74', .045);
+      line(point(0, .42), point(length, .42), '#b9b49e', .045);
       for (let along = .35; along < length; along += .65) line(point(along, -.34), point(along, .34), '#7b8a735c', .025);
       if (shop) {
         // A faded entrance strip and two queue scuffs make the kiosk/stall a

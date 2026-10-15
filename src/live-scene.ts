@@ -15,7 +15,7 @@ import { PixelPropArt, pixelPropHeight } from './pixel-props';
 import { PixelObstacleArt } from './pixel-obstacles';
 import { PIXEL_TILE, PIXEL_PALETTE as P, pixelIso, pixelSeed } from './pixel-art';
 import { PIXEL_SCENE_THEME as T } from './pixel-scene-theme';
-import { buildSurfaceMasks, courtyardGroundMarks, paintRoadSurface, paintTerrainTexture, terrainTextureResolution, type SurfaceMasks } from './live-ground-art';
+import { buildSurfaceMasks, courtyardGroundMarks, paintTerrainTexture, terrainTextureResolution, type SurfaceMasks } from './live-ground-art';
 import { distantPlantSurfaces, type DistantPlantSurface } from './live-distant-plants';
 import { paintPropAtmosphere, paintBuildingAtmosphere, type EnvironmentPixel } from './pixel-environment';
 import { fitMinimap, minimapPoint, minimapViewport } from './minimap-presentation';
@@ -27,14 +27,16 @@ import { paintCanvasWetSurfaces } from './scene-wet-surfaces';
 import { wetGroundCandidates, WetGroundFrameCache, type WetGroundCandidate } from './scene-wet-ground';
 import { fieldHudOverlaps, placeFieldHudBox, readFieldHudBounds, type FieldHudBox } from './field-hud';
 import { liveAmbientBirds, liveAmbientGround, liveAmbientGroundMarks, liveCloudShadows, type LiveAmbientGround } from './live-world-ambience';
-import { sampleWorldSunlight, type WorldBird } from './world-ambience';
+import { sampleWorldSunlight, type WorldBird, type WorldSunlight } from './world-ambience';
 import { paintStreetGroundDetail, streetGroundDetails, type StreetGroundDetail } from './live-street-details';
 import { paintCityRelief } from './live-city-relief';
 import { buildCityStreetGround, paintCityStreetGroundDetail, type CityStreetGroundDetail } from './live-city-streets';
-import { buildCityBuildingGroundShadows, paintCityBuildingGroundShadows, type CityBuildingGroundShadow } from './live-city-shadows';
+import { buildWorldGroundShadowCasters, paintWorldGroundShadows, type GroundShadowCaster } from './live-ground-shadows';
 import { buildCityGardenGround, cityGardenTrees, paintCityGardenGroundDetail, type CityGardenGroundDetail } from './live-city-gardens';
 import { distantStreetPropSurfaces, type DistantStreetPropSurface } from './live-distant-street-props';
 import { buildStreetTerrainDetails, paintStreetTerrainDetail, type StreetTerrainDetail } from './live-street-terrain';
+import { buildRoadSurfaceArt, paintRoadSurfaceArt, type RoadSurfaceArt } from './live-road-surface';
+import { paintActorGroundShadows } from './live-actor-ground-shadows';
 
 type Motion = PixelMotion;
 type LabelBox = { x: number; y: number; width: number; height: number };
@@ -100,7 +102,8 @@ export class LiveScene {
   private cityStreetGround = new SceneryIndex<CityStreetGroundDetail>([]);
   private cityGardenGround = new SceneryIndex<CityGardenGroundDetail>([]);
   private streetTerrain = new SceneryIndex<StreetTerrainDetail>([]);
-  private cityGroundShadows = new SceneryIndex<CityBuildingGroundShadow>([]);
+  private groundShadows = new SceneryIndex<GroundShadowCaster>([]);
+  private roadSurface: RoadSurfaceArt | null = null;
   private propArt = new PixelPropArt();
   private buildingArt = new PixelBuildingArt();
   private buildingDetail: PixelDetail = 64;
@@ -212,7 +215,7 @@ export class LiveScene {
     this.streetGround = new SceneryIndex<StreetGroundDetail>([]);
     this.cityStreetGround = new SceneryIndex<CityStreetGroundDetail>([]);
     this.cityGardenGround = new SceneryIndex<CityGardenGroundDetail>([]);
-    this.cityGroundShadows = new SceneryIndex<CityBuildingGroundShadow>([]);
+    this.groundShadows = new SceneryIndex<GroundShadowCaster>([]); this.roadSurface = null;
     this.buildingForObstacle.clear(); this.buildingWalls.clear(); this.cutawayBuildings.clear(); this.distantBuildings.clear();
     this.propArt.clear(); this.buildingArt.clear(); this.obstacleArt.clear(); this.actorArt.clear(); this.containerArt.clear();
     this.clearWetGround(); this.lampProps = [];
@@ -364,6 +367,7 @@ export class LiveScene {
     this.propArt.clear(); this.buildingArt.clear(); this.obstacleArt.clear(); this.actorArt.clear(); this.containerArt.clear(); this.cutawayBuildings.clear();
     this.siteScenery = new SceneryIndex(world.citySites ?? [], world.chunkSize);
     this.surfaceMasks = buildSurfaceMasks(world, this.terrain, this.walkableGround, buildings);
+    this.roadSurface = buildRoadSurfaceArt(world, this.surfaceMasks);
     this.groundAmbience = new SceneryIndex(liveAmbientGround(world, this.terrain, this.walkableGround, this.surfaceMasks.indoor), world.chunkSize);
     this.streetGround = new SceneryIndex(streetGroundDetails(world, this.terrain, this.walkableGround, this.surfaceMasks.indoor), world.chunkSize);
     const cityStreets = buildCityStreetGround(world, this.terrain, this.walkableGround, this.surfaceMasks.indoor);
@@ -375,7 +379,8 @@ export class LiveScene {
     for (const prop of cityGardenTrees(world, cityGardens)) scenery.push({ ...prop, type: 'prop', prop,
       depth: prop.x + prop.y + (prop.width + prop.height) / 2 });
     this.scenery = new SceneryIndex(scenery, world.chunkSize);
-    this.cityGroundShadows = new SceneryIndex(buildCityBuildingGroundShadows(world, buildings, this.terrain, this.surfaceMasks.indoor), world.chunkSize);
+    this.groundShadows = new SceneryIndex(buildWorldGroundShadowCasters(world, buildings, this.terrain, this.surfaceMasks.indoor,
+      scenery.filter((item): item is Extract<StaticScenery, { type: 'prop' }> => item.type === 'prop').map(item => item.prop)), world.chunkSize);
     this.lampProps = (world.props ?? []).filter(prop => prop.kind === 'lamp');
     this.lampScenery = new SceneryIndex(this.lampProps, world.chunkSize);
     this.wetLamps = this.lampProps.flatMap(prop => {
@@ -428,7 +433,7 @@ export class LiveScene {
       const px = x + .15 + (hash % 89) / 130, py = y + .15 + ((hash >>> 10) % 89) / 130;
       if (!this.walkableGround[y * world.width + x] && material !== 'water' || hash % 3) continue;
       // Most world cells have no authored mark. Avoid a clip/save pair for each of the million cells.
-      const detail = material === 'concrete' ? hash % 13 === 0 || hash % 47 === 0 : material === 'road' ? hash % 17 === 0 || hash % 31 === 0
+      const detail = material === 'concrete' ? hash % 13 === 0 || hash % 47 === 0
         : material === 'yard' || material === 'path' || material === 'grass' || material === 'forest' ? hash % 11 === 0
           : material === 'sand' ? hash % 5 === 0 : material === 'water';
       if (!detail) continue;
@@ -439,10 +444,6 @@ export class LiveScene {
           c.beginPath(); c.moveTo(px - .28, py + .31); c.lineTo(px - .03, py + .04); c.lineTo(px - .08, py - .17); c.lineTo(px + .16, py - .32); c.stroke();
         }
         if (hash % 47 === 0) { c.fillStyle = '#35433999'; c.fillRect(px - .19, py - .14, .38, .28); c.strokeStyle = '#c1bba07a'; c.lineWidth = .065; c.strokeRect(px - .19, py - .14, .38, .28); c.strokeStyle = '#71806a'; for (let stripe = -.12; stripe < .15; stripe += .09) { c.beginPath(); c.moveTo(px - .15, py + stripe); c.lineTo(px + .15, py + stripe); c.stroke(); } }
-      } else if (material === 'road' && hash % 17 === 0) {
-        c.fillStyle = '#20303645'; c.beginPath(); c.ellipse(px, py, .29, .18, (hash % 7) / 5, 0, Math.PI * 2); c.fill(); c.strokeStyle = '#a5a69340'; c.lineWidth = .045; c.stroke();
-      } else if (material === 'road' && hash % 31 === 0) {
-        c.strokeStyle = '#24343a77'; c.lineWidth = .055; c.beginPath(); c.moveTo(px - .3, py - .3); c.lineTo(px - .05, py - .06); c.lineTo(px + .04, py + .07); c.lineTo(px + .31, py + .19); c.moveTo(px - .05, py - .06); c.lineTo(px + .15, py - .19); c.stroke();
       } else if ((material === 'yard' || material === 'path') && hash % 11 === 0) {
         c.strokeStyle = '#665b3959'; c.lineWidth = .09; c.beginPath(); c.moveTo(px - .3, py - .36); c.quadraticCurveTo(px - .11, py, px + .16, py + .35); c.moveTo(px - .07, py - .36); c.quadraticCurveTo(px + .12, py, px + .39, py + .35); c.stroke();
       } else if (material === 'water' && hash % 3 === 0) {
@@ -453,15 +454,6 @@ export class LiveScene {
         c.fillStyle = material === 'forest' ? '#abc18130' : '#d8d09866'; c.fillRect(px, py, .045, .06); c.fillRect(px + .09, py - .08, .035, .05);
       }
       c.restore();
-    }
-    // Cast shadows share the authoritative cover's footprint and never add scenery.
-    c.fillStyle = '#10271e38';
-    for (const [index, obstacle] of world.obstacles.entries()) {
-      if (obstacle.kind === 'water') continue;
-      if (this.buildingForObstacle.has(index)) continue;
-      if (obstacle.kind === 'tree') { c.beginPath(); c.ellipse(obstacle.x + .95, obstacle.y + .55, 1.2, .7, -.5, 0, Math.PI * 2); c.fill(); continue; }
-      const length = obstacle.kind === 'building' ? 1.8 : .5;
-      c.beginPath(); c.moveTo(obstacle.x, obstacle.y); c.lineTo(obstacle.x + obstacle.width, obstacle.y); c.lineTo(obstacle.x + obstacle.width + length, obstacle.y + obstacle.height + length * .3); c.lineTo(obstacle.x + length, obstacle.y + obstacle.height + length * .3); c.closePath(); c.fill();
     }
     c.restore();
   }
@@ -595,7 +587,7 @@ export class LiveScene {
       c.beginPath(); path.points.forEach((point, index) => index ? c.lineTo(point.x + .5, point.y + .5) : c.moveTo(point.x + .5, point.y + .5)); c.strokeStyle = color; c.lineWidth = width; c.stroke();
     };
     c.save(); c.lineJoin = 'round'; c.lineCap = 'round';
-    paintRoadSurface(c, world, this.surfaceMasks);
+    if (this.roadSurface) paintRoadSurfaceArt(c, this.roadSurface);
     // Roads may cross a river only on cells the authoritative raster marks as road.
     for (const kind of ['trail', 'rail', 'river'] as const) {
       const paths = world.paths?.filter(path => path.kind === kind) ?? [];
@@ -678,7 +670,9 @@ export class LiveScene {
     const distant = this.tile < 6;
     const area = { x: minX - 7, y: minY - 7, width: maxX - minX + 14, height: maxY - minY + 14 };
     const daylight = clamp(1 - (climate.profile.lights - .18) / 1.32, 0, 1), reducedMotion = this.reducedMotion?.matches ?? false;
-    this.environmentSun = daylight * (1 - climate.rain) * (1 - climate.fog);
+    const sun = sampleWorldSunlight({ timeMs: climate.timeMs, bounds: { x: 0, y: 0, width: 840, height: 520 },
+      dayPhase: climate.dayPhase, daylight, rain: climate.rain, fog: climate.fog, reducedMotion });
+    this.environmentSun = sun.intensity;
     this.environmentWind = climate.wind;
     const birds = this.overview || this.tile < 20 ? [] : liveAmbientBirds(world.seed, area,
       { timeMs: climate.timeMs, daylight, rain: climate.rain, fog: climate.fog, reducedMotion });
@@ -695,10 +689,11 @@ export class LiveScene {
       }
       c.restore();
     }
+    this.paintRoadGround(area);
     this.paintStreetGround(area);
     this.paintStreetTerrain(area);
-    this.paintCityGroundShadows(area);
-    this.paintAmbientGround(world, area, climate, daylight);
+    this.paintGroundShadows(area, sun, now);
+    this.paintAmbientGround(world, area, climate, daylight, sun);
     this.paintBirdShadows(birds);
     this.paintWetGround(climate, { x: minX - 1, y: minY - 1, width: maxX - minX + 3, height: maxY - minY + 3 });
     this.paintDoorways(world, area);
@@ -773,18 +768,28 @@ export class LiveScene {
       }
       c.strokeStyle = '#697b6859'; c.lineWidth = .035; c.stroke();
     }
-    for (const detail of this.cityStreetGround.visible(area).slice(0, 160)) paintCityStreetGroundDetail(c, detail, this.tile >= 24);
+    for (const detail of this.cityStreetGround.visible(area).slice(0, 160)) paintCityStreetGroundDetail(c, detail, this.tile >= 24, false);
     for (const detail of details) paintStreetGroundDetail(c, detail);
     for (const detail of this.cityGardenGround.visible(area).slice(0, 160)) paintCityGardenGroundDetail(c, detail, this.tile >= 24);
     c.restore();
   }
-  private paintCityGroundShadows(area: LabelBox): void {
-    if (this.overview || this.tile < 14) return;
-    const shadows = this.cityGroundShadows.visible(area).sort((a, b) =>
-      (a.x - this.camera.x) ** 2 + (a.y - this.camera.y) ** 2 - (b.x - this.camera.x) ** 2 - (b.y - this.camera.y) ** 2).slice(0, 192);
+  private paintRoadGround(area: LabelBox): void {
+    if (this.overview || this.tile < 14 || !this.roadSurface) return;
     const c = this.context, origin = this.project({ x: -.5, y: -.5 });
     c.save(); c.transform(this.tile / 2, this.tile / 4, -this.tile / 2, this.tile / 4, origin.x, origin.y);
-    paintCityBuildingGroundShadows(c, shadows); c.restore();
+    paintRoadSurfaceArt(c, this.roadSurface, { area, display: true }); c.restore();
+  }
+  private paintGroundShadows(area: LabelBox, sun: WorldSunlight, now: number): void {
+    if (this.overview || this.tile < 10) return;
+    const shadows = this.groundShadows.visible(area).sort((a, b) =>
+      (a.x + a.width / 2 - this.camera.x) ** 2 + (a.y + a.height / 2 - this.camera.y) ** 2 - (b.x + b.width / 2 - this.camera.x) ** 2 - (b.y + b.height / 2 - this.camera.y) ** 2).slice(0, 384);
+    const c = this.context, origin = this.project({ x: -.5, y: -.5 });
+    c.save(); c.transform(this.tile / 2, this.tile / 4, -this.tile / 2, this.tile / 4, origin.x, origin.y);
+    paintWorldGroundShadows(c, shadows, sun);
+    const snapshot = this.snapshot!;
+    const actors = snapshot.entities.map(entity => ({ ...this.interpolated(this.motions.get(entity.id)!, now), health: entity.health }));
+    paintActorGroundShadows(c, actors, sun, { width: snapshot.world.width, height: snapshot.world.height, terrain: this.terrain, indoor: this.surfaceMasks.indoor });
+    c.restore();
   }
   private paintStreetTerrain(area: LabelBox): void {
     if (this.overview || this.tile < 10) return;
@@ -795,11 +800,9 @@ export class LiveScene {
     for (const detail of details) paintStreetTerrainDetail(c, detail, this.tile >= 20);
     c.restore();
   }
-  private paintAmbientGround(world: LiveWorld, area: LabelBox, climate: ReturnType<typeof readSceneClimate>, daylight: number): void {
+  private paintAmbientGround(world: LiveWorld, area: LabelBox, climate: ReturnType<typeof readSceneClimate>, daylight: number, sun: WorldSunlight): void {
     if (this.overview || this.tile < 16) return;
     const c = this.context, reducedMotion = this.reducedMotion?.matches ?? false, scale = this.tile / PIXEL_TILE;
-    const sun = sampleWorldSunlight({ timeMs: climate.timeMs, bounds: { x: 0, y: 0, width: 840, height: 520 },
-      dayPhase: climate.dayPhase, daylight, rain: climate.rain, fog: climate.fog, reducedMotion });
     c.save();
     // Broad, stepped silhouettes pass over the street rather than acting as a
     // moving screen filter. Model and interaction geometry stays untouched.
@@ -1044,8 +1047,8 @@ export class LiveScene {
       if (own || selected || boss) this.label(own ? 'ТЫ' : boss?`БОСС · ${boss.name}`:entity.name, p.x, p.y - 10, color, 9);
       this.hitTargets.push({ entity, x: p.x, y: p.y }); return;
     }
-    c.beginPath(); c.ellipse(p.x, p.y, 13 * zoom, 6 * zoom, 0, 0, Math.PI * 2); c.fillStyle = '#0005'; c.fill();
-    if (own || selected) { c.strokeStyle = color; c.lineWidth = 2; c.stroke(); }
+    c.beginPath(); c.ellipse(p.x, p.y, (entity.health > 0 ? 9 : 13) * zoom, (entity.health > 0 ? 3.5 : 6) * zoom, 0, 0, Math.PI * 2); c.fillStyle = '#18312c42'; c.fill();
+    if (own || selected) { c.beginPath(); c.ellipse(p.x, p.y, 13 * zoom, 6 * zoom, 0, 0, Math.PI * 2); c.strokeStyle = color; c.lineWidth = 2; c.stroke(); }
     const animation = this.combatAnimation.frame(entity, motion, now, snapshot.now + now - this.snapshotAt, pixelActorWalkCycleDistance(this.width < 480 ? 48 : 64));
     const { weapon, gear } = pixelActorLoadout(entity, snapshot.self);
     const sprite = this.actorArt.get(entity, animation, weapon, gear, pixelActorDetail(160 * scale, this.renderer.deviceRatio)), actorScale = scale;
