@@ -3,6 +3,7 @@ import { getShelterBackdropCoverage, getShelterBackdropDecorations, getShelterBa
 import { projectShelterPoint } from '../src/shelter-isometric';
 import { shelterOverviewCamera, shelterViewportForSize } from '../src/shelter-camera';
 import { getShelterAccessRoadSpan, isShelterAccessRoadClear, SHELTER_ACCESS_ROAD } from '../src/shelter-road';
+import { getShelterForestNearBounds, isShelterForestPointInBounds, isShelterForestClear } from '../src/shelter-forest';
 
 const bounds = { x: -266, y: -105, width: 1420, height: 788 };
 
@@ -25,14 +26,27 @@ test('distant forest continues above and below the portrait yard and leaves all 
   expect(decorations).toEqual(getShelterBackdropDecorations(coverage, bounds));
   expect(decorations.some(decoration => projectShelterPoint(decoration.point).y < bounds.y - 80)).toBe(true);
   expect(decorations.some(decoration => projectShelterPoint(decoration.point).y > bounds.y + bounds.height + 80)).toBe(true);
-  expect(decorations.length).toBeLessThanOrEqual(256);
+  expect(decorations.length).toBeLessThanOrEqual(1024);
   for (const decoration of decorations) {
     const point = projectShelterPoint(decoration.point);
-    expect(['tree', 'bush', 'rock']).toContain(decoration.kind);
+    expect(['tree', 'bush', 'rock', 'fern', 'stump', 'logs']).toContain(decoration.kind);
     expect(decoration.owned).toBe(false);
     expect(isShelterAccessRoadClear(decoration.point, decoration.radius + 12)).toBe(true);
     expect(point.x + 56 > bounds.x && point.x - 56 < bounds.x + bounds.width && point.y + 80 > bounds.y && point.y - 80 < bounds.y + bounds.height).toBe(false);
   }
+});
+
+test('the actual territory shares one forest with the near layer and keeps whole mature crowns away from the road', () => {
+  const lots = [{ x: 30, y: 132, width: 768, height: 396 }], coverage = { x: -512, y: -768, width: 2048, height: 2048 };
+  const near = getShelterForestNearBounds(lots), forest = getShelterBackdropDecorations(coverage, bounds, lots);
+  expect(forest.some(decoration => decoration.kind === 'tree')).toBe(true);
+  expect(forest.length).toBeLessThanOrEqual(1024);
+  for (const decoration of forest) {
+    expect(isShelterForestPointInBounds(decoration.point, near)).toBe(false);
+    expect(isShelterForestClear(decoration.point, decoration.radius, lots, [], decoration.kind === 'tree' ? 125 * (decoration.scale ?? 1) : 0)).toBe(true);
+  }
+  const depths = forest.map(decoration => projectShelterPoint(decoration.point).y);
+  expect(depths).toEqual([...depths].sort((a, b) => a - b));
 });
 
 test('the gate road continues beyond the visible forest while its carriageway remains free of plants', () => {

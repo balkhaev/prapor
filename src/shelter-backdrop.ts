@@ -3,7 +3,8 @@ import type { ShelterCamera, ShelterRect, ShelterViewport } from './shelter-came
 import { projectShelterPoint, unprojectShelterPoint } from './shelter-isometric';
 import type { ShelterLandscapeDecoration } from './shelter-landscape';
 import { PIXEL_PALETTE as P } from './pixel-art';
-import { getShelterAccessRoadSpan, isShelterAccessRoadClear, paintShelterAccessRoad } from './shelter-road';
+import { getShelterAccessRoadSpan, paintShelterAccessRoad } from './shelter-road';
+import { getShelterForestDecorations, getShelterForestNearBounds, isShelterForestPointInBounds, sampleShelterForest } from './shelter-forest';
 
 export const SHELTER_BACKDROP_TILE = 512;
 const CHUNK = 256;
@@ -20,22 +21,23 @@ export function getShelterBackdropCoverage(camera: ShelterCamera, viewport: Shel
 }
 
 /** The distant grove is presentation only and never joins the resident activity/prop lists. */
-export function getShelterBackdropDecorations(coverage: ShelterRect, worldBounds: ShelterRect): ShelterLandscapeDecoration[] {
-  const spacing = 144, decorations: ShelterLandscapeDecoration[] = [];
-  for (let y = Math.floor(coverage.y / spacing); y <= Math.ceil((coverage.y + coverage.height) / spacing); y++) {
-    for (let x = Math.floor(coverage.x / spacing); x <= Math.ceil((coverage.x + coverage.width) / spacing); x++) {
-      const seed = hash(x, y), grove = hash(Math.floor(x / 3), Math.floor(y / 3)), at = { x: x * spacing + 24 + seed % 88, y: y * spacing + 24 + (seed >>> 9) % 88 };
-      // Groves alternate with open meadow; each tree stays anchored when coverage changes.
-      if (seed % 11 > 5 + grove % 5) continue;
-      // Leave the authored grove and its existing road/yard silhouettes intact.
-      if (at.x + 56 > worldBounds.x && at.x - 56 < worldBounds.x + worldBounds.width && at.y + 80 > worldBounds.y && at.y - 80 < worldBounds.y + worldBounds.height) continue;
-      const kind = seed % 7 < 4 ? 'tree' : seed % 7 < 6 ? 'bush' : 'rock', point = unprojectShelterPoint(at), radius = kind === 'tree' ? 19 : 13;
-      if (!isShelterAccessRoadClear(point, radius + 12)) continue;
-      decorations.push({ kind, point, radius, seed, owned: false });
-    }
-  }
-  // Large shelters still use one floor quad and a fixed cosmetic geometry budget.
-  return decorations.sort((a, b) => a.seed - b.seed).slice(0, 256);
+export function getShelterBackdropDecorations(coverage: ShelterRect, worldBounds: ShelterRect, lots: readonly ShelterRect[] = [], reserved: readonly ShelterRect[] = []): ShelterLandscapeDecoration[] {
+  const corners = [{ x: coverage.x - 100, y: coverage.y - 40 }, { x: coverage.x + coverage.width + 100, y: coverage.y - 40 },
+    { x: coverage.x - 100, y: coverage.y + coverage.height + 145 }, { x: coverage.x + coverage.width + 100, y: coverage.y + coverage.height + 145 }].map(unprojectShelterPoint);
+  const x = Math.min(...corners.map(point => point.x)), y = Math.min(...corners.map(point => point.y));
+  const logical = { x, y, width: Math.max(...corners.map(point => point.x)) - x, height: Math.max(...corners.map(point => point.y)) - y };
+  const near = getShelterForestNearBounds(lots);
+  const visible = getShelterForestDecorations(logical, lots, reserved, 4096).filter(decoration => {
+    const point = projectShelterPoint(decoration.point);
+    if (point.x < coverage.x - 75 || point.x > coverage.x + coverage.width + 75 || point.y < coverage.y - 20 || point.y > coverage.y + coverage.height + 140) return false;
+    if (lots.length) return !isShelterForestPointInBounds(decoration.point, near);
+    // Old standalone callers have no territory model. Keep their authored
+    // rectangle intact; the actual scene uses the shared exact partition.
+    return !(point.x + 56 > worldBounds.x && point.x - 56 < worldBounds.x + worldBounds.width && point.y + 80 > worldBounds.y && point.y - 80 < worldBounds.y + worldBounds.height);
+  });
+  // Selection remains deterministic; painting order follows the feet so one
+  // dense grove has genuine overlapping depth instead of seed-sorted crowns.
+  return visible.slice(0, 1024).sort((a, b) => projectShelterPoint(a.point).y - projectShelterPoint(b.point).y);
 }
 
 export interface ShelterBackdropGroundPatch { x: number; y: number; width: number; height: number; seed: number }
@@ -54,22 +56,36 @@ export function getShelterBackdropGroundPatches(coverage: ShelterRect): ShelterB
 }
 
 /** Continuous earth, meadow and forest litter make the outer grove part of the same terrain. */
-export function paintShelterBackdropTerrain(g: Phaser.GameObjects.Graphics, coverage: ShelterRect, decorations: readonly ShelterLandscapeDecoration[] = []): void {
+export function paintShelterBackdropTerrain(g: Phaser.GameObjects.Graphics, coverage: ShelterRect, _decorations: readonly ShelterLandscapeDecoration[] = [], lots: readonly ShelterRect[] = [], reserved: readonly ShelterRect[] = []): void {
+  // The soil follows the very same grove/clearing field as the trees. Low
+  // contrast, quantised contours form connected woodland floors rather than
+  // a separate dark pedestal under each trunk. Rows merge equal colour runs.
+  let step = 32;
+  while ((Math.ceil(coverage.width / step) + 2) * (Math.ceil(coverage.height / step) + 2) > 16000) step *= 2;
+  const left = Math.floor(coverage.x / step) * step, right = coverage.x + coverage.width;
+  const colorAt = (x: number, y: number): number => {
+    const field = sampleShelterForest(unprojectShelterPoint({ x, y }), lots, reserved);
+    const density = Math.round(field.density * 20) / 20, damp = Math.round(field.moisture * 8) / 8;
+    const green = [102 - damp * 6, 113 - damp * 3, 77 + damp * 3];
+    const wood = [48 - damp * 2, 71 + damp * 2, 59 + damp * 4];
+    const channels = green.map((value, i) => Math.round(value * (1 - density * .87) + wood[i]! * density * .87));
+    return channels[0]! << 16 | channels[1]! << 8 | channels[2]!;
+  };
+  for (let y = Math.floor(coverage.y / step) * step; y < coverage.y + coverage.height; y += step) {
+    let start = left, color = colorAt(left + step / 2, y + step / 2);
+    for (let x = left + step; x <= right + step; x += step) {
+      const next = x < right ? colorAt(x + step / 2, y + step / 2) : -1;
+      if (next === color) continue;
+      g.fillStyle(color, .88).fillRect(start, y, x - start, step);
+      start = x; color = next;
+    }
+  }
   for (const patch of getShelterBackdropGroundPatches(coverage)) {
-    g.fillStyle(pigment(patch.seed % 4 ? P.grass : P.soil), patch.seed % 4 ? .14 : .12);
+    const field = sampleShelterForest(unprojectShelterPoint({ x: patch.x + patch.width / 2, y: patch.y + patch.height / 2 }), lots, reserved);
+    g.fillStyle(field.density > .35 ? 0x49644f : patch.seed % 4 ? 0x879363 : 0x897b57, .06);
     for (let band = 0; band < 7; band++) {
       const inset = Math.round(patch.width * [.31, .15, .05, 0, .06, .19, .34][band]!);
       g.fillRect(patch.x + inset, patch.y + Math.round(band * patch.height / 7), patch.width - inset * 2, Math.ceil(patch.height / 7));
-    }
-  }
-  for (const decoration of decorations) {
-    const at = projectShelterPoint(decoration.point);
-    const radius = decoration.kind === 'tree' ? 30 : decoration.radius + 7;
-    g.fillStyle(pigment(P.soil), .32).fillEllipse(Math.round(at.x + 3), Math.round(at.y + 2), radius * 2, radius * .66);
-    g.fillStyle(pigment(P.leafShade), .36).fillEllipse(Math.round(at.x - 4), Math.round(at.y), radius * 1.4, radius * .45);
-    for (let leaf = 0; leaf < 8; leaf++) {
-      const seed = hash(decoration.seed + leaf, leaf), x = Math.round(at.x + seed % (radius * 2) - radius), y = Math.round(at.y + (seed >>> 9) % Math.round(radius * .65) - radius * .3);
-      g.fillStyle(pigment(leaf % 3 ? P.wood : P.sand), .38).fillRect(x, y, 2 + seed % 2, 1);
     }
   }
   const road = getShelterAccessRoadSpan(coverage);
@@ -78,7 +94,7 @@ export function paintShelterBackdropTerrain(g: Phaser.GameObjects.Graphics, cove
 
 /** One small repeated texture supplies coherent ground detail at every world coordinate. */
 export function paintShelterBackdropTile(g: Phaser.GameObjects.Graphics): void {
-  g.fillStyle(0x566448).fillRect(0, 0, SHELTER_BACKDROP_TILE, SHELTER_BACKDROP_TILE);
+  g.fillStyle(0x606e4d).fillRect(0, 0, SHELTER_BACKDROP_TILE, SHELTER_BACKDROP_TILE);
   // Uneven meadow patches break up the repeated forest floor. Their quieter
   // perimeter leaves the inhabited clearing and its paths visually dominant.
   for (let row = 0; row < 4; row++) for (let column = 0; column < 4; column++) {
