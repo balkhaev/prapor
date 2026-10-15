@@ -72,6 +72,20 @@ test('receiver chunks are shared and exclude all interior and water cells at eve
   expect(hidden).toEqual([]);
 });
 
+test('edge clips never create receivers outside the map or over unknown terrain cells', () => {
+  const terrain = Array<LiveTerrain>(16 * 16).fill('grass'), indoor = new Uint8Array(terrain.length);
+  // A sparse/unknown terrain cell must fail closed, even when its array length
+  // still agrees with the static world's declared dimensions.
+  Reflect.deleteProperty(terrain, 0); Reflect.deleteProperty(terrain, 15 * 16 + 15);
+  const casters = buildWorldGroundShadowCasters({ width: 16, height: 16, props: [{ ...prop('car'), x: 0, y: 0 }] }, [], terrain, indoor);
+  for (const chunk of new Set(casters.flatMap(caster => caster.receivers))) for (const run of chunk.runs) {
+    expect(run.x).toBeGreaterThanOrEqual(0); expect(run.y).toBeGreaterThanOrEqual(0);
+    expect(run.x + run.width).toBeLessThanOrEqual(16); expect(run.y + run.height).toBeLessThanOrEqual(16);
+    for (let x = run.x; x < run.x + run.width; x++) expect(terrain[run.y * 16 + x]).toBeDefined();
+  }
+  expect(buildWorldGroundShadowCasters({ width: 16, height: 16 }, [], [], indoor)).toEqual([]);
+});
+
 test('opaque scenery is prioritised over a full forest and supplementary garden trees receive the same light', () => {
   const f = fixture(), trees = Array.from({ length: GROUND_SHADOW_LIMITS.casters + 2 }, (_, i) => ({ ...prop('tree'), id: `forest-${i}` }));
   const scenery = [...trees, prop('bus-stop'), { ...prop('tree'), id: 'garden-tree:home:0' }];

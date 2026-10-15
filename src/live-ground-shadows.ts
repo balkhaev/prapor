@@ -139,7 +139,7 @@ export function buildWorldGroundShadowCasters(world: ShadowWorld, buildings: rea
     for (let yy = y; yy < bottom; yy++) {
       let start = -1;
       for (let xx = x; xx <= right; xx++) {
-        const cell = yy * world.width + xx, allowed = xx < right && !indoor[cell] && terrain[cell] !== 'water';
+        const cell = yy * world.width + xx, allowed = xx < right && !!terrain[cell] && !indoor[cell] && terrain[cell] !== 'water';
         if (allowed && start < 0) start = xx;
         else if (!allowed && start >= 0) { runs.push({ x: start, y: yy, width: xx - start, height: 1 }); start = -1; }
       }

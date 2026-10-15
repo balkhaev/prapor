@@ -163,16 +163,16 @@ export function paintStreetTerrainDetail(c: CanvasRenderingContext2D, detail: St
       line(local(-length * .31, breadth * .18), local(length * .13, breadth * .25), '#455f5c91', .04);
     }
   } else if (kind === 'pothole') {
-    polygon(detail.contour, '#a7a28c', 1, -.04, -.04);
-    polygon(detail.contour, '#344a46', .88, .025, .03);
-    polygon(detail.contour, '#6e7970', .63, .045, .07);
+    polygon(detail.contour, '#949c93', 1, -.04, -.04);
+    polygon(detail.contour, '#33454b', .88, .025, .03);
+    polygon(detail.contour, '#667478', .63, .045, .07);
     if (fine) for (let i = 0; i < 5; i++) {
       const p = detail.contour[(i * 2 + seed % 2) % detail.contour.length]!;
       line(p, { x: p.x + .07, y: p.y - .025 }, i % 2 ? '#c0b898' : '#263f3e', .045);
     }
   } else if (kind === 'repair') {
-    polygon(detail.contour, '#9a9a8566', 1, -.035, -.035);
-    polygon(detail.contour, seed % 2 ? '#4f625a' : '#58695f', .94);
+    polygon(detail.contour, '#858c854d', 1, -.035, -.035);
+    polygon(detail.contour, seed % 2 ? '#495458' : '#5c6465', .94);
     if (fine) {
       for (let i = 0; i < detail.contour.length; i += 2) {
         const p = detail.contour[i]!, q = detail.contour[(i + 1) % detail.contour.length]!;
