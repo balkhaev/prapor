@@ -58,26 +58,39 @@ export function getShelterBackdropGroundPatches(coverage: ShelterRect): ShelterB
 /** Continuous earth, meadow and forest litter make the outer grove part of the same terrain. */
 export function paintShelterBackdropTerrain(g: Phaser.GameObjects.Graphics, coverage: ShelterRect, _decorations: readonly ShelterLandscapeDecoration[] = [], lots: readonly ShelterRect[] = [], reserved: readonly ShelterRect[] = []): void {
   // The soil follows the very same grove/clearing field as the trees. Low
-  // contrast, quantised contours form connected woodland floors rather than
-  // a separate dark pedestal under each trunk. Rows merge equal colour runs.
+  // contrast contours form connected woodland floors rather than a separate
+  // dark pedestal under each trunk. Shared vertex colours keep sampling cells
+  // invisible: only the crisp vegetation should have a stepped silhouette.
   let step = 32;
   while ((Math.ceil(coverage.width / step) + 2) * (Math.ceil(coverage.height / step) + 2) > 16000) step *= 2;
   const left = Math.floor(coverage.x / step) * step, right = coverage.x + coverage.width;
   const colorAt = (x: number, y: number): number => {
     const field = sampleShelterForest(unprojectShelterPoint({ x, y }), lots, reserved);
-    const density = Math.round(field.density * 20) / 20, damp = Math.round(field.moisture * 8) / 8;
+    const density = field.density, damp = field.moisture;
     const green = [102 - damp * 6, 113 - damp * 3, 77 + damp * 3];
     const wood = [48 - damp * 2, 71 + damp * 2, 59 + damp * 4];
     const channels = green.map((value, i) => Math.round(value * (1 - density * .87) + wood[i]! * density * .87));
     return channels[0]! << 16 | channels[1]! << 8 | channels[2]!;
   };
+  const gradient = g.scene?.game?.renderer?.type === 2;
+  const mix = (a: number, b: number, t: number): number => {
+    const channel = (shift: number) => Math.round((a >>> shift & 255) * (1 - t) + (b >>> shift & 255) * t);
+    return channel(16) << 16 | channel(8) << 8 | channel(0);
+  };
   for (let y = Math.floor(coverage.y / step) * step; y < coverage.y + coverage.height; y += step) {
-    let start = left, color = colorAt(left + step / 2, y + step / 2);
-    for (let x = left + step; x <= right + step; x += step) {
-      const next = x < right ? colorAt(x + step / 2, y + step / 2) : -1;
-      if (next === color) continue;
-      g.fillStyle(color, .88).fillRect(start, y, x - start, step);
-      start = x; color = next;
+    let topLeft = colorAt(left, y), bottomLeft = colorAt(left, y + step);
+    for (let x = left; x < right; x += step) {
+      const topRight = colorAt(x + step, y), bottomRight = colorAt(x + step, y + step);
+      if (gradient) g.fillGradientStyle(topLeft, topRight, bottomLeft, bottomRight, .88).fillRect(x, y, step, step);
+      else {
+        // Canvas has no Graphics gradient command. Four small colour steps
+        // preserve the same quiet field without a new bitmap or full-screen blur.
+        for (let row = 0; row < 4; row++) for (let column = 0; column < 4; column++) {
+          const top = mix(topLeft, topRight, (column + .5) / 4), bottom = mix(bottomLeft, bottomRight, (column + .5) / 4);
+          g.fillStyle(mix(top, bottom, (row + .5) / 4), .88).fillRect(x + column * step / 4, y + row * step / 4, step / 4, step / 4);
+        }
+      }
+      topLeft = topRight; bottomLeft = bottomRight;
     }
   }
   for (const patch of getShelterBackdropGroundPatches(coverage)) {
