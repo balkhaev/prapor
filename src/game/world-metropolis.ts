@@ -129,7 +129,7 @@ function metropolisRoutes(core: readonly LiveWorldRoute[], pois: readonly LivePo
   return core.map(route => {
     const local = metro.filter(poi => poi.districtId === route.districtId);
     const preferred = local.filter(poi => route.purpose === 'pvp' ? poi.danger === 3 : route.purpose === 'pve' ? poi.tags.some(tag => tag === 'metro-use:works' || tag === 'metro-use:port' || tag === 'metro-use:station')
-      : route.purpose === 'loot' ? poi.tags.some(tag => tag === 'metro-use:market' || tag === 'metro-use:civic' || tag === 'metro-use:housing') : true);
+      : route.purpose === 'loot' ? poi.tags.some(tag => tag === 'metro-use:market' || tag === 'metro-use:civic' || tag === 'metro-use:housing' || tag === 'metro-use:campus' || tag === 'metro-use:waterfront') : true);
     const candidates = preferred.length >= 2 ? preferred : local;
     const chosen: LivePoi[] = [];
     for (const poi of candidates) if (!chosen.some(previous => previous.tags.find(tag => tag.startsWith('metro-use:')) === poi.tags.find(tag => tag.startsWith('metro-use:')))) chosen.push(poi);

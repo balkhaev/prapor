@@ -82,7 +82,7 @@ async function showScene(): Promise<void> {
         quarterChoice.add(new Option('Весь город', ''));
         for (const quarter of preview.world.city?.quarters ?? []) quarterChoice.add(new Option(quarter.name, quarter.id));
       }
-      loading.hidden = true; cityScene.show(); cityScene.showOverview(true);
+      loading.hidden = true; quarterChoice.value = ''; cityScene.show(); cityScene.showOverview(true);
       locationLabel.textContent = `${preview.world.city?.name ?? preview.world.name} · ${preview.world.width} × ${preview.world.height}`;
     } catch {
       if (request === sceneRequest) {
