@@ -698,9 +698,25 @@ export class LiveScene {
   }
   private paintStreetGround(area: LabelBox): void {
     if (this.overview || this.tile < 20) return;
-    const c = this.context, origin = this.project({ x: -.5, y: -.5 });
+    const c = this.context, world = this.snapshot!.world, origin = this.project({ x: -.5, y: -.5 });
     const details = this.streetGround.visible(area).sort((a, b) => (a.x - this.camera.x) ** 2 + (a.y - this.camera.y) ** 2 - (b.x - this.camera.x) ** 2 - (b.y - this.camera.y) ** 2).slice(0, 192);
     c.save(); c.transform(this.tile / 2, this.tile / 4, -this.tile / 2, this.tile / 4, origin.x, origin.y);
+    if (this.tile >= 24) {
+      // One batched path keeps joints thin at walking zoom without allocating
+      // high-resolution bitmaps for a million-cell city. Real interiors, roads
+      // and cover never receive a false pavement surface.
+      c.beginPath();
+      for (let y = Math.max(0, Math.floor(area.y)); y < Math.min(world.height, Math.ceil(area.y + area.height)); y++) {
+        for (let x = Math.max(0, Math.floor(area.x)); x < Math.min(world.width, Math.ceil(area.x + area.width)); x++) {
+          const cell = y * world.width + x;
+          if (this.terrain[cell] !== 'concrete' || !this.walkableGround[cell] || this.surfaceMasks.indoor[cell]) continue;
+          const point = this.project({ x, y });
+          if (point.x < -this.tile || point.y < -this.tile || point.x > this.width + this.tile || point.y > this.height + this.tile) continue;
+          c.rect(x + .025, y + .025, .95, .45); c.rect(x + .025, y + .525, .95, .45);
+        }
+      }
+      c.strokeStyle = '#697b6859'; c.lineWidth = .035; c.stroke();
+    }
     for (const detail of details) paintStreetGroundDetail(c, detail);
     c.restore();
   }
