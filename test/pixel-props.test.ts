@@ -85,7 +85,7 @@ test('all authored prop variants remain identifiable and retain their existing n
     for(let variant=0;variant<4;variant++) {
       const sprite=cache.get(prop(kind,'x',variant));digests.add(fake.records.get(sprite.image)!.digest);
       sizes.add(`${sprite.image.width}:${sprite.image.height}:${sprite.anchor.x}:${sprite.anchor.y}`);
-      expect(pixelPropHeight(kind)).toBeGreaterThan(0);expect(pixelPropHeight(kind)).toBeLessThanOrEqual(246);
+      expect(pixelPropHeight(kind)).toBeGreaterThan(0);expect(pixelPropHeight(kind)).toBeLessThanOrEqual(kind==='tree'?420:246);
     }
     expect(digests.size).toBe(4);expect(sizes.size).toBe(1);
   }

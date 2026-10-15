@@ -1,5 +1,6 @@
 import { LIVE_PROP_KINDS, type LivePoint, type LiveWorldProp } from './game/live';
 import { PIXEL_PALETTE as C, PIXEL_TILE, PixelRaster, pixelIso, pixelRandom, pixelSeed, type PixelColor } from './pixel-art';
+import { TREE_ART_HEIGHT, TREE_ART_MARGIN, treeCrownProfile } from './pixel-plant-form';
 
 export { PIXEL_TILE } from './pixel-art';
 export const PIXEL_PROP_CACHE_BYTES = 24 * 1024 * 1024;
@@ -8,7 +9,7 @@ type Entry = Sprite & { bytes: number };
 type Colors = readonly [PixelColor, PixelColor, PixelColor];
 const HEIGHT: Record<LiveWorldProp['kind'], number> = {
   car: 82, van: 108, truck: 132, bus: 128, railcar: 144,
-  tree: 240, shrub: 62, lamp: 236, 'power-pole': 246, sign: 110,
+  tree: TREE_ART_HEIGHT, shrub: 62, lamp: 236, 'power-pole': 246, sign: 110,
   shed: 156, kiosk: 132, 'market-stall': 118, transformer: 126,
   fence: 86, dumpster: 66, pallet: 30, crate: 56, barrel: 66,
   bench: 62, planter: 68, logs: 48, playground: 142, garden: 36,
@@ -262,23 +263,23 @@ function vehicle(m: Model): void {
 
 function foliage(m: Model): void {
   const tree=m.prop.kind==='tree',variant=m.prop.variant,birch=tree&&variant===2;
-  m.shadow(tree?.64:.78);groundGrowth(m,tree?9:12);
+  m.shadow(tree?.88:.78);groundGrowth(m,tree?9:12);
   const center=m.point(.5,.5),span=Math.max(12,(m.prop.width+m.prop.height)*30);
   // A mature urban tree has a broad crown above a legible bare trunk. The
   // immutable footprint and trunk anchor stay exactly where the server put it.
-  const spread=tree?1.19:1,lean=tree?(m.random()-.5)*span*.12:0;
+  const profile=treeCrownProfile(variant),lean=tree?(m.random()-.5)*span*.17:0;
   const trunk=birch?C.cream:C.wood,trunkShade=birch?C.plasterShade:C.woodShade;
   if(tree) {
     for(const [u,v] of [[.25,.4],[.68,.26],[.76,.71],[.36,.78]]) {
       m.line([.5,.5,7],[u!,v!,1],C.woodShade,6);m.line([.5,.5,7],[u!,v!,2],C.wood,2);
     }
-    m.box(.465,.465,.535,.535,0,112,[trunk,trunkShade,trunk]);
-    for(let z=7;z<103;z+=11) {
+    m.box(.465,.465,.535,.535,0,profile.trunk,[trunk,trunkShade,trunk]);
+    for(let z=7;z<profile.trunk-8;z+=15) {
       m.line([.48,.54,z],[.48,.54,z+7],birch?C.woodShade:C.woodLight,birch?2:1);
       m.line([.53,.54,z+3],[.54,.54,z+8],trunkShade,2);
     }
-    for(const [u,v,z] of [[.18,.44,125],[.76,.69,144],[.42,.22,157],[.74,.38,179]]) {
-      m.line([.5,.5,z!-43],[u!,v!,z!],trunkShade,6);m.line([.49,.5,z!-42],[u!,v!,z!+1],trunk,3);
+    for(const [u,v,z] of [[.18,.44,profile.trunk+7],[.76,.69,profile.trunk+31],[.42,.22,profile.trunk+48],[.74,.38,profile.trunk+67]]) {
+      m.line([.5,.5,z!-61],[u!,v!,z!],trunkShade,7);m.line([.49,.5,z!-60],[u!,v!,z!+1],trunk,3);
       m.line([u!,v!,z!],[u!-.05,v!+.09,z!+15],trunkShade,2);
     }
   } else {
@@ -286,15 +287,15 @@ function foliage(m: Model): void {
   }
   if(tree&&variant===3) {
     for(let level=0;level<4;level++) {
-      const cy=center.y-61-level*38,radius=span*(.96-level*.18),vertices:LivePoint[]=[{x:center.x+lean,y:cy-64}];
+      const cy=center.y-profile.center-level*74,radius=span*(profile.spread-level*.23),vertices:LivePoint[]=[{x:center.x+lean,y:cy-104}];
       for(let side=0;side<2;side++)for(let tier=0;tier<5;tier++) {
-        const t=side===0?tier:4-tier,sign=side===0?1:-1,width=radius*(.28+t*.18),y=cy-40+t*15;
-        vertices.push({x:center.x+lean+sign*width,y},{x:center.x+lean+sign*(width-7),y:y+5});
+        const t=side===0?tier:4-tier,sign=side===0?1:-1,width=radius*(.28+t*.18),y=cy-72+t*24;
+        vertices.push({x:center.x+lean+sign*width,y},{x:center.x+lean+sign*(width-9),y:y+7});
       }
       m.raster.polygon(vertices,C.leafShade);
-      m.raster.polygon([{x:center.x,y:cy-60},{x:center.x-radius*.77,y:cy+14},{x:center.x-radius*.16,y:cy+18},{x:center.x+radius*.15,y:cy-4}],C.leaf);
+      m.raster.polygon([{x:center.x+lean,y:cy-100},{x:center.x+lean-radius*.77,y:cy+19},{x:center.x+lean-radius*.16,y:cy+24},{x:center.x+lean+radius*.15,y:cy-8}],C.leaf);
       for(let tier=0;tier<4;tier++) {
-        const y=cy-31+tier*16,width=radius*(.25+tier*.17);
+        const y=cy-57+tier*25,width=radius*(.25+tier*.17);
         m.raster.line(center.x-width,y,center.x-3,y+6,C.leafLight);
         for(let i=0;i<4;i++) {
           const x=center.x-width+m.random()*width*1.5;
@@ -304,7 +305,7 @@ function foliage(m: Model): void {
     }
     return;
   }
-  const poplar=tree&&variant===1,rx=Math.min(span*(poplar?.66:birch?1.01:1.06)*spread,m.raster.width/2-Math.abs(lean)-16),ry=tree?(poplar?92:birch?73:76):24,cy=center.y-(tree?(poplar?134:139):25);
+  const rx=Math.min(span*(tree?profile.spread:1.06),m.raster.width/2-Math.abs(lean)-16),ry=tree?profile.radiusY:24,cy=center.y-(tree?profile.center:25);
   const crownX=center.x+lean;
   const silhouette:LivePoint[]=[];
   for(let i=0;i<32;i++) {
@@ -317,7 +318,7 @@ function foliage(m: Model): void {
   for(let i=0;i<count;i++) {
     const angle=i*2.399,radius=Math.sqrt((i+1)/(count+1));
     const x=crownX+Math.cos(angle)*rx*.71*radius,y=cy+Math.sin(angle)*ry*.69*radius;
-    const size=(tree?23:8)+m.random()*(tree?16:10),mass:LivePoint[]=[];
+    const size=(tree?32:8)+m.random()*(tree?23:10),mass:LivePoint[]=[];
     for(let lobe=0;lobe<12;lobe++) {
       const theta=lobe*Math.PI/6,rough=.78+m.random()*.22;
       mass.push({x:x+Math.cos(theta)*size*rough,y:y+Math.sin(theta)*Math.min(size*.67,ry*.38)*rough});
@@ -333,7 +334,7 @@ function foliage(m: Model): void {
   }
   if(birch)for(let i=0;i<7;i++) {
     const x=crownX-rx*.55+m.random()*rx*1.1,y=cy+ry*.35+m.random()*ry*.38;
-    m.raster.line(x,y,x-3,y+9,C.leafShade);m.raster.line(x-2,y+3,x-5,y+7,C.leaf);
+    m.raster.line(x,y,x-5,y+22,C.leafShade);m.raster.line(x-3,y+5,x-9,y+17,C.leaf);
   }
   if(!tree&&variant===2)for(let i=0;i<7;i++) {
     const p=m.point(.2+m.random()*.6,.2+m.random()*.6,30+m.random()*12);m.raster.rect(p.x,p.y,2,2,i%2?C.terra:C.yellow);
@@ -867,7 +868,7 @@ export class PixelPropArt {
     const cached=this.sprites.get(key);
     if(cached) {this.sprites.delete(key);this.sprites.set(key,cached);return cached;}
     // The footprint is authoritative; only elevated silhouettes receive a little padding.
-    const margin=prop.kind==='lamp'?56:prop.kind==='tree'?48:prop.kind==='power-pole'?38:12;
+    const margin=prop.kind==='lamp'?56:prop.kind==='tree'?TREE_ART_MARGIN:prop.kind==='power-pole'?38:12;
     const elevation=pixelPropHeight(prop.kind);
     const image=document.createElement('canvas');
     image.width=Math.ceil((prop.width+prop.height)*PIXEL_TILE/2)+margin*2+1;
