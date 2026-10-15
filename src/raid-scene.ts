@@ -12,10 +12,12 @@ import { PixelContainerArt } from './pixel-containers';
 import { PixelRaster, PIXEL_PALETTE as P } from './pixel-art';
 import { paintPropAtmosphere, paintBuildingAtmosphere } from './pixel-environment';
 import { raidGroundArt } from './raid-ground-art';
-import { SceneLightBuffer, propLampSources } from './pixel-lighting';
+import { SceneLightBuffer, propLampSources, type SceneLamp } from './pixel-lighting';
 import { readSceneClimate } from './scene-climate';
 import { paintSceneWeather } from './scene-weather';
 import { SceneWeatherCache } from './scene-weather-cache';
+import { paintWetSurfaces, type WetSurfacePatch } from './scene-wet-surfaces';
+import { raidWetGround, WetGroundFrameCache } from './scene-wet-ground';
 import type { LiveCityBuilding, LiveWorldProp } from './game/live';
 import { raidPixelBuilding, raidPixelFrame, raidPixelProp } from './pixel-raid-presentation';
 import { PIXEL_SCENE_THEME as T, pixelSceneTint as tintColor } from './pixel-scene-theme';
@@ -105,6 +107,11 @@ export class RaidStreetRenderer {
 	private weatherGraphics: Phaser.GameObjects.Graphics;
 	private weatherCache = new SceneWeatherCache();
 	private paintedWeather: ReturnType<SceneWeatherCache['get']> | null = null;
+	private wetGroundGraphics: Phaser.GameObjects.Graphics | null = null;
+	private wetPatches: WetSurfacePatch[] = [];
+	private wetLamps: SceneLamp[] = [];
+	private wetFrame = new WetGroundFrameCache();
+	private paintedWet: ReturnType<WetGroundFrameCache['get']> | null = null;
 
 	constructor(private scene: Phaser.Scene, viewport: ShelterViewport, private reducedMotion: boolean, _requestScavAtlas: (appearance: number) => void = () => {}) {
 		this.viewport = { ...viewport };
@@ -242,6 +249,7 @@ export class RaidStreetRenderer {
 		const yard = plan.mapId === 'forest' ? tintColor(P.leafShade) : plan.mapId === 'depot' ? tintColor(P.soil) : tintColor(P.grass);
 		polygon(ground, this.quad(-1, -1, plan.width + 2, plan.height + 2), mix(yard, tintColor(P.ink), .34));
 		this.world.add(this.sceneryImage(raidGroundArt(plan), this.project({ x: 0, y: 0 })).setDepth(-999));
+		this.buildWetGround(plan);
 		for (const building of plan.buildings) this.buildBuilding(building);
 		for (const prop of plan.props) this.buildProp(prop);
 		for (const spot of plan.lootSpots) {
@@ -277,8 +285,34 @@ export class RaidStreetRenderer {
 	}
 	private clearScenery(): void {
 		this.environment = [];
+		this.wetGroundGraphics = null; this.wetPatches = []; this.wetLamps = []; this.wetFrame.clear(); this.paintedWet = null;
 		for (const key of this.sceneryTextures) this.scene.textures.remove(key);
 		this.sceneryTextures.clear(); this.buildingArt.clear(); this.propArt.clear(); this.containerArt.clear();
+	}
+	private buildWetGround(plan: Plan): void {
+		// The bunker is an underground corridor, not exposed outdoor ground.
+		if (plan.mapId === 'bunker') return;
+		const wet = raidWetGround(plan); this.wetPatches = wet.patches; this.wetLamps = wet.lamps;
+		const origin = this.project({ x: 0, y: 0 });
+		this.wetGroundGraphics = this.scene.add.graphics().setPosition(origin.x, origin.y).setScale(.5).setDepth(-998);
+		this.world.add(this.wetGroundGraphics);
+	}
+	private paintWetGround(climate: ReturnType<typeof readSceneClimate>): void {
+		const graphics = this.wetGroundGraphics;
+		if (!graphics) return;
+		if (climate.wetness <= .001) { graphics.clear(); this.wetFrame.clear(); this.paintedWet = null; return; }
+		const zoom = this.camera.zoom, origin = this.project({ x: 0, y: 0 });
+		const screen = (patch: WetSurfacePatch) => ({ x: (origin.x + patch.x * .5 - this.camera.x) * zoom, y: (origin.y + patch.y * .5 - this.camera.y) * zoom });
+		const patches = this.wetPatches.filter(patch => {
+			const p = screen(patch), rx = patch.width * .25 * zoom, ry = patch.height * .25 * zoom;
+			return p.x + rx >= 0 && p.x - rx <= this.viewport.width && p.y + ry >= 0 && p.y - ry <= this.viewport.height;
+		}).sort((a, b) => {
+			const pa = screen(a), pb = screen(b);
+			return Math.hypot(pa.x - this.viewport.width / 2, pa.y - this.viewport.height / 2) - Math.hypot(pb.x - this.viewport.width / 2, pb.y - this.viewport.height / 2);
+		}).slice(0, 64);
+		const frame = this.wetFrame.get({ patches, lamps: this.wetLamps, timeMs: climate.timeMs, wetness: climate.wetness, rain: climate.rain,
+			lights: climate.profile.lights, reducedMotion: this.reducedMotion });
+		if (frame !== this.paintedWet) { graphics.clear(); paintWetSurfaces(graphics, frame); this.paintedWet = frame; }
 	}
 	private buildBuilding(building: Plan["buildings"][number]): void {
 		const base = this.quad(building.x, building.y, building.width, building.height), front = base[2]!;
@@ -657,7 +691,7 @@ export class RaidStreetRenderer {
 		}
 		if (this.pendingCamera) this.applyRestoredCamera();
 		else if (this.following) this.follow(delta, firstFrame);
-		this.applyCamera(); this.world.sort("depth"); this.paintLighting(climate); this.paintWeather(climate); this.updateMini(frame);
+		this.applyCamera(); this.paintWetGround(climate); this.world.sort("depth"); this.paintLighting(climate); this.paintWeather(climate); this.updateMini(frame);
 		const status = this.report ? this.report.success ? "РЕЙД ЗАВЕРШЁН · ДОБЫЧА НА БАЗЕ" : "РЕЙД ЗАВЕРШЁН · СМОТРИ ОТЧЁТ"
 			: objective.settling ? "КОНТРОЛЬНАЯ ТОЧКА · ОЖИДАЕТСЯ СВОДКА" : frame.paused ? "ЖДЁТ ПРИКАЗА · ДОБЫЧА ПРИ НЁМ"
 			: `${objective.label}${frame.action === "search" ? ` · ${Math.floor(frame.segmentProgress * 100)}%` : frame.enemyPositions.length ? ` · КОНТАКТ ${frame.enemyPositions.length}` : ""}`;

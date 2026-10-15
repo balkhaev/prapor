@@ -12,15 +12,17 @@ import { pixelActorLoadout } from './pixel-loadout';
 import { PixelBuildingArt, pixelBuildingSpriteBytes, pixelBuildingWallHeight } from './pixel-buildings';
 import { PixelPropArt } from './pixel-props';
 import { PixelObstacleArt } from './pixel-obstacles';
-import { PIXEL_TILE, PIXEL_PALETTE as P } from './pixel-art';
+import { PIXEL_TILE, PIXEL_PALETTE as P, pixelIso } from './pixel-art';
 import { PIXEL_SCENE_THEME as T } from './pixel-scene-theme';
 import { buildSurfaceMasks, paintRoadSurface, paintTerrainTexture, terrainTextureResolution, type SurfaceMasks } from './live-ground-art';
 import { paintPropAtmosphere, paintBuildingAtmosphere, type EnvironmentPixel } from './pixel-environment';
 import { fitMinimap, minimapPoint, minimapViewport } from './minimap-presentation';
-import { SceneLightBuffer, propLampSources } from './pixel-lighting';
+import { SceneLightBuffer, propLampSources, type SceneLamp } from './pixel-lighting';
 import { readSceneClimate } from './scene-climate';
 import { paintCanvasSceneWeather } from './scene-weather';
 import { SceneWeatherCache } from './scene-weather-cache';
+import { paintCanvasWetSurfaces } from './scene-wet-surfaces';
+import { wetGroundCandidates, WetGroundFrameCache, type WetGroundCandidate } from './scene-wet-ground';
 
 type Motion = PixelMotion;
 type LabelBox = { x: number; y: number; width: number; height: number };
@@ -81,6 +83,9 @@ export class LiveScene {
   private environmentAt = 0;
   private lightBuffer = new SceneLightBuffer();
   private weatherCache = new SceneWeatherCache();
+  private wetGround = new SceneryIndex<WetGroundCandidate>([]);
+  private wetLamps: SceneLamp[] = [];
+  private wetFrame = new WetGroundFrameCache();
   private lampProps: LiveWorldProp[] = [];
   private reducedMotion = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
 
@@ -112,7 +117,7 @@ export class LiveScene {
 
   show(): void { if (this.active) return; this.active = true; this.resize(); this.animate(); }
   hide(): void { this.active = false; cancelAnimationFrame(this.frame); this.frame = 0; this.weatherCache.clear(); }
-  clear(): void { this.snapshot = null; this.weatherCache.clear(); this.motions.clear(); this.selected = null; this.routePoiIds = []; this.waypointTargets = []; this.hitTargets = []; this.combatAnimation.clear(); this.weaponMounts.clear(); this.shotRigs.clear(); this.paint(); }
+  clear(): void { this.snapshot = null; this.weatherCache.clear(); this.clearWetGround(); this.motions.clear(); this.selected = null; this.routePoiIds = []; this.waypointTargets = []; this.hitTargets = []; this.combatAnimation.clear(); this.weaponMounts.clear(); this.shotRigs.clear(); this.paint(); }
   setSelected(id: string | null): void { this.selected = id; }
   /** Inspect public architecture without issuing a movement command. */
   focusPoint(point: LivePoint): void {
@@ -148,7 +153,7 @@ export class LiveScene {
     this.snapshot = snapshot;
     if (!this.active) this.paint();
   }
-  destroy(): void { this.hide(); this.lightBuffer.clear(); this.lampProps = []; this.observer.disconnect(); this.overlayObserver.disconnect(); this.canvas.removeEventListener('click', this.click); this.canvas.removeEventListener('pointerdown', this.pointerDown); this.canvas.removeEventListener('pointermove', this.pointerMove); this.canvas.removeEventListener('pointerup', this.pointerUp); this.canvas.removeEventListener('pointercancel', this.pointerCancel); this.canvas.removeEventListener('wheel', this.wheel); this.controls.removeEventListener('click', this.zoomClick); this.canvas.remove(); this.controls.remove(); }
+  destroy(): void { this.hide(); this.clearWetGround(); this.lightBuffer.clear(); this.lampProps = []; this.observer.disconnect(); this.overlayObserver.disconnect(); this.canvas.removeEventListener('click', this.click); this.canvas.removeEventListener('pointerdown', this.pointerDown); this.canvas.removeEventListener('pointermove', this.pointerMove); this.canvas.removeEventListener('pointerup', this.pointerUp); this.canvas.removeEventListener('pointercancel', this.pointerCancel); this.canvas.removeEventListener('wheel', this.wheel); this.controls.removeEventListener('click', this.zoomClick); this.canvas.remove(); this.controls.remove(); }
 
   private resize(): void {
     const box = this.host.getBoundingClientRect();
@@ -283,6 +288,14 @@ export class LiveScene {
     for (const building of buildings) scenery.push({ ...building, type: 'architecture', building, depth: building.x + building.y + building.width + building.height - 1.1 });
     this.scenery = new SceneryIndex(scenery, world.chunkSize); this.propArt.clear(); this.buildingArt.clear(); this.obstacleArt.clear(); this.actorArt.clear(); this.containerArt.clear(); this.cutawayBuildings.clear();
     this.surfaceMasks = buildSurfaceMasks(world, this.terrain, this.walkableGround, buildings);
+    this.lampProps = (world.props ?? []).filter(prop => prop.kind === 'lamp');
+    this.wetLamps = this.lampProps.flatMap(prop => {
+      const origin = pixelIso(prop.x, prop.y);
+      return propLampSources(prop).map(lamp => ({ x: origin.x + lamp.x, y: origin.y + lamp.y, headY: origin.y + lamp.headY, radius: lamp.radius }));
+    });
+    this.wetFrame.clear();
+    this.wetGround = new SceneryIndex(wetGroundCandidates({ width: world.width, height: world.height, seed: world.seed,
+      terrain: this.terrain, walkable: this.walkableGround, indoor: this.surfaceMasks.indoor, blocked: [...buildings, ...(world.props ?? [])], lamps: this.wetLamps }), world.chunkSize);
     const texture = document.createElement('canvas'), resolution = terrainTextureResolution(world.width, world.height);
     texture.width = world.width * resolution; texture.height = world.height * resolution;
     const ground = texture.getContext('2d');
@@ -309,7 +322,6 @@ export class LiveScene {
       map.restore();
     }
     this.minimapTerrain = minimap;
-    this.lampProps = (world.props ?? []).filter(prop => prop.kind === 'lamp');
     const overview = document.createElement('canvas'); overview.width = (world.width + world.height) * 4; overview.height = (world.width + world.height) * 2;
     const overviewContext = overview.getContext('2d');
     if (overviewContext) { overviewContext.save(); overviewContext.transform(4, 2, -4, 2, world.height * 4, 0); overviewContext.drawImage(texture, 0, 0, world.width, world.height); overviewContext.restore(); }
@@ -539,6 +551,7 @@ export class LiveScene {
       }
       c.restore();
     }
+    this.paintWetGround(climate, { x: minX - 1, y: minY - 1, width: maxX - minX + 3, height: maxY - minY + 3 });
     this.paintDoorways(world);
     for (const [index, extract] of world.extracts.entries()) {
       const p = this.project(extract); this.polygon(this.quad(extract.x - .7, extract.y - .7, 1.4, 1.4), `${T.extract}55`, T.extract);
@@ -593,6 +606,22 @@ export class LiveScene {
     });
     this.lightBuffer.paint(this.width, this.height, lamps, undefined, climate);
     this.context.drawImage(this.lightBuffer.canvas, 0, 0, this.width, this.height);
+  }
+  private clearWetGround(): void { this.wetGround = new SceneryIndex<WetGroundCandidate>([]); this.wetLamps = []; this.wetFrame.clear(); }
+  private paintWetGround(climate: ReturnType<typeof readSceneClimate>, area: LabelBox): void {
+    if (climate.wetness <= .001 || this.overview || this.tile < 16) return;
+    const origin = this.project({ x: -.5, y: -.5 }), scale = this.tile / PIXEL_TILE;
+    const visible = (x: number, y: number, width: number, height: number) => origin.x + (x + width / 2) * scale >= 0 && origin.x + (x - width / 2) * scale <= this.width
+      && origin.y + (y + height / 2) * scale >= 0 && origin.y + (y - height / 2) * scale <= this.height;
+    const distance = (x: number, y: number) => Math.hypot(origin.x + x * scale - this.width / 2, origin.y + y * scale - this.height / 2);
+    const patches = this.wetGround.visible(area).map(candidate => candidate.patch).filter(patch => visible(patch.x, patch.y, patch.width, patch.height))
+      .sort((a, b) => distance(a.x, a.y) - distance(b.x, b.y)).slice(0, 64);
+    const lamps = this.wetLamps.filter(lamp => visible(lamp.x, lamp.y, lamp.radius * 2, lamp.radius * 2))
+      .sort((a, b) => distance(a.x, a.y) - distance(b.x, b.y)).slice(0, 32);
+    const frame = this.wetFrame.get({ patches, lamps, timeMs: climate.timeMs, wetness: climate.wetness, rain: climate.rain,
+      lights: climate.profile.lights, reducedMotion: this.reducedMotion?.matches });
+    this.context.save(); this.context.translate(origin.x, origin.y); this.context.scale(scale, scale);
+    paintCanvasWetSurfaces(this.context, frame); this.context.restore();
   }
   private paintLandmarks(world: LiveWorld): void {
     const c = this.context, small = this.overview || this.tile < 12;
