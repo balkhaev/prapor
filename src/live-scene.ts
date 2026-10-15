@@ -728,7 +728,7 @@ export class LiveScene {
     if (p.x < -horizontal || p.x > this.width + horizontal || p.y < -(PIXEL_ACTOR_NATIVE_SIZE.height - PIXEL_ACTOR_ANCHOR.y) * scale - 40
       || p.y > this.height + PIXEL_ACTOR_ANCHOR.y * scale + 40) return;
     const boss=entity.bossId?getBoss(entity.bossId):null;
-    const own = entity.id === snapshot.selfId, selected = entity.id === this.selected, color = own ? T.self : boss ? T.boss : entity.kind === 'player' ? T.ally : entity.faction === 'raiders' ? T.hostile : T.hostile;
+    const own = entity.id === snapshot.selfId, selected = entity.id === this.selected, color = own ? T.self : boss ? T.boss : entity.kind === 'player' ? T.ally : entity.faction === 'raiders' ? T.hostile : T.scav;
     if (this.overview || this.tile < 28) {
       c.fillStyle = color; c.strokeStyle = T.panel; c.lineWidth = 1.5; c.beginPath(); c.arc(p.x, p.y, own || selected ? 4.5 : 2.8, 0, Math.PI * 2); c.fill(); c.stroke();
       if (entity.aimUntil && entity.aimUntil > snapshot.now && entity.aimTargetId === snapshot.selfId) this.label('ЦЕЛИТСЯ В ТЕБЯ', p.x, p.y - 14, T.injured, 8);
@@ -782,7 +782,7 @@ export class LiveScene {
     const target = snapshot.self.automation?.target;
     if (target) { c.strokeStyle = snapshot.self.automation?.stage === 'extract' ? T.extract : T.self; c.lineWidth = 1; c.strokeRect(x + target.x * scale - 3, y + target.y * scale - 3, 6, 6); }
     c.restore();
-    for (const entity of snapshot.entities) { c.fillStyle = entity.id === snapshot.selfId ? T.self : entity.bossId?T.boss:entity.kind === 'player' ? T.ally : entity.faction === 'raiders' ? T.hostile : T.hostile; c.beginPath(); const px=x+entity.x*scale,py=y+entity.y*scale;if(entity.bossId){c.moveTo(px,py-3);c.lineTo(px+3,py);c.lineTo(px,py+3);c.lineTo(px-3,py);c.closePath();}else c.arc(px,py,entity.id===snapshot.selfId?2.8:1.6,0,Math.PI*2);c.fill(); }
+    for (const entity of snapshot.entities) { c.fillStyle = entity.id === snapshot.selfId ? T.self : entity.bossId?T.boss:entity.kind === 'player' ? T.ally : entity.faction === 'raiders' ? T.hostile : T.scav; c.beginPath(); const px=x+entity.x*scale,py=y+entity.y*scale;if(entity.bossId){c.moveTo(px,py-3);c.lineTo(px+3,py);c.lineTo(px,py+3);c.lineTo(px-3,py);c.closePath();}else c.arc(px,py,entity.id===snapshot.selfId?2.8:1.6,0,Math.PI*2);c.fill(); }
     this.label(snapshot.world.name.toUpperCase(), x + width / 2, y + height + 14, T.muted, 8);
     c.font = '600 8px "IBM Plex Mono", monospace'; c.textAlign = 'right'; c.fillStyle = T.text; c.fillText('С ↑', x + width - 3, y + 10);
   }

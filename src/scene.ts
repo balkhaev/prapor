@@ -452,8 +452,11 @@ export function createWorld(
 				const slot = this.scavs.get(scav.id);
 				const assignment = actual.shelter?.rooms.find(room => room.id === scav.assignment && room.workerIds.includes(scav.id))?.id ?? null;
 				if (!slot?.actor.visible || scav.status === "raiding" || slot.assignment !== assignment || slot.status !== scav.status) return [];
+				const activityPose = getShelterActivityPose({ activity: slot.routine?.activity, elapsedMs: this.time.now, phase: slot.phase,
+					walking: slot.walking, facing: slot.direction[1] === 'e' ? 1 : -1, cargo: slot.routine?.cargo, reducedMotion });
 				return [{ id: scav.id, name: scav.name ?? "Дикий", point: { ...slot.position }, direction: slot.direction,
 					walking: slot.walking, working: slot.working, walkPhase: slot.animation.stride,
+					limping: slot.status === 'wounded', handsBusy: slot.working || !slot.walking && !slot.assignment && (activityPose.stance === 'work' || activityPose.stance === 'carry'),
 					visualLoadout: slot.visualLoadout,
 					pixelFrame: scavPixelFrame(slot.direction, slot.animation.stride, slot.animation.idleSeconds * 1000, slot.walking, reducedMotion),
 					activity: slot.routine?.activity ?? slot.role, label: this.personActivityLabel(slot), role: slot.role, appearance: slot.appearance,

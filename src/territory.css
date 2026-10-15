@@ -21,7 +21,7 @@
 .territory-map-building-label small{font-size:9px;line-height:1.1;color:var(--game-muted)}
 .free-plan-building:hover .territory-building-selection,.free-plan-building.active .territory-building-selection{stroke:#ebcf8e}
 .free-plan-building:focus-visible .territory-building-selection{stroke:#fff0bc;stroke-width:5}
-.free-plan-building:hover .territory-map-building-label,.free-plan-building:focus-visible .territory-map-building-label,.free-plan-building.active .territory-map-building-label{background:color-mix(in srgb, var(--game-brass-surface) 96%, transparent);border-color:color-mix(in srgb, var(--game-brass) 67%, transparent)}
+.free-plan-building:hover .territory-map-building-label,.free-plan-building:focus-visible .territory-map-building-label,.free-plan-building.active .territory-map-building-label{background:var(--game-brass-surface);border-color:color-mix(in srgb, var(--game-brass) 67%, transparent)}
 .free-plan-building.under-construction{opacity:.75}
 .territory-map-expansion{position:absolute;z-index:3;transform:translate(-50%,-50%);display:flex;align-items:center;justify-content:center;width:32px;height:32px;min-height:0;margin:0;padding:0;border:1px solid color-mix(in srgb, var(--game-line) 53%, transparent);border-radius:50%;background:color-mix(in srgb, var(--game-panel-raised) 93%, transparent);color:var(--game-brass-light);cursor:pointer;box-shadow:0 3px 9px #152c2277}
 .territory-map-expansion>b{font-size:20px;font-weight:400;line-height:1}

@@ -26,6 +26,7 @@ type Frame = ReturnType<typeof getRaidFieldFrame>;
 export interface RaidStreetSnapshot { raids: Raid[]; selectedRaidId?: string | null; history?: RaidReport[]; weapons?: WeaponInstance[]; scavs?: { id: string; personality?: string; appearance?: number }[] }
 type Pawn = { root: Phaser.GameObjects.Container; body: Phaser.GameObjects.Container; actor: PixelPhaserActor; point: Point | null; appearance: number; direction: PixelFacing; firedAt?: number; bossBadge?: Phaser.GameObjects.Text };
 type Occluder = { object: Phaser.GameObjects.Container; x: number; y: number; width: number; height: number };
+let nextSceneryTexture = 0;
 const MINI = { width: 136, height: 102, inset: 9, innerWidth: 118, innerHeight: 78 };
 const clamp = Phaser.Math.Clamp;
 const mix = (a: number, b: number, amount: number) => {
@@ -86,7 +87,6 @@ export class RaidStreetRenderer {
 	private propArt = new PixelPropArt();
 	private containerArt = new PixelContainerArt();
 	private sceneryTextures = new Set<string>();
-	private nextSceneryTexture = 0;
 
 	constructor(private scene: Phaser.Scene, viewport: ShelterViewport, private reducedMotion: boolean, _requestScavAtlas: (appearance: number) => void = () => {}) {
 		this.viewport = { ...viewport };
@@ -252,7 +252,7 @@ export class RaidStreetRenderer {
 		const copy = document.createElement('canvas'); copy.width = sprite.image.width; copy.height = sprite.image.height;
 		const context = copy.getContext('2d');
 		if (context) { context.imageSmoothingEnabled = false; context.drawImage(sprite.image, 0, 0); }
-		const key = `raid-pixel-scenery-${this.scene.sys.settings.key}-${++this.nextSceneryTexture}`;
+		const key = `raid-pixel-scenery-${++nextSceneryTexture}`;
 		this.scene.textures.addCanvas(key, copy)?.setFilter(Phaser.Textures.FilterMode.NEAREST);
 		this.sceneryTextures.add(key);
 		return this.scene.add.image(point.x, point.y, key).setOrigin(sprite.anchor.x / copy.width, sprite.anchor.y / copy.height).setScale(scale);
@@ -270,7 +270,7 @@ export class RaidStreetRenderer {
 			for (let n = 0; n < 7; n++) {
 				const prop = raidPixelProp({ id: `${building.id}-${n}`, kind: 'tree', x: building.x + rng() * building.width, y: building.y + rng() * building.height, blocking: true });
 				prop.variant = n % 4;
-				root.add(this.sceneryImage(this.propArt.get(prop), this.project(prop), .5));
+				root.add(this.sceneryImage(this.propArt.get(prop), this.project({ x: prop.x - prop.width / 2, y: prop.y - prop.height / 2 }), .5));
 			}
 			renderedHeight = 135;
 		} else {
@@ -297,7 +297,10 @@ export class RaidStreetRenderer {
 				}
 			}
 			root.add(this.sceneryImage({ image, anchor: { x: 60, y: 64 } }, { x: 0, y: 0 }, .5));
-		} else root.add(this.sceneryImage(this.propArt.get(raidPixelProp(prop)), { x: 0, y: 0 }, .5));
+		} else {
+			const native = raidPixelProp(prop), offset = this.project({ x: prop.x - native.width / 2, y: prop.y - native.height / 2 });
+			root.add(this.sceneryImage(this.propArt.get(native), { x: offset.x - point.x, y: offset.y - point.y }, .5));
+		}
 		this.world.add(root);
 	}
 
@@ -320,7 +323,7 @@ export class RaidStreetRenderer {
 		const clock = frame.weatherPhase * 1000;
 		// Pose recoil follows an already observed cue; entering a combat pose never creates a shot.
 		if (presentation.shot && !this.report && !frame.paused && !this.reducedMotion) pawn.firedAt = clock - (1 - presentation.shot.strength) * (this.squadFrame ? 80 : 75);
-		const animation = raidPixelFrame(this.plan!, frame, { facing: pawn.direction, appearance: pawn.appearance, hostile, downed: presentation.downed,
+		const animation = raidPixelFrame(this.plan!, frame, { facing: pawn.direction, appearance: pawn.appearance, hostile, downed: presentation.downed, limping: presentation.limping,
 			reducedMotion: this.reducedMotion, shotAge: pawn.firedAt === undefined ? undefined : clock - pawn.firedAt });
 		pawn.actor.update({ appearance: pawn.appearance, faction: hostile ? 'raiders' : 'scavs', limping: presentation.limping, bossId: presentation.bossId }, animation,
 			presentation.lostWeapon ? null : loadout.weapon, scavPixelGear(loadout));

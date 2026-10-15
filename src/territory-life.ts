@@ -1,5 +1,5 @@
 import { isScavAppearance } from "./game/scav-appearances";
-import { SCAV_DIRECTIONS, scavAttachment, scavFrame, type ScavDirection, type ScavPose } from "./scav-isometric";
+import { SCAV_DIRECTIONS, scavAttachment, scavFrame, scavPixelGear, type ScavDirection, type ScavPose } from "./scav-isometric";
 import { projectShelterPoint } from "./shelter-isometric";
 import type { ShelterPoint } from "./shelter-motion";
 import { getShelterActivityPose } from "./shelter-activity";
@@ -29,6 +29,8 @@ export interface ShelterPersonView {
 	activityPhase?: number;
 	visualLoadout?: ScavVisualLoadout;
 	pixelFrame?: PixelActorFrame;
+	limping?: boolean;
+	handsBusy?: boolean;
 }
 export interface TerritoryLifeBounds { x: number; y: number; width: number; height: number }
 export interface TerritoryLifeOptions {
@@ -175,11 +177,12 @@ export function createTerritoryLife(options: TerritoryLifeOptions): TerritoryLif
 			const animation: PixelActorFrame = person.pixelFrame ?? { mode: person.walking ? 'walk' : 'idle', facing: direction,
 				frame: person.walking ? Math.floor(finite(person.walkPhase) * PIXEL_ACTOR_FRAMES.walk) % PIXEL_ACTOR_FRAMES.walk : pixelActorTimedFrame('idle', performance.now() + appearance * 173) };
 			const pose = options.reducedMotion ? { ...animation, frame: 0 } : animation;
-			const loadout = person.visualLoadout, weapon = person.working ? emptyWeapon : loadout?.weapon ?? emptyWeapon;
-			const gear = { profile: 'light' as const, armor: Boolean(loadout?.armorModelId), helmet: Boolean(loadout?.helmetModelId), backpack: Boolean(loadout?.packModelId) };
-			const spriteKey = `${appearance}:${JSON.stringify(pose)}:${pixelWeaponSignature(weapon)}:${JSON.stringify(gear)}`;
+			const loadout = person.visualLoadout ?? { armorModelId: null, helmetModelId: null, packModelId: null, weapon: null };
+			const weapon = person.working || person.handsBusy ? emptyWeapon : loadout.weapon ?? emptyWeapon;
+			const gear = scavPixelGear(loadout);
+			const spriteKey = `${appearance}:${person.limping}:${JSON.stringify(pose)}:${pixelWeaponSignature(weapon)}:${JSON.stringify(gear)}`;
 			if (node.spriteKey !== spriteKey) {
-				const image = art.get({ appearance, faction: 'scavs' }, pose, weapon, gear), scale = BODY_HEIGHT / 160;
+				const image = art.get({ appearance, limping: person.limping }, pose, weapon, gear), scale = BODY_HEIGHT / 160;
 				sprite.width = image.image.width; sprite.height = image.image.height;
 				const context = sprite.getContext('2d'); if (context) { context.imageSmoothingEnabled = false; context.drawImage(image.image, 0, 0); }
 				sprite.style.width = `${sprite.width * scale}px`; sprite.style.height = `${sprite.height * scale}px`;

@@ -88,7 +88,9 @@ body { background-color: var(--game-bg); }
 }
 .command-room-banner > svg,
 .command-system > svg,
-.room-mini-art { image-rendering: pixelated; shape-rendering: crispEdges; }
+.room-mini-art,
+.territory-map-art,
+.territory-building-art { image-rendering: pixelated; shape-rendering: crispEdges; }
 .command-room-banner > svg { filter: none; }
 
 /* A dialogue is a field panel, with the same neutral surface as the workbench. */
