@@ -115,7 +115,7 @@ function storedBody(value: unknown, legacyHealth: number): HealthState {
   if (legacyHealth <= 0) body.parts.head.hp = 0;
   return body;
 }
-const DEFAULT_MAP: LiveMapId = "perimeter", WORLD_VERSION = 3, COMBAT_TRAVEL_MS = 8000, VISION_RADIUS = 24, VISIBLE_DROP_CAPACITY = 512;
+const DEFAULT_MAP: LiveMapId = "perimeter", WORLD_VERSION = 3, COMBAT_TRAVEL_MS = 8000, VISION_RADIUS = 24, VISIBLE_ENTITY_CAPACITY = 256, VISIBLE_DROP_CAPACITY = 512;
 const maps = new Map(LIVE_MAPS.map(map => [map.id, map]));
 const mapFrom = (id: unknown): LiveMapId | null => typeof id === "string" && maps.has(id as LiveMapId) ? id as LiveMapId : null;
 const worldFor = (id: LiveMapId): LiveWorld => {
@@ -639,7 +639,9 @@ export function createLiveService(options: LiveOptions): LiveService {
             return { items: parcel.items, money: parcel.money, message: row.message };
           }), economyMessage: player.economyMessage ?? "Находки с выхода поступают в убежище; пополнение расходует его запасы." } : {}) },
       entities: [...players.values()].filter(other => other.mapId === player.mapId && (other.id === player.id || exposed(other) && visible(other))).map(publicEntity)
-        .concat([...scavs.values()].filter(scav => scav.mapId === player.mapId && visible(scav)).map(publicEntity)),
+        .concat([...scavs.values()].filter(scav => scav.mapId === player.mapId && visible(scav)).map(publicEntity))
+        .sort((a, b) => Number(b.id === player.id) - Number(a.id === player.id)
+          || distance(player, a) - distance(player, b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).slice(0, VISIBLE_ENTITY_CAPACITY),
       // Dense fights can leave more cargo than one bounded packet can contain.
       // Project a stable page; keep every physical UUID in the durable world.
       drops: [...drops.values()].filter(drop => drop.mapId === player.mapId && visible(drop)).sort((a, b) =>

@@ -21,7 +21,14 @@ h1 { font-size: clamp(25px, 3vw, 37px); letter-spacing: -.035em; line-height: 1.
 .environment-camera button:hover { background: var(--game-hover); border-color: var(--game-brass); }
 .environment-camera[hidden] { display: none; }
 #environment-location { margin-left: auto; padding-bottom: 11px; font: 10px 'IBM Plex Mono', monospace; color: var(--game-brass-light); text-transform: uppercase; letter-spacing: .07em; }
-.environment-stage { height: clamp(420px, 67vh, 760px); width: 100%; overflow: hidden; background: var(--game-inset); border-block: 1px solid var(--game-line); touch-action: none; }
+.environment-stage { position: relative; height: clamp(420px, 67vh, 760px); width: 100%; overflow: hidden; background: var(--game-inset); border-block: 1px solid var(--game-line); touch-action: none; }
+.environment-render-host { position: absolute; inset: 0; width: 100%; height: 100%; }
+.environment-render-host[hidden], .environment-quarter[hidden], .environment-loading[hidden] { display: none; }
+.environment-render-host canvas { width: 100%; height: 100%; touch-action: none; cursor: grab; }
+.environment-render-host canvas.is-dragging { cursor: grabbing; }
+.environment-loading { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; padding: 24px; background: var(--game-inset); color: var(--game-muted); font-size: 12px; text-align: center; }
+.environment-toolbar .environment-quarter { min-width: 180px; }
+.environment-toolbar { flex-wrap: wrap; }
 .environment-stage canvas { display: block; image-rendering: pixelated; }
 .environment-footer { display: flex; justify-content: space-between; gap: 14px; padding: 14px 20px; font: 9px 'IBM Plex Mono', monospace; color: var(--game-muted); }
 .environment-note { margin: 17px 3px 0; color: var(--game-muted); font-size: 11px; line-height: 1.7; }

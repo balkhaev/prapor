@@ -20,7 +20,7 @@ const hash = (x: number, y: number): number => {
   value = Math.imul(value ^ value >>> 13, 1274126177); return (value ^ value >>> 16) >>> 0;
 };
 
-/** Detailed pixel ground stays within a 4096px texture side, including G9's 512 cells. */
+/** Detailed ground stays within a 4096px texture side, including G10's million cells. */
 export function terrainTextureResolution(width: number, height: number): number {
   const longest = Math.max(width, height);
   return Math.max(1, Math.min(longest <= 256 ? 16 : 12, Math.floor(4096 / longest)));

@@ -4,6 +4,10 @@ import type { LiveWorld } from '../src/game/live';
 type Saved = Record<string, unknown>;
 const record = (value: unknown): value is Saved => typeof value === 'object' && value !== null && !Array.isArray(value);
 const oldDistricts: Record<string, { x: number; y: number }> = { customs: { x: 0, y: 0 }, sawmill: { x: 128, y: 0 }, depot: { x: 0, y: 128 }, village: { x: 128, y: 128 } };
+// Each expansion embeds the previous frame without stretching it. G10 adds
+// 256 cells around G9, whose cumulative offset from the original map was 128.
+const frames = [{ version: 10, offset: 384 }, { version: 9, offset: 128 }, { version: 8, offset: 96 }, { version: 7, offset: 32 }] as const;
+const coordinateFrame = (version: number) => frames.find(frame => version >= frame.version);
 
 /** Move the whole durable coordinate frame atomically, including offline fighters.
  * The marker also prevents a second shift if later startup validation fails before
@@ -14,10 +18,11 @@ export function migrateExpandedLiveCoordinates(db: Database, current: LiveWorld)
   const world = JSON.parse(row.state) as Saved;
   const previous = typeof world.geometryVersion === 'string' ? /^perimeter-g(\d+)-/.exec(world.geometryVersion) : undefined;
   if (!previous && world.geometryVersion !== undefined) return false;
-  const targetVersion = current.generatorVersion >= 9 ? 9 : current.generatorVersion >= 8 ? 8 : 7;
-  const targetOffset = targetVersion === 9 ? 128 : targetVersion === 8 ? 96 : 32;
-  const frameVersion = typeof world.coordinateExpansionVersion === 'number' ? world.coordinateExpansionVersion : previous ? Number(previous[1]) : 0;
-  const previousOffset = frameVersion >= 9 ? 128 : frameVersion >= 8 ? 96 : frameVersion >= 7 ? 32 : 0, delta = targetOffset - previousOffset;
+  const target = coordinateFrame(current.generatorVersion)!;
+  const targetVersion = target.version, targetOffset = target.offset;
+  const marker = world.coordinateExpansionVersion;
+  const frameVersion = typeof marker === 'number' && Number.isInteger(marker) && marker >= 7 ? marker : previous ? Number(previous[1]) : 0;
+  const previousOffset = coordinateFrame(frameVersion)?.offset ?? 0, delta = targetOffset - previousOffset;
   if (delta <= 0) return false;
   const point = (value: unknown, district?: unknown): void => {
     if (!record(value) || typeof value.x !== 'number' || typeof value.y !== 'number' || !Number.isFinite(value.x) || !Number.isFinite(value.y)) return;

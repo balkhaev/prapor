@@ -4,6 +4,38 @@ import { PIXEL_PALETTE as P } from './pixel-art';
 
 export type SceneryBounds = LivePoint & { width: number; height: number };
 
+/** Navigation bitmaps have their own budgets; they never inherit the world's pixel-art scale. */
+export function liveMapRasterPlan(width: number, height: number): {
+  minimap: { width: number; height: number; scale: number };
+  overview: { width: number; height: number; scale: number };
+} {
+  const mapScale = Math.min(4, 1024 / Math.max(width, height));
+  const isoScale = Math.min(4, 2048 / (width + height));
+  return { minimap: { width: Math.ceil(width * mapScale), height: Math.ceil(height * mapScale), scale: mapScale },
+    overview: { width: Math.ceil((width + height) * isoScale), height: Math.ceil((width + height) * isoScale / 2), scale: isoScale } };
+}
+
+/** The distant city is a cached plan of real footprints, including small lanes between buildings. */
+export function paintMapFootprints(c: CanvasRenderingContext2D, world: LiveWorld, buildings: readonly LiveCityBuilding[]): void {
+  for (const obstacle of world.obstacles) {
+    if (obstacle.kind === 'water' || obstacle.propId) continue;
+    c.fillStyle = obstacle.kind === 'tree' ? P.leafShade : obstacle.kind === 'building' ? P.panelShade : P.concreteShade;
+    c.fillRect(obstacle.x, obstacle.y, obstacle.width, obstacle.height);
+  }
+  for (const prop of world.props ?? []) {
+    const green = ['tree', 'shrub', 'garden', 'planter'].includes(prop.kind);
+    if (!prop.blocking && !green && prop.kind !== 'playground') continue;
+    c.fillStyle = green ? P.leafShade : P.steelShade;
+    c.fillRect(prop.x, prop.y, prop.width, prop.height);
+  }
+  for (const building of buildings) {
+    c.fillStyle = buildingPalette(building)[2];
+    c.fillRect(building.x, building.y, building.width, building.height);
+    c.strokeStyle = P.ink; c.lineWidth = .3;
+    c.strokeRect(building.x, building.y, building.width, building.height);
+  }
+}
+
 /** Public static scenery is indexed once, rather than scanning the whole perimeter per frame. */
 export class SceneryIndex<T extends SceneryBounds> {
   private chunks = new Map<string, T[]>();
@@ -56,6 +88,7 @@ export function buildingFacadeCadence(building: LiveCityBuilding, length: number
  * A courtyard/POI box alone is never sufficient evidence for a roof. */
 export function sceneBuildings(world: LiveWorld): LiveCityBuilding[] {
   const result = [...world.citySites?.flatMap(site => site.buildings) ?? []];
+  const authored = new SceneryIndex(result, world.chunkSize);
   const styles = (template: string): Pick<LiveCityBuilding, 'kind' | 'floors' | 'facade' | 'roof'> =>
     ['workshop', 'sawmill', 'depot', 'city-tram', 'greenhouse'].includes(template) ? { kind: 'workshop', floors: 1, facade: 'metal', roof: template === 'sawmill' ? 'sawtooth' : 'gable' }
       : template === 'apartments' ? { kind: 'apartment', floors: 2, facade: 'plaster', roof: 'gable' }
@@ -64,6 +97,9 @@ export function sceneBuildings(world: LiveWorld): LiveCityBuilding[] {
             : { kind: 'garage', floors: 1, facade: 'plaster', roof: 'gable' };
   for (const [index, obstacle] of world.obstacles.entries()) {
     if (obstacle.kind !== 'building' || obstacle.propId) continue;
+    // An authored house already owns its collision wall segments, irrespective of the legacy collider kind.
+    if (authored.visible(obstacle).some(building => obstacle.x >= building.x && obstacle.y >= building.y
+      && obstacle.x + obstacle.width <= building.x + building.width && obstacle.y + obstacle.height <= building.y + building.height)) continue;
     const poi = world.pois.find(poi => obstacle.x >= poi.x && obstacle.y >= poi.y && obstacle.x + obstacle.width <= poi.x + poi.width && obstacle.y + obstacle.height <= poi.y + poi.height);
     const frontage = /^(Жилой дом|Дом лесных рабочих|Угловая лавка|Служебная мастерская|Ремонтный бокс) · /.exec(obstacle.label ?? '');
     const inferred = frontage ? frontage[1] === 'Угловая лавка' ? { kind: 'shop' as const, floors: 1 as const, facade: 'plaster' as const, roof: 'gable' as const }

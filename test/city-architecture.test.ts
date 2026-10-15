@@ -1,11 +1,12 @@
+// These fixtures protect the preserved G9 city core; full G10 coverage is in world-metropolis tests.
 import { expect, test } from 'bun:test';
-import { generateLiveWorld, validateGeneratedWorld } from '../src/game/world-generation';
+import { generatePerimeterCore, validateGeneratedWorld } from '../src/game/world-generation';
 
 type Rect = { x: number; y: number; width: number; height: number };
 const intersects = (a: Rect, b: Rect): boolean => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 
 test('dense city addresses preserve loot identities and distinguish the four neighbourhoods', () => {
-  const world = generateLiveWorld(), sites = world.citySites!, buildings = sites.flatMap(site => site.buildings);
+  const world = generatePerimeterCore(), sites = world.citySites!, buildings = sites.flatMap(site => site.buildings);
   expect(sites).toHaveLength(24);
   expect(buildings.length).toBeGreaterThanOrEqual(150);
   for (const site of sites) {
@@ -45,7 +46,7 @@ test('dense city addresses preserve loot identities and distinguish the four nei
 
 test('representative seeds keep authored architecture separate from landmarks and every room reachable', () => {
   for (const seed of [0, 9, 99]) {
-    const world = generateLiveWorld(`architecture-${seed}`), buildings = world.citySites!.flatMap(site => site.buildings);
+    const world = generatePerimeterCore(`architecture-${seed}`), buildings = world.citySites!.flatMap(site => site.buildings);
     const landmarks = world.pois.filter(poi => poi.tags.includes('city') && !poi.tags.includes('city-site'));
     const solid = world.obstacles.filter(obstacle => obstacle.kind === 'building');
     expect(buildings.length).toBeGreaterThanOrEqual(150);

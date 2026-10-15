@@ -4,6 +4,7 @@ import { BODY_PARTS, parseHealth, parseMedicalInventory, type BodyPart, type Tre
 import { getBoss, type BossId } from './game/bosses';
 import { isLiveKitId, type LiveEntry, type LiveKitId, type LiveLoadout } from './game/live-entry';
 import { MODULE_BY_ID, MODULE_SLOTS, type ModuleSlot } from './game/modules';
+import { LIVE_WORLD_LIMITS as WORLD_LIMITS } from './game/live-world-limits';
 
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const number = (value: unknown, min = 0, max = Number.MAX_SAFE_INTEGER): value is number => typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max;
@@ -17,6 +18,7 @@ const point = (value: unknown, world: Pick<LiveWorld, 'width' | 'height'>): valu
 const invalid = (): never => { throw new LiveApiError(0, 'invalid_response'); };
 const keys = (value: Record<string, unknown>, allowed: readonly string[]) => Object.keys(value).every(key => allowed.includes(key));
 const uuid = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+const terrainRow = new RegExp(`^[${Object.keys(LIVE_TERRAIN_CODES).join('')}]+$`);
 
 function readLoot(value: unknown): EconomyLoot[] {
   try { return readEconomyLootItems(value, LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT); } catch { return invalid(); }
@@ -100,18 +102,22 @@ const rectangle = (value: unknown, bounds: Pick<LiveWorld, 'width' | 'height'>):
   point(value, bounds) && integer(value.x) && integer(value.y) && integer(value.width, 1, bounds.width) && integer(value.height, 1, bounds.height) && value.x + value.width <= bounds.width && value.y + value.height <= bounds.height;
 
 function readCity(value: unknown, bounds: Pick<LiveWorld, 'width' | 'height'>) {
-  if (!rectangle(value, bounds) || !keys(value, ['name', 'x', 'y', 'width', 'height', 'quarters']) || !text(value.name, 80) || !Array.isArray(value.quarters) || value.quarters.length !== 4) return invalid();
+  if (!rectangle(value, bounds) || !keys(value, ['name', 'x', 'y', 'width', 'height', 'quarters']) || !text(value.name, 80) || !Array.isArray(value.quarters) || value.quarters.length < 4 || value.quarters.length > WORLD_LIMITS.cityQuarters) return invalid();
   const quarters = value.quarters.map(quarter => {
     if (!rectangle(quarter, bounds) || !keys(quarter, ['id', 'name', 'x', 'y', 'width', 'height']) || !text(quarter.id, 64) || !text(quarter.name, 80) || quarter.x < value.x || quarter.y < value.y || quarter.x + quarter.width > value.x + value.width || quarter.y + quarter.height > value.y + value.height) return invalid();
     return { id: quarter.id, name: quarter.name, x: quarter.x, y: quarter.y, width: quarter.width, height: quarter.height };
   });
   if (new Set(quarters.map(quarter => quarter.id)).size !== quarters.length) return invalid();
+  if (quarters.reduce((area, quarter) => area + quarter.width * quarter.height, 0) !== value.width * value.height
+    || quarters.some((a, index) => quarters.slice(index + 1).some(b => a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y))) return invalid();
   return { name: value.name, x: value.x, y: value.y, width: value.width, height: value.height, quarters };
 }
 
 function readCitySites(value: unknown, city: LiveWorld['city'], pois: LiveWorld['pois'], bounds: Pick<LiveWorld, 'width' | 'height'>): LiveCitySite[] | undefined {
   if (value === undefined) return undefined;
-  if (!city || !Array.isArray(value) || value.length > 64) return invalid();
+  if (!city || !Array.isArray(value) || value.length > WORLD_LIMITS.citySites) return invalid();
+  const poiById = new Map(pois.map(poi => [poi.id, poi]));
+  let buildingCount = 0;
   type Rect = { x: number; y: number; width: number; height: number };
   const within = (child: Rect, parent: Rect) => child.x >= parent.x && child.y >= parent.y && child.x + child.width <= parent.x + parent.width && child.y + child.height <= parent.y + parent.height;
   const inside = (location: { x: number; y: number }, area: Rect) => location.x >= area.x && location.y >= area.y && location.x < area.x + area.width && location.y < area.y + area.height;
@@ -122,7 +128,9 @@ function readCitySites(value: unknown, city: LiveWorld['city'], pois: LiveWorld[
       || !text(site.id, 64) || !text(site.poiId, 100) || !text(site.quarterId, 64) || !text(site.name, 80) || !['courtyard', 'arcade', 'workyard', 'service-yard'].includes(site.kind as string)
       || !rectangle(site.courtyard, bounds) || !keys(site.courtyard, ['x', 'y', 'width', 'height']) || !within(site.courtyard, site)
       || !Array.isArray(site.buildings) || site.buildings.length < 1 || site.buildings.length > 12 || !Array.isArray(site.passages) || site.passages.length < 2 || site.passages.length > 4) return invalid();
-    const quarter = city.quarters.find(quarter => quarter.id === site.quarterId), poi = pois.find(poi => poi.id === site.poiId);
+    buildingCount += site.buildings.length;
+    if (buildingCount > WORLD_LIMITS.buildings) return invalid();
+    const quarter = city.quarters.find(quarter => quarter.id === site.quarterId), poi = poiById.get(site.poiId);
     if (!quarter || !within(site, quarter) || !poi || !poi.tags.includes('city') || poi.x !== site.x || poi.y !== site.y || poi.width !== site.width || poi.height !== site.height) return invalid();
     const buildings = site.buildings.map(building => {
       if (!rectangle(building, bounds) || !keys(building, ['id', 'name', 'kind', 'x', 'y', 'width', 'height', 'entrances', 'floors', 'roof', 'roofAxis', 'facade']) || !within(building, site)
@@ -168,13 +176,13 @@ export function readLiveStatus(value: unknown): LiveStatus {
   if (!record(value) || !text(value.id) || !text(value.name, 80) || !integer(value.online, 0, 256) || !integer(value.capacity, 1, 256) || value.online > value.capacity || !number(value.startedAt) || !Array.isArray(value.maps) || value.maps.length !== 1 || !Array.isArray(value.districts) || value.districts.length !== 4) return invalid();
   const capacity = value.capacity;
   const maps: LiveMapSummary[] = value.maps.map(map => {
-    if (!record(map) || map.id !== 'perimeter' || !text(map.name, 80) || !text(map.description, 500) || !['industrial', 'forest', 'urban', 'mixed'].includes(map.theme as string) || !integer(map.width, 2, 512) || !integer(map.height, 2, 512) || !integer(map.online, 0, capacity) || !integer(map.npcs, 0, 256)) return invalid();
+    if (!record(map) || map.id !== 'perimeter' || !text(map.name, 80) || !text(map.description, 500) || !['industrial', 'forest', 'urban', 'mixed'].includes(map.theme as string) || !integer(map.width, 2, WORLD_LIMITS.side) || !integer(map.height, 2, WORLD_LIMITS.side) || !integer(map.online, 0, capacity) || !integer(map.npcs, 0, WORLD_LIMITS.npcs)) return invalid();
     return { id: map.id, name: map.name, description: map.description, theme: map.theme as LiveMapSummary['theme'], width: map.width, height: map.height, online: map.online, npcs: map.npcs, ...(map.city === undefined ? {} : { city: readCity(map.city, map as { width: number; height: number }) }) };
   });
   if (maps[0]!.online !== value.online) return invalid();
   const districts = value.districts.map(district => {
     const parsed = readDistrict(district, maps[0]!);
-    if (!record(district) || !integer(district.online, 0, capacity) || !integer(district.npcs, 0, 256)) return invalid();
+    if (!record(district) || !integer(district.online, 0, capacity) || !integer(district.npcs, 0, WORLD_LIMITS.npcs)) return invalid();
     return { ...parsed, online: district.online, npcs: district.npcs };
   });
   if (new Set(districts.map(district => district.id)).size !== 4 || districts.reduce((total, district) => total + district.online, 0) !== value.online) return invalid();
@@ -259,7 +267,7 @@ export function readLiveEntry(value: unknown): LiveEntry {
 /** Only immutable, versioned geometry may be reused between server responses. */
 function readWorldProps(source: unknown, bounds: Pick<LiveWorld, 'width' | 'height'>): LiveWorld['props'] {
   if (source === undefined) return undefined;
-  if (!Array.isArray(source) || source.length > 6000) return invalid();
+  if (!Array.isArray(source) || source.length > WORLD_LIMITS.props) return invalid();
   const props = source.map(prop => {
     if (!record(prop) || !keys(prop, ['id', 'kind', 'x', 'y', 'width', 'height', 'orientation', 'variant', 'blocking'])
       || !text(prop.id, 100) || !LIVE_PROP_KINDS.includes(prop.kind as typeof LIVE_PROP_KINDS[number]) || !point(prop, bounds)
@@ -274,15 +282,15 @@ function readWorldProps(source: unknown, bounds: Pick<LiveWorld, 'width' | 'heig
 }
 
 export function readLiveWorld(source: unknown): LiveWorld {
-  if (!record(source) || source.id !== 'perimeter' || !text(source.name, 80) || !text(source.description, 500) || !['industrial', 'forest', 'urban', 'mixed'].includes(source.theme as string) || !integer(source.width, 2, 512) || !integer(source.height, 2, 512) || !text(source.version, 128) || !text(source.seed, 128) || !integer(source.generatorVersion, 1, 1_000_000) || !integer(source.chunkSize, 1, 128) || !Array.isArray(source.obstacles) || source.obstacles.length > 4096 || !Array.isArray(source.extracts) || !source.extracts.length || source.extracts.length > 64 || !Array.isArray(source.zones) || source.zones.length > 1000 || !Array.isArray(source.districts) || source.districts.length !== 4 || !Array.isArray(source.pois) || source.pois.length > 256 || !Array.isArray(source.containers) || source.containers.length > 512) return invalid();
+  if (!record(source) || source.id !== 'perimeter' || !text(source.name, 80) || !text(source.description, 500) || !['industrial', 'forest', 'urban', 'mixed'].includes(source.theme as string) || !integer(source.width, 2, WORLD_LIMITS.side) || !integer(source.height, 2, WORLD_LIMITS.side) || !text(source.version, 128) || !text(source.seed, 128) || !integer(source.generatorVersion, 1, 1_000_000) || !integer(source.chunkSize, 1, 128) || !Array.isArray(source.obstacles) || source.obstacles.length > WORLD_LIMITS.obstacles || !Array.isArray(source.extracts) || !source.extracts.length || source.extracts.length > 64 || !Array.isArray(source.zones) || source.zones.length > WORLD_LIMITS.zones || !Array.isArray(source.districts) || source.districts.length !== 4 || !Array.isArray(source.pois) || source.pois.length > WORLD_LIMITS.pois || !Array.isArray(source.containers) || source.containers.length > WORLD_LIMITS.containers) return invalid();
   const bounds = { width: source.width, height: source.height };
   const city = source.city === undefined ? undefined : readCity(source.city, bounds);
   const terrainRows = source.terrainRows === undefined ? undefined : (() => {
-    if (!Array.isArray(source.terrainRows) || source.terrainRows.length !== bounds.height || !source.terrainRows.every(row => typeof row === 'string' && row.length === bounds.width && [...row].every(code => Object.hasOwn(LIVE_TERRAIN_CODES, code)))) return invalid();
+    if (!Array.isArray(source.terrainRows) || source.terrainRows.length !== bounds.height || !source.terrainRows.every(row => typeof row === 'string' && row.length === bounds.width && terrainRow.test(row))) return invalid();
     return [...source.terrainRows] as string[];
   })();
   const paths: LiveWorld['paths'] = source.paths === undefined ? undefined : (() => {
-    if (!Array.isArray(source.paths) || source.paths.length > 384) return invalid();
+    if (!Array.isArray(source.paths) || source.paths.length > WORLD_LIMITS.paths) return invalid();
     const parsed = source.paths.map(path => {
       if (!record(path) || !text(path.id) || !text(path.name, 80) || !['road', 'trail', 'rail', 'river'].includes(path.kind as string) || !number(path.width, .1, Math.max(bounds.width, bounds.height)) || !Array.isArray(path.points) || path.points.length < 2 || path.points.length > 256) return invalid();
       return { id: path.id, name: path.name, kind: path.kind as NonNullable<LiveWorld['paths']>[number]['kind'], width: path.width, points: path.points.map(location => point(location, bounds) ? { x: location.x, y: location.y } : invalid()) };
@@ -298,18 +306,19 @@ export function readLiveWorld(source: unknown): LiveWorld {
     return { x: poi.x, y: poi.y, width: poi.width, height: poi.height, id: poi.id, templateId: poi.templateId, name: poi.name, districtId: poi.districtId, danger: poi.danger as 1 | 2 | 3, tags: [...poi.tags] as string[], entrances };
   });
   if (new Set(pois.map(poi => poi.id)).size !== pois.length) return invalid();
+  const poiIds = new Set(pois.map(poi => poi.id));
   const citySites = readCitySites(source.citySites, city, pois, bounds);
   const routes: LiveWorld['routes'] = source.routes === undefined ? undefined : (() => {
     if (!Array.isArray(source.routes) || source.routes.length > 16) return invalid();
     const parsed = source.routes.map(route => {
       const base = readRouteBase(route);
-      if (!record(route) || !keys(route, ['id', 'name', 'description', 'districtId', 'purpose', 'poiIds']) || !Array.isArray(route.poiIds) || route.poiIds.length < 2 || route.poiIds.length > 5 || !route.poiIds.every(id => text(id) && pois.some(poi => poi.id === id)) || new Set(route.poiIds).size !== route.poiIds.length) return invalid();
+      if (!record(route) || !keys(route, ['id', 'name', 'description', 'districtId', 'purpose', 'poiIds']) || !Array.isArray(route.poiIds) || route.poiIds.length < 2 || route.poiIds.length > 5 || !route.poiIds.every(id => text(id) && poiIds.has(id)) || new Set(route.poiIds).size !== route.poiIds.length) return invalid();
       return { ...base, poiIds: [...route.poiIds] as string[] };
     });
     uniqueRoutes(parsed); return parsed;
   })();
   const containers: LiveWorld['containers'] = source.containers.map(container => {
-    if (!point(container, bounds) || !integer(container.x) || !integer(container.y) || !text(container.id) || !text(container.poiId) || !pois.some(poi => poi.id === container.poiId) || !containerKind(container.kind) || !['mixed', 'tools', 'medical', 'intel', 'valuables', 'provisions'].includes(container.lootTable as string) || !integer(container.searchMs, 1, 60_000)) return invalid();
+    if (!point(container, bounds) || !integer(container.x) || !integer(container.y) || !text(container.id) || !text(container.poiId) || !poiIds.has(container.poiId) || !containerKind(container.kind) || !['mixed', 'tools', 'medical', 'intel', 'valuables', 'provisions'].includes(container.lootTable as string) || !integer(container.searchMs, 1, 60_000)) return invalid();
     return { x: container.x, y: container.y, id: container.id, poiId: container.poiId, kind: container.kind, lootTable: container.lootTable as LiveWorld['containers'][number]['lootTable'], searchMs: container.searchMs };
   });
   if (new Set(containers.map(container => container.id)).size !== containers.length) return invalid();
@@ -321,8 +330,15 @@ export function readLiveWorld(source: unknown): LiveWorld {
     if (!rectangle(zone, bounds) || !text(zone.name, 80) || !Object.values(LIVE_TERRAIN_CODES).includes(zone.terrain as LiveWorld['zones'][number]['terrain']) || !integer(zone.danger, 1, 3)) return invalid();
     return { x: zone.x, y: zone.y, width: zone.width, height: zone.height, name: zone.name, terrain: zone.terrain as LiveWorld['zones'][number]['terrain'], danger: zone.danger as 1 | 2 | 3 };
   }) };
-  const byProp = new Map(decoded.obstacles.filter(obstacle => obstacle.propId).map(obstacle => [obstacle.propId!, obstacle]));
-  if (byProp.size !== decoded.obstacles.filter(obstacle => obstacle.propId).length || [...byProp.keys()].some(id => !props?.some(prop => prop.id === id && prop.blocking)) || props?.some(prop => prop.blocking && (!byProp.has(prop.id) || ['x', 'y', 'width', 'height'].some(key => prop[key as 'x' | 'y' | 'width' | 'height'] !== byProp.get(prop.id)![key as 'x' | 'y' | 'width' | 'height'])))) return invalid();
+  const linkedObstacles = decoded.obstacles.filter(obstacle => obstacle.propId);
+  const byProp = new Map(linkedObstacles.map(obstacle => [obstacle.propId!, obstacle]));
+  const propsById = new Map(props?.map(prop => [prop.id, prop]));
+  if (byProp.size !== linkedObstacles.length || linkedObstacles.some(obstacle => !propsById.get(obstacle.propId!)?.blocking)
+    || props?.some(prop => {
+      if (!prop.blocking) return false;
+      const obstacle = byProp.get(prop.id);
+      return !obstacle || prop.x !== obstacle.x || prop.y !== obstacle.y || prop.width !== obstacle.width || prop.height !== obstacle.height;
+    })) return invalid();
   return decoded;
 }
 
@@ -394,6 +410,27 @@ export function readLiveSnapshot(value: unknown, cachedWorld?: LiveWorld): LiveS
 }
 export interface LiveIdentity { accountId: string | null; playerId?: string; worldVersion?: string; gameId?: string | null }
 export interface LiveJoinOptions { districtId?: LiveDistrictId; purpose?: LivePurpose; kitId?: LiveKitId; intent?: 'deploy' | 'continue' }
+/** Cap decompressed bytes before JSON parsing, including chunked responses that
+ * omit Content-Length. A city packet can be large, but never unbounded. */
+async function readResponseJson(response: Response): Promise<unknown> {
+  const declared = response.headers.get('content-length');
+  if (declared && /^\d+$/.test(declared) && Number(declared) > WORLD_LIMITS.wireBytes) { void response.body?.cancel().catch(() => {}); return invalid(); }
+  if (!response.body) return null;
+  const reader = response.body.getReader(), decoder = new TextDecoder(), chunks: string[] = [];
+  let bytes = 0, pending = '';
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > WORLD_LIMITS.wireBytes) { void reader.cancel().catch(() => {}); return invalid(); }
+      pending += decoder.decode(value, { stream: true });
+      if (pending.length >= 65536) { chunks.push(pending); pending = ''; }
+    }
+    chunks.push(pending + decoder.decode());
+  } finally { reader.releaseLock(); }
+  try { return JSON.parse(chunks.join('')); } catch { return null; }
+}
 export async function liveRequest<T>(path: 'status' | 'entry' | 'join' | 'state' | 'action' | 'leave', identity: LiveIdentity, read: (value: unknown) => T, command?: LiveCommand, signal?: AbortSignal, joinOptions?: LiveJoinOptions, transport: typeof fetch = globalThis.fetch): Promise<T> {
   const controller = new AbortController();
   const abort = () => controller.abort();
@@ -403,7 +440,7 @@ export async function liveRequest<T>(path: 'status' | 'entry' | 'join' | 'state'
   try {
     const post = path === 'join' || path === 'action' || path === 'leave';
     const response = await transport(`/api/live/${path}`, { method: post ? 'POST' : 'GET', body: post ? JSON.stringify(path === 'join' && joinOptions ? joinOptions : command ?? {}) : undefined, credentials: 'same-origin', mode: 'same-origin', cache: 'no-store', redirect: 'error', headers: { Accept: 'application/json', ...(post ? { 'Content-Type': 'application/json' } : {}), ...(identity.accountId ? { 'x-prapor-account': identity.accountId } : {}), ...(identity.playerId ? { 'x-prapor-live': identity.playerId } : {}), ...(identity.gameId ? { 'x-prapor-game': identity.gameId } : {}), ...(identity.worldVersion ? { 'x-prapor-world-version': identity.worldVersion } : {}) }, signal: controller.signal });
-    const value: unknown = await response.json().catch(() => null);
+    const value = await readResponseJson(response);
     if (!response.ok) throw new LiveApiError(response.status, record(value) && typeof value.error === 'string' ? value.error : record(value) && typeof value.code === 'string' ? value.code : 'unknown');
     return read(value);
   } catch (error) {

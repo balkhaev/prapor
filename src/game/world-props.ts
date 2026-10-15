@@ -20,8 +20,9 @@ const sizes: Partial<Record<PropKind, [number, number]>> = {
 const labels: Partial<Record<PropKind, string>> = { car: 'Припаркованная машина', van: 'Фургон', truck: 'Грузовик', bus: 'Автобус', dumpster: 'Мусорный контейнер', pallet: 'Паллеты', crate: 'Транспортная тара', shed: 'Хозяйственная постройка', railcar: 'Грузовой вагон', transformer: 'Трансформатор', kiosk: 'Киоск' };
 
 /** Authored use of space drives decoration. Physical cover always leaves a clear detour. */
-export function generateWorldProps(world: SceneryWorld, seed: string): { props: LiveWorldProp[]; obstacles: LiveObstacle[] } {
+export function generateWorldProps(world: SceneryWorld, seed: string, options: { exclude?: Rect; budget?: number; idPrefix?: string } = {}): { props: LiveWorldProp[]; obstacles: LiveObstacle[] } {
   const { width, height } = world, total = width * height;
+  const budget = Math.max(0, Math.min(16384, Math.floor(options.budget ?? 6000)));
   const physical = new Uint8Array(total), occupied = new Uint8Array(total), reserved = new Uint8Array(total), interiors = new Uint8Array(total);
   const props: LiveWorldProp[] = [], obstacles: LiveObstacle[] = [];
   const cells = (rect: Rect, visit: (index: number) => void, margin = 0): void => {
@@ -58,7 +59,8 @@ export function generateWorldProps(world: SceneryWorld, seed: string): { props: 
     const [long, short] = sizes[kind] ?? [1, 1], w = orientation === 'x' ? long : short, h = orientation === 'x' ? short : long;
     const blocking = solidKinds.has(kind) && !indoor;
     const rect = { x: blocking ? Math.round(x) : Math.round(x * 4) / 4, y: blocking ? Math.round(y) : Math.round(y * 4) / 4, width: w, height: h };
-    if (rect.x < 2 || rect.y < 2 || rect.x + w >= width - 2 || rect.y + h >= height - 2 || props.length >= 6000) return false;
+    if (rect.x < 2 || rect.y < 2 || rect.x + w >= width - 2 || rect.y + h >= height - 2 || props.length >= budget
+      || options.exclude && rect.x < options.exclude.x + options.exclude.width && rect.y < options.exclude.y + options.exclude.height && rect.x + w > options.exclude.x && rect.y + h > options.exclude.y) return false;
     const spacing = indoor ? 0 : fixtureSpacing[kind] ?? 0;
     if (spacing && fixtures.get(kind)?.some(point => Math.hypot(point.x - rect.x, point.y - rect.y) < spacing)) return false;
     let suitable = true;
@@ -66,7 +68,7 @@ export function generateWorldProps(world: SceneryWorld, seed: string): { props: 
     // A full one-cell free ring proves that a new solid rectangle cannot seal any walkable component.
     if (blocking) cells(rect, index => { if (physical[index] || interiors[index]) suitable = false; }, 1);
     if (!suitable) return false;
-    const id = `prop-${source}-${props.length}`, variant = hash(`${seed}:${source}:${x}:${y}`) % 4;
+    const id = `${options.idPrefix ?? 'prop'}-${source}-${props.length}`, variant = hash(`${seed}:${source}:${x}:${y}`) % 4;
     props.push({ ...rect, id, kind, orientation, variant, blocking });
     if (spacing) { const placed = fixtures.get(kind) ?? []; placed.push(rect); fixtures.set(kind, placed); }
     cells(rect, index => { occupied[index] = 1; if (blocking) physical[index] = 1; });
@@ -75,6 +77,10 @@ export function generateWorldProps(world: SceneryWorld, seed: string): { props: 
   };
   const quarterOf = (rect: Rect) => world.city?.quarters.find(quarter => inside(rect, quarter))?.id;
   const useOf = (poi: LivePoi): 'center' | 'industry' | 'station' | 'homes' | 'forest' => {
+    const use = poi.tags.find(tag => tag.startsWith('metro-use:'))?.slice(10);
+    if (use === 'works' || use === 'port') return 'industry';
+    if (use === 'station') return 'station';
+    if (use === 'market' || use === 'civic' || use === 'campus') return 'center';
     const quarter = quarterOf(poi);
     if (quarter) return quarter === 'old-center' ? 'center' : quarter === 'industrial' ? 'industry' : quarter === 'station' ? 'station' : 'homes';
     return poi.districtId === 'customs' ? 'industry' : poi.districtId === 'sawmill' ? 'forest' : poi.districtId === 'depot' ? 'station' : 'homes';
@@ -169,7 +175,7 @@ export function generateWorldProps(world: SceneryWorld, seed: string): { props: 
   }
   // Budget the complete landscape before visiting any region. A bigger forest
   // cannot consume the wire cap and leave the last district without its trees.
-  const greeneryStep = Math.max(3, Math.ceil(Math.sqrt(greeneryWeight / Math.max(500, 5500 - props.length))));
+  const greeneryStep = Math.max(3, Math.ceil(Math.sqrt(greeneryWeight / Math.max(500, budget - 500 - props.length))));
   for (let y = 3; y < height - 3; y += greeneryStep) for (let x = 3; x < width - 3; x += greeneryStep) {
     const code = material(x, y), roll = hash(`${seed}:greenery:${x}:${y}`), urban = !!world.city && inside({ x, y }, world.city);
     if (code === 'f' && roll % 7 !== 0) add(roll % 5 === 0 ? 'shrub' : 'tree', x + (roll % 5 - 2) / 4, y + (Math.floor(roll / 5) % 5 - 2) / 4, 'x', 'grove');

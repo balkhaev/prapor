@@ -1,5 +1,6 @@
+// These fixtures protect the preserved G9 city core; full G10 coverage is in world-metropolis tests.
 import { describe, expect, test } from 'bun:test';
-import { generateLiveWorld, validateGeneratedWorld } from '../src/game/world-generation';
+import { generatePerimeterCore, validateGeneratedWorld } from '../src/game/world-generation';
 import { cityStreetPlan, generateLandscape } from '../src/game/world-landscape';
 import type { LivePoint } from '../src/game/live';
 
@@ -8,7 +9,7 @@ const inside = (point: LivePoint, rectangle: LivePoint & { width: number; height
 
 describe('inhabited district ground and access', () => {
   for (const seed of seeds) test(`land use, door footways and freight facilities stay coherent for ${seed}`, () => {
-    const source = generateLiveWorld(seed), dryObstacles = source.obstacles.filter(obstacle => obstacle.kind !== 'water');
+    const source = generatePerimeterCore(seed), dryObstacles = source.obstacles.filter(obstacle => obstacle.kind !== 'water');
     const landscape = generateLandscape({ ...source, obstacles: dryObstacles }, seed);
     const world = { ...source, terrainRows: landscape.terrainRows, paths: landscape.paths, obstacles: [...dryObstacles, ...landscape.water] };
     expect(validateGeneratedWorld(world).containers).toBe(source.containers.length);

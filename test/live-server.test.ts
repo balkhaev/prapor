@@ -9,11 +9,12 @@ import { createAccountService, type AccountService } from "../server/accounts";
 import { createHandler } from "../server/handler";
 import type { LiveCommand, LiveDistrictId, LivePurpose, LiveSnapshot, LiveStatus } from "../src/game/live";
 import { getLiveMap, hasLiveLineOfSight, isLiveWalkable } from "../src/game/live-maps";
-import { LIVE_GENERATOR_VERSION, LIVE_WORLD_OFFSET } from "../src/game/world-generation";
+import { LIVE_GENERATOR_VERSION, LIVE_WORLD_OFFSET, LIVE_WORLD_SIZE } from "../src/game/world-generation";
 
 const ORIGIN = "https://game.delopusk.ru";
 let directory: string, dbPath: string, service: LiveService, accounts: AccountService | undefined;
 let time = 1_800_000_000_000;
+let cachedWorld: LiveSnapshot["world"] | undefined;
 interface Session { cookie: string; id: string; accountId?: string }
 const options = () => ({ dbPath, secureCookies: true, allowedOrigins: [ORIGIN], now: () => time, random: () => 0, automaticTicks: false, accounts });
 function request(path: string, method = "GET", body?: unknown, session?: Session, headers: Record<string, string> = {}): Request {
@@ -31,13 +32,16 @@ async function call(path: string, method = "GET", body?: unknown, session?: Sess
 async function enter(session?: Session, ip?: string, districtId?: LiveDistrictId, purpose: LivePurpose = "pvp"): Promise<{ session: Session; state: LiveSnapshot }> {
   const reply = await call("join", "POST", districtId ? { districtId, purpose } : {}, session, undefined, ip);
   expect(reply.status).toBe(200);
-  const state = await reply.json() as LiveSnapshot;
+  const state = await reply.json() as LiveSnapshot; cachedWorld = state.world;
   return { session: session ?? { cookie: reply.headers.get("set-cookie")!.split(";")[0]!, id: state.selfId }, state };
 }
 async function state(session: Session): Promise<LiveSnapshot> {
-  const result = await call("state", "GET", undefined, session);
+  // Reuse public geometry as the real client does; repeated 4 MB packets obscure simulation checks.
+  const result = await call("state", "GET", undefined, session, cachedWorld ? { "x-prapor-world-version": cachedWorld.version } : {});
   expect(result.status).toBe(200);
-  return result.json() as Promise<LiveSnapshot>;
+  const snapshot = await result.json() as LiveSnapshot;
+  if (snapshot.world) cachedWorld = snapshot.world;
+  return { ...snapshot, world: snapshot.world ?? cachedWorld! };
 }
 async function act(session: Session, command: LiveCommand): Promise<LiveSnapshot> {
   const reply = await call("action", "POST", command, session);
@@ -80,7 +84,7 @@ function blockedPair(corner = false): [{ x: number; y: number }, { x: number; y:
 }
 beforeEach(async () => {
   directory = await mkdtemp(join(tmpdir(), "prapor-live-")); dbPath = join(directory, "live.sqlite");
-  time = 1_800_000_000_000; accounts = undefined;
+  time = 1_800_000_000_000; accounts = undefined; cachedWorld = undefined;
   service = createLiveService(options());
   // Deterministic fixtures keep unrelated NPC combat out of movement/PvP assertions.
   editStorage(db => db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify({ version: 3, geometryVersion: getLiveMap("perimeter").version, startedAt: time, events: [],
@@ -94,6 +98,9 @@ describe("shared endless live server", () => {
   test("independent guests meet in one world, cannot impersonate each other, and only command a server-paced path", async () => {
     const first = await enter(), second = await enter();
     expect(first.session.id).not.toBe(second.session.id);
+    // Exercise a short, visible movement independently of the expanded spawn frame.
+    placePlayers([{ session: first.session, x: 0, y: 0 }, { session: second.session, x: 1, y: 0 }]);
+    await enter(first.session); await enter(second.session);
     const shared = await state(first.session);
     expect(shared.server.online).toBe(2);
     expect(shared.entities.filter(entity => entity.kind === "player").map(entity => entity.id).sort()).toEqual([first.session.id, second.session.id].sort());
@@ -170,6 +177,8 @@ describe("shared endless live server", () => {
     expect((await state(second.session)).drops.some(drop => drop.id === "drop-0")).toBe(false);
     expect((await call("action", "POST", { type: "extract" }, first.session)).status).toBe(409);
     const exit = first.state.world.extracts[0]!;
+    // Start nearby: the outer origin is now hundreds of steps from this preserved exit.
+    placePlayers([{ session: first.session, x: exit.x - 3, y: exit.y }]); await enter(first.session); await enter(second.session);
     await act(first.session, { type: "move", ...exit }); await advance(12_000, [first.session, second.session]);
     const banked = await act(first.session, { type: "extract" });
     expect(banked.self.stash).toBe(35); expect(banked.self.cargo).toBe(0);
@@ -318,6 +327,7 @@ describe("shared endless live server", () => {
 
   test("rival NPC groups fight each other inside their shared map without a player issuing an attack", async () => {
     const guest = await enter();
+    placePlayers([{ session: guest.session, x: 0, y: 0 }]);
     editStorage(db => {
       const row = db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!;
       const world = JSON.parse(row.state) as { scavs: Array<Record<string, unknown>> };
@@ -441,8 +451,8 @@ describe("shared endless live server", () => {
     expect(restored.server.bosses).toHaveLength(4);
     expect(restored.server.maps[0]!.npcs).toBe(getLiveMap("perimeter").npcSpawns.length + restored.server.bosses!.filter(boss => boss.state === 'alive').length); expect(service.healthy()).toBe(true);
   });
-  test.each(["perimeter-g2-a827381f", "perimeter-g3-b38b4b0d", "perimeter-g6-shipped", "perimeter-g7-shipped", "perimeter-g8-shipped"])("expanding saved geometry %s preserves translated body positions, private kit and durable loose cargo across two restarts", async geometryVersion => {
-    const guest = await enter(), map = getLiveMap("perimeter"), previousOffset = geometryVersion.startsWith("perimeter-g8-") ? 96 : geometryVersion.startsWith("perimeter-g7-") ? 32 : 0, point = { x: previousOffset, y: previousOffset };
+  test.each(["perimeter-g2-a827381f", "perimeter-g3-b38b4b0d", "perimeter-g6-shipped", "perimeter-g7-shipped", "perimeter-g8-shipped", "perimeter-g9-shipped"])("expanding saved geometry %s preserves translated body positions, private kit and durable loose cargo across two restarts", async geometryVersion => {
+    const guest = await enter(), map = getLiveMap("perimeter"), previousOffset = geometryVersion.startsWith("perimeter-g9-") ? 128 : geometryVersion.startsWith("perimeter-g8-") ? 96 : geometryVersion.startsWith("perimeter-g7-") ? 32 : 0, point = { x: previousOffset, y: previousOffset };
     expect(isLiveWalkable(map, { x: LIVE_WORLD_OFFSET, y: LIVE_WORLD_OFFSET })).toBe(true);
     placePlayers([{ session: guest.session, ...point, health: 71, ammo: 17, medkits: 1, cargo: 65, stash: 120 }]);
     editStorage(db => {
@@ -452,7 +462,7 @@ describe("shared endless live server", () => {
     });
     const restored = (await enter(guest.session)).state;
     expect({ width: restored.world.width, height: restored.world.height, generatorVersion: restored.world.generatorVersion })
-      .toEqual({ width: 512, height: 512, generatorVersion: LIVE_GENERATOR_VERSION });
+      .toEqual({ width: LIVE_WORLD_SIZE, height: LIVE_WORLD_SIZE, generatorVersion: LIVE_GENERATOR_VERSION });
     expect(restored.world.version).toBe(map.version); expect(restored.worldVersion).toBe(map.version);
     expect(restored.self).toMatchObject({ ammo: 17, medkits: 1, cargo: 65, stash: 120 });
     const translated = { x: point.x + LIVE_WORLD_OFFSET - previousOffset, y: point.y + LIVE_WORLD_OFFSET - previousOffset };
@@ -493,8 +503,8 @@ describe("shared endless live server", () => {
     }
   });
 
-  test.each([6, 7, 8])('G%s offline fighters migrate before the new world is saved and can join later without a second coordinate shift', async previousVersion => {
-    const active = await enter(), offline = await enter(), body = createHealth(71), previousOffset = previousVersion === 8 ? 96 : previousVersion === 7 ? 32 : 0; body.parts.leftLeg.fracture = true;
+  test.each([6, 7, 8, 9])('G%s offline fighters migrate before the new world is saved and can join later without a second coordinate shift', async previousVersion => {
+    const active = await enter(), offline = await enter(), body = createHealth(71), previousOffset = previousVersion === 9 ? 128 : previousVersion === 8 ? 96 : previousVersion === 7 ? 32 : 0; body.parts.leftLeg.fracture = true;
     editStorage(db => {
       for (const row of db.query<{ identity: string; state: string }, []>('SELECT identity,state FROM live_players').all()) {
         const fighter = JSON.parse(row.state); Object.assign(fighter, { x: previousOffset + (fighter.id === active.session.id ? 0 : 1), y: previousOffset, ammo: 17, cargo: 65, stash: 120, body, healthAt: time, safeUntil: time + 120_000 });

@@ -16,18 +16,20 @@ for (const wall of map.obstacles) for (let y = wall.y; y < wall.y + wall.height;
 const inside = (point: LivePoint, rectangle: LivePoint & { width: number; height: number }): boolean => point.x >= rectangle.x && point.y >= rectangle.y && point.x < rectangle.x + rectangle.width && point.y < rectangle.y + rectangle.height;
 const clear = (point: LivePoint): boolean => point.x >= 0 && point.y >= 0 && point.x < map.width && point.y < map.height && !blocked[point.y * map.width + point.x];
 /** An independent breadth-first oracle catches A* reuse and dynamic door occupancy errors. */
+const oracleDistance = new Int32Array(blocked.length), oracleEpoch = new Uint32Array(blocked.length), oracleQueue = new Int32Array(blocked.length);
+let oracleTurn = 0;
 function walkingDistance(start: LivePoint, end: LivePoint, occupied = new Set<number>()): number | null {
   const startKey = start.y * map.width + start.x, endKey = end.y * map.width + end.x;
   if (!clear(start) || !clear(end) || occupied.has(endKey)) return null;
-  const distances = new Int32Array(blocked.length); distances.fill(-1); distances[startKey] = 0;
-  const queue = [startKey];
-  for (let cursor = 0; cursor < queue.length; cursor++) {
-    const key = queue[cursor]!, x = key % map.width, y = Math.floor(key / map.width);
-    if (key === endKey) return distances[key]!;
-    for (const point of [{ x: x - 1, y }, { x: x + 1, y }, { x, y: y - 1 }, { x, y: y + 1 }]) {
-      const next = point.y * map.width + point.x;
-      if (!clear(point) || occupied.has(next) || distances[next] !== -1) continue;
-      distances[next] = distances[key]! + 1; queue.push(next);
+  if (++oracleTurn === 0xffffffff) { oracleEpoch.fill(0); oracleTurn = 1; }
+  oracleDistance[startKey] = 0; oracleEpoch[startKey] = oracleTurn; oracleQueue[0] = startKey;
+  let length = 1;
+  for (let cursor = 0; cursor < length; cursor++) {
+    const key = oracleQueue[cursor]!, x = key % map.width, y = Math.floor(key / map.width);
+    if (key === endKey) return oracleDistance[key]!;
+    for (const next of [x > 0 ? key - 1 : -1, x + 1 < map.width ? key + 1 : -1, y > 0 ? key - map.width : -1, y + 1 < map.height ? key + map.width : -1]) {
+      if (next < 0 || blocked[next] || occupied.has(next) || oracleEpoch[next] === oracleTurn) continue;
+      oracleEpoch[next] = oracleTurn; oracleDistance[next] = oracleDistance[key]! + 1; oracleQueue[length++] = next;
     }
   }
   return null;
@@ -90,7 +92,7 @@ afterEach(async () => { service.close(); await rm(directory, { recursive: true, 
 
 describe('city passages use the actual server collision grid', () => {
   test('every enterable building has a usable interior and remains reachable when an actor occupies one entrance', () => {
-    expect(map.citySites).toHaveLength(24);
+    expect(map.citySites).toHaveLength(120);
     let checked = 0;
     for (const site of map.citySites!) {
       const court = { x: site.courtyard.x + Math.floor(site.courtyard.width / 2), y: site.courtyard.y + Math.floor(site.courtyard.height / 2) };

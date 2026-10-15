@@ -1,12 +1,13 @@
+// These fixtures protect the preserved G9 city core; full G10 coverage is in world-metropolis tests.
 import { describe, expect, test } from 'bun:test';
-import { generateLiveWorld, validateGeneratedWorld } from '../src/game/world-generation';
+import { generatePerimeterCore, validateGeneratedWorld } from '../src/game/world-generation';
 import { readLiveWorld } from '../src/live-client';
 import { isLiveWalkable } from '../src/game/live-maps';
 
 describe('inhabited public scenery and authoritative cover', () => {
   test('thousands of purposeful objects reproduce from geometry without closing doors, searches or route passages', () => {
     for (const seed of ['perimeter-alpha-01', 'neighbourhood-night', 'seed-9']) {
-      const world = generateLiveWorld(seed), repeat = generateLiveWorld(seed), props = world.props!;
+      const world = generatePerimeterCore(seed), repeat = generatePerimeterCore(seed), props = world.props!;
       expect(repeat.props).toEqual(props); expect(props.length).toBeGreaterThan(1800); expect(props.length).toBeLessThan(6000);
       expect(new Set(props.map(prop => prop.id)).size).toBe(props.length);
       expect(new Set(props.map(prop => prop.kind)).size).toBeGreaterThanOrEqual(20);
@@ -28,7 +29,7 @@ describe('inhabited public scenery and authoritative cover', () => {
   }, 20_000);
 
   test('props are detached static wire data with bounded identities and exact physical footprints', () => {
-    const world = generateLiveWorld(), decoded = readLiveWorld(world);
+    const world = generatePerimeterCore(), decoded = readLiveWorld(world);
     expect(decoded.props).toEqual(world.props);
     decoded.props![0]!.variant = (decoded.props![0]!.variant + 1) % 4;
     expect(decoded.props![0]).not.toEqual(world.props![0]);

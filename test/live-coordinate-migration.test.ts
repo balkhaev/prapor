@@ -21,6 +21,49 @@ function fixture(): Database {
 const player = (db: Database, id: string) => JSON.parse(db.query<{ state: string }, [string]>('SELECT state FROM live_players WHERE identity=?').get(id)!.state);
 const world = (db: Database) => JSON.parse(db.query<{ state: string }, []>('SELECT state FROM live_world').get()!.state);
 
+test.each(['direct G6', 'saved G7', 'saved G8', 'saved G9', 'interrupted G7 startup', 'interrupted G8 startup', 'interrupted G9 startup'])('G10 embeds %s once, preserving offline inventories, pending paid entries, boss cycles and every cargo identity', scenario => {
+  const db = fixture(), expanded = { generatorVersion: 10 } as LiveWorld;
+  try {
+    const outbox = db.query('SELECT * FROM live_economy_outbox').all();
+    if (scenario !== 'direct G6') {
+      const sourceVersion = scenario.includes('G9') ? 9 : scenario.includes('G8') ? 8 : 7;
+      expect(migrateExpandedLiveCoordinates(db, { generatorVersion: sourceVersion } as LiveWorld)).toBe(true);
+      if (scenario.startsWith('saved')) {
+        const saved = world(db); saved.geometryVersion = `perimeter-g${sourceVersion}-shipped`; delete saved.coordinateExpansionVersion;
+        db.query('UPDATE live_world SET state=?').run(JSON.stringify(saved));
+      }
+    }
+    expect(migrateExpandedLiveCoordinates(db, expanded)).toBe(true);
+    expect(player(db, 'offline')).toEqual({ identity: 'offline', id: 'fighter', mapId: 'perimeter', x: 384, y: 384, body: { wounded: true }, medicine: { splint: 1 }, lootItems: [{ id: 'inventory' }], searchedDropIds: ['cycle'], path: [], pathGoal: null, destination: null, replanAt: 0 });
+    expect(player(db, 'paid')).toMatchObject({ identity: 'paid', id: 'paid-fighter', x: 633, y: 390, entryPending: { id: 'receipt', x: 633, y: 390, respawn: true, automatic: true, districtId: 'sawmill' },
+      automation: { enabled: true, stage: 'route', target: null, targetId: null }, sortie: { poiIds: ['poi-2-0'], visitedContainerIds: ['existing-cycle'], extractTarget: null, blockedExtractKeys: [], blockedAt: 0 }, path: [], destination: null });
+    expect(JSON.parse(db.query<{ state: string }, []>('SELECT state FROM live_bosses').get()!.state)).toMatchObject({ x: 604, y: 424, home: { x: 603, y: 425 }, route: [{ x: 602, y: 426 }], bossCycle: 9, bossDeathSettled: true, respawnAt: 120000, body: { dead: true } });
+    expect(world(db).drops).toEqual([{ id: 'corpse', source: 'body', mapId: 'perimeter', x: 384, y: 639, amount: 17, items: [{ id: 'private', modelId: 'old-watch' }] },
+      { id: 'district-corpse', source: 'body', mapId: 'perimeter', x: 388, y: 517 }, { id: 'cycle', source: 'supply', mapId: 'perimeter', x: 465, y: 451, containerId: 'city-old-center-0-slot-0', expiresAt: 50000 }]);
+    expect(world(db).lootCooldowns).toEqual([['container:city-old-center-0-slot-1', 60000], ['perimeter:387:388', 70000]]);
+    expect(world(db).coordinateExpansionVersion).toBe(10);
+    const once = { players: db.query('SELECT * FROM live_players').all(), world: world(db), bosses: db.query('SELECT * FROM live_bosses').all() };
+    expect(migrateExpandedLiveCoordinates(db, expanded)).toBe(false);
+    expect(migrateExpandedLiveCoordinates(db, { generatorVersion: 9 } as LiveWorld)).toBe(false);
+    expect({ players: db.query('SELECT * FROM live_players').all(), world: world(db), bosses: db.query('SELECT * FROM live_bosses').all() }).toEqual(once);
+    expect(db.query('SELECT * FROM live_economy_outbox').all()).toEqual(outbox);
+  } finally { db.close(); }
+});
+
+test('G10 migration rolls back invalid offline data and resumes atomically without a partial coordinate frame', () => {
+  const db = fixture(), expanded = { generatorVersion: 10 } as LiveWorld;
+  try {
+    migrateExpandedLiveCoordinates(db, { generatorVersion: 9 } as LiveWorld);
+    db.query('INSERT INTO live_players VALUES(?,?)').run('broken', 'not-json');
+    const before = { players: db.query('SELECT * FROM live_players').all(), world: db.query('SELECT * FROM live_world').all(), bosses: db.query('SELECT * FROM live_bosses').all(), receipts: db.query('SELECT * FROM live_economy_outbox').all() };
+    expect(() => migrateExpandedLiveCoordinates(db, expanded)).toThrow();
+    expect({ players: db.query('SELECT * FROM live_players').all(), world: db.query('SELECT * FROM live_world').all(), bosses: db.query('SELECT * FROM live_bosses').all(), receipts: db.query('SELECT * FROM live_economy_outbox').all() }).toEqual(before);
+    db.query('DELETE FROM live_players WHERE identity=?').run('broken');
+    expect(migrateExpandedLiveCoordinates(db, expanded)).toBe(true); expect(player(db, 'offline')).toMatchObject({ x: 384, y: 384 });
+    expect(migrateExpandedLiveCoordinates(db, expanded)).toBe(false);
+  } finally { db.close(); }
+});
+
 test('expanded coordinate migration moves offline rows, pending paid entries, bosses and loose cargo only once', () => {
   const db = fixture();
   try {

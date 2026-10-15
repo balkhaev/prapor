@@ -1,11 +1,12 @@
+// Historical frontage fixtures protect the G9 core embedded by the metropolis generator.
 import { expect, test } from 'bun:test';
-import { generateLiveWorld } from '../src/game/world-generation';
+import { generatePerimeterCore } from '../src/game/world-generation';
 import { cityStreetPlan, regionalStreetPlan } from '../src/game/world-landscape';
 import { readLiveWorld } from '../src/live-client';
 import { sceneBuildings } from '../src/live-map-art';
 
 test('regional settlements have usable frontage density while closed houses preserve the public geometry contract', () => {
-  const world = generateLiveWorld(), decoded = readLiveWorld(world), buildings = sceneBuildings(decoded);
+  const world = generatePerimeterCore(), decoded = readLiveWorld(world), buildings = sceneBuildings(decoded);
   const infill = world.obstacles.filter(obstacle => /^(Жилой дом|Дом лесных рабочих|Угловая лавка|Служебная мастерская|Ремонтный бокс) · /.test(obstacle.label ?? ''));
   expect(infill.length).toBeGreaterThanOrEqual(32); expect(infill.length).toBeLessThanOrEqual(64);
   for (const district of world.districts) expect(infill.filter(house => house.x >= district.x && house.y >= district.y && house.x + house.width <= district.x + district.width && house.y + house.height <= district.y + district.height).length).toBeGreaterThanOrEqual(6);
