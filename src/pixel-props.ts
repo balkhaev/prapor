@@ -438,53 +438,135 @@ function container(m: Model): void {
   }
 }
 
+/** Soft cloth and flat paper never imitate an unopened loot container. */
+function courtyardBench(m:Model):void {
+  const variant=m.prop.variant,paint=variant===1?C.blue:variant===2?C.green:C.wood;
+  const finish:Colors=[paint,variant===1?C.steelShade:C.woodShade,variant===2?C.steelShade:C.wood];
+  for(const u of [.14,.86]) {
+    if(variant===3)m.box(u-.045,.14,u+.045,.86,0,26,CONCRETE,false);
+    else for(const v of [.18,.78])m.post(u,v,0,27,variant===1?C.steelShade:C.woodShade,3);
+    m.line([u,.17,6],[u,.8,6],C.steelShade,3);
+  }
+  for(let plank=0;plank<4;plank++) {
+    const v=.035+plank*.24;m.box(.025,v,.975,v+.2,27,5,finish,false);
+    m.line([.04,v+.025,33],[.96,v+.025,33],variant===2?C.leafLight:C.woodLight);
+    m.grain(.06,v+.11,.94,34,4);for(const u of [.14,.86])m.bolt(u,v+.12,34);
+  }
+  if(variant!==3) {
+    for(const u of [.15,.85])m.post(u,.11,28,27,C.steelShade,3);
+    if(variant===2)for(const z of [39,50]) {
+      m.poly([[.035,.12,z],[.965,.12,z],[.965,.035,z+7],[.035,.035,z+7]],C.green);
+      m.line([.05,.035,z+7],[.95,.035,z+7],C.leafLight);
+    } else for(const z of variant===1?[38,45,52]:[39,50]) {
+      m.line([.025,.11,z],[.975,.11,z],paint,variant===1?5:8);
+      m.line([.035,.11,z+2],[.965,.11,z+2],variant===1?C.steelLight:C.woodLight);
+    }
+    for(const u of [.12,.88]) {
+      m.line([u,.12,36],[u,.4,45],C.steelShade,3);m.line([u,.4,45],[u,.86,37],C.steelShade,3);
+      if(variant===1)m.line([u,.2,42],[u,.4,47],C.steel,2);
+    }
+    for(const [a,b,z]of [[.17,.26,40],[.59,.68,51],[.8,.84,40]])m.line([a!,.115,z!],[b!,.115,z!],C.woodShade,2);
+  }
+  if(variant===0) {
+    m.poly([[.65,.34,35],[.83,.34,35],[.85,.63,36],[.82,.6,49],[.68,.6,50]],C.sand);
+    m.poly([[.65,.34,35],[.68,.6,50],[.65,.4,48]],C.woodShade);
+    m.line([.7,.48,49],[.7,.48,55],C.woodLight,2);m.line([.7,.48,55],[.79,.48,55],C.woodLight,2);
+    m.line([.79,.48,55],[.79,.48,49],C.woodLight,2);m.line([.72,.6,37],[.75,.6,47],C.woodLight);
+  } else if(variant===1) {
+    m.slab(.61,.2,.86,.91,35,C.cream);m.poly([[.61,.92,35],[.86,.92,35],[.86,.92,19],[.61,.92,22]],C.plasterShade);
+    for(const u of [.66,.77,.83]){m.line([u,.23,36],[u,.91,36],C.blue,2);m.line([u,.925,23],[u,.925,34],C.blue);}
+    for(const v of [.33,.54,.77])m.line([.615,v,36],[.855,v,36],C.red);
+    for(const u of [.64,.72,.8])m.line([u,.925,20],[u+.015,.925,17],C.woodLight);
+  } else if(variant===2) {
+    m.line([.18,.35,34],[.34,.35,34],C.woodShade,2);m.line([.57,.82,34],[.69,.82,34],C.woodLight,2);
+  } else {
+    m.slab(.54,.25,.81,.76,35,C.cream);m.line([.675,.26,36],[.675,.75,36],C.plasterShade);
+    for(const v of [.34,.43,.52,.64])m.line([.57,v,36],[.65,v,36],C.steelShade);
+    m.slab(.71,.34,.78,.49,36,C.steelShade);m.line([.1,.7,34],[.26,.7,34],C.woodLight,2);
+  }
+}
+
+/** Cultivated leaves, flowers, stakes and herbs share a small stable grammar. */
+function bedPlant(m:Model,u:number,v:number,z:number,kind:number,size:number):void {
+  if(kind===0) {
+    const p=m.point(u,v,z+size*.4);m.raster.ellipse(p.x,p.y,Math.max(4,size*.68),Math.max(3,size*.43),C.leafShade);
+    m.raster.ellipse(p.x-1,p.y-2,Math.max(3,size*.43),Math.max(2,size*.3),C.leaf);
+    m.line([u-.035,v,z+2],[u+.03,v,z+size],C.leaf,3);m.line([u,v-.035,z+2],[u,v+.035,z+size*.7],C.leafLight,2);
+    m.line([u-.025,v+.02,z+size*.35],[u+.025,v-.02,z+size*.35],C.grass);
+  } else if(kind===1) {
+    m.line([u,v,z],[u,v,z+size],C.leafShade,2);m.line([u,v,z+size*.4],[u-.045,v-.025,z+size*.65],C.leaf,3);
+    m.line([u,v,z+size*.58],[u+.04,v+.025,z+size*.78],C.leafLight,2);
+    const leaf=m.point(u+.02,v,z+size*.55);m.raster.ellipse(leaf.x,leaf.y,Math.max(3,size*.21),2,C.leaf);
+    const p=m.point(u,v,z+size);m.raster.ellipse(p.x,p.y,4,3,Math.floor(u*100+v*80)%3?C.terra:C.cream);m.raster.pixel(p.x,p.y-1,C.yellow);
+  } else if(kind===2) {
+    m.line([u,v,z],[u,v,z+size],C.woodLight,2);
+    for(const t of [.3,.55,.78]) {
+      m.line([u,v,z+size*t],[u-.045,v+.03,z+size*(t+.1)],C.leaf,3);
+      m.line([u,v,z+size*t],[u+.04,v-.03,z+size*(t+.13)],C.leafLight,2);
+      const p=m.point(u+.025,v,z+size*t);m.raster.ellipse(p.x,p.y,2,2,C.terra);
+    }
+  } else {
+    const p=m.point(u,v,z+3);m.raster.ellipse(p.x,p.y,Math.max(4,size*.33),3,C.leafShade);
+    for(const [du,dv,scale]of [[-.06,.025,.66],[-.035,-.02,.88],[0,-.035,1],[.03,.02,.91],[.055,-.01,.72]]) {
+      m.line([u,v,z],[u+du!,v+dv!,z+size*scale!],C.grass,2);
+      m.line([u+du!,v+dv!,z+size*scale!],[u+du!+.015,v+dv!,z+size*scale!+2],C.leafLight);
+    }
+  }
+}
+
+function courtyardPlanter(m:Model):void {
+  const variant=m.prop.variant,soil=variant===2?33:29;
+  if(variant===1||variant===3) {
+    const outer=Array.from({length:8},(_,i)=>{const a=Math.PI/4*i;return [.5+Math.cos(a)*.44,.5+Math.sin(a)*.44] as const;});
+    const base=outer.map(([u,v])=>[.5+(u-.5)*.76,.5+(v-.5)*.76] as const);
+    for(let i=0;i<8;i++){const a=outer[i]!,b=outer[(i+1)%8]!,aa=base[i]!,bb=base[(i+1)%8]!;
+      m.poly([[aa[0],aa[1],0],[bb[0],bb[1],0],[b[0],b[1],28],[a[0],a[1],28]],variant===1?(i%3?C.terra:C.terraShade):(i%3?C.concrete:C.concreteShade));}
+    m.poly(outer.map(([u,v])=>[u,v,29] as const),variant===1?C.woodLight:C.plasterShade);
+    m.poly(outer.map(([u,v])=>[.5+(u-.5)*.8,.5+(v-.5)*.8,30] as const),C.soil);
+  } else {
+    m.box(.055,.055,.945,.945,0,variant===2?32:28,variant===2?WOOD:CONCRETE);
+    m.box(.035,.035,.965,.965,variant===2?29:25,5,variant===2?[C.woodLight,C.woodShade,C.wood]:CONCRETE,false);
+    m.slab(.09,.09,.91,.91,soil+1,C.soil);
+    if(variant===2){for(const u of [.18,.35,.52,.69,.86])m.line([u,.95,4],[u,.95,29],C.woodShade);
+      for(const z of [8,25])m.line([.06,.955,z],[.94,.955,z],C.steelShade,2);for(const u of [.14,.84])for(const z of [8,25])m.bolt(u,.96,z);
+    } else {m.line([.08,.95,12],[.92,.95,12],C.plasterShade);m.line([.1,.96,4],[.13,.96,10],C.concreteShade);m.line([.13,.96,10],[.21,.96,15],C.concreteShade);}
+  }
+  const plants=variant===1?[[.32,.3],[.65,.28],[.5,.52],[.28,.67],[.72,.65]]:variant===2?[[.3,.32],[.67,.3],[.5,.6]]:[[.3,.3],[.67,.28],[.48,.56],[.24,.68],[.74,.67]];
+  for(const [u,v]of plants)bedPlant(m,u!,v!,soil+2,variant===2?3:variant===0?0:1,variant===2?23:variant===1?19:14);
+}
+
+function courtyardFence(m:Model):void {
+  const variant=m.prop.variant;
+  if(variant===2) {
+    for(const z of [21,53])m.line([.04,.5,z],[.96,.5,z],C.woodShade,5);
+    for(let i=0;i<12;i++){const u=.04+i*.081,top=68+(i%3===1?5:0);
+      m.poly([[u,.5,2],[u+.045,.5,2],[u+.045,.5,top-4],[u+.023,.5,top],[u,.5,top-4]],i%4===0?C.woodLight:C.plasterShade);
+      m.line([u+.005,.505,8],[u+.005,.505,top-5],C.woodLight);if(i%3===0)m.line([u+.01,.51,31],[u+.03,.51,47],C.woodShade,2);
+      for(const z of [21,53])m.bolt(u+.023,.51,z);}
+  } else if(variant===1) {
+    for(const u of [.04,.49,.95])m.post(u,.5,0,68,C.steelShade,4);for(const z of [12,62])m.line([.04,.5,z],[.96,.5,z],C.steel,3);
+    for(let i=0;i<13;i++){const u=.04+i*.071;m.line([u,.5,12],[Math.min(.96,u+.12),.5,62],C.panelShade);m.line([u,.5,62],[Math.min(.96,u+.12),.5,12],C.steelShade);}
+    for(const u of [.18,.59,.82])m.line([u,.505,58],[u+.025,.505,38],C.rust,2);
+  } else {
+    if(variant===3){m.box(.02,.2,.98,.8,0,13,[C.brick,C.brickShade,C.terraShade],false);m.line([.03,.81,7],[.97,.81,7],C.woodLight);
+      for(const u of [.17,.35,.53,.71,.89])m.line([u,.81,1],[u,.81,12],C.woodShade);m.slab(.02,.2,.98,.8,14,C.plasterShade);}
+    const base=variant===3?14:3;for(const u of [.04,.5,.96])m.post(u,.5,base,variant===3?62:70,variant===3?C.steelShade:C.green,4);
+    for(const z of [base+10,base+47])m.line([.04,.5,z],[.96,.5,z],variant===3?C.steelShade:C.green,3);
+    for(let i=0;i<11;i++){const u=.08+i*.084,top=base+51+(variant===0?Math.sin(i*Math.PI/10)*9:0);
+      m.line([u,.5,base+4],[u,.5,top],C.steelShade,2);m.line([u-.012,.5,top-3],[u,.5,top+2],variant===0?C.green:C.steel,2);
+      m.line([u,.5,top+2],[u+.012,.5,top-3],variant===0?C.green:C.steel,2);}
+    if(variant===0)for(const u of [.24,.75]){m.line([u-.045,.5,30],[u,.5,38],C.green,2);m.line([u,.5,38],[u+.045,.5,30],C.green,2);}
+  }
+  groundGrowth(m,3);
+}
+
 function furniture(m: Model): void {
   const kind=m.prop.kind;
-  if(kind==='bench'||kind==='workbench') {
-    for(const u of [.16,.82]) for(const v of [.17,.8]) m.post(u,v,0,27,kind==='bench'?C.steelShade:C.wood,3);
-    m.box(.02,.02,.98,.98,27,5,WOOD,false);
-    for(const v of [.25,.5,.75]) m.line([.025,v,33],[.975,v,33],C.woodShade);
-    for(const v of [.16,.38,.65,.87])m.grain(.04,v,.95,34,4);
+  if(kind==='bench')courtyardBench(m);
+  else if(kind==='workbench') {
+    for(const u of [.16,.82])for(const v of [.17,.8])m.post(u,v,0,27,C.wood,3);m.box(.02,.02,.98,.98,27,5,WOOD,false);
+    for(const v of [.25,.5,.75])m.line([.025,v,33],[.975,v,33],C.woodShade);for(const v of [.16,.38,.65,.87])m.grain(.04,v,.95,34,4);
     for(const u of [.16,.82])for(const v of [.15,.82])m.bolt(u,v,34);
-    if(kind==='bench') {
-      for(const u of [.15,.84]) m.post(u,.12,28,24,C.steelShade,3);
-      for(const z of [38,48]) {
-        m.line([.015,.12,z],[.985,.12,z],C.woodShade,8);
-        m.line([.015,.12,z+2],[.985,.12,z+2],C.woodLight,2);
-      }
-      for(const u of [.12,.88]) m.line([u,.06,36],[u,.91,36],C.steelShade,3);
-      for(const z of [39,49]) {m.grain(.06,.12,.94,z,7);for(const u of [.15,.84])m.bolt(u,.115,z);}
-      if(m.prop.variant===3)m.line([.39,.12,49],[.48,.12,45],C.woodShade,3);
-      m.wear(.04,.1,.96,.9,34,4+m.prop.variant*2,C.woodShade);
-      if(m.prop.variant===1) {
-        // Cast side frames and a gently arched top distinguish the park bench
-        // from the plain timber seats used beside loading yards.
-        for(const u of [.12,.88]) {
-          m.line([u,.18,40],[u,.44,47],C.steelShade,4);
-          m.line([u,.44,47],[u,.79,39],C.steelShade,4);
-          m.line([u,.21,42],[u,.44,48],C.steel,2);
-        }
-        m.line([.16,.12,51],[.5,.12,56],C.wood,4);
-        m.line([.5,.12,56],[.84,.12,51],C.wood,4);
-      } else if(m.prop.variant===2) {
-        for(const z of [38,48])m.line([.025,.115,z],[.975,.115,z],C.green,4);
-        m.line([.04,.1,52],[.96,.1,52],C.steel,2);
-        for(const u of [.16,.82])m.line([u,.16,3],[u,.8,3],C.steelShade,4);
-      } else if(m.prop.variant===3) {
-        // A folded newspaper lies on the seat; its low plane has no loot-box
-        // silhouette and does not change the existing seating footprint.
-        m.slab(.55,.3,.76,.71,35,C.cream);
-        m.line([.65,.31,36],[.65,.7,36],C.plasterShade);
-        for(const v of [.38,.47,.56,.65])m.line([.58,v,36],[.63,v,36],C.steelShade);
-        m.slab(.68,.37,.73,.51,36,C.steelShade);
-      } else if(m.prop.variant===0) {
-        // An abandoned shopping bag is a small domestic mark on the seat.
-        m.box(.68,.32,.84,.65,34,14,[C.sand,C.woodShade,C.woodLight],false);
-        m.line([.71,.41,48],[.71,.41,54],C.woodLight,2);
-        m.line([.71,.41,54],[.8,.41,54],C.woodLight,2);
-        m.line([.8,.41,54],[.8,.41,48],C.woodLight,2);
-      }
-    } else {
       m.box(.13,.15,.37,.45,33,8,METAL);
       m.line([.63,.28,34],[.89,.67,34],C.ink,3);
       m.line([.73,.68,34],[.73,.92,34],C.wood,3);
@@ -495,22 +577,9 @@ function furniture(m: Model): void {
       m.line([.43,.35,35],[.56,.48,35],C.steel,2);m.line([.43,.35,35],[.39,.35,35],C.steelLight,3);
       if(m.prop.variant===1)m.slab(.59,.17,.79,.35,35,C.cream);
       if(m.prop.variant===3) {m.line([.78,.6,35],[.88,.6,35],C.wood,3);m.line([.83,.55,35],[.83,.66,35],C.steelShade,4);}
-    }
-  } else if(kind==='planter') {
-    m.box(.045,.045,.955,.955,0,28,CONCRETE);
-    m.slab(.08,.08,.92,.92,29,C.soil);
-    for(const [u,v] of [[.3,.3],[.7,.28],[.5,.63],[.24,.7],[.8,.7]]) {
-      const p=m.point(u!,v!,40);
-      m.raster.ellipse(p.x,p.y,14,12,C.leafShade);m.raster.ellipse(p.x-3,p.y-4,10,9,C.leaf);
-      m.raster.line(p.x-4,p.y-7,p.x+2,p.y-10,C.leafLight,2);
-      if(m.prop.variant===1) {m.raster.rect(p.x,p.y-10,3,3,C.terra);m.raster.rect(p.x-6,p.y-4,2,2,C.yellow);}
-      if(m.prop.variant===2)m.raster.line(p.x,p.y+3,p.x+6,p.y-9,C.grass,2);
-      if(m.prop.variant===3)m.raster.line(p.x-5,p.y+4,p.x-8,p.y-10,C.woodLight);
-    }
-    m.line([.05,.955,22],[.955,.955,22],C.plasterShade);
-    m.line([.08,.96,7],[.08,.96,16],C.concreteShade);m.line([.08,.96,16],[.18,.96,20],C.concreteShade);
-    for(const u of [.27,.74])m.line([u,.96,5],[u+.04,.96,5],C.ink,2);
-  } else if(kind==='logs') {
+
+  } else if(kind==='planter')courtyardPlanter(m);
+  else if(kind==='logs') {
     for(let row=0;row<2;row++) for(let i=0;i<3-row;i++) {
       const v=.16+i*.27+row*.135, z=9+row*15;
       m.line([.08,v,z],[.92,v,z],C.woodShade,15);
@@ -522,24 +591,8 @@ function furniture(m: Model): void {
       m.grain(.12,v,.88,z+6,7);m.line([.95,v,z-3],[.95,v+.025,z+3],C.woodShade);
     }
     for(const u of [.24,.76]) m.line([u,.02,8],[u,.96,9],C.steelShade,3);
-  } else if(kind==='fence') {
-    for(const u of [.04,.49,.95]) m.post(u,.5,0,67,C.steelShade,5);
-    for(const z of [13,61]) m.line([.03,.5,z],[.97,.5,z],C.steel,3);
-    for(const u of [.04,.49,.95]) {m.bolt(u,.51,15);m.bolt(u,.51,60);m.line([u,.5,68],[u+.02,.5,68],C.steelLight,2);}
-    for(let i=0;i<13;i++) {
-      const u=.04+i*.072;
-      m.line([u,.5,13],[Math.min(.97,u+.12),.5,61],C.panelShade);
-      m.line([u,.5,61],[Math.min(.97,u+.12),.5,13],C.steelShade);
-    }
-    if(m.prop.variant===2) for(let i=0;i<14;i++) {
-      const u=i/14;m.line([u,.5,4],[u,.5,62+(i%2)*3],C.wood,7);
-      m.line([u,.5,10],[u,.5,61],C.woodLight);
-      m.line([u,.5,22],[u,.5,41],C.woodShade);m.bolt(u,.51,17);m.bolt(u,.51,51);
-    }
-    if(m.prop.variant===1)for(const u of [.18,.59,.82])m.line([u,.505,58],[u+.03,.505,38],C.rust,2);
-    if(m.prop.variant===3) {m.line([.55,.5,61],[.66,.5,53],C.rust,2);m.line([.66,.5,53],[.79,.5,59],C.steelShade,2);}
-    groundGrowth(m,4);
-  }
+
+  } else if(kind==='fence')courtyardFence(m);
 }
 
 function utility(m: Model): void {
@@ -817,28 +870,100 @@ function smallBuilding(m: Model): void {
   if(shed)m.wear(.1,.1,.9,.9,height+18,12,C.rust);
 }
 
+function courtyardGarden(m:Model):void {
+  const variant=m.prop.variant;
+  const bed=(u0:number,v0:number,u1:number,v1:number,flower=false):void=>{
+    m.box(u0,v0,u1,v1,0,8,flower?[C.terra,C.terraShade,C.woodShade]:WOOD,false);
+    m.slab(u0+.025,v0+.035,u1-.025,v1-.035,9,C.soil);
+    m.line([u0,v1,8],[u1,v1,8],C.woodLight,2);
+    for(const u of [u0+.025,u1-.025])m.bolt(u,v1,5);
+  };
+  if(variant===0) {
+    for(const v of [.06,.37,.68]) {
+      bed(.04,v,.96,v+.25);
+      m.line([.1,v+.13,10],[.9,v+.13,10],C.woodShade,2);
+      for(let col=0;col<6;col++)bedPlant(m,.13+col*.145,v+.125,10,0,10+col%2*2);
+    }
+  } else if(variant===1) {
+    bed(.04,.05,.96,.95,true);
+    for(let row=0;row<3;row++)for(let col=0;col<6;col++)bedPlant(m,.14+col*.145,.2+row*.3,10,1,10+(col+row)%3*4);
+    for(const v of [.1,.9])m.line([.08,v,10],[.92,v,10],C.sand);
+  } else if(variant===2) {
+    for(const v of [.09,.57]) {
+      bed(.04,v,.96,v+.34);
+      for(const u of [.16,.5,.84])m.post(u,v+.17,8,23,C.woodLight,2);
+      m.line([.16,v+.17,29],[.84,v+.17,29],C.wood,2);
+      for(const u of [.2,.39,.6,.79])bedPlant(m,u,v+.15,10,2,18);
+    }
+  } else {
+    bed(.04,.07,.52,.94);bed(.61,.07,.96,.94);
+    for(const v of [.2,.43,.68,.84])for(const u of [.16,.35])bedPlant(m,u,v,10,3,13+(Math.floor(v*10)%2)*3);
+    for(const v of [.24,.5,.77])bedPlant(m,.79,v,10,0,14);
+    for(const v of [.25,.5,.75]){const p=m.point(.79,v,10);m.raster.ellipse(p.x,p.y,3,2,C.terra);}
+  }
+  // Hose and plant labels sit below the borders, inside the same authored plot.
+  m.line([.06,.975,2],[.63,.975,2],C.rubber,2);m.line([.63,.975,2],[.88,.85,2],C.rubber,2);
+  if(variant!==1)for(const u of [.18,.77]){m.line([u,.13,8],[u,.13,18],C.woodLight);m.slab(u-.025,.11,u+.025,.16,18,C.cream);}
+}
+
+function courtyardPlayground(m:Model):void {
+  const variant=m.prop.variant;groundGrowth(m,4);
+  if(variant===0) {
+    for(const u of [.08,.92]) {
+      m.line([u,.1,0],[u,.5,121],C.steelShade,5);m.line([u,.9,0],[u,.5,121],C.steel,5);
+      m.line([u,.25,42],[u,.75,42],C.steelShade,3);
+    }
+    m.line([.07,.5,121],[.93,.5,121],C.red,6);
+    for(const u of [.3,.68]) {
+      for(const side of [-1,1])m.line([u+side*.06,.5,117],[u+side*.06,.5,23],C.ink,2);
+      m.box(u-.08,.36,u+.08,.65,23,3,WOOD,false);m.line([u-.07,.36,27],[u+.07,.36,27],C.woodLight);
+      for(let link=0;link<8;link++)for(const side of [-1,1]){const p=m.point(u+side*.06,.5,29+link*11);m.raster.rect(p.x,p.y,1,3,C.steelLight);}
+    }
+    for(const u of [.16,.67,.87])m.line([u,.5,124],[u+.035,.5,124],C.steelLight,2);
+  } else if(variant===1) {
+    for(const [u,v]of [[.12,.23],[.12,.7],[.4,.23],[.4,.7]])m.post(u!,v!,0,105,C.blue,4);
+    m.box(.09,.19,.43,.75,77,6,[C.yellow,C.woodShade,C.wood]);
+    m.poly([[.43,.25,82],[.43,.68,82],[.95,.68,7],[.95,.25,7]],C.steelLight);
+    for(const v of [.25,.68])m.line([.43,v,89],[.96,v,13],C.blue,4);
+    for(let rung=0;rung<8;rung++)m.line([.08,.22,8+rung*9],[.08,.72,8+rung*9],C.yellow,3);
+    for(const v of [.2,.75])m.line([.12,v,107],[.42,v,107],C.blue,3);
+    m.line([.46,.3,80],[.91,.3,14],C.cream);m.line([.51,.6,67],[.82,.6,23],C.panelShade,2);
+    for(const v of [.2,.72])m.bolt(.4,v,80);
+    m.line([.13,.23,109],[.2,.23,109],C.woodLight,2);
+  } else if(variant===2) {
+    m.box(.07,.07,.93,.93,0,10,[C.wood,C.woodShade,C.terraShade]);
+    m.slab(.115,.115,.885,.885,11,C.sand);
+    for(const [u,v]of [[.08,.08],[.78,.08],[.78,.78],[.08,.78]])m.slab(u!,v!,u!+.14,v!+.14,12,C.red);
+    for(const [u,v]of [[.25,.24],[.38,.7],[.71,.52]]){const p=m.point(u!,v!,12);m.raster.line(p.x-2,p.y,p.x+6,p.y+1,C.woodLight);}
+    m.post(.5,.5,10,117,C.wood,5);
+    m.poly([[.09,.09,108],[.91,.09,108],[.5,.5,131]],C.red);
+    m.poly([[.91,.09,108],[.91,.91,108],[.5,.5,131]],C.terraShade);
+    m.poly([[.91,.91,108],[.09,.91,108],[.5,.5,131]],C.terra);
+    m.poly([[.09,.91,108],[.09,.09,108],[.5,.5,131]],C.woodLight);
+    for(const [u,v]of [[.09,.09],[.91,.09],[.91,.91],[.09,.91]])m.line([.5,.5,132],[u!,v!,109],C.cream);
+    m.line([.09,.91,108],[.91,.91,108],C.woodShade,3);
+  } else {
+    const ring=Array.from({length:12},(_,i)=>{const a=i*Math.PI/6;return [.5+Math.cos(a)*.4,.5+Math.sin(a)*.4] as const;});
+    for(let i=0;i<12;i++){const a=ring[i]!,b=ring[(i+1)%12]!;m.poly([[a[0],a[1],11],[b[0],b[1],11],[b[0],b[1],18],[a[0],a[1],18]],C.steelShade);}
+    m.poly(ring.map(([u,v])=>[u,v,19] as const),C.blue);
+    for(let i=0;i<12;i++){const a=ring[i]!;m.line([.5,.5,20],[a[0],a[1],20],i%3===0?C.woodLight:C.steelShade);}
+    m.post(.5,.5,19,35,C.red,6);
+    for(const angle of [0,Math.PI/2,Math.PI,Math.PI*1.5]) {
+      const u=.5+Math.cos(angle)*.29,v=.5+Math.sin(angle)*.29;
+      const nx=-Math.sin(angle)*.13,ny=Math.cos(angle)*.13;
+      m.line([u,v,20],[u,v,48],C.yellow,4);
+      m.line([u+nx,v+ny,48],[u-nx,v-ny,48],C.yellow,3);
+      m.line([u,v,48],[.5,.5,48],C.red,3);
+      m.line([u+nx,v+ny,23],[u-nx,v-ny,23],C.woodLight,7);
+    }
+    m.line([.48,.48,55],[.52,.52,55],C.steelLight,3);
+  }
+}
+
 function yard(m: Model): void {
   const kind=m.prop.kind;
-  if(kind==='garden') {
-    m.slab(.02,.02,.98,.98,0,C.soil);
-    for(let row=0;row<5;row++) {
-      const v=.11+row*.18;
-      m.line([.04,v,1],[.96,v,1],C.woodShade,5);
-      for(let pebble=0;pebble<5;pebble++) {
-        const p=m.point(.07+m.random()*.86,v-.04,2);m.raster.rect(p.x,p.y,2,1,pebble%2?C.terraShade:C.sand);
-      }
-      for(let col=0;col<7;col++) {
-        const p=m.point(.09+col*.13,v,6+col%3);
-        m.raster.ellipse(p.x,p.y,6,4,C.leafShade);m.raster.rect(p.x-3,p.y-4,5,3,C.leaf);
-        if(m.prop.variant===2)m.raster.rect(p.x,p.y-2,2,2,C.terra);
-        if(m.prop.variant===1)m.raster.pixel(p.x+1,p.y-4,C.yellow);
-        if(m.prop.variant===3)m.raster.line(p.x-1,p.y+1,p.x+4,p.y-6,C.grass);
-      }
-    }
-    for(const v of [.03,.97])m.line([.02,v,3],[.98,v,3],C.wood,3);
-    for(const [u,v] of [[.03,.03],[.97,.03],[.97,.97],[.03,.97]])m.post(u!,v!,0,12,C.woodShade,2);
-    m.line([.05,.91,2],[.65,.91,2],C.rubber,2);m.line([.65,.91,2],[.84,.76,2],C.rubber,2);
-  } else if(kind==='market-stall') {
+  if(kind==='garden')courtyardGarden(m);
+  else if(kind==='market-stall') {
     for(const u of [.1,.9]) for(const v of [.1,.9]) m.post(u,v,0,91,C.wood,4);
     m.box(.08,.2,.92,.85,0,38,WOOD);
     m.box(.03,.12,.97,.92,38,5,WOOD);
@@ -877,38 +1002,7 @@ function yard(m: Model): void {
     }
     m.box(.74,.72,.87,.87,44,9,METAL,false);m.slab(.7,.68,.9,.89,54,C.steelLight);
     m.grain(.08,.93,.91,44,7);
-  } else {
-    groundGrowth(m,6);
-    const paint=m.prop.variant>=2?C.blue:C.red;
-    if(m.prop.variant%2===0) {
-      // A Soviet swing frame: two A frames and two suspended narrow seats.
-      for(const u of [.08,.92]) {
-        m.line([u,.1,0],[u,.5,121],C.steelShade,5);
-        m.line([u,.9,0],[u,.5,121],C.steel,5);
-        m.line([u,.25,42],[u,.75,42],C.steelShade,3);
-      }
-      m.line([.07,.5,121],[.93,.5,121],paint,6);
-      for(const u of [.3,.68]) {
-        m.line([u-.06,.5,117],[u-.06,.5,23],C.ink,2);
-        m.line([u+.06,.5,117],[u+.06,.5,23],C.ink,2);
-        m.box(u-.08,.36,u+.08,.65,23,3,WOOD,false);
-        for(let link=0;link<8;link++)for(const side of [-1,1]) {
-          const p=m.point(u+side*.06,.5,29+link*11);m.raster.rect(p.x,p.y,1,3,C.steelLight);
-        }
-        m.line([u-.07,.36,27],[u+.07,.36,27],C.woodLight);
-      }
-      for(const u of [.16,.67,.87])m.line([u,.5,124],[u+.035,.5,124],C.steelLight,2);
-    } else {
-      for(const [u,v] of [[.12,.23],[.12,.7],[.4,.23],[.4,.7]])m.post(u!,v!,0,82,paint,4);
-      m.box(.09,.19,.43,.75,59,6,[C.yellow,C.woodShade,C.wood]);
-      m.poly([[.43,.25,64],[.43,.68,64],[.95,.68,7],[.95,.25,7]],C.steelLight);
-      for(const v of [.25,.68]) m.line([.43,v,70],[.96,v,13],paint,4);
-      for(let i=0;i<6;i++) m.line([.08,.22,8+i*9],[.08,.72,8+i*9],C.yellow,3);
-      for(const v of [.2,.75])m.line([.12,v,84],[.42,v,84],paint,3);
-      m.line([.46,.3,63],[.91,.3,14],C.white);m.line([.51,.6,54],[.82,.6,21],C.panelShade,2);
-      for(const v of [.2,.72])m.bolt(.4,v,62);
-    }
-  }
+  } else courtyardPlayground(m);
 }
 
 function paintModel(model: Model): void {

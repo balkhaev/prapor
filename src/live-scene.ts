@@ -33,6 +33,7 @@ import { paintCityRelief } from './live-city-relief';
 import { buildCityStreetGround, paintCityStreetGroundDetail, type CityStreetGroundDetail } from './live-city-streets';
 import { buildWorldGroundShadowCasters, paintWorldGroundShadows, type GroundShadowCaster } from './live-ground-shadows';
 import { buildCityGardenGround, cityGardenTrees, paintCityGardenGroundDetail, type CityGardenGroundDetail } from './live-city-gardens';
+import { buildCourtyardGround, paintCourtyardGroundDetail, type CourtyardGroundDetail } from './live-courtyard-art';
 import { distantStreetPropSurfaces, type DistantStreetPropSurface } from './live-distant-street-props';
 import { buildStreetTerrainDetails, paintStreetTerrainDetail, type StreetTerrainDetail } from './live-street-terrain';
 import { buildRoadSurfaceArt, paintRoadSurfaceArt, type RoadSurfaceArt } from './live-road-surface';
@@ -101,6 +102,7 @@ export class LiveScene {
   private streetGround = new SceneryIndex<StreetGroundDetail>([]);
   private cityStreetGround = new SceneryIndex<CityStreetGroundDetail>([]);
   private cityGardenGround = new SceneryIndex<CityGardenGroundDetail>([]);
+  private courtyardGround = new SceneryIndex<CourtyardGroundDetail>([]);
   private streetTerrain = new SceneryIndex<StreetTerrainDetail>([]);
   private groundShadows = new SceneryIndex<GroundShadowCaster>([]);
   private roadSurface: RoadSurfaceArt | null = null;
@@ -215,6 +217,7 @@ export class LiveScene {
     this.streetGround = new SceneryIndex<StreetGroundDetail>([]);
     this.cityStreetGround = new SceneryIndex<CityStreetGroundDetail>([]);
     this.cityGardenGround = new SceneryIndex<CityGardenGroundDetail>([]);
+    this.courtyardGround = new SceneryIndex<CourtyardGroundDetail>([]);
     this.groundShadows = new SceneryIndex<GroundShadowCaster>([]); this.roadSurface = null;
     this.buildingForObstacle.clear(); this.buildingWalls.clear(); this.cutawayBuildings.clear(); this.distantBuildings.clear();
     this.propArt.clear(); this.buildingArt.clear(); this.obstacleArt.clear(); this.actorArt.clear(); this.containerArt.clear();
@@ -374,6 +377,8 @@ export class LiveScene {
     this.cityStreetGround = new SceneryIndex(cityStreets, world.chunkSize);
     const cityGardens = buildCityGardenGround(world, this.terrain, this.walkableGround, this.surfaceMasks.indoor);
     this.cityGardenGround = new SceneryIndex(cityGardens, world.chunkSize);
+    const courtyards = buildCourtyardGround(world, this.terrain, this.walkableGround, this.surfaceMasks.indoor, cityGardens);
+    this.courtyardGround = new SceneryIndex(courtyards, world.chunkSize);
     const streetTerrain = buildStreetTerrainDetails(world, this.terrain, this.walkableGround, this.surfaceMasks.indoor);
     this.streetTerrain = new SceneryIndex(streetTerrain, world.chunkSize);
     for (const prop of cityGardenTrees(world, cityGardens)) scenery.push({ ...prop, type: 'prop', prop,
@@ -399,6 +404,7 @@ export class LiveScene {
       this.paintSiteGround(world, ground); this.paintLandscape(world, ground);
       for (const detail of cityStreets) paintCityStreetGroundDetail(ground, detail, false);
       for (const detail of cityGardens) paintCityGardenGroundDetail(ground, detail, false);
+      for (const detail of courtyards) paintCourtyardGroundDetail(ground, detail, false);
       this.paintGroundDetails(world, ground);
       for (const detail of streetTerrain) paintStreetTerrainDetail(ground, detail, false);
       ground.restore();
@@ -512,7 +518,7 @@ export class LiveScene {
   }
   private paintProp(prop: LiveWorldProp): void {
     if (this.tile < 14) {
-      if (!prop.blocking && !['tree', 'shrub', 'garden', 'playground'].includes(prop.kind)) return;
+      if (!prop.blocking && !['tree', 'shrub', 'garden', 'planter', 'playground', 'bench', 'fence'].includes(prop.kind)) return;
       if (['tree', 'shrub', 'garden', 'planter'].includes(prop.kind)) {
         let surfaces = this.distantPlants.get(prop.id);
         if (!surfaces) {
@@ -521,7 +527,7 @@ export class LiveScene {
           this.distantPlants.set(prop.id, surfaces);
         }
         for (const surface of surfaces) this.polygon(surface.points.map(point => this.project(point, point.z * this.tile)), surface.color);
-      } else if (['car', 'van', 'truck', 'bus', 'bus-stop'].includes(prop.kind)) {
+      } else if (['car', 'van', 'truck', 'bus', 'bus-stop', 'bench', 'fence', 'playground'].includes(prop.kind)) {
         let surfaces = this.distantStreetProps.get(prop.id);
         if (!surfaces) {
           surfaces = distantStreetPropSurfaces(prop);
@@ -691,6 +697,7 @@ export class LiveScene {
     }
     this.paintRoadGround(area);
     this.paintStreetGround(area);
+    this.paintCourtyardGround(area);
     this.paintStreetTerrain(area);
     this.paintGroundShadows(area, sun, now);
     this.paintAmbientGround(world, area, climate, daylight, sun);
@@ -771,6 +778,16 @@ export class LiveScene {
     for (const detail of this.cityStreetGround.visible(area).slice(0, 160)) paintCityStreetGroundDetail(c, detail, this.tile >= 24, false);
     for (const detail of details) paintStreetGroundDetail(c, detail);
     for (const detail of this.cityGardenGround.visible(area).slice(0, 160)) paintCityGardenGroundDetail(c, detail, this.tile >= 24);
+    c.restore();
+  }
+  private paintCourtyardGround(area: LabelBox): void {
+    if (this.overview || this.tile < 24) return;
+    const c = this.context, origin = this.project({ x: -.5, y: -.5 });
+    const details = this.courtyardGround.visible(area).sort((a, b) =>
+      (a.x + a.width / 2 - this.camera.x) ** 2 + (a.y + a.height / 2 - this.camera.y) ** 2
+      - (b.x + b.width / 2 - this.camera.x) ** 2 - (b.y + b.height / 2 - this.camera.y) ** 2).slice(0, 192);
+    c.save(); c.transform(this.tile / 2, this.tile / 4, -this.tile / 2, this.tile / 4, origin.x, origin.y);
+    for (const detail of details) paintCourtyardGroundDetail(c, detail, true, false);
     c.restore();
   }
   private paintRoadGround(area: LabelBox): void {
