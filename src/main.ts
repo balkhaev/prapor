@@ -347,7 +347,7 @@ let presentationFallback = initialSession.presentation;
 applySession(initialSession);
 function applySession(session: GameSession) {
 	page = session.page; worldView = session.view; selectedMap = session.mapId; squadDraft = session.squadDraft;
-	selectedWeapon = session.weaponId; selectedScav = session.scavId; inspectorVisible = Boolean(session.scavId); selectedRoomId = session.roomId;
+	selectedWeapon = session.weaponId; selectedScav = session.scavId; inspectorVisible = Boolean(session.scavId) && (session.inspectorOpen ?? true); selectedRoomId = session.roomId;
 	selectedRaidId = session.raidId; lastWatchedRaid = state.raids.find(raid => raid.id === session.raidId) ?? null; lastWatchedReport = null;
 	contextMode = session.context; selectedShelterSite = session.site; roomContextTab = session.roomTab;
 	arsenalTab = session.armoryTab; selectedModuleSlot = session.moduleSlot; selectedBenchModule = session.benchModuleId; productionWorkshopId = session.workshopId;
@@ -362,7 +362,7 @@ function applySession(session: GameSession) {
 	fleaView.tab=session.flea.tab; fleaView.search=session.flea.search; fleaView.kind=session.flea.kind; fleaView.barterModelId=session.flea.barterModelId??null; fleaView.catalogGroup=session.flea.catalogGroup??'all'; lootHunt=readLootHunt(session.flea.hunt);
 }
 function captureSession(): GameSession {
-	return readGameSession({version:1,page,view:worldView,mapId:selectedMap,weaponId:selectedWeapon,scavId:selectedScav,roomId:selectedRoomId,raidId:selectedRaidId,squadDraft,context:contextMode,site:selectedShelterSite,roomTab:roomContextTab,armoryTab:arsenalTab,moduleSlot:selectedModuleSlot,benchModuleId:selectedBenchModule,workshopId:productionWorkshopId,perks:[...selectedPerks].flatMap(([raidId,perk])=>{const raid=state.raids.find(item=>item.id===raidId);return raid?.expedition?[{raidId,perk,stage:raid.expedition.stage,seed:raid.seed}]:[]}),flea:{tab:fleaView.tab,search:fleaView.search,kind:fleaView.kind,barterModelId:fleaView.barterModelId,catalogGroup:fleaView.catalogGroup,...(lootHunt?{hunt:lootHunt}:{})},journal:[...document.querySelectorAll<HTMLDetailsElement>('details[data-report][open]')].map(item=>item.dataset.report),filters:{weaponSearch,category,collection,moduleSearch,benchSearch:benchPartSearch,moduleSlot:moduleSlotFilter,moduleRarity:moduleRarityFilter,roomModuleSearch,roomModuleSlot,craftForWeapon:moduleCraftForWeapon,contracts:contractFilter,achievements:achievementFilter},presentation:world?.getPresentationState() ?? presentationFallback},state);
+	return readGameSession({version:1,page,view:worldView,mapId:selectedMap,weaponId:selectedWeapon,scavId:selectedScav,inspectorOpen:inspectorVisible,roomId:selectedRoomId,raidId:selectedRaidId,squadDraft,context:contextMode,site:selectedShelterSite,roomTab:roomContextTab,armoryTab:arsenalTab,moduleSlot:selectedModuleSlot,benchModuleId:selectedBenchModule,workshopId:productionWorkshopId,perks:[...selectedPerks].flatMap(([raidId,perk])=>{const raid=state.raids.find(item=>item.id===raidId);return raid?.expedition?[{raidId,perk,stage:raid.expedition.stage,seed:raid.seed}]:[]}),flea:{tab:fleaView.tab,search:fleaView.search,kind:fleaView.kind,barterModelId:fleaView.barterModelId,catalogGroup:fleaView.catalogGroup,...(lootHunt?{hunt:lootHunt}:{})},journal:[...document.querySelectorAll<HTMLDetailsElement>('details[data-report][open]')].map(item=>item.dataset.report),filters:{weaponSearch,category,collection,moduleSearch,benchSearch:benchPartSearch,moduleSlot:moduleSlotFilter,moduleRarity:moduleRarityFilter,roomModuleSearch,roomModuleSlot,craftForWeapon:moduleCraftForWeapon,contracts:contractFilter,achievements:achievementFilter},presentation:world?.getPresentationState() ?? presentationFallback},state);
 }
 function scheduleSessionSave() {
 	if (!serverReady || saveConflict || protectedSave) return;
@@ -2428,7 +2428,7 @@ document.addEventListener("click", async (event) => {
 	if (target.dataset.watchRaid) { watchRaid(target.dataset.watchRaid); return; }
 	if (target.hasAttribute('data-live-close')) { setView("base"); document.querySelector<HTMLButtonElement>('[data-view="base"]')?.focus({ preventScroll: true }); return; }
 	if (target.dataset.raidOrders) { const raid = state.raids.find(item => item.id === target.dataset.raidOrders); if (raid) openInspector(raid.scavId); return; }
-	if (target.dataset.scav) { if (page === "home" && worldView === "base" && !liveMode?.isActive()) { selectedScav = target.dataset.scav; fieldObjects?.show({ kind: "scav", id: target.dataset.scav }); } else openInspector(target.dataset.scav); return; }
+	if (target.dataset.scav) { if (page === "home" && worldView === "base" && !liveMode?.isActive() && world?.projectScav(target.dataset.scav)) { selectedScav = target.dataset.scav; fieldObjects?.show({ kind: "scav", id: target.dataset.scav }); } else openInspector(target.dataset.scav); return; }
 	if (target.dataset.ammoPick && target.dataset.ammoScav) { act(await gameAction({ type: "setLoadoutOption", args: [target.dataset.ammoScav, "ammoType", target.dataset.ammoPick] })); return; }
 	if (target.dataset.camera) { cameraAction(target.dataset.camera); return; }
 	if (target.dataset.cameraRoom) { inspectRoomView(target.dataset.cameraRoom); return; }

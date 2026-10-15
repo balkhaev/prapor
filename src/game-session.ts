@@ -12,6 +12,8 @@ export interface GameSession {
 	mapId: string;
 	weaponId: string;
 	scavId: string|null;
+	/** Omitted by legacy sessions, where a selected fighter opened the inspector. */
+	inspectorOpen?: boolean;
 	roomId: string|null;
 	raidId: string|null;
 	context: 'overview'|'room'|'build';
@@ -44,6 +46,8 @@ const slots = MODULE_SLOTS;
 /** UI state is a reference to owned gameplay, never a second inventory or clock. */
 export function readGameSession(value:unknown,state:GameState):GameSession {
 	const source=object(value), valid=source.version===1?source:{}, filters=object(valid.filters);
+	const scavId=id(valid.scavId,state.scavs);
+	const inspectorOpen=scavId!==null&&(valid.inspectorOpen===undefined||valid.inspectorOpen===true);
 	const roomId=id(valid.roomId,state.shelter.rooms)??state.shelter.rooms[0]?.id??null;
 	let page=choose(valid.page,['home','raids','arsenal','base','contracts','journal','recruits','squad','achievements','flea'] as const,'home');
 	let view=choose(valid.view,['base','map','raid'] as const,'base');
@@ -69,5 +73,5 @@ export function readGameSession(value:unknown,state:GameState):GameSession {
 	if(typeof fleaSource.catalogGroup==='string'&&(['all','gear','module',...Object.keys(LOOT_CATEGORY_LABELS)]).includes(fleaSource.catalogGroup))flea.catalogGroup=fleaSource.catalogGroup as NonNullable<GameSession['flea']['catalogGroup']>;
 	const hunt=readLootHunt(fleaSource.hunt);if(hunt)flea.hunt=hunt;
 	try {if(valid.presentation!==null&&typeof valid.presentation==='object'&&JSON.stringify(valid.presentation).length<=48_000)presentation=JSON.parse(JSON.stringify(valid.presentation));}catch{/* Gameplay remains valid if its view state cannot be read. */}
-	return {version:1,page,view,mapId:choose(valid.mapId,MAPS.map(map=>map.id),MAPS[0]!.id),weaponId:id(valid.weaponId,state.weapons)??state.weapons[0]?.id??'',scavId:id(valid.scavId,state.scavs),roomId,raidId,context,site,roomTab:choose(valid.roomTab,['staff','production','upgrade'] as const,'staff'),armoryTab:choose(valid.armoryTab,['weapons','bench','modules','equipment','market'] as const,'weapons'),moduleSlot:choose(valid.moduleSlot,slots,'optic'),benchModuleId:id(valid.benchModuleId,state.modules),workshopId:id(valid.workshopId,state.shelter.rooms.filter(room=>room.type==='workshop')),perks,journal,squadDraft,flea,filters:{weaponSearch:query(filters.weaponSearch),category:choose(filters.category,['all','rifle','smg','shotgun','sniper','pistol'] as const,'all'),collection:filters.collection===true,moduleSearch:query(filters.moduleSearch),benchSearch:query(filters.benchSearch),moduleSlot:choose(filters.moduleSlot,['all',...slots],'all'),moduleRarity:choose(filters.moduleRarity,['all',...Object.keys(RARITY_COLORS)],'all'),roomModuleSearch:query(filters.roomModuleSearch),roomModuleSlot:choose(filters.roomModuleSlot,['all',...slots],'optic'),craftForWeapon:filters.craftForWeapon!==false,contracts:choose(filters.contracts,['open','done','all'] as const,'open'),achievements:choose(filters.achievements,['all','earned','active'] as const,'all')},presentation};
+	return {version:1,page,view,mapId:choose(valid.mapId,MAPS.map(map=>map.id),MAPS[0]!.id),weaponId:id(valid.weaponId,state.weapons)??state.weapons[0]?.id??'',scavId,inspectorOpen,roomId,raidId,context,site,roomTab:choose(valid.roomTab,['staff','production','upgrade'] as const,'staff'),armoryTab:choose(valid.armoryTab,['weapons','bench','modules','equipment','market'] as const,'weapons'),moduleSlot:choose(valid.moduleSlot,slots,'optic'),benchModuleId:id(valid.benchModuleId,state.modules),workshopId:id(valid.workshopId,state.shelter.rooms.filter(room=>room.type==='workshop')),perks,journal,squadDraft,flea,filters:{weaponSearch:query(filters.weaponSearch),category:choose(filters.category,['all','rifle','smg','shotgun','sniper','pistol'] as const,'all'),collection:filters.collection===true,moduleSearch:query(filters.moduleSearch),benchSearch:query(filters.benchSearch),moduleSlot:choose(filters.moduleSlot,['all',...slots],'all'),moduleRarity:choose(filters.moduleRarity,['all',...Object.keys(RARITY_COLORS)],'all'),roomModuleSearch:query(filters.roomModuleSearch),roomModuleSlot:choose(filters.roomModuleSlot,['all',...slots],'optic'),craftForWeapon:filters.craftForWeapon!==false,contracts:choose(filters.contracts,['open','done','all'] as const,'open'),achievements:choose(filters.achievements,['all','earned','active'] as const,'all')},presentation};
 }

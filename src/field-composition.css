@@ -179,6 +179,7 @@ body.immersive-game { --field-glass: #19251fe8; --field-edge: #b6b79a36; }
  .immersive-game .command-crew,
  .immersive-game .command-routes { left: 8px; right: 8px; bottom: 167px; width: auto; max-height: calc(100dvh - 295px); }
  .immersive-game .tool-backdrop { inset: 87px 8px 133px; padding: 0; }
+ .immersive-game:has(.field-raid-status:not([hidden])) .tool-backdrop { bottom: 148px; }
  .immersive-game .tool-window { width: 100%; border-radius: 5px; }
  .immersive-game .tool-head { min-height: 42px; padding: 6px 10px; }
  .immersive-game .tool-head h2 { font-size: 17px; }
