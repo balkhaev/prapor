@@ -2,6 +2,7 @@
 import type { BodyPart, HealthState, MedicalInventory, TreatmentType } from './health';
 import type { BossId } from './bosses';
 import type { LiveKitId, LiveLoadout } from './live-entry';
+import type { ModuleSlot } from './modules';
 export type { LiveKitId, LiveLoadout, LiveKitQuote, LiveEntry, LiveEntryFighter, LiveEntryStock } from './live-entry';
 export type { EconomyLoot } from "../../server/live-economy";
 import type { EconomyLoot } from "../../server/live-economy";
@@ -129,6 +130,8 @@ export interface LiveVisualLoadout {
   profile: 'light' | 'assault' | 'scout';
   /** Older fighters can lack an authored model. Never infer it from their name or skin. */
   weaponId?: string;
+  /** Model IDs only. An explicit empty assembly must not grow factory parts. */
+  modules?: Partial<Record<ModuleSlot, string>>;
   helmet: boolean;
   armor: boolean;
   backpack: boolean;

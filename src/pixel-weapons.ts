@@ -1,182 +1,265 @@
 import type { LivePoint } from './game/live';
-import { PixelRaster, type PixelColor } from './pixel-art';
+import { WEAPONS, WEAPON_BY_ID, type WeaponCategory } from './game/data';
+import type { WeaponInstance } from './game/engine';
+import { FACTORY_KITS, MODULE_BY_ID, MODULE_SLOTS, type ModuleSlot } from './game/modules';
+import { weaponBuildGeometry } from './armory-art';
+import type { ArmoryMaterial, ArmoryPaint } from './armory-surface';
+import { PixelRaster } from './pixel-art';
 import { pixelBearing, type PixelFacing } from './pixel-animation';
-
-export const PIXEL_WEAPON_IDS = ['pm', 'pp91', 'sks', 'mosin', 'akm', 'svd', 'unknown'] as const;
-export type PixelWeaponId = typeof PIXEL_WEAPON_IDS[number];
-
-/** Only a public known model selects exact weapon art; absent/private IDs stay neutral. */
-export function pixelWeaponId(value: unknown): PixelWeaponId {
-  return typeof value === 'string' && (PIXEL_WEAPON_IDS as readonly string[]).includes(value) ? value as PixelWeaponId : 'unknown';
-}
-
-export type PixelWeaponAnchors = { muzzle: LivePoint; ejection: LivePoint; forehand: LivePoint };
-export type PixelWeaponProfile = {
-  /** Native longitudinal dimensions, before the isometric bearing foreshortens them. */
-  length: number; forward: number; rear: number; boreHeight: number; support: number;
-  twoHanded: boolean; scoped: boolean;
+import { sampleWeaponContours, weaponPathContours } from './pixel-weapon-geometry';
+export const PIXEL_WEAPON_IDS = [...WEAPONS.map(weapon => weapon.id), 'unknown'] as readonly string[];
+export type PixelWeaponId = string;
+export type PixelWeaponInput = PixelWeaponId | Pick<WeaponInstance, 'weaponId' | 'modules' | 'durability'>;
+/** Only a known public model selects exact art; absent/private IDs stay neutral. */
+export function pixelWeaponId(value: unknown): PixelWeaponId { return typeof value === 'string' && Object.hasOwn(WEAPON_BY_ID, value) ? value : 'unknown'; }
+export type PixelWeaponAnchors = {
+    muzzle: LivePoint;
+    ejection: LivePoint;
+    forehand: LivePoint;
 };
-export const PIXEL_WEAPON_PROFILES = {
-  pm: { length: 22, forward: 17, rear: 5, boreHeight: 8, support: 3, twoHanded: false, scoped: false },
-  pp91: { length: 47, forward: 28, rear: 19, boreHeight: 9, support: 13, twoHanded: true, scoped: false },
-  sks: { length: 75, forward: 49, rear: 26, boreHeight: 10, support: 25, twoHanded: true, scoped: false },
-  mosin: { length: 79, forward: 52, rear: 27, boreHeight: 10, support: 27, twoHanded: true, scoped: false },
-  akm: { length: 67, forward: 42, rear: 25, boreHeight: 10, support: 22, twoHanded: true, scoped: false },
-  svd: { length: 79, forward: 53, rear: 26, boreHeight: 10, support: 27, twoHanded: true, scoped: true },
-  unknown: { length: 66, forward: 42, rear: 24, boreHeight: 10, support: 21, twoHanded: true, scoped: false },
-} as const satisfies Record<PixelWeaponId, PixelWeaponProfile>;
-
-/** Shared metal/wood values keep small features readable beside the actor palette. */
+export type PixelWeaponProfile = {
+    length: number;
+    forward: number;
+    rear: number;
+    boreHeight: number;
+    support: number;
+    twoHanded: boolean;
+    scoped: boolean;
+    hasMuzzle: boolean;
+    hasEjection: boolean;
+};
 export const PIXEL_WEAPON_PALETTE = {
-  outline: '#20322e', black: '#2a3a35', metal: '#50685f', metalLight: '#81958a', edge: '#adb49b',
-  wood: '#987047', woodShade: '#614b35', woodLight: '#b89160', grip: '#76513b', glass: '#536e68',
+    outline: '#20322e', black: '#2a3a35', metal: '#50685f', metalLight: '#81958a', edge: '#adb49b',
+    wood: '#987047', woodShade: '#614b35', woodLight: '#b89160', grip: '#76513b', glass: '#536e68',
+    polymer: '#586452', polymerLight: '#89957a', rubber: '#354139', carbon: '#3c4b43',
 } as const;
 const C = PIXEL_WEAPON_PALETTE;
-type ProfilePoint = readonly [u: number, z: number];
-
-function geometry(id: PixelWeaponId, grip: LivePoint, facing: PixelFacing, kick: number) {
-  const profile = PIXEL_WEAPON_PROFILES[id], forward = pixelBearing(facing);
-  const sideways = { x: -forward.y * 2, y: forward.x * .5 };
-  const recoil = Number.isFinite(kick) ? Math.max(0, Math.min(4, kick)) : 0;
-  const origin = { x: Math.round(grip.x), y: Math.round(grip.y) };
-  const point = (u: number, z: number, v = 0): LivePoint => ({
-    x: Math.round(origin.x + forward.x * u + sideways.x * v),
-    y: Math.round(origin.y + forward.y * u + sideways.y * v - z - recoil * u / profile.forward),
-  });
-  return { profile, forward, point, near: forward.x >= 0 ? 1 : -1 };
-}
-
-/** The trigger grip never recoils. Body art can solve arms before painting the weapon. */
-export function pixelWeaponAnchors(id: PixelWeaponId, grip: LivePoint, facing: PixelFacing, kick = 0): PixelWeaponAnchors {
-  const { profile, point } = geometry(id, grip, facing, kick);
-  return {
-    muzzle: point(profile.forward, profile.boreHeight),
-    ejection: point(id === 'pm' ? 7 : 8, profile.boreHeight + 2, 3),
-    forehand: point(profile.support, id === 'pm' ? -1 : profile.boreHeight - 6),
-  };
-}
-
-/** Weapon models have no inventory or state access; unknown remains an anonymous silhouette. */
-export function paintPixelWeapon(r: PixelRaster, id: PixelWeaponId, grip: LivePoint, facing: PixelFacing, kick = 0): PixelWeaponAnchors {
-  const { profile, point: p, near } = geometry(id, grip, facing, kick);
-  const segment = (a: ProfilePoint, b: ProfilePoint, color: PixelColor, width = 1, v = 0): void => {
-    const start = p(a[0], a[1], v), end = p(b[0], b[1], v);
-    r.line(start.x, start.y, end.x, end.y, color, width);
-  };
-  // Extruded profile edges stay visible when the barrel points straight north/south.
-  const shape = (points: readonly ProfilePoint[], color: PixelColor, top: PixelColor, depth = 5, shade: PixelColor = C.black): void => {
-    const faces = points.map((a, i) => {
-      const b = points[(i + 1) % points.length]!;
-      const quad = [p(a[0],a[1],-depth/2),p(b[0],b[1],-depth/2),p(b[0],b[1],depth/2),p(a[0],a[1],depth/2)];
-      return { quad, y: quad.reduce((sum, v) => sum + v.y, 0) / 4, color: a[1] + b[1] >= profile.boreHeight * 2 ? top : shade };
-    }).sort((a,b) => a.y-b.y);
-    for (const face of faces) r.polygon(face.quad, face.color);
-    const face = points.map(([u,z]) => p(u,z,near*depth/2));
-    r.polygon(face,color);
-    for (let i=0;i<face.length;i++) {
-      const a=face[i]!, b=face[(i+1)%face.length]!;r.line(a.x,a.y,b.x,b.y,C.outline);
+const colors: Record<ArmoryMaterial, readonly [
+    string,
+    string,
+    string
+]> = {
+    steel: [C.metal, C.edge, C.black], dark: [C.black, C.metalLight, C.outline], wood: [C.wood, C.woodLight, C.woodShade],
+    polymer: [C.polymer, C.polymerLight, C.black], rubber: [C.rubber, C.metal, C.outline], glass: [C.glass, C.edge, C.black], carbon: [C.carbon, C.metalLight, C.black],
+};
+const flatPaint = { ...Object.fromEntries(Object.entries(colors).map(([name, palette]) => [name, palette[0]])), prefix: 'pixel-native' } as ArmoryPaint;
+const lengths: Record<WeaponCategory, number> = { pistol: 22, smg: 47, shotgun: 70, rifle: 67, sniper: 79 };
+const depths: Record<ModuleSlot, number> = { receiver: 6, stock: 6, handguard: 7, barrel: 3, magazine: 5, optic: 7, muzzle: 5, foregrip: 4, mount: 5, flashlight: 6, laser: 5 };
+const bucket = (condition: number) => Number.isFinite(condition) ? Math.floor(Math.max(0, Math.min(100, condition)) / 20) * 20 : 0;
+const factories = new Map<string, Pick<WeaponInstance, 'weaponId' | 'modules' | 'durability'>>();
+function build(input: PixelWeaponInput): Pick<WeaponInstance, 'weaponId' | 'modules' | 'durability'> {
+    if (typeof input !== 'string')
+        return input;
+    const id = pixelWeaponId(input);
+    let value = factories.get(id);
+    if (!value) {
+        value = { weaponId: id, durability: 100, modules: Object.fromEntries(Object.entries(FACTORY_KITS[id] ?? {}).map(([slot, modelId]) => [slot, { id: `pixel-factory-${slot}`, modelId, durability: 100, foundAt: 0 }])) };
+        factories.set(id, value);
     }
-  };
-  const box = (u0:number,u1:number,z0:number,z1:number,color:PixelColor,top:PixelColor=C.metalLight,depth=5):void => {
-    shape([[u0,z0],[u1,z0],[u1,z1],[u0,z1]],color,top,depth);
-  };
-  const barrel = (from:number,to:number,z:number,thickness=3):void => {
-    box(from,to,z-thickness/2,z+thickness/2,C.black,C.metalLight,thickness);
-    segment([from,z+thickness/2],[to,z+thickness/2],C.metalLight,1,-near);
-  };
-  const stock = (rear:number,end:number,wood=true):void => {
-    shape([[rear,-5],[rear+3,10],[rear+10,11],[end,7],[end,2],[rear+9,-3]],
-      wood?C.wood:C.black,wood?C.woodLight:C.metal,6,wood?C.woodShade:C.black);
-    segment([rear+3,7],[end-3,5],wood?C.woodLight:C.metalLight,1,near*3);
-    segment([rear+1,-3],[rear+3,8],C.black,2,near*3);
-  };
-  const pistolGrip = (wood=false):void => {
-    shape([[-5,5],[1,3],[-1,-10],[-7,-8]],wood?C.grip:C.black,wood?C.wood:C.metal,4);
-    segment([-5,1],[-5,-6],wood?C.woodLight:C.metal,1,near*2);
-  };
-  const triggerGuard = ():void => {
-    segment([0,3],[7,3],C.outline,2,near*2);
-    segment([7,3],[6,-2],C.outline,2,near*2);
-    segment([6,-2],[0,-2],C.outline,2,near*2);
-    segment([2,3],[2,0],C.edge,1,near*2);
-  };
-  const sights = (rear:number,front:number,z:number):void => {
-    box(rear,rear+2,z,z+3,C.black,C.edge,3);
-    box(front-2,front,z,z+4,C.black,C.metalLight,3);
-  };
-
-  if (id === 'pm') {
-    pistolGrip(true);triggerGuard();
-    shape([[-5,5],[13,5],[17,7],[17,10],[14,12],[-4,12],[-6,9]],C.metal,C.metalLight,5);
-    segment([-3,10],[13,10],C.edge,1,near*2.5);
-    for (const u of [-3,-1,1])segment([u,6],[u,9],C.black,1,near*2.5);
-    box(5,8,9,11,C.black,C.metal,1);
-    sights(-4,15,12);
-  } else if (id === 'pp91') {
-    // Unfolded wire stock, compact box receiver and straight pistol-calibre magazine.
-    segment([-19,8],[-8,8],C.metalLight,2);segment([-19,-4],[-19,8],C.black,3);
-    segment([-19,-4],[-8,4],C.metal,2);segment([-8,4],[-7,8],C.black,3);
-    pistolGrip();triggerGuard();
-    shape([[3,4],[9,4],[10,-14],[5,-15]],C.black,C.metal,4);
-    segment([6,0],[7,-12],C.metalLight,1,near*2);
-    box(-7,16,5,13,C.black,C.metalLight,6);
-    box(11,20,4,9,C.metal,C.metalLight,6);
-    for(const u of [12,15,18])segment([u,5],[u,8],C.black,1,near*3);
-    barrel(18,28,9,3);sights(-5,22,13);
-    segment([1,11],[7,11],C.edge,1,near*3);
-  } else if (id === 'sks') {
-    stock(-26,-5);
-    shape([[-7,2],[14,1],[32,5],[33,9],[-6,9]],C.wood,C.woodLight,6,C.woodShade);
-    box(-5,15,8,13,C.black,C.metalLight,5);
-    shape([[6,2],[17,3],[15,-3],[8,-5]],C.black,C.metal,4);
-    barrel(30,49,10);barrel(15,33,12,2);
-    for(const u of [19,28])box(u,u+2,5,12,C.black,C.metalLight,7);
-    segment([19,5],[31,6],C.woodLight,1,near*3);
-    segment([32,6],[44,7],C.metal,2); // Folded integral bayonet.
-    segment([4,13],[7,15],C.metalLight,2,near*3);sights(12,46,12);
-  } else if (id === 'mosin') {
-    stock(-27,-5);
-    shape([[-6,2],[16,3],[35,6],[36,9],[-5,10]],C.wood,C.woodLight,6,C.woodShade);
-    barrel(-5,52,10,2);box(-5,13,8,13,C.metal,C.edge,4);
-    for(const u of [25,34])box(u,u+2,5,12,C.black,C.metalLight,7);
-    segment([10,13],[6,13],C.edge,2,near*2);
-    segment([6,13],[6,8],C.metalLight,2,near*6);
-    const bolt=p(6,8,near*8);r.ellipse(bolt.x,bolt.y,2,2,C.edge);
-    segment([14,7],[31,7],C.woodLight,1,near*3);sights(18,49,11);
-  } else if (id === 'akm') {
-    stock(-25,-7);pistolGrip(true);triggerGuard();
-    shape([[3,4],[10,4],[12,-3],[16,-11],[14,-16],[9,-15],[4,-8],[1,-1]],C.black,C.metal,5);
-    for(const u of [4,7,10])segment([u,1],[u+3,-11],C.metalLight,1,near*2.5);
-    box(-7,14,5,13,C.black,C.metalLight,6);
-    shape([[14,6],[27,6],[29,11],[15,12]],C.wood,C.woodLight,7,C.woodShade);
-    for(const u of [17,21,25])segment([u,7],[u,10],C.woodShade,1,near*3.5);
-    barrel(25,42,10);barrel(14,35,15,2);box(31,33,9,15,C.black,C.metal,5);
-    shape([[40,8],[42,9],[42,12],[40,11]],C.metal,C.edge,4);
-    segment([-4,13],[11,13],C.edge,1,near*2);segment([6,10],[11,10],C.metalLight,1,near*3);
-    sights(13,38,14);
-  } else if (id === 'svd') {
-    // Open wooden thumbhole stock and cheek rest; the PSO belongs to this model alone.
-    shape([[-26,-6],[-23,11],[-18,12],[-6,8],[-5,4],[-20,5],[-22,-6]],C.wood,C.woodLight,6,C.woodShade);
-    segment([-22,-6],[-7,2],C.wood,4);segment([-25,-5],[-24,9],C.black,2);
-    box(-22,-9,11,15,C.woodShade,C.woodLight,6);
-    shape([[7,5],[14,5],[18,-9],[11,-11],[7,-7]],C.black,C.metal,5);
-    segment([10,1],[14,-8],C.metalLight,1,near*2.5);
-    box(-5,17,6,14,C.black,C.metalLight,5);
-    shape([[17,6],[35,7],[36,12],[18,14]],C.wood,C.woodLight,7,C.woodShade);
-    for(const u of [20,24,28,32])box(u,u+2,9,11,C.black,C.woodShade,1);
-    barrel(34,53,10);box(47,49,9,17,C.black,C.metal,4);
-    box(-1,2,13,19,C.black,C.metal,4);box(11,14,13,19,C.black,C.metal,4);
-    barrel(-4,20,22,5);box(-6,-2,19,25,C.black,C.metalLight,7);box(17,23,18,26,C.black,C.metalLight,8);
-    const objective=p(23,22);r.ellipse(objective.x,objective.y,2,2,C.glass);
-    segment([1,24],[15,24],C.edge);sights(15,49,14);
-  } else {
-    // Deliberately neutral; remote NPC art must not assert a private loadout or optic.
-    stock(-24,-7,false);pistolGrip();triggerGuard();
-    box(4,10,-10,4,C.black,C.metal,4);box(-7,14,5,13,C.black,C.metalLight,6);
-    box(14,28,6,11,C.metal,C.metalLight,6);barrel(27,42,10);sights(11,37,13);
-  }
-  // The returned centre is also the visible barrel aperture; effects never drift onto a sight.
-  const anchors=pixelWeaponAnchors(id,grip,facing,kick);
-  r.pixel(anchors.muzzle.x,anchors.muzzle.y,C.outline);
-  return anchors;
+    return value;
+}
+/** Physical part identities and visible wear own cache identity, never inventory UUIDs. */
+export function pixelWeaponSignature(input: PixelWeaponInput): string {
+    const weapon = build(input), id = pixelWeaponId(weapon.weaponId);
+    if (id === 'unknown')
+        return 'unknown';
+    return `${id}:${bucket(weapon.durability)}|${MODULE_SLOTS.map(slot => { const part = weapon.modules[slot]; return `${slot}:${part ? `${part.modelId}:${bucket(part.durability)}` : 'none'}`; }).join('|')}`;
+}
+type Cell = {
+    x: number;
+    y: number;
+    color: string;
+    material: ArmoryMaterial;
+    depth: number;
+    slot: ModuleSlot;
+    condition: number;
+};
+type Model = {
+    signature: string;
+    profile: PixelWeaponProfile;
+    cells: Map<string, Cell>;
+    muzzle: LivePoint;
+    forehand: LivePoint;
+    ejection: LivePoint;
+};
+type Run = {
+    x: number;
+    y: number;
+    width: number;
+    color: string;
+};
+type Image = {
+    runs: Run[];
+    bytes: number;
+};
+export const PIXEL_WEAPON_MODEL_CACHE_SIZE = 128;
+export const PIXEL_WEAPON_IMAGE_CACHE_BYTES = 4 * 1024 * 1024;
+const models = new Map<string, Model>(), images = new Map<string, Image>();
+let imageBytes = 0;
+const key = (x: number, y: number) => `${x},${y}`;
+export function clearPixelWeaponCache(): void { models.clear(); images.clear(); imageBytes = 0; }
+export function pixelWeaponCacheStats(): {
+    models: number;
+    images: number;
+    imageBytes: number;
+} { return { models: models.size, images: images.size, imageBytes }; }
+function neutral(signature: string): Model {
+    const cells = new Map<string, Cell>();
+    for (const [x, y, width, height, slot] of [[-24, -7, 21, 8, 'stock'], [-6, -12, 24, 10, 'receiver'], [18, -10, 24, 3, 'barrel'], [-5, -2, 5, 13, 'stock'], [5, -2, 6, 14, 'magazine']] as const)
+        for (let u = x; u < x + width; u++)
+            for (let z = y; z < y + height; z++)
+                cells.set(key(u, z), { x: u, y: z, color: C.black, material: 'dark', depth: depths[slot], slot, condition: 100 });
+    return { signature, cells, profile: { length: 66, forward: 42, rear: 24, boreHeight: 9, support: 22, twoHanded: true, scoped: false, hasMuzzle: true, hasEjection: true }, muzzle: { x: 42, y: -9 }, forehand: { x: 22, y: -4 }, ejection: { x: 8, y: -10 } };
+}
+function model(input: PixelWeaponInput): Model {
+    const signature = pixelWeaponSignature(input), previous = models.get(signature);
+    if (previous) {
+        models.delete(signature);
+        models.set(signature, previous);
+        return previous;
+    }
+    const weapon = build(input), id = pixelWeaponId(weapon.weaponId);
+    if (id === 'unknown') {
+        const value = neutral(signature);
+        while (models.size >= PIXEL_WEAPON_MODEL_CACHE_SIZE)
+            models.delete(models.keys().next().value!);
+        models.set(signature, value);
+        return value;
+    }
+    const resolved = weaponBuildGeometry(weapon, flatPaint), scale = lengths[resolved.category] / resolved.referenceWidth, cells = new Map<string, Cell>();
+    const local = (p: LivePoint): LivePoint => ({ x: (p.x - resolved.grip.x) * scale, y: (p.y - resolved.grip.y) * scale });
+    for (const part of resolved.parts) {
+        const offset = part.shape.offset ?? { x: 0, y: 0 };
+        const paint = (contours: LivePoint[][], color: string, fillRule: 'evenodd' | 'nonzero' = 'nonzero') => {
+            const transformed = contours.map(contour => contour.map(p => local({ x: p.x + offset.x, y: p.y + offset.y })));
+            sampleWeaponContours(transformed, fillRule, (x, y) => cells.set(key(x, y), { x, y, color, material: part.shape.material, depth: depths[part.slot], slot: part.slot, condition: part.durability }));
+        };
+        paint(weaponPathContours(part.shape.outline), colors[part.shape.material][0], part.shape.fillRule ?? 'evenodd');
+        // Filled native hardware also contributes geometry: sights, grip panels,
+        // glass and mounting feet use exactly the details authored for the bench.
+        for (const tag of part.shape.detail.matchAll(/<(path|rect|circle)\b([^>]*)\/?\s*>/g)) {
+            const attributes = tag[2]!, fill = attributes.match(/\bfill="(#[\da-f]{6})"/i)?.[1];
+            if (!fill)
+                continue;
+            const number = (name: string) => Number(attributes.match(new RegExp(`\\b${name}="([-\\d.]+)"`))?.[1] ?? 0);
+            if (tag[1] === 'path') {
+                const path = attributes.match(/\bd="([^"]+)"/)?.[1];
+                if (path)
+                    paint(weaponPathContours(path), fill, attributes.includes('fill-rule="evenodd"') ? 'evenodd' : 'nonzero');
+            }
+            else if (tag[1] === 'rect') {
+                const x = number('x'), y = number('y'), w = number('width'), h = number('height');
+                if (w > 0 && h > 0)
+                    paint([[{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }]], fill);
+            }
+            else {
+                const x = number('cx'), y = number('cy'), r = number('r');
+                if (r * scale >= .45)
+                    paint([Array.from({ length: 12 }, (_, i) => ({ x: x + Math.cos(i / 12 * Math.PI * 2) * r, y: y + Math.sin(i / 12 * Math.PI * 2) * r }))], fill);
+            }
+        }
+    }
+    const muzzle = local(resolved.muzzle), ejection = local(resolved.ejection), values = [...cells.values()];
+    const foregrip = weapon.modules.foregrip ? MODULE_BY_ID[weapon.modules.foregrip.modelId] : undefined;
+    const supportSlots: ModuleSlot[] = foregrip && foregrip.appearance !== 'bipod' ? ['foregrip', 'handguard', 'barrel', 'receiver'] : ['handguard', 'barrel', 'receiver'];
+    let support: Cell | undefined;
+    for (const slot of supportSlots) {
+        const candidates = values.filter(cell => cell.slot === slot && cell.x > 1);
+        if (!candidates.length)
+            continue;
+        const xs = candidates.map(cell => cell.x), desired = slot === 'foregrip' ? (Math.min(...xs) + Math.max(...xs)) / 2 : Math.max(3, Math.min(muzzle.x * .5, (Math.min(...xs) + Math.max(...xs)) / 2));
+        candidates.sort((a, b) => Math.abs(a.x - desired) - Math.abs(b.x - desired) || b.y - a.y);
+        support = candidates[0];
+        break;
+    }
+    const forehand = resolved.category !== 'pistol' && support ? { x: support.x + .5, y: support.y + .5 } : { x: 0, y: 0 };
+    const left = Math.min(0, ...values.map(cell => cell.x)), right = Math.max(0, ...values.map(cell => cell.x + 1));
+    const value: Model = { signature, cells, muzzle, ejection, forehand, profile: { length: right - left, forward: muzzle.x, rear: -left, boreHeight: -muzzle.y, support: forehand.x, twoHanded: resolved.category !== 'pistol', scoped: resolved.parts.some(part => part.slot === 'optic'), hasMuzzle: resolved.parts.some(part => part.slot === 'barrel'), hasEjection: resolved.parts.some(part => part.slot === 'receiver') } };
+    while (models.size >= PIXEL_WEAPON_MODEL_CACHE_SIZE)
+        models.delete(models.keys().next().value!);
+    models.set(signature, value);
+    return value;
+}
+export function pixelWeaponProfile(input: PixelWeaponInput): PixelWeaponProfile { return { ...model(input).profile }; }
+/** Factory dimensions are lazy; importing a scene never assembles39 profiles. */
+export const PIXEL_WEAPON_PROFILES: Readonly<Record<PixelWeaponId, PixelWeaponProfile>> = Object.fromEntries(PIXEL_WEAPON_IDS.map(id => [id, Object.defineProperties({}, { ...Object.fromEntries(['length', 'forward', 'rear', 'boreHeight', 'support', 'twoHanded', 'scoped', 'hasMuzzle', 'hasEjection'].map(field => [field, { enumerable: true, get: () => model(id).profile[field as keyof PixelWeaponProfile] }])) }) as PixelWeaponProfile]));
+function geometry(input: PixelWeaponInput, grip: LivePoint, facing: PixelFacing, kick: number) {
+    const value = model(input), bearing = pixelBearing(facing), side = { x: -bearing.y * 2, y: bearing.x * .5 }, recoil = Number.isFinite(kick) ? Math.round(Math.max(0, Math.min(4, kick)) * 2) / 2 : 0;
+    const project = (u: number, h: number, v = 0): LivePoint => ({ x: Math.round(grip.x) + Math.round(bearing.x * u + side.x * v), y: Math.round(grip.y) + Math.round(bearing.y * u + side.y * v + h - recoil * u / Math.max(1, value.muzzle.x)) });
+    return { value, bearing, side, recoil, project };
+}
+export function pixelWeaponAnchors(input: PixelWeaponInput, grip: LivePoint, facing: PixelFacing, kick = 0): PixelWeaponAnchors {
+    const { value, project } = geometry(input, grip, facing, kick);
+    return { muzzle: project(value.muzzle.x, value.muzzle.y), ejection: project(value.ejection.x, value.ejection.y, 3), forehand: project(value.forehand.x, value.forehand.y) };
+}
+function projected(input: PixelWeaponInput, facing: PixelFacing, kick: number): Image {
+    const { value, bearing, side, recoil, project } = geometry(input, { x: 128, y: 96 }, facing, kick), imageKey = `${value.signature}/${facing}/${recoil}`, previous = images.get(imageKey);
+    if (previous) {
+        images.delete(imageKey);
+        images.set(imageKey, previous);
+        return previous;
+    }
+    type Face = {
+        points: LivePoint[];
+        depth: number;
+        color: string;
+    };
+    const faces: Face[] = [];
+    const near = bearing.x >= 0 ? 1 : -1, end = bearing.y >= 0 ? 1 : -1;
+    for (const cell of value.cells.values()) {
+        const { x, y, depth: d, material } = cell, palette = colors[material], wear = cell.condition < 100 && ((Math.imul(x + 137, 73856093) ^ Math.imul(y + 113, 19349663)) >>> 0) % 100 < (100 - cell.condition) * .15;
+        const add = (vertices: Array<readonly [
+            number,
+            number,
+            number
+        ]>, color: string) => faces.push({ points: vertices.map(([u, h, v]) => project(u, h, v)), color, depth: vertices.reduce((sum, [u, h, v]) => sum + bearing.y * 2 * u + side.y * 2 * v - h * .5, 0) / 4 });
+        add([[x, y, near * d / 2], [x + 1, y, near * d / 2], [x + 1, y + 1, near * d / 2], [x, y + 1, near * d / 2]], wear ? C.edge : cell.color);
+        const upper = value.cells.get(key(x, y - 1));
+        if (!upper || upper.depth < d)
+            add([[x, y, -d / 2], [x + 1, y, -d / 2], [x + 1, y, d / 2], [x, y, d / 2]], palette[1]);
+        const edge = value.cells.get(key(x + end, y));
+        if (!edge || edge.depth < d) {
+            const u = end > 0 ? x + 1 : x;
+            add([[u, y, -d / 2], [u, y + 1, -d / 2], [u, y + 1, d / 2], [u, y, d / 2]], palette[2]);
+        }
+    }
+    faces.sort((a, b) => a.depth - b.depth);
+    const pixels = new Array<string | undefined>(256 * 192), context = { fillStyle: '', setTransform() { }, fillRect(x: number, y: number, w: number, h: number) { for (let row = y; row < y + h; row++)
+            pixels.fill(context.fillStyle, row * 256 + x, row * 256 + x + w); } };
+    const raster = new PixelRaster(context as unknown as CanvasRenderingContext2D, 256, 192);
+    for (const face of faces)
+        raster.polygon(face.points, face.color);
+    const runs: Run[] = [];
+    for (let y = 0; y < 192; y++)
+        for (let x = 0; x < 256;) {
+            const color = pixels[y * 256 + x];
+            if (!color) {
+                x++;
+                continue;
+            }
+            const start = x;
+            while (x < 256 && pixels[y * 256 + x] === color)
+                x++;
+            runs.push({ x: start - 128, y: y - 96, width: x - start, color });
+        }
+    // Conservatively account for a JS run object, its array slot and references.
+    const image = { runs, bytes: runs.length * 80 };
+    while (imageBytes + image.bytes > PIXEL_WEAPON_IMAGE_CACHE_BYTES && images.size) {
+        const first = images.keys().next().value!;
+        imageBytes -= images.get(first)!.bytes;
+        images.delete(first);
+    }
+    images.set(imageKey, image);
+    imageBytes += image.bytes;
+    return image;
+}
+/** Integer-painted extruded native parts, without asynchronous textures or DOM. */
+export function paintPixelWeapon(r: PixelRaster, input: PixelWeaponInput, grip: LivePoint, facing: PixelFacing, kick = 0): PixelWeaponAnchors {
+    const image = projected(input, facing, kick), x = Math.round(grip.x), y = Math.round(grip.y);
+    for (const run of image.runs)
+        r.rect(x + run.x, y + run.y, run.width, 1, run.color);
+    const anchors = pixelWeaponAnchors(input, grip, facing, kick);
+    if (model(input).profile.hasMuzzle)
+        r.pixel(anchors.muzzle.x, anchors.muzzle.y, C.outline);
+    return anchors;
 }

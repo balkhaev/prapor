@@ -19,6 +19,7 @@ import type { AccountService } from "./accounts";
 import { LiveEconomyError, type EconomyLoot, type LiveDelivery, type LiveEconomy, type LiveEconomyIdentity, type LiveSupplyRequest } from "./live-economy";
 import { LIVE_FIELD_KITS, getLiveLoadout, isLiveKitId, quoteLiveKits, type LiveEntry, type LiveKitId } from '../src/game/live-entry';
 import { WEAPON_BY_ID } from '../src/game/data';
+import { FACTORY_KITS } from '../src/game/modules';
 import { GEAR_MODEL_BY_ID } from '../src/game/systems';
 
 export interface LiveOptions {
@@ -94,16 +95,19 @@ const NPC_VISUAL_LOADOUTS: Readonly<Record<Scav['faction'], Readonly<Record<Scav
   },
 };
 function npcVisualLoadout(faction: Scav['faction'], role: Scav['role'], bossId?: BossId): LiveVisualLoadout {
-  if (!bossId) return { ...NPC_VISUAL_LOADOUTS[faction][role] };
+  if (!bossId) {
+    const visible = NPC_VISUAL_LOADOUTS[faction][role];
+    return { ...visible, modules: { ...FACTORY_KITS[visible.weaponId!] } };
+  }
   const boss = getBoss(bossId)!, slot = GEAR_MODEL_BY_ID[boss.armorModelId]?.slot;
   return { profile: WEAPON_BY_ID[boss.weaponId]?.category === 'sniper' ? 'scout' : 'assault', weaponId: boss.weaponId,
-    helmet: slot === 'helmet', armor: slot === 'armor', backpack: slot === 'backpack' };
+    modules: { ...FACTORY_KITS[boss.weaponId] }, helmet: slot === 'helmet', armor: slot === 'armor', backpack: slot === 'backpack' };
 }
 function visibleLoadout(entity: Participant | Scav): LiveVisualLoadout | undefined {
-  if (!isParticipant(entity)) return { ...entity.visualLoadout };
+  if (!isParticipant(entity)) return { ...entity.visualLoadout, ...(entity.visualLoadout.modules ? { modules: { ...entity.visualLoadout.modules } } : {}) };
   const kit = entity.loadout;
   return kit ? { profile: kit.kitId === 'scav' ? 'light' : kit.kitId, weaponId: kit.weaponId,
-    helmet: kit.helmetProtection > 0, armor: kit.armorProtection > 0, backpack: false } : undefined;
+    modules: { ...FACTORY_KITS[kit.weaponId] }, helmet: kit.helmetProtection > 0, armor: kit.armorProtection > 0, backpack: false } : undefined;
 }
 function storedBody(value: unknown, legacyHealth: number): HealthState {
   if (value !== undefined) return parseHealth(value);

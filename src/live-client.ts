@@ -3,6 +3,7 @@ import { readEconomyLootItems } from './game/live-loot';
 import { BODY_PARTS, parseHealth, parseMedicalInventory, type BodyPart, type TreatmentType } from './game/health';
 import { getBoss, type BossId } from './game/bosses';
 import { isLiveKitId, type LiveEntry, type LiveKitId, type LiveLoadout } from './game/live-entry';
+import { MODULE_BY_ID, MODULE_SLOTS, type ModuleSlot } from './game/modules';
 
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const number = (value: unknown, min = 0, max = Number.MAX_SAFE_INTEGER): value is number => typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max;
@@ -204,9 +205,20 @@ export function readLiveStatus(value: unknown): LiveStatus {
 
 const loadoutKeys = ['kitId', 'label', 'weaponId', 'weaponName', 'damage', 'range', 'attackMs', 'armorProtection', 'helmetProtection', 'maxAmmo'] as const;
 function readVisualLoadout(value: unknown): NonNullable<LiveEntity['visualLoadout']> {
-  if (!record(value) || !keys(value, ['profile', 'weaponId', 'helmet', 'armor', 'backpack']) || !['light', 'assault', 'scout'].includes(value.profile as string)
+  if (!record(value) || !keys(value, ['profile', 'weaponId', 'modules', 'helmet', 'armor', 'backpack']) || !['light', 'assault', 'scout'].includes(value.profile as string)
     || !(value.weaponId === undefined || text(value.weaponId, 64)) || !['helmet', 'armor', 'backpack'].every(key => typeof value[key] === 'boolean')) return invalid();
+  const modules: Partial<Record<ModuleSlot, string>> = {};
+  if (value.modules !== undefined) {
+    if (!record(value.modules) || !keys(value.modules, MODULE_SLOTS) || !text(value.weaponId, 64)) return invalid();
+    for (const slot of MODULE_SLOTS) {
+      const modelId = value.modules[slot];
+      if (modelId === undefined) continue;
+      if (!text(modelId, 160) || !Object.hasOwn(MODULE_BY_ID, modelId) || MODULE_BY_ID[modelId]!.slot !== slot) return invalid();
+      modules[slot] = modelId;
+    }
+  }
   return { profile: value.profile as NonNullable<LiveEntity['visualLoadout']>['profile'],
+    ...(value.modules === undefined ? {} : { modules }),
     ...(value.weaponId === undefined ? {} : { weaponId: value.weaponId as string }), helmet: value.helmet as boolean, armor: value.armor as boolean, backpack: value.backpack as boolean };
 }
 function readLiveLoadout(value: unknown, extraKeys: readonly string[] = []): LiveLoadout {

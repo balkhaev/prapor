@@ -2,11 +2,26 @@ import { describe, expect, test } from 'bun:test';
 import { pixelActorLoadout } from '../src/pixel-loadout';
 import { getLiveLoadout } from '../src/game/live-entry';
 import type { LiveEntity } from '../src/game/live';
+import { FACTORY_KITS, MODULE_SLOTS } from '../src/game/modules';
+import { WEAPONS } from '../src/game/data';
 
 const entity: LiveEntity = { id: 'other', kind: 'player', name: 'Другой', x: 2, y: 3, appearance: 27, health: 100, action: 'idle', safeUntil: 0 };
 const self = { id: 'self', loadout: getLiveLoadout('assault') };
 
 describe('visible field equipment in the raid renderer', () => {
+  test('every weapon uses its explicit installed assembly and keeps removed slots empty', () => {
+    for (const definition of WEAPONS) {
+      const modules = { ...FACTORY_KITS[definition.id] };
+      const visible = { profile: 'assault' as const, weaponId: definition.id, modules, helmet: true, armor: true, backpack: false };
+      const weapon = pixelActorLoadout({ ...entity, visualLoadout: visible }, self).weapon;
+      expect(typeof weapon).toBe('object'); if (typeof weapon === 'string') throw new Error('Lost arsenal build');
+      expect(weapon.weaponId).toBe(definition.id);
+      for (const slot of MODULE_SLOTS) expect(weapon.modules[slot]?.modelId).toBe(modules[slot]);
+      expect(weapon.modules).not.toBe(modules);
+      const stripped = pixelActorLoadout({ ...entity, visualLoadout: { ...visible, modules: {} } }, self).weapon;
+      expect(typeof stripped === 'object' && stripped.modules).toEqual({});
+    }
+  });
   test('the public descriptor controls exact model and explicitly absent gear for every fighter', () => {
     const visualLoadout = { profile: 'light' as const, weaponId: 'pm', helmet: false, armor: false, backpack: false };
     for (const id of ['self', 'other']) {

@@ -727,7 +727,7 @@ function renderPart(shape: Geometry, paint: Paint, slot: ModuleSlot, installed: 
 }
 
 const visibleCondition = (durability: number) => Number.isFinite(durability) ? Math.floor(Math.max(0, Math.min(100, durability)) / 20) * 20 : 0;
-const installedCondition = (weapon: WeaponInstance, partCondition = 100) => Math.min(visibleCondition(weapon.durability), visibleCondition(partCondition));
+const installedCondition = (weapon: Pick<WeaponInstance, 'durability'>, partCondition = 100) => Math.min(visibleCondition(weapon.durability), visibleCondition(partCondition));
 
 function positioned(shape: Geometry, x: number, y: number): Geometry {
 	if (!x && !y) return shape;
@@ -813,16 +813,44 @@ export function weaponBuildArt(weapon: WeaponInstance, selectedSlot?: ModuleSlot
 }
 
 /** The carried weapon uses the very same installed-part geometry as the workbench. */
+export type WeaponBuildGeometry = {
+	category: Profile['category']; referenceWidth: number;
+	grip: { x: number; y: number }; muzzle: { x: number; y: number }; ejection: { x: number; y: number };
+	parts: Array<{ shape: Geometry; slot: ModuleSlot; modelId: string; durability: number }>;
+};
+
+/** Native installed geometry, without a DOM, generated texture or inventory identity.
+ * Offsets apply to the outline/detail; bounds and muzzle are already positioned. */
+export function weaponBuildGeometry(weapon: Pick<WeaponInstance, 'weaponId' | 'modules' | 'durability'>, suppliedPaint?: Paint): WeaponBuildGeometry {
+	const base = profile(weapon.weaponId), installed = weapon.modules, gun = installedBarrelProfile(base, installed);
+	const stock = installed.stock ? MODULE_BY_ID[installed.stock.modelId] : undefined;
+	const grip = weaponGripAnchor(gun.id, stock?.appearance, stock?.weaponId);
+	const paint = suppliedPaint ?? palette('native-weapon-geometry').paint;
+	const parts = drawOrder.flatMap((slot) => {
+		const instance = installed[slot], model = instance ? MODULE_BY_ID[instance.modelId] : undefined;
+		return model ? [{ shape: installedGeometry(slot, model, gun, paint, installed), slot, modelId: model.id, durability: installedCondition(weapon, instance?.durability) }] : [];
+	});
+	const factoryBounds = drawOrder.flatMap((slot) => {
+		const modelId = FACTORY_KITS[weapon.weaponId]?.[slot], model = modelId ? MODULE_BY_ID[modelId] : undefined;
+		return model ? [geometry(slot, model.appearance, base, paint).bounds] : [];
+	});
+	const referenceWidth = Math.max(base.barrelEnd, ...factoryBounds.map((bounds) => bounds[0] + bounds[2])) - Math.min(370, ...factoryBounds.map((bounds) => bounds[0])) + 8;
+	const muzzlePart = parts.find(({ slot }) => slot === 'muzzle'), barrelPart = parts.find(({ slot }) => slot === 'barrel');
+	const muzzle = muzzlePart?.shape.muzzle ?? (muzzlePart ? { x: muzzlePart.shape.bounds[0] + muzzlePart.shape.bounds[2] - 10, y: 138 } : barrelPart?.shape.muzzle ?? { x: gun.barrelEnd, y: 138 });
+	const receiver = parts.find(({ slot }) => slot === 'receiver')?.shape;
+	const portPath = receiver?.detail.match(/<path\b[^>]*data-mechanism="ejection-port"[^>]*\bd="([^"]+)"/)?.[1];
+	const port = portPath?.match(/^M\s*([-\d.]+)[ ,]+([-\d.]+)h\s*([-\d.]+)v\s*([-\d.]+)/);
+	const ejection = port ? { x: Number(port[1]) + Number(port[3]) / 2 + (receiver?.offset?.x ?? 0), y: Number(port[2]) + Number(port[4]) / 2 + (receiver?.offset?.y ?? 0) }
+		: { x: grip.x + 70, y: muzzle.y - 4 };
+	return { category: base.category, grip, muzzle, ejection, referenceWidth, parts };
+}
+
 export function weaponActorArt(weapon: WeaponInstance): { svg: string; width: number; height: number; referenceWidth: number; grip: { x: number; y: number }; muzzle: { x: number; y: number } } {
 	const base = profile(weapon.weaponId), installed = weapon.modules;
 	const gun = installedBarrelProfile(base, installed);
-	const stock = installed.stock ? MODULE_BY_ID[installed.stock.modelId] : undefined;
-	const { x: gripX, y: gripY } = weaponGripAnchor(gun.id, stock?.appearance, stock?.weaponId);
 	const { paint, defs } = palette(paintId(weapon.id));
-	const parts = drawOrder.flatMap((slot) => {
-		const instance = installed[slot], model = instance ? MODULE_BY_ID[instance.modelId] : undefined;
-		return model ? [{ shape: installedGeometry(slot, model, gun, paint, installed), slot, instance }] : [];
-	});
+	const resolved = weaponBuildGeometry(weapon, paint), { x: gripX, y: gripY } = resolved.grip;
+	const parts = resolved.parts.map(({ shape, slot }) => ({ shape, slot, instance: installed[slot]! }));
 	const left = Math.min(370, gripX, ...parts.map(({ shape }) => shape.bounds[0])) - 4;
 	const top = Math.min(120, gripY, ...parts.map(({ shape }) => shape.bounds[1])) - 4;
 	const right = Math.max(gun.barrelEnd, ...parts.map(({ shape }) => shape.bounds[0] + shape.bounds[2])) + 4;
@@ -830,14 +858,7 @@ export function weaponActorArt(weapon: WeaponInstance): { svg: string; width: nu
 	const width = right - left, height = bottom - top;
 	// Actor scale follows the factory gun, so adding a suppressor extends the barrel
 	// instead of shrinking the receiver, stock and every other installed part.
-	const factoryBounds = drawOrder.flatMap((slot) => {
-		const modelId = FACTORY_KITS[weapon.weaponId]?.[slot], model = modelId ? MODULE_BY_ID[modelId] : undefined;
-		return model ? [geometry(slot, model.appearance, base, paint).bounds] : [];
-	});
-	const referenceWidth = Math.max(base.barrelEnd, ...factoryBounds.map((bounds) => bounds[0] + bounds[2])) - Math.min(370, ...factoryBounds.map((bounds) => bounds[0])) + 8;
-	const muzzlePart = parts.find(({ slot }) => slot === "muzzle");
-	const barrelPart = parts.find(({ slot }) => slot === "barrel");
-	const muzzle = muzzlePart?.shape.muzzle ?? (muzzlePart ? { x: muzzlePart.shape.bounds[0] + muzzlePart.shape.bounds[2] - 10, y: 138 } : barrelPart?.shape.muzzle ?? { x: gun.barrelEnd, y: 138 });
+	const { referenceWidth, muzzle } = resolved;
 	return { svg: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${left} ${top} ${width} ${height}">${defs}${modularWeaponRasterDefs(paint.prefix, parts.map(({ instance }) => instance?.modelId))}<g stroke-linejoin="round" stroke-linecap="round">${parts.map(({ shape, slot, instance }) => renderPart(shape, paint, slot, true, false, installedCondition(weapon, instance?.durability), instance?.modelId)).join("")}</g></svg>`, width, height, referenceWidth,
 		grip: { x: gripX - left, y: gripY - top }, muzzle: { x: muzzle.x - left, y: muzzle.y - top } };
 }
