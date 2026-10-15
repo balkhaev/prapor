@@ -57,4 +57,7 @@ test('legacy raid paving retains every authored cell and does not rewrite a paid
   const plan = getRaidFieldPlan(state.raids[0]!), before = structuredClone(plan), surface = raidGroundSurface(plan);
   for (const tile of plan.tiles) expect(surface.terrain[tile.y * plan.width + tile.x]).toBe(tile.kind === 'street' ? 'road' : tile.kind === 'sidewalk' ? 'concrete' : 'grass');
   expect(surface.world.paths!.length).toBeGreaterThan(0); expect(plan).toEqual(before);
+  const forest = raidGroundSurface({ ...plan, mapId: 'forest' });
+  expect(forest.terrain).not.toContain('road'); expect(forest.terrain).not.toContain('concrete');
+  expect(forest.world.paths!.every(path => path.kind === 'trail')).toBe(true);
 });
