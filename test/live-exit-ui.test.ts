@@ -179,7 +179,7 @@ describe('visible server-confirmed live exit', () => {
     expect(hud.children[0]!.innerHTML).toContain('<dt>Боезапас</dt><dd>41</dd>');
     expect(dock.innerHTML).toContain('data-live-button="select:observed" aria-pressed="true"');
     expect(sceneFocus).toEqual([poi]); expect(sceneRoute).toEqual(route.poiIds);
-    expect(server.self.automation).toEqual(fighter.automation);
+    expect(server.self.automation).toEqual(fighter.automation!);
     expect(mode!.isActive()).toBe(true); expect(joins).toBe(1); expect(leaves).toBe(0); expect(commands).toHaveLength(0);
   });
   test('opening the market during an explicit exit leaves its existing deadline unchanged', async () => {

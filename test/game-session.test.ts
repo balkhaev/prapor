@@ -8,6 +8,28 @@ test('restoring a session validates references without changing paid gameplay',(
 	const restored=readGameSession({version:1,page:'arsenal',view:'base',weaponId:state.weapons[1]!.id,scavId:state.scavs[0]!.id,roomId:state.shelter.rooms[0]!.id,context:'room',armoryTab:'bench',moduleSlot:'barrel',filters:{weaponSearch:'СКС',category:'rifle',moduleSlot:'optic',moduleRarity:'rare',roomModuleSlot:'stock',contracts:'done'},presentation:{version:1,lift:{y:228}}},state);
 	expect(restored.page).toBe('arsenal');expect(restored.armoryTab).toBe('bench');expect(restored.moduleSlot).toBe('barrel');expect(restored.filters.roomModuleSlot).toBe('stock');expect(restored.weaponId).toBe(state.weapons[1]!.id);expect(restored.scavId).toBe(state.scavs[0]!.id);expect(restored.context).toBe('room');expect(restored.presentation).toEqual({version:1,lift:{y:228}});expect(saveGame(state)).toBe(before);
 });
+test('closing a fighter inspector survives session restoration without clearing selection',()=>{
+	const state=createGame(10_000),scavId=state.scavs[0]!.id,before=saveGame(state);
+	for(const inspectorOpen of [false,true]){
+		const captured=readGameSession({version:1,page:'home',view:'base',scavId,inspectorOpen},state);
+		const restored=readGameSession(JSON.parse(JSON.stringify(captured)),state);
+		expect(restored.scavId).toBe(scavId);expect(restored.inspectorOpen).toBe(inspectorOpen);
+	}
+	expect(saveGame(state)).toBe(before);
+});
+test('inspector visibility preserves legacy sessions and rejects malformed or stale references',()=>{
+	const state=createGame(10_000),scavId=state.scavs[0]!.id,before=saveGame(state);
+	expect(readGameSession({version:1,scavId},state).inspectorOpen).toBe(true);
+	for(const inspectorOpen of [null,'true','false',1,{},[]]){
+		const restored=readGameSession({version:1,scavId,inspectorOpen},state);
+		expect(restored.scavId).toBe(scavId);expect(restored.inspectorOpen).toBe(false);
+	}
+	for(const selected of [null,'scav-999']){
+		const restored=readGameSession({version:1,scavId:selected,inspectorOpen:true},state);
+		expect(restored.scavId).toBeNull();expect(restored.inspectorOpen).toBe(false);
+	}
+	expect(saveGame(state)).toBe(before);
+});
 test('unknown or malformed view state falls back safely instead of becoming game state',()=>{
 	const state=createGame(10_000);
 	for(const value of [null,42,[],{version:2,page:'arsenal'}, {version:1,page:'constructor',weaponId:'gun-999',scavId:'scav-999',context:'build',site:{column:4,row:99},moduleSlot:'__proto__',filters:{category:'constructor',moduleRarity:'__proto__',weaponSearch:42}}]){
