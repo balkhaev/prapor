@@ -48,7 +48,9 @@ export function clarifyPixelActor(
     if (!has(column, row)) continue;
     const index = (row * columns + column) * 4;
     let red = planes[index]!, green = planes[index + 1]!, blue = planes[index + 2]!;
-    const upperEdge = !has(column, row - 1);
+    // A one-cell barrel needs its dark silhouette. Light only the upper edge of
+    // a plane with material beneath it, rather than washing out thin equipment.
+    const upperEdge = !has(column, row - 1) && has(column, row + 1);
     const darkEdge = !has(column - 1, row) || !has(column + 1, row) || !has(column, row + 1);
     if (darkEdge) { red = red * .57 + 9; green = green * .57 + 12; blue = blue * .57 + 11; }
     if (upperEdge) {
