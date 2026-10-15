@@ -36,6 +36,11 @@ test('distant coverage keeps a thin barrel visible at every nearest-sampling pha
     expect(after, `sampling phase ${phase}`).toBeGreaterThan(0);
   }
   expect(originalInvisiblePhases).toBeGreaterThan(0);
+  // Coverage alone is insufficient: a bright, translucent barrel would merge
+  // into midtone terrain even when it survives every sampling phase.
+  const barrelAlpha = alphaAt(distant, width, 35, 17) / 255;
+  const barrelOnGround = lumaAt(distant, width, 35, 17) * barrelAlpha + 100 * (1 - barrelAlpha);
+  expect(100 - barrelOnGround).toBeGreaterThan(25);
   expect(distant).toHaveLength(source.length);
   expect(alphaAt(distant, width, 0, 0)).toBe(0);
 });
