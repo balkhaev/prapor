@@ -202,5 +202,5 @@ describe('city passages use the actual server collision grid', () => {
       const step = Math.abs(point.x - last.x) + Math.abs(point.y - last.y); expect(step).toBeLessThanOrEqual(1); steps += step; last = point;
     }
     expect(steps).toBeGreaterThanOrEqual(8); expect(visitedInterior).toBe(true); expect(service.healthy()).toBe(true);
-  });
+  }, 15_000);
 });

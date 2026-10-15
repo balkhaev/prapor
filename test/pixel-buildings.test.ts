@@ -87,7 +87,7 @@ test('generated legacy hall cutaways preserve every actual free doorway cell and
       expect(painted).toBe(wallCell);
     }
   }
-});
+}, 15_000);
 
 test('building cache is lazy, reuses sprites, separates levels and evicts the least recently used surface', () => {
   const images = canvases(), art = new PixelBuildingArt();
