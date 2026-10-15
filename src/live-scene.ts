@@ -31,6 +31,8 @@ import { sampleWorldSunlight, type WorldBird } from './world-ambience';
 import { paintStreetGroundDetail, streetGroundDetails, type StreetGroundDetail } from './live-street-details';
 import { paintCityRelief } from './live-city-relief';
 import { buildCityStreetGround, paintCityStreetGroundDetail, type CityStreetGroundDetail } from './live-city-streets';
+import { buildCityBuildingGroundShadows, paintCityBuildingGroundShadows, type CityBuildingGroundShadow } from './live-city-shadows';
+import { buildCityGardenGround, paintCityGardenGroundDetail, type CityGardenGroundDetail } from './live-city-gardens';
 
 type Motion = PixelMotion;
 type LabelBox = { x: number; y: number; width: number; height: number };
@@ -93,6 +95,8 @@ export class LiveScene {
   private groundAmbience = new SceneryIndex<LiveAmbientGround>([]);
   private streetGround = new SceneryIndex<StreetGroundDetail>([]);
   private cityStreetGround = new SceneryIndex<CityStreetGroundDetail>([]);
+  private cityGardenGround = new SceneryIndex<CityGardenGroundDetail>([]);
+  private cityGroundShadows = new SceneryIndex<CityBuildingGroundShadow>([]);
   private propArt = new PixelPropArt();
   private buildingArt = new PixelBuildingArt();
   private buildingDetail: PixelDetail = 64;
@@ -201,6 +205,8 @@ export class LiveScene {
     this.groundAmbience = new SceneryIndex<LiveAmbientGround>([]);
     this.streetGround = new SceneryIndex<StreetGroundDetail>([]);
     this.cityStreetGround = new SceneryIndex<CityStreetGroundDetail>([]);
+    this.cityGardenGround = new SceneryIndex<CityGardenGroundDetail>([]);
+    this.cityGroundShadows = new SceneryIndex<CityBuildingGroundShadow>([]);
     this.buildingForObstacle.clear(); this.buildingWalls.clear(); this.cutawayBuildings.clear(); this.distantBuildings.clear();
     this.propArt.clear(); this.buildingArt.clear(); this.obstacleArt.clear(); this.actorArt.clear(); this.containerArt.clear();
     this.clearWetGround(); this.lampProps = [];
@@ -356,6 +362,9 @@ export class LiveScene {
     this.streetGround = new SceneryIndex(streetGroundDetails(world, this.terrain, this.walkableGround, this.surfaceMasks.indoor), world.chunkSize);
     const cityStreets = buildCityStreetGround(world, this.terrain, this.walkableGround, this.surfaceMasks.indoor);
     this.cityStreetGround = new SceneryIndex(cityStreets, world.chunkSize);
+    const cityGardens = buildCityGardenGround(world, this.terrain, this.walkableGround, this.surfaceMasks.indoor);
+    this.cityGardenGround = new SceneryIndex(cityGardens, world.chunkSize);
+    this.cityGroundShadows = new SceneryIndex(buildCityBuildingGroundShadows(world, buildings, this.terrain, this.surfaceMasks.indoor), world.chunkSize);
     this.lampProps = (world.props ?? []).filter(prop => prop.kind === 'lamp');
     this.lampScenery = new SceneryIndex(this.lampProps, world.chunkSize);
     this.wetLamps = this.lampProps.flatMap(prop => {
@@ -373,7 +382,9 @@ export class LiveScene {
       ground.save(); ground.scale(resolution, resolution);
       this.paintSiteGround(world, ground); this.paintLandscape(world, ground);
       for (const detail of cityStreets) paintCityStreetGroundDetail(ground, detail, false);
-      this.paintGroundDetails(world, ground); ground.restore();
+      for (const detail of cityGardens) paintCityGardenGroundDetail(ground, detail, false);
+      this.paintGroundDetails(world, ground);
+      ground.restore();
     }
     this.terrainTexture = texture;
     const budget = liveMapRasterPlan(world.width, world.height);
@@ -433,8 +444,9 @@ export class LiveScene {
     }
     // Cast shadows share the authoritative cover's footprint and never add scenery.
     c.fillStyle = '#10271e38';
-    for (const obstacle of world.obstacles) {
+    for (const [index, obstacle] of world.obstacles.entries()) {
       if (obstacle.kind === 'water') continue;
+      if (this.buildingForObstacle.has(index)) continue;
       if (obstacle.kind === 'tree') { c.beginPath(); c.ellipse(obstacle.x + .95, obstacle.y + .55, 1.2, .7, -.5, 0, Math.PI * 2); c.fill(); continue; }
       const length = obstacle.kind === 'building' ? 1.8 : .5;
       c.beginPath(); c.moveTo(obstacle.x, obstacle.y); c.lineTo(obstacle.x + obstacle.width, obstacle.y); c.lineTo(obstacle.x + obstacle.width + length, obstacle.y + obstacle.height + length * .3); c.lineTo(obstacle.x + length, obstacle.y + obstacle.height + length * .3); c.closePath(); c.fill();
@@ -506,7 +518,9 @@ export class LiveScene {
     }
     const anchor = this.project({ x: prop.x - .5, y: prop.y - .5 });
     const extent = (prop.width + prop.height) * this.tile / 2;
-    if (anchor.x + prop.width * this.tile / 2 < -8 || anchor.x - prop.height * this.tile / 2 > this.width + 8 || anchor.y + extent / 2 < -8 || anchor.y - this.tile * 2.5 > this.height + 8) return;
+    const crown = ['tree', 'shrub', 'garden', 'planter'].includes(prop.kind) ? this.tile * 1.2 : 0;
+    if (anchor.x + prop.width * this.tile / 2 + crown < -8 || anchor.x - prop.height * this.tile / 2 - crown > this.width + 8
+      || anchor.y + extent / 2 + crown * .4 < -8 || anchor.y - this.tile * (pixelPropHeight(prop.kind) / PIXEL_TILE + .4) > this.height + 8) return;
     this.renderer.sprite(this.propArt.get(prop), anchor, this.tile / PIXEL_TILE, this.width, this.height);
     this.paintAtmosphere(anchor, plot => paintPropAtmosphere(prop, this.environmentAt, plot, this.reducedMotion?.matches));
     if (this.environmentSun > .05 && ['tree', 'shrub', 'planter', 'garden'].includes(prop.kind)) {
@@ -550,7 +564,7 @@ export class LiveScene {
   }
   private buildingVisible(building: LiveCityBuilding): boolean {
     const base = this.quad(building.x - .5, building.y - .5, building.width, building.height), height = this.tile * pixelBuildingWallHeight(building);
-    return Math.max(...base.map(p => p.x)) >= -4 && Math.min(...base.map(p => p.x)) <= this.width + 4 && Math.max(...base.map(p => p.y)) >= -4 && Math.min(...base.map(p => p.y)) - height - this.tile * .65 <= this.height + 4;
+    return Math.max(...base.map(p => p.x)) >= -4 && Math.min(...base.map(p => p.x)) <= this.width + 4 && Math.max(...base.map(p => p.y)) >= -4 && Math.min(...base.map(p => p.y)) - height - this.tile * 2.25 <= this.height + 4;
   }
   private paintLandscape(world: LiveWorld, c: CanvasRenderingContext2D): void {
     const stroke = (path: LiveLandscapePath, color: string, width: number) => {
@@ -658,6 +672,7 @@ export class LiveScene {
       c.restore();
     }
     this.paintStreetGround(area);
+    this.paintCityGroundShadows(area);
     this.paintAmbientGround(world, area, climate, daylight);
     this.paintBirdShadows(birds);
     this.paintWetGround(climate, { x: minX - 1, y: minY - 1, width: maxX - minX + 3, height: maxY - minY + 3 });
@@ -671,7 +686,9 @@ export class LiveScene {
     }
     const objects: { depth: number; paint: () => void }[] = [];
     // Far views already contain every real footprint. Never sort thousands of invisible detail sprites.
-    const visible = distant ? [] : this.scenery.visible(area);
+    // A four-storey facade plus a steep roof can enter well before its ground
+    // footprint. Keep the broad phase tall enough, then use exact sprite culling.
+    const visible = distant ? [] : this.scenery.visible({ x: minX - 15, y: minY - 15, width: maxX - minX + 30, height: maxY - minY + 30 });
     const activity: LivePoint[] = [...snapshot.drops];
     for (const entity of snapshot.entities) {
       activity.push(entity);
@@ -733,7 +750,16 @@ export class LiveScene {
     }
     for (const detail of this.cityStreetGround.visible(area).slice(0, 160)) paintCityStreetGroundDetail(c, detail, this.tile >= 24);
     for (const detail of details) paintStreetGroundDetail(c, detail);
+    for (const detail of this.cityGardenGround.visible(area).slice(0, 160)) paintCityGardenGroundDetail(c, detail, this.tile >= 24);
     c.restore();
+  }
+  private paintCityGroundShadows(area: LabelBox): void {
+    if (this.overview || this.tile < 14) return;
+    const shadows = this.cityGroundShadows.visible(area).sort((a, b) =>
+      (a.x - this.camera.x) ** 2 + (a.y - this.camera.y) ** 2 - (b.x - this.camera.x) ** 2 - (b.y - this.camera.y) ** 2).slice(0, 192);
+    const c = this.context, origin = this.project({ x: -.5, y: -.5 });
+    c.save(); c.transform(this.tile / 2, this.tile / 4, -this.tile / 2, this.tile / 4, origin.x, origin.y);
+    paintCityBuildingGroundShadows(c, shadows); c.restore();
   }
   private paintAmbientGround(world: LiveWorld, area: LabelBox, climate: ReturnType<typeof readSceneClimate>, daylight: number): void {
     if (this.overview || this.tile < 16) return;

@@ -8,6 +8,9 @@ function fixture() {
     { id: 'metro-river-avenue', kind: 'road', width: 5, points: [{ x: 8, y: 2 }, { x: 8, y: 29 }] },
   ], citySites: [{ id: 'quiet-court', passages: [[{ x: 20, y: 6 }, { x: 20, y: 24 }]] }], props: [
     { id: 'old-playground', kind: 'playground', x: 23, y: 9, width: 2, height: 2, orientation: 'x' },
+    { id: 'corner-kiosk', kind: 'kiosk', x: 24, y: 18, width: 2, height: 2, orientation: 'x' },
+    { id: 'flower-market', kind: 'market-stall', x: 27, y: 23, width: 1.5, height: 2, orientation: 'y' },
+    { id: 'park-bench', kind: 'bench', x: 18, y: 18, width: 1.5, height: .6, orientation: 'x' },
   ] } as unknown as LiveWorld;
   const terrain = Array<LiveTerrain>(1024).fill('concrete'), walkable = new Uint8Array(1024).fill(1), indoor = new Uint8Array(1024);
   for (let y = 0; y < 32; y++) for (let x = 6; x <= 10; x++) terrain[y * 32 + x] = 'road';
@@ -20,6 +23,8 @@ test('city pavement, real courtyard ways and play traces accept only existing fr
   expect(details.some(detail => detail.kind === 'pavement')).toBe(true);
   expect(details.some(detail => detail.kind === 'passage')).toBe(true);
   expect(details.some(detail => detail.kind === 'play-chalk')).toBe(true);
+  expect(details.filter(detail => detail.kind === 'shop-apron')).toHaveLength(2);
+  expect(details.filter(detail => detail.kind === 'bench-pad')).toHaveLength(1);
   expect(buildCityStreetGround(f.world, f.terrain, f.walkable, f.indoor)).toEqual(details);
   expect(f).toEqual(before);
   for (const detail of details) {
@@ -32,6 +37,23 @@ test('city pavement, real courtyard ways and play traces accept only existing fr
   }
   expect(buildCityStreetGround({ ...f.world, city: undefined }, f.terrain, f.walkable, f.indoor)).toEqual([]);
   expect(buildCityStreetGround(f.world, Array<LiveTerrain>(1024).fill('grass'), f.walkable, f.indoor)).toEqual([]);
+});
+
+test('serving and seating aprons stay at the real furnishings and disappear with their public anchors', () => {
+  const f = fixture(), details = buildCityStreetGround(f.world, f.terrain, f.walkable, f.indoor);
+  const aprons = details.filter(detail => detail.kind === 'shop-apron' || detail.kind === 'bench-pad');
+  expect(aprons).toHaveLength(3);
+  expect(aprons.find(detail => detail.kind === 'shop-apron' && detail.normal.y === 1)?.a).toEqual({ x: 24.05, y: 20.36 });
+  expect(aprons.find(detail => detail.kind === 'shop-apron' && detail.normal.x === -1)?.a).toEqual({ x: 28.86, y: 23.05 });
+  expect(buildCityStreetGround({ ...f.world, props: [] }, f.terrain, f.walkable, f.indoor)
+    .some(detail => detail.kind === 'shop-apron' || detail.kind === 'bench-pad')).toBe(false);
+  // An interior market counter must not paint an outdoor serving place even
+  // when a piece of public concrete happens to sit outside its containing wall.
+  f.indoor[19 * 32 + 25] = 1;
+  expect(buildCityStreetGround(f.world, f.terrain, f.walkable, f.indoor)
+    .filter(detail => detail.kind === 'shop-apron')).toHaveLength(1);
+  f.indoor.fill(1);
+  expect(buildCityStreetGround(f.world, f.terrain, f.walkable, f.indoor)).toEqual([]);
 });
 
 test('native and cached street passes share an exact physical clip and do not leak canvas state', () => {
