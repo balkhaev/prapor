@@ -89,11 +89,11 @@ function pixelMotifTone(material: LiveTerrain, px: number, py: number, resolutio
     const tileH = style === 1 ? Math.max(3, Math.round(resolution * .5)) : style === 2 ? Math.max(4, Math.round(resolution * .75)) : tileW;
     const row = Math.floor(py / tileH), shiftedX = px + (style ? row % 2 * Math.floor(tileW / 2) : 0), tx = shiftedX % tileW, ty = py % tileH;
     const stone = hash(Math.floor(shiftedX / tileW), row ^ seed);
-    // Broad slab seams used to dominate the street at a distance. Keep masonry
-    // in its middle tones so silhouettes and actual street furniture lead.
-    tone = tx === 0 || ty === 0 ? 1 : ty === 1 ? 3 : 2 + Number(stone % 7 === 0);
-    if (!style && stone % 5 === 0 && tx === 3 + ty % 3 && ty > tileH / 2) tone = 1;
-    else if (stone % 7 === 0 && tx === tileW - 2 && ty === tileH - 2) tone = 1;
+    // This bounded atlas can have just four pixels per world cell. A one-texel
+    // mortar line would become a broad dark trench at walking zoom. Keep only
+    // slab colour/wear here; fine outdoor joints are drawn at display scale.
+    tone = 2 + Number(stone % 9 === 0);
+    if (stone % 17 === 0 && tx === tileW - 2 && ty === tileH - 2) tone = 1;
   } else if (material === 'water') {
     const row = Math.floor(py / 5), ripple = hash(row, seed), waveX = (px + ripple % 17) % 23;
     tone = cluster % 7 === 0 ? 1 : 2;
