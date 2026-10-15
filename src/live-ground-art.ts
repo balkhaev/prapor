@@ -1,6 +1,8 @@
 import type { LiveLandscapePath, LivePoint, LiveTerrain, LiveWorld } from './game/live';
 import { PIXEL_PALETTE as P } from './pixel-art';
 
+export type GroundWorld = Pick<LiveWorld, 'width' | 'height' | 'seed' | 'paths' | 'city' | 'citySites'>;
+
 type RGB = readonly [number, number, number];
 const pigment = (hex: string): RGB => [1, 3, 5].map(at => Number.parseInt(hex.slice(at, at + 2), 16)) as unknown as RGB;
 const blend = (a: RGB, b: RGB, ratio: number): RGB => a.map((channel, i) => Math.round(channel * (1 - ratio) + b[i]! * ratio)) as unknown as RGB;
@@ -67,7 +69,7 @@ function pixelMotifTone(material: LiveTerrain, px: number, py: number, resolutio
 
 /** Small motif atlases and one upload strip avoid a second full-world bitmap.
  * Whole-colour pixels are copied once; costly motif hashes run only in the atlases. */
-export function paintTerrainTexture(c: CanvasRenderingContext2D, world: LiveWorld, terrain: readonly LiveTerrain[], resolution: number): void {
+export function paintTerrainTexture(c: CanvasRenderingContext2D, world: GroundWorld, terrain: readonly LiveTerrain[], resolution: number): void {
   const width = world.width, height = world.height, textureWidth = width * resolution, textureHeight = height * resolution;
   const seed = [...world.seed].reduce((value, char) => (Math.imul(value, 31) + char.charCodeAt(0)) | 0, 0);
   const kinds = Object.keys(PIXEL_TERRAIN_PALETTES) as LiveTerrain[], concrete = kinds.indexOf('concrete');
@@ -126,7 +128,7 @@ export function paintTerrainTexture(c: CanvasRenderingContext2D, world: LiveWorl
 export type SurfaceRun = { x: number; y: number; width: number };
 export type SurfaceMasks = { road: Uint8Array; indoor: Uint8Array; roadRuns: SurfaceRun[] };
 
-export function buildSurfaceMasks(world: LiveWorld, terrain: readonly LiveTerrain[], walkable: Uint8Array, buildings: readonly Pick<NonNullable<LiveWorld['citySites']>[number]['buildings'][number], 'x' | 'y' | 'width' | 'height'>[] = world.citySites?.flatMap(site => site.buildings) ?? []): SurfaceMasks {
+export function buildSurfaceMasks(world: GroundWorld, terrain: readonly LiveTerrain[], walkable: Uint8Array, buildings: readonly Pick<NonNullable<LiveWorld['citySites']>[number]['buildings'][number], 'x' | 'y' | 'width' | 'height'>[] = world.citySites?.flatMap(site => site.buildings) ?? []): SurfaceMasks {
   const indoor = new Uint8Array(world.width * world.height), road = new Uint8Array(world.width * world.height);
   for (const building of buildings) {
     for (let y = Math.max(0, building.y); y < Math.min(world.height, building.y + building.height); y++) for (let x = Math.max(0, building.x); x < Math.min(world.width, building.x + building.width); x++) indoor[y * world.width + x] = 1;
@@ -200,7 +202,7 @@ export function buildRoadSurfacePlan(paths: readonly LiveLandscapePath[], road: 
 }
 
 /** Cached markings are clipped once against authoritative road, free cover and interior masks. */
-export function paintRoadSurface(c: CanvasRenderingContext2D, world: LiveWorld, masks: SurfaceMasks): void {
+export function paintRoadSurface(c: CanvasRenderingContext2D, world: GroundWorld, masks: SurfaceMasks): void {
   const { road, roadRuns } = masks, plan = buildRoadSurfacePlan(world.paths ?? [], road, world.width, world.height);
   const stroke = (a: LivePoint, b: LivePoint, color: string, width: number) => { c.beginPath(); c.moveTo(a.x, a.y); c.lineTo(b.x, b.y); c.strokeStyle = color; c.lineWidth = width; c.stroke(); };
   const clip = () => { c.beginPath(); for (const run of roadRuns) c.rect(run.x, run.y, run.width, 1); c.clip(); };
@@ -213,6 +215,25 @@ export function paintRoadSurface(c: CanvasRenderingContext2D, world: LiveWorld, 
   for (const path of paths) if (path.id.startsWith('city-')) pathStroke(path, '#bdc3aa', path.width + .07);
   for (const path of paths) pathStroke(path, grain ?? '#3e4a51', Math.max(1, path.width - .28));
   c.lineCap = 'butt';
+  // Flush maintenance details add history without suggesting loot or cover.
+  // Each one is clipped by the same physical surface as the road itself.
+  for (const detail of roadSurfaceDetails(world, masks)) {
+    const { x, y, kind, variant } = detail;
+    if (kind === 'repair') {
+      stroke({ x: x - .44, y: y - .12 }, { x: x + .4, y: y + .1 }, '#344249', .55);
+      stroke({ x: x - .4, y: y - .4 }, { x: x + .4, y: y - .18 }, '#65716e', .055);
+      if (variant) stroke({ x: x - .38, y: y + .12 }, { x: x + .36, y: y + .3 }, '#48565a', .06);
+    } else if (kind === 'drain') {
+      stroke({ x: x - .23, y: y }, { x: x + .23, y }, '#283b3d', .48);
+      for (let slot = -.16; slot <= .18; slot += .08) stroke({ x: x + slot, y: y - .17 }, { x: x + slot, y: y + .17 }, '#819088', .035);
+      stroke({ x: x - .24, y: y - .24 }, { x: x + .24, y: y - .24 }, '#93a094', .045);
+    } else {
+      stroke({ x: x - .32, y: y - .42 }, { x: x - .1, y: y - .1 }, '#2e3d42', .055);
+      stroke({ x: x - .1, y: y - .1 }, { x: x + .04, y: y + .17 }, '#2e3d42', .055);
+      stroke({ x: x + .04, y: y + .17 }, { x: x + .3, y: y + .36 }, '#2e3d42', .055);
+      stroke({ x: x - .1, y: y - .1 }, { x: x + .18, y: y - .21 }, '#65736c', .04);
+    }
+  }
   for (const segment of plan.segments) {
     const ux = segment.dx / segment.length, uy = segment.dy / segment.length;
     // Short wheel-wear patches use one opaque shade instead of continuous alpha noise.
@@ -249,4 +270,19 @@ export function paintRoadSurface(c: CanvasRenderingContext2D, world: LiveWorld, 
     }
   }
   c.restore();
+}
+
+export type RoadSurfaceDetail = LivePoint & { kind: 'repair' | 'drain' | 'crack'; variant: number };
+/** Stable spatial sampling covers the whole world; nothing accumulates on ticks. */
+export function roadSurfaceDetails(world: Pick<GroundWorld, 'width' | 'height' | 'seed'>, masks: SurfaceMasks): RoadSurfaceDetail[] {
+  const details: RoadSurfaceDetail[] = [], seed = [...world.seed].reduce((value, char) => Math.imul(value, 31) + char.charCodeAt(0), 0) | 0;
+  for (const run of masks.roadRuns) for (let x = run.x; x < run.x + run.width; x++) {
+    const sample = hash(x ^ seed, run.y);
+    if (sample % 43 !== 0 || !masks.road[run.y * world.width + x]) continue;
+    const broad = x > 0 && run.y > 0 && x < world.width - 1 && run.y < world.height - 1
+      && masks.road[run.y * world.width + x - 1] && masks.road[run.y * world.width + x + 1]
+      && masks.road[(run.y - 1) * world.width + x] && masks.road[(run.y + 1) * world.width + x];
+    details.push({ x: x + .5, y: run.y + .5, kind: broad ? sample % 3 === 0 ? 'drain' : 'repair' : 'crack', variant: (sample >>> 8) % 2 });
+  }
+  return details;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { getShelterLandscape } from "../src/shelter-landscape";
+import { getShelterLandscape, getShelterPathDetails } from "../src/shelter-landscape";
 import { getShelterBuildingRect, getShelterCorridorPoint, getShelterCorridorSegments, getShelterRoomDoor, getShelterRoomEntranceDirection, getShelterTerritoryCell, getShelterWorldBounds, isShelterPointInTerritory, type ShelterLayoutBuilding } from "../src/shelter-layout";
 import { projectShelterPoint, shelterRoomPosition } from "../src/shelter-isometric";
 import type { ShelterPoint } from "../src/shelter-motion";
@@ -12,6 +12,22 @@ function overlaps(point: ShelterPoint, radius: number, building: ShelterLayoutBu
 }
 
 describe("surface base landscaping", () => {
+	test("route wear follows the real route, keeps its centre readable and has a fixed detail budget", () => {
+		for (const path of [{ from: { x: 10.25, y: 30.5 }, to: { x: 180.75, y: 30.5 } }, { from: { x: -50, y: 180 }, to: { x: 120, y: -10 } }]) {
+			const before = structuredClone(path), details = getShelterPathDetails(path), dx = path.to.x - path.from.x, dy = path.to.y - path.from.y, length = Math.hypot(dx, dy);
+			expect(details).toEqual(getShelterPathDetails(path)); expect(path).toEqual(before);
+			expect(details.some(detail => detail.kind === "grass")).toBe(true); expect(details.some(detail => detail.kind === "rut")).toBe(true);
+			for (const detail of details) {
+				const along = ((detail.x - path.from.x) * dx + (detail.y - path.from.y) * dy) / length;
+				const across = Math.abs((detail.x - path.from.x) * -dy + (detail.y - path.from.y) * dx) / length;
+				expect(along).toBeGreaterThan(0); expect(along).toBeLessThan(length);
+				expect(across).toBeLessThanOrEqual(7.6);
+				if (detail.kind === "grass") expect(across).toBeGreaterThanOrEqual(5.8);
+			}
+		}
+		expect(getShelterPathDetails({ from: { x: 0, y: 0 }, to: { x: 1e9, y: 0 } }).length).toBeLessThanOrEqual(120);
+		expect(getShelterPathDetails({ from: { x: 0, y: 0 }, to: { x: 0, y: 0 } })).toEqual([]);
+	});
 	test("all four facings redraw worn paths and gravel thresholds on the selected entrance side", () => {
 		const base: ShelterLayoutBuilding = { column: 1, row: 1, width: 1, height: 1, position: { x: 311.25, y: 288.75 } }, plans = [];
 		for (const facing of [0, 1, 2, 3] as const) {

@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from 'bun:test';
 import { LIVE_PROP_KINDS, type LiveWorldProp } from '../src/game/live';
 import { PIXEL_PALETTE } from '../src/pixel-art';
-import { PixelPropArt, PIXEL_PROP_CACHE_BYTES } from '../src/pixel-props';
+import { PixelPropArt, PIXEL_PROP_CACHE_BYTES, pixelPropHeight } from '../src/pixel-props';
 
 type RasterRecord = { calls:number; digest:number; colors:Set<string>; left:number;top:number;right:number;bottom:number };
 let restoreDocument:(()=>void)|undefined;
@@ -52,7 +52,7 @@ test('all public models have unclipped opaque pixel detail, in both directions a
   }
 });
 
-test('position/id changes reuse art, while orientation, footprint and visual variants distinguish it',()=>{
+test('manufactured props reuse art across positions and IDs, while their authored geometry stays distinct',()=>{
   const fake=canvases(),cache=new PixelPropArt(),item=prop('car');
   const first=cache.get(item),again=cache.get({...item,id:'elsewhere',x:420,y:500,blocking:true});
   expect(again.image).toBe(first.image);expect(again.anchor).toEqual(first.anchor);expect(fake.created).toBe(1);
@@ -60,6 +60,35 @@ test('position/id changes reuse art, while orientation, footprint and visual var
   const digest=fake.records.get(first.image)!.digest;
   cache.clear();expect(cache.cacheSize).toBe(0);expect(cache.cacheBytes).toBe(0);expect(first.image.width*first.image.height).toBe(1);
   const replay=cache.get(item);expect(fake.records.get(replay.image)!.digest).toBe(digest);
+});
+
+test('groves have four stable ID-seeded canopies per authored species without per-ID allocations',()=>{
+  const fake=canvases(),cache=new PixelPropArt();
+  for(const kind of ['tree','shrub'] as const)for(let variant=0;variant<4;variant++) {
+    const images=new Set<HTMLCanvasElement>(),digests=new Set<number>();
+    for(let i=0;i<80;i++) {
+      const item={...prop(kind,'x',variant),id:`grove-${i}`},sprite=cache.get(item);
+      images.add(sprite.image);digests.add(fake.records.get(sprite.image)!.digest);
+      expect(cache.get({...item,x:i*9,y:i*3,blocking:true}).image).toBe(sprite.image);
+      expect(sprite.anchor.y).toBe(pixelPropHeight(kind)+12);
+    }
+    expect(images.size).toBe(4);expect(digests.size).toBe(4);
+    expect(cache.cacheBytes).toBeLessThanOrEqual(PIXEL_PROP_CACHE_BYTES);
+  }
+  expect(fake.created).toBe(32);
+});
+
+test('all authored prop variants remain identifiable and retain their existing native envelopes',()=>{
+  const fake=canvases(),cache=new PixelPropArt();
+  for(const kind of LIVE_PROP_KINDS) {
+    const digests=new Set<number>(),sizes=new Set<string>();
+    for(let variant=0;variant<4;variant++) {
+      const sprite=cache.get(prop(kind,'x',variant));digests.add(fake.records.get(sprite.image)!.digest);
+      sizes.add(`${sprite.image.width}:${sprite.image.height}:${sprite.anchor.x}:${sprite.anchor.y}`);
+      expect(pixelPropHeight(kind)).toBeGreaterThan(0);expect(pixelPropHeight(kind)).toBeLessThanOrEqual(246);
+    }
+    expect(digests.size).toBe(4);expect(sizes.size).toBe(1);
+  }
 });
 
 test('LRU budget frees old canvas buffers and invalid public dimensions allocate nothing',()=>{

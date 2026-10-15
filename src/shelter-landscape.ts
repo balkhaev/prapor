@@ -29,6 +29,7 @@ const C = {
 	grassDark: pigment(P.shadow), soil: pigment(P.soil), gravel: pigment(P.sand), pale: pigment(P.cream),
 	damp: pigment(P.concreteShade), litter: pigment(P.wood), water: pigment(P.glass),
 	ink: pigment(P.ink), bark: pigment(P.woodShade), wood: pigment(P.woodLight), steel: pigment(P.steel),
+	leaf: pigment(P.leaf), leafLight: pigment(P.leafLight),
 };
 
 /** Flat clusters keep leaves readable at the same pixel scale as the actors. */
@@ -48,6 +49,23 @@ const distanceToSegment = (point: ShelterPoint, { from, to }: ShelterCorridorSeg
 	const t = length ? Math.max(0, Math.min(1, ((point.x - from.x) * dx + (point.y - from.y) * dy) / length)) : 0;
 	return Math.hypot(point.x - from.x - t * dx, point.y - from.y - t * dy);
 };
+export interface ShelterPathDetail extends ShelterPoint { kind: "stone" | "grass" | "rut"; size: number; side: -1 | 1 }
+/** Surface decoration is seeded by the existing route, bounded independently
+ * of its length, and never participates in navigation or prop collision. */
+export function getShelterPathDetails(path: ShelterCorridorSegment): ShelterPathDetail[] {
+	const dx = path.to.x - path.from.x, dy = path.to.y - path.from.y, length = Math.hypot(dx, dy);
+	if (!Number.isFinite(length) || length < 4) return [];
+	const count = Math.min(48, Math.max(1, Math.floor(length / 12))), r = random(hash(Math.round(path.from.x), Math.round(path.from.y), Math.round(path.to.x + path.to.y))), details: ShelterPathDetail[] = [];
+	const nx = -dy / length, ny = dx / length;
+	for (let i = 0; i < count; i++) {
+		const t = (i + .35 + r() * .3) / count, side = i % 2 ? 1 : -1;
+		const at = (offset: number) => ({ x: path.from.x + dx * t + nx * offset, y: path.from.y + dy * t + ny * offset });
+		details.push({ ...at(side * (5.8 + r() * 1.8)), kind: i % 3 ? "grass" : "stone", size: 1 + r() * 2, side });
+		details.push({ ...at(side * (2 + r() * .7)), kind: "rut", size: 3 + r() * 5, side });
+		if (i % 2 === 0) details.push({ ...at((r() - .5) * 4), kind: "stone", size: 1, side });
+	}
+	return details;
+}
 const intersects = (point: ShelterPoint, radius: number, rect: ShelterRect) => point.x + radius > rect.x && point.x - radius < rect.x + rect.width && point.y + radius > rect.y && point.y - radius < rect.y + rect.height;
 function ownedAt(point: ShelterPoint, sites: ReadonlySet<string>): boolean {
 	const site = getShelterTerritoryCell(point);
@@ -290,6 +308,21 @@ export function paintShelterLandscape(g: Phaser.GameObjects.Graphics, landscape:
 			const start = step / length, end = Math.min(length, step + 7 + r() * 10) / length, side = r() < .5 ? -1 : 1;
 			a.line([start, end].map((t) => ({ x: path.from.x + (path.to.x - path.from.x) * t + normal.x * side * 2.2, y: path.from.y + (path.to.y - path.from.y) * t + normal.y * side * 2.2 })), 0x615f47, .8, .27);
 		}
+		const tangent = length ? { x: (path.to.x - path.from.x) / length, y: (path.to.y - path.from.y) / length } : { x: 0, y: 0 };
+		for (const detail of getShelterPathDetails(path)) {
+			const at = a.point(detail);
+			if (detail.kind === "grass") {
+				g.lineStyle(1, detail.side > 0 ? C.grassDark : C.grassLight, .85);
+				g.lineBetween(Math.round(at.x), Math.round(at.y), Math.round(at.x - 1), Math.round(at.y - detail.size - 1));
+				g.lineBetween(Math.round(at.x), Math.round(at.y), Math.round(at.x + 2), Math.round(at.y - detail.size));
+			} else if (detail.kind === "stone") {
+				const size = Math.round(detail.size);
+				g.fillStyle(C.soil, .65).fillRect(Math.round(at.x), Math.round(at.y), size + 1, 1);
+				g.fillStyle(C.pale, .65).fillRect(Math.round(at.x), Math.round(at.y - 1), size, 1);
+			} else {
+				a.line([detail, { x: detail.x + tangent.x * detail.size, y: detail.y + tangent.y * detail.size }], C.soil, 1, .58);
+			}
+		}
 	}
 	if (landscape.lots.length) {
 		const left = Math.min(...landscape.lots.map((lot) => lot.x)) - 12, right = Math.max(...landscape.lots.map((lot) => lot.x + lot.width)) + 12;
@@ -298,6 +331,13 @@ export function paintShelterLandscape(g: Phaser.GameObjects.Graphics, landscape:
 		for (let x = left + 14; x < right; x += 47) a.line([{ x, y: 76 }, { x: Math.min(x + 21, right), y: 76 }], 0xd5ceaa, 1.5, .55);
 		a.line([{ x: ENTRANCE.x, y: 112 }, ENTRANCE], C.soil, 19, .8);
 		a.line([{ x: left, y: 110 }, { x: right, y: 110 }], 0x283e32, 1.2, .7);
+		for (let x = left + 27; x < right - 20; x += 113) {
+			// Patched tarmac and drain slats stay beside the existing gate road.
+			a.face([{ x, y: 54 }, { x: x + 27, y: 56 }, { x: x + 22, y: 70 }, { x: x - 3, y: 67 }], C.ink, .32);
+			a.line([{ x: x + 3, y: 57 }, { x: x + 12, y: 61 }, { x: x + 9, y: 65 }], C.steel, 1, .35);
+			a.plane(x + 11, 104, 15, 4, C.ink);
+			for (let slot = 13; slot < 25; slot += 3) a.line([{ x: x + slot, y: 104.5 }, { x: x + slot, y: 107.5 }], C.steel, 1, .7);
+		}
 	}
 }
 
@@ -311,12 +351,23 @@ export function paintShelterDecoration(g: Phaser.GameObjects.Graphics, decoratio
 	switch (decoration.kind) {
 		case "tree": {
 			const height = 43 + seed % 12, birch = seed % 3 === 1, pine = seed % 3 === 0;
+			for (const [dx, dy] of [[-10, 2], [8, 4], [-2, 10], [4, -7]]) {
+				a.face([p, { x: p.x + dx! * .55 - 1, y: p.y + dy! * .55 }, { x: p.x + dx!, y: p.y + dy! }, { x: p.x + dx! * .55 + 2, y: p.y + dy! * .55 }], C.bark, .9, .7);
+				a.line([{ x: p.x + dx! * .15, y: p.y + dy! * .15 }, { x: p.x + dx! * .75, y: p.y + dy! * .75 }], C.wood, 1, .7, 1.2);
+			}
+			for (let i = 0; i < 7; i++) {
+				const angle = i * 2.4, leaf = a.point({ x: p.x + Math.cos(angle) * (7 + i % 3), y: p.y + Math.sin(angle) * (6 + i % 3) });
+				g.fillStyle(i % 2 ? C.litter : C.grassDark, .8).fillRect(Math.round(leaf.x), Math.round(leaf.y), 2, 1);
+			}
 			for (const [dx, dy] of [[-7, 2], [6, 2], [1, 7]]) a.line([p, { x: p.x + dx!, y: p.y + dy! }], birch ? 0xada689 : 0x5d5b40, 1.4, .75);
 			g.lineStyle(birch ? 3 : 4, birch ? 0xc1c1a3 : 0x6a5943).lineBetween(at.x, at.y, at.x - 1, at.y - height + 10);
 			g.lineStyle(1, birch ? 0xe0dcca : 0xa58a60, .65).lineBetween(at.x - 1, at.y - 3, at.x - 2, at.y - 26);
 			if (birch) for (let z = 5; z < height - 10; z += 7) g.lineStyle(1.1, 0x5a6151, .8).lineBetween(at.x - 1.5, at.y - z, at.x + .8, at.y - z + .7);
 			g.lineStyle(1.8, birch ? 0x999c7e : 0x6a5943).lineBetween(at.x - 1, at.y - 17, at.x - 11 + sway * .4, at.y - 30);
 			g.lineStyle(1.5, birch ? 0xaaa88d : 0x6a5943).lineBetween(at.x - 1, at.y - 22, at.x + 11 + sway * .4, at.y - 35);
+			for (let z = 6; z < 30; z += 7) {
+				g.lineStyle(1, birch ? C.ink : C.wood, .75).lineBetween(Math.round(at.x - 1), Math.round(at.y - z), Math.round(at.x + 1), Math.round(at.y - z - 2));
+			}
 			if (pine) {
 				// Long tiered boughs make a ragged spruce silhouette, with clear sky between the tiers.
 				for (const [z, width] of [[20, 19], [31, 16], [41, 12]]) {
@@ -325,6 +376,11 @@ export function paintShelterDecoration(g: Phaser.GameObjects.Graphics, decoratio
 					g.fillStyle(C.forestLight).fillPoints(points.map(point => ({ x: Math.round(point.x), y: Math.round(point.y) })), true);
 					g.fillStyle(C.grassDark).fillPoints([points[0]!, points[1]!, { x: cx - width! * .7, y: base - 1 }, { x: cx - 1, y: base - 5 }], true);
 					g.lineStyle(1, C.grass, .8).lineBetween(Math.round(cx - 3), Math.round(base - 8), Math.round(cx - width! * .55), Math.round(base - 3));
+					for (const tip of [-.65, -.3, .18, .52]) {
+						const lx = Math.round(cx + width! * tip), ly = Math.round(base - (1 - Math.abs(tip)) * 7);
+						g.fillStyle(tip < 0 ? C.grassLight : C.grass).fillRect(lx, ly, 3, 1);
+						g.fillStyle(C.forestLight).fillRect(lx + 1, ly + 2, 2, 1);
+					}
 				}
 			} else {
 				const centre = { x: at.x + sway, y: at.y - height + 20 }, width = birch ? 16 : 22, depth = birch ? 19 : 17;
@@ -334,14 +390,23 @@ export function paintShelterDecoration(g: Phaser.GameObjects.Graphics, decoratio
 					const angle = i / 9 * Math.PI * 2, cx = centre.x + Math.cos(angle) * width * .58, cy = centre.y + Math.sin(angle) * depth * .57;
 					foliage(g, cx, cy, width * .95, depth * .85, C.forestLight);
 				}
-				for (let i = 0; i < 7; i++) {
-					const angle = r() * Math.PI * 2, radius = Math.sqrt(r()) * .65;
-					foliage(g, centre.x - 3 + Math.cos(angle) * width * radius, centre.y - 4 + Math.sin(angle) * depth * radius, 8 + r() * 7, 5 + r() * 5, i % 3 ? C.grass : C.grassLight);
+				for (const [dx, dy, spread] of [[-.4, -.55, .75], [.15, -.65, .66], [-.55, -.05, .7], [.1, -.1, .78], [.55, .16, .5], [-.2, .48, .55]]) {
+					const cx = centre.x + width * dx!, cy = centre.y + depth * dy!;
+					foliage(g, cx, cy, width * spread!, depth * spread! * .8, C.leaf);
+					foliage(g, cx - 2, cy - 2, width * spread! * .55, depth * spread! * .32, C.leafLight);
+				}
+				for (let i = 0; i < 9; i++) {
+					const x = Math.round(centre.x - width * .6 + r() * width * 1.1), y = Math.round(centre.y - depth * .6 + r() * depth);
+					g.fillStyle(C.leafLight, .85).fillRect(x, y, 2 + i % 2, 1);
+					g.fillStyle(C.forestLight, .9).fillRect(x + 2, y + 2, 2, 1);
 				}
 			}
 			break;
 		}
 		case "bush":
+			for (const dx of [-7, 0, 6]) {
+				g.lineStyle(1, C.bark).lineBetween(Math.round(at.x), Math.round(at.y), Math.round(at.x + dx), Math.round(at.y - 9));
+			}
 			for (let i = 0; i < 5; i++) {
 				const dx = Math.cos(i * 2.7) * 7, dy = Math.sin(i * 2.7) * 3;
 				foliage(g, at.x + dx + sway * .35, at.y - 5 + dy, 15, 12, C.forestLight);
@@ -408,6 +473,10 @@ export function paintShelterDecoration(g: Phaser.GameObjects.Graphics, decoratio
 			a.box(p.x - 16, p.y - 6, 33, 2, 6, C.wood, 0x927449, 0x645638, 15);
 			a.line([{ x: p.x - 8, y: p.y }, { x: p.x - 2, y: p.y }], 0xd6bf88, .7, .55, 10.2);
 			a.line([{ x: p.x + 6, y: p.y + 5 }, { x: p.x + 13, y: p.y + 5 }], 0x68573b, .6, .65, 10.2);
+			for (const x of [-12, 12]) for (const y of [-4, 6]) {
+				const bolt = a.point({ x: p.x + x, y: p.y + y }, 10.4); g.fillStyle(C.ink).fillRect(Math.round(bolt.x), Math.round(bolt.y), 1, 1);
+			}
+			a.line([{ x: p.x - 13, y: p.y - 5 }, { x: p.x + 7, y: p.y - 5 }], C.pale, 1, .45, 19.2);
 			break;
 		}
 		case "barrels":
@@ -418,6 +487,9 @@ export function paintShelterDecoration(g: Phaser.GameObjects.Graphics, decoratio
 				for (const z of [4, 10]) g.lineStyle(.8, 0x3c5a48).lineBetween(b.x - 4, b.y - z, b.x + 4, b.y - z);
 				g.fillStyle(0x956c46, .65).fillEllipse(b.x + 1, b.y - 7, 2.4, 3.5);
 				g.fillStyle(0x3f5547, .7).fillCircle(b.x + 1, b.y - 13, .65);
+				g.fillStyle(C.pale, .75).fillRect(Math.round(b.x - 3), Math.round(b.y - 9), 3, 2);
+				g.fillStyle(C.ink).fillRect(Math.round(b.x - 2), Math.round(b.y - 9), 1, 1);
+				g.lineStyle(1, C.pale, .5).lineBetween(Math.round(b.x - 3), Math.round(b.y - 11), Math.round(b.x - 3), Math.round(b.y - 5));
 			}
 			a.box(p.x - 15, p.y + 5, 18, 9, 7, 0xb99b69, 0x92754e, 0x695f40);
 			break;
@@ -437,6 +509,8 @@ export function paintShelterDecoration(g: Phaser.GameObjects.Graphics, decoratio
 			g.lineStyle(2.2, C.steel).lineBetween(at.x, at.y, at.x, at.y - 30);
 			g.lineStyle(2, C.steel).lineBetween(at.x, at.y - 30, at.x + 7, at.y - 30);
 			g.fillStyle(C.pale).fillEllipse(at.x + 7, at.y - 30, 7, 3);
+			g.fillStyle(C.ink).fillRect(Math.round(at.x + 3), Math.round(at.y - 33), 8, 2);
+			g.lineStyle(1, C.ink).lineBetween(Math.round(at.x + 1), Math.round(at.y - 1), Math.round(at.x + 1), Math.round(at.y - 27));
 			break;
 		case "gate":
 			for (const dx of [-30, 30]) {

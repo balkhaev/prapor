@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from 'bun:test';
 import type { LiveCityBuilding, LiveObstacle } from '../src/game/live';
-import { PIXEL_BUILDING_CACHE_BYTES, PixelBuildingArt, pixelBuildingSpriteBytes } from '../src/pixel-buildings';
-import { pixelIso } from '../src/pixel-art';
+import { PIXEL_BUILDING_CACHE_BYTES, PixelBuildingArt, pixelBuildingSpriteBytes, pixelBuildingVentAnchor } from '../src/pixel-buildings';
+import { pixelIso, PIXEL_PALETTE as P } from '../src/pixel-art';
 import { generateLiveWorld } from '../src/game/world-generation';
 import { sceneBuildings } from '../src/live-map-art';
 
@@ -113,4 +113,42 @@ test('a viewport budget lowers the whole frame level so five large houses remain
   expect(images).toHaveLength(5); expect(art.retainedBytes).toBe(sum(detail));
   for (let frame = 0; frame < 3; frame++) expect(visible.map(house => art.get(house, false, detail))).toEqual(firstFrame);
   expect(images).toHaveLength(5);
+});
+
+test('ambient outlet sits inside the actual chimney opening at every roof plane, axis and native level', () => {
+  const images = canvases(true), art = new PixelBuildingArt();
+  for (const roof of ['flat', 'gable', 'sawtooth'] as const) for (const roofAxis of ['x', 'y'] as const) for (const native of [32, 64, 128] as const) {
+    const factory = { ...building, id: `outlet-${roof}-${roofAxis}`, kind: 'workshop' as const, width: 9, height: 7, floors: 1 as const, roof, roofAxis, entrances: [] };
+    const sprite = art.get(factory, false, native), outlet = pixelBuildingVentAnchor(factory)!;
+    const scale = native / 128, at = pixelIso(outlet.x * scale, outlet.y * scale, outlet.z * scale, sprite.anchor);
+    const image = images.at(-1)!;
+    const pixel = [...image.spans].reverse().find(span => at.x >= span[0] && at.y >= span[1] && at.x < span[0] + span[2] && at.y < span[1] + span[3]);
+    expect(pixel?.[4]).toBe(P.ink);
+    expect(outlet.x).toBeGreaterThan(0); expect(outlet.x).toBeLessThan(factory.width);
+    expect(outlet.y).toBeGreaterThan(0); expect(outlet.y).toBeLessThan(factory.height);
+    expect(outlet.z).toBeGreaterThan(0);
+    expect(pixelBuildingVentAnchor({ ...factory, x: 100, y: 200 })).toEqual(outlet);
+  }
+  expect(pixelBuildingVentAnchor({ ...building, kind: 'shop' })).toBeNull();
+  expect(pixelBuildingVentAnchor({ ...building, kind: 'garage' })).toBeNull();
+  const residential = Array.from({ length: 20 }, (_, i) => pixelBuildingVentAnchor({ ...building, id: `residential-${i}` }));
+  expect(residential.some(Boolean)).toBe(true); expect(residential.some(anchor => anchor === null)).toBe(true);
+});
+
+test('a shop entrance retains real glass on either side, with dark recesses and reflected panes', () => {
+  const images = canvases(true), art = new PixelBuildingArt();
+  const shop = { ...building, id: 'public-shop', kind: 'shop' as const, floors: 1 as const, facade: 'plaster' as const, entrances: [{ x: 13, y: 27 }] };
+  const sprite = art.get(shop, false, 128), image = images[0]!;
+  const colorAt = (u: number, z: number) => {
+    const at = pixelIso(u, 8, z * 1.7, sprite.anchor);
+    return [...image.spans].reverse().find(span => at.x >= span[0] && at.y >= span[1] && at.x < span[0] + span[2] && at.y < span[1] + span[3])?.[4];
+  };
+  // Two display windows survive the real central doorway; their interior is blue.
+  for (const center of [8 / 3, 16 / 3]) {
+    const glass = [center - .3, center + .3].map(u => colorAt(u, 38));
+    expect(glass.some(color => color === '#334f55' || color === P.glassLight || color === P.steelShade)).toBe(true);
+  }
+  expect(image.colors.has(P.glassLight)).toBe(true);
+  expect(image.colors.has(P.red)).toBe(true); // public shop sign
+  expect(image.integerBounds).toBe(true);
 });

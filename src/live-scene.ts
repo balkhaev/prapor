@@ -15,6 +15,7 @@ import { PixelObstacleArt } from './pixel-obstacles';
 import { PIXEL_TILE, PIXEL_PALETTE as P } from './pixel-art';
 import { PIXEL_SCENE_THEME as T } from './pixel-scene-theme';
 import { buildSurfaceMasks, paintRoadSurface, paintTerrainTexture, terrainTextureResolution, type SurfaceMasks } from './live-ground-art';
+import { paintPropAtmosphere, paintBuildingAtmosphere, type EnvironmentPixel } from './pixel-environment';
 
 type Motion = PixelMotion;
 type LabelBox = { x: number; y: number; width: number; height: number };
@@ -72,6 +73,8 @@ export class LiveScene {
   private buildingDetail: PixelDetail = 64;
   private cutawayBuildings = new Set<string>();
   private surfaceMasks: SurfaceMasks = { road: new Uint8Array(), indoor: new Uint8Array(), roadRuns: [] };
+  private environmentAt = 0;
+  private reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
   constructor(private host: HTMLElement, _command: (command: LiveCommand) => void, private select: (id: string) => void) {
     const context = this.canvas.getContext('2d');
@@ -397,6 +400,17 @@ export class LiveScene {
     const extent = (prop.width + prop.height) * this.tile / 2;
     if (anchor.x + prop.width * this.tile / 2 < -8 || anchor.x - prop.height * this.tile / 2 > this.width + 8 || anchor.y + extent / 2 < -8 || anchor.y - this.tile * 2.5 > this.height + 8) return;
     this.renderer.sprite(this.propArt.get(prop), anchor, this.tile / PIXEL_TILE, this.width, this.height);
+    this.paintAtmosphere(anchor, plot => paintPropAtmosphere(prop, this.environmentAt, plot, this.reducedMotion.matches));
+  }
+  private paintAtmosphere(origin: LivePoint, paint: (plot: EnvironmentPixel) => void): void {
+    const c = this.context, scale = this.tile / PIXEL_TILE;
+    if (scale < .22) return;
+    c.save();
+    paint((x, y, width, height, color, alpha) => {
+      c.fillStyle = color; c.globalAlpha = alpha;
+      c.fillRect(Math.round(origin.x + x * scale), Math.round(origin.y + y * scale), Math.max(1, Math.round(width * scale)), Math.max(1, Math.round(height * scale)));
+    });
+    c.restore();
   }
   /** Cached pixel facades share the authoritative footprint and real cutaway doorways. */
   private paintBuilding(building: LiveCityBuilding): void {
@@ -413,6 +427,7 @@ export class LiveScene {
     }
     const detail = this.buildingDetail;
     this.renderer.sprite(this.buildingArt.get(building, cutaway, detail, this.buildingWalls.get(building.id)), this.project({ x, y }), this.tile / detail, this.width, this.height);
+    if (!cutaway) this.paintAtmosphere(this.project({ x, y }), plot => paintBuildingAtmosphere(building, this.environmentAt, plot, this.reducedMotion.matches));
   }
   private buildingVisible(building: LiveCityBuilding): boolean {
     const base = this.quad(building.x - .5, building.y - .5, building.width, building.height), height = this.tile * pixelBuildingWallHeight(building);
@@ -487,6 +502,7 @@ export class LiveScene {
 
   private paint(): void {
     const c = this.context, now = performance.now();
+    this.environmentAt = now;
     c.clearRect(0, 0, this.width, this.height);
     c.fillStyle = T.background; c.fillRect(0, 0, this.width, this.height);
     c.imageSmoothingEnabled = false;
