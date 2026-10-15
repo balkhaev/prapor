@@ -8,6 +8,7 @@ import { createLiveService, type LiveService } from '../server/live';
 import { readLiveSnapshot } from '../src/live-client';
 import { BOSSES } from '../src/game/bosses';
 import { WEAPON_BY_ID } from '../src/game/data';
+import { FACTORY_KITS } from '../src/game/modules';
 import { parseSave, saveGame } from '../src/game/engine';
 import { createHealth } from '../src/game/health';
 import { getLiveLoadout, type LiveKitId } from '../src/game/live-entry';
@@ -67,9 +68,10 @@ async function fixture() {
 describe('authoritative public actor equipment', () => {
   test.each(['scav', 'assault', 'scout'] as const)('%s shows its issued weapon and only public gear flags, including after reconnect', async kitId => {
     const f = await fixture(), { session, snapshot } = await f.enter(kitId), kit = getLiveLoadout(kitId);
-    const expected: LiveVisualLoadout = { profile: kitId === 'scav' ? 'light' : kitId, weaponId: kit.weaponId, helmet: true, armor: true, backpack: false };
+    const expected: LiveVisualLoadout = { profile: kitId === 'scav' ? 'light' : kitId, weaponId: kit.weaponId, modules: FACTORY_KITS[kit.weaponId], helmet: true, armor: true, backpack: false };
     expect(f.own(snapshot).visualLoadout).toEqual(expected);
-    expect(Object.keys(f.own(snapshot).visualLoadout!).sort()).toEqual(['armor', 'backpack', 'helmet', 'profile', 'weaponId']);
+    expect(Object.keys(f.own(snapshot).visualLoadout!).sort()).toEqual(['armor', 'backpack', 'helmet', 'modules', 'profile', 'weaponId']);
+    expect(Object.values(f.own(snapshot).visualLoadout!.modules!).every(model => typeof model === 'string')).toBe(true);
     f.restart(db => f.player(db, session, saved => { saved.ammo = 1; saved.cargo = 7; }));
     const resumed = await f.state(session, { intent: 'continue', kitId: kitId === 'scav' ? 'assault' : 'scav' });
     expect(resumed.self.ammo).toBe(1); expect(resumed.self.cargo).toBe(7); expect(f.own(resumed).visualLoadout).toEqual(expected);
@@ -96,7 +98,7 @@ describe('authoritative public actor equipment', () => {
     f.restart(db => f.player(db, second.session, saved => { Object.assign(saved, near, { ammo: 3, cargo: 4 }); }));
     await f.state(second.session, { intent: 'continue' }); const visible = await f.state(first.session, { intent: 'continue' });
     const other = visible.entities.find(entity => entity.id === second.session.id)!;
-    expect(other.visualLoadout).toEqual({ profile: 'assault', weaponId: 'pp91', helmet: true, armor: true, backpack: false });
+    expect(other.visualLoadout).toEqual({ profile: 'assault', weaponId: 'pp91', modules: FACTORY_KITS.pp91, helmet: true, armor: true, backpack: false });
     for (const key of ['loadout', 'body', 'medicine', 'ammo', 'cargo', 'lootItems', 'pendingDelivery']) expect(other).not.toHaveProperty(key);
     const far = world.districts.find(district => Math.hypot(district.spawns[0]!.x - point.x, district.spawns[0]!.y - point.y) > 24)!.spawns[0]!;
     f.restart(db => f.player(db, second.session, saved => { Object.assign(saved, far); }));
@@ -132,7 +134,7 @@ describe('authoritative public actor equipment', () => {
       f.restart(db => { boss = JSON.parse(db.query<{ state: string }, [string]>('SELECT state FROM live_bosses WHERE boss_id=?').get(definition.id)!.state); f.player(db, session, player => { Object.assign(player, f.nearby(boss)); }); });
       const observed = await f.state(session, { intent: 'continue' }), body = observed.entities.find(entity => entity.bossId === definition.id)!;
       expect(body).toBeDefined(); const slot = GEAR_MODEL_BY_ID[definition.armorModelId]!.slot;
-      expect(body.visualLoadout).toEqual({ profile: WEAPON_BY_ID[definition.weaponId]!.category === 'sniper' ? 'scout' : 'assault', weaponId: definition.weaponId,
+      expect(body.visualLoadout).toEqual({ profile: WEAPON_BY_ID[definition.weaponId]!.category === 'sniper' ? 'scout' : 'assault', weaponId: definition.weaponId, modules: FACTORY_KITS[definition.weaponId],
         helmet: slot === 'helmet', armor: slot === 'armor', backpack: slot === 'backpack' });
       for (const key of ['body', 'bossLastHit', 'items', 'ammo', 'loadout']) expect(body).not.toHaveProperty(key);
     }

@@ -1,13 +1,18 @@
 import { afterEach, expect, test } from 'bun:test';
 import { PIXEL_FACINGS, pixelBearing, type PixelActorFrame } from '../src/pixel-animation';
-import { PixelActorArt, PIXEL_ACTOR_ANCHOR, PIXEL_ACTOR_CACHE_BYTES, PIXEL_ACTOR_FRAMES, paintPixelActor, pixelActorRig } from '../src/pixel-actors';
-import { PIXEL_WEAPON_IDS, PIXEL_WEAPON_PROFILES, pixelWeaponAnchors } from '../src/pixel-weapons';
+import { PixelActorArt, PIXEL_ACTOR_ANCHOR, PIXEL_ACTOR_CACHE_BYTES, PIXEL_ACTOR_FRAMES, PIXEL_ACTOR_NATIVE_SIZE, paintPixelActor, pixelActorRig } from '../src/pixel-actors';
+import { PIXEL_WEAPON_IDS, paintPixelWeapon, pixelWeaponProfile, pixelWeaponAnchors, type PixelWeaponInput } from '../src/pixel-weapons';
+import { PixelRaster } from '../src/pixel-art';
 import type { LiveEntity } from '../src/game/live';
+import { WEAPONS } from '../src/game/data';
+import { MODULE_BY_ID, type ModuleSlot } from '../src/game/modules';
+import { createWeaponShowcaseBuild } from '../src/weapon-showcase';
 
 const colors: string[] = [''];
 const colorIds = new Map<string, number>();
 function colorId(color: string): number { let id = colorIds.get(color); if (id === undefined) { id = colors.length; colors.push(color); colorIds.set(color, id); } return id; }
-function surface(width = 192, height = 208) {
+const W = PIXEL_ACTOR_NATIVE_SIZE.width, H = PIXEL_ACTOR_NATIVE_SIZE.height;
+function surface(width: number = W, height: number = H) {
   const pixels = new Uint32Array(width * height); let valid = true, calls = 0;
   const context = { fillStyle: '', setTransform() {}, fillRect(x: number, y: number, w: number, h: number) {
     calls++; valid &&= [x,y,w,h].every(Number.isInteger) && x >= 0 && y >= 0 && w > 0 && h > 0 && x + w <= width && y + h <= height && /^#[\da-f]{6}$/i.test(context.fillStyle);
@@ -16,6 +21,10 @@ function surface(width = 192, height = 208) {
   return { context: context as unknown as CanvasRenderingContext2D, pixels, get valid() { return valid; }, get calls() { return calls; } };
 }
 function digest(pixels: Uint32Array): number { let hash = 2166136261; for (const pixel of pixels) hash = Math.imul(hash ^ pixel, 16777619); return hash >>> 0; }
+function hasPadding(pixels: Uint32Array): boolean {
+  return pixels.slice(0, W).every(pixel => pixel === 0) && pixels.slice((H - 1) * W).every(pixel => pixel === 0)
+    && pixels.every((pixel, index) => index % W !== 0 && index % W !== W - 1 || pixel === 0);
+}
 const scav = { appearance: 0, faction: 'scavs' as const, role: 'patrol' as const };
 let restoreDocument: (() => void) | undefined;
 afterEach(() => { restoreDocument?.(); restoreDocument = undefined; });
@@ -54,9 +63,9 @@ test('all32 identities,8 bearings and articulated states render opaque bounded i
       for (let frame = 0; frame < frames; frame++) {
         const s = surface(); paintPixelActor(s.context, { ...scav, appearance: 19 }, { mode, frame, facing } as PixelActorFrame, 'sks'); expect(s.valid).toBe(true); expect(s.calls).toBeGreaterThan(200); states.add(digest(s.pixels));
         // No raster clipping can silently amputate a boot or weapon at the frame edge.
-        expect(s.pixels.slice(0, 192).every(pixel => pixel === 0)).toBe(true);
-        expect(s.pixels.slice(207 * 192).every(pixel => pixel === 0)).toBe(true);
-        expect(s.pixels.every((pixel, index) => index % 192 !== 0 && index % 192 !== 191 || pixel === 0)).toBe(true);
+        expect(s.pixels.slice(0, W).every(pixel => pixel === 0)).toBe(true);
+        expect(s.pixels.slice((H - 1) * W).every(pixel => pixel === 0)).toBe(true);
+        expect(s.pixels.every((pixel, index) => index % W !== 0 && index % W !== W - 1 || pixel === 0)).toBe(true);
       }
       expect(states.size).toBe(frames);
     }
@@ -83,17 +92,18 @@ test('cropped muzzle/ejection remain registered to the mounted trigger and suppo
   for (const facing of PIXEL_FACINGS) for (const weapon of PIXEL_WEAPON_IDS) for (let frame = 0; frame < 3; frame++) {
     const animation = { mode: 'fire' as const, frame, facing }, rig = pixelActorRig(animation), expected = pixelWeaponAnchors(weapon, rig.grip, facing, [0,4,2][frame]);
     const sprite = art.get(scav, animation, weapon);
-    expect(sprite.muzzle).toEqual({ x: expected.muzzle.x - 96 + sprite.anchor.x, y: expected.muzzle.y - 176 + sprite.anchor.y });
-    expect(sprite.ejection).toEqual({ x: expected.ejection.x - 96 + sprite.anchor.x, y: expected.ejection.y - 176 + sprite.anchor.y });
-    const trigger = { x: rig.grip.x - 96 + sprite.anchor.x, y: rig.grip.y - 176 + sprite.anchor.y };
+    expect(sprite.muzzle).toEqual({ x: expected.muzzle.x - PIXEL_ACTOR_ANCHOR.x + sprite.anchor.x, y: expected.muzzle.y - PIXEL_ACTOR_ANCHOR.y + sprite.anchor.y });
+    expect(sprite.ejection).toEqual({ x: expected.ejection.x - PIXEL_ACTOR_ANCHOR.x + sprite.anchor.x, y: expected.ejection.y - PIXEL_ACTOR_ANCHOR.y + sprite.anchor.y });
+    const trigger = { x: rig.grip.x - PIXEL_ACTOR_ANCHOR.x + sprite.anchor.x, y: rig.grip.y - PIXEL_ACTOR_ANCHOR.y + sprite.anchor.y };
     // Rear hands can be hidden by a real torso/pack; sockets still exist underneath.
     if (pixelBearing(facing).y >= -.1) {
-      expect(canvases.colorAt(sprite.image, trigger.x, trigger.y)).toBe('#c6a484');
-      if (weapon !== 'pm') { const support = { x: expected.forehand.x - 96 + sprite.anchor.x, y: expected.forehand.y - 176 + sprite.anchor.y }; expect(['#c6a484', '#3a4e3d', '#c0ad85']).toContain(canvases.colorAt(sprite.image, support.x, support.y) ?? ''); }
+      // Compact two-handed builds can bring the support glove over the trigger glove.
+      expect(['#c6a484', '#3a4e3d', '#c0ad85']).toContain(canvases.colorAt(sprite.image, trigger.x, trigger.y) ?? '');
+      if (pixelWeaponProfile(weapon).twoHanded) { const support = { x: expected.forehand.x - PIXEL_ACTOR_ANCHOR.x + sprite.anchor.x, y: expected.forehand.y - PIXEL_ACTOR_ANCHOR.y + sprite.anchor.y }; expect(['#c6a484', '#3a4e3d', '#c0ad85']).toContain(canvases.colorAt(sprite.image, support.x, support.y) ?? ''); }
     }
-    expect(sprite.image.width).toBeLessThan(192); expect(sprite.image.height).toBeLessThan(192);
+    expect(sprite.image.width).toBeLessThan(W); expect(sprite.image.height).toBeLessThan(H);
   }
-});
+}, 30_000);
 
 test('rear-facing hands and forearms stay behind the torso and backpack', () => {
   const handColors = new Set(['#c6a484', '#82917a', '#c0ad85', '#3a4e3d']);
@@ -102,17 +112,136 @@ test('rear-facing hands and forearms stay behind the torso and backpack', () => 
     paintPixelActor(s.context, scav, animation, weapon, { profile: 'light', helmet: false, armor: false, backpack });
     // The trigger hand is physically on the front of the body. It must not be
     // painted over the coat/pack just because its socket is still available.
-    expect(handColors.has(colors[s.pixels[rig.grip.y * 192 + rig.grip.x]!]!)).toBe(false);
+    expect(handColors.has(colors[s.pixels[rig.grip.y * W + rig.grip.x]!]!)).toBe(false);
     expect(s.valid).toBe(true);
   }
+}, 30_000);
+
+test('all39 real factory and field builds retain their parts through every bearing and representative live/fallen poses', () => {
+  expect(WEAPONS).toHaveLength(39);
+  for (const definition of WEAPONS) {
+    const builds = [createWeaponShowcaseBuild(definition.id, 'factory'), createWeaponShowcaseBuild(definition.id, 'field')];
+    const before = structuredClone(builds), changed = new Set<PixelActorFrame['mode']>();
+    for (const mode of ['idle', 'fire', 'downed'] as const) for (const [facingIndex, facing] of PIXEL_FACINGS.entries()) {
+      const hashes = builds.map(build => {
+        const s = surface(), animation = { mode, frame: facingIndex % PIXEL_ACTOR_FRAMES[mode], facing };
+        const sockets = paintPixelActor(s.context, scav, animation, build, { profile: 'light', helmet: false, armor: false, backpack: false });
+        expect(s.valid, `${definition.id} ${mode} ${facing}`).toBe(true);
+        expect(hasPadding(s.pixels), `${definition.id} ${mode} ${facing} touches native edge`).toBe(true);
+        expect(s.pixels.some(Boolean)).toBe(true);
+        if (mode === 'downed') { expect(sockets.muzzle).toBeUndefined(); expect(sockets.ejection).toBeUndefined(); }
+        return digest(s.pixels);
+      });
+      if (hashes[0] !== hashes[1]) changed.add(mode);
+    }
+    // A field optic, barrel and magazine must remain visible when its owner falls,
+    // as well as while holding the same physical build during a live animation.
+    expect([...changed].sort(), definition.id).toEqual(['downed', 'fire', 'idle']);
+    expect(builds).toEqual(before);
+  }
+}, 120_000);
+
+test('long suppressed barrels, large scopes and bipods stay inside native/cropped frames in every animated pose', () => {
+  const canvases = mockCanvases(), art = new PixelActorArt();
+  for (const id of ['awm', 'trg42', 'pkp']) {
+    const build = createWeaponShowcaseBuild(id, 'field');
+    expect(MODULE_BY_ID[build.modules.foregrip!.modelId]!.appearance).toBe('bipod');
+    if (id !== 'pkp') {
+      expect(MODULE_BY_ID[build.modules.barrel!.modelId]!.appearance).toBe('long');
+      expect(MODULE_BY_ID[build.modules.optic!.modelId]!.appearance).toBe('longscope');
+      expect(MODULE_BY_ID[build.modules.muzzle!.modelId]!.appearance).toContain('suppressor');
+    }
+    for (const facing of PIXEL_FACINGS) for (const [mode, frames] of Object.entries(PIXEL_ACTOR_FRAMES)) for (let frame = 0; frame < frames; frame++) {
+      const animation = { mode, frame, facing } as PixelActorFrame, native = surface(), metadata = paintPixelActor(native.context, scav, animation, build);
+      expect(hasPadding(native.pixels), `${id} ${facing} ${mode} ${frame}`).toBe(true);
+      const sprite = art.get(scav, animation, build), crop = { x: PIXEL_ACTOR_ANCHOR.x - sprite.anchor.x, y: PIXEL_ACTOR_ANCHOR.y - sprite.anchor.y };
+      expect(sprite.image.width).toBeLessThan(W); expect(sprite.image.height).toBeLessThan(H);
+      for (const socket of ['muzzle', 'ejection'] as const) {
+        const nativeSocket = metadata[socket], local = sprite[socket];
+        if (!nativeSocket) { expect(local).toBeUndefined(); continue; }
+        expect(local).toEqual({ x: nativeSocket.x - crop.x, y: nativeSocket.y - crop.y });
+        expect(local!.x).toBeGreaterThanOrEqual(0); expect(local!.x).toBeLessThan(sprite.image.width);
+        expect(local!.y).toBeGreaterThanOrEqual(0); expect(local!.y).toBeLessThan(sprite.image.height);
+      }
+      if (mode !== 'downed') {
+        const rig = pixelActorRig(animation), recoil = mode === 'fire' ? [0, 4, 2][frame]! : 0;
+        const expected = pixelWeaponAnchors(build, rig.grip, facing, recoil);
+        expect(metadata).toEqual({ muzzle: expected.muzzle, ejection: expected.ejection });
+        if (pixelBearing(facing).y >= -.1) {
+          const support = { x: expected.forehand.x - crop.x, y: expected.forehand.y - crop.y };
+          expect(['#c6a484', '#3a4e3d', '#c0ad85']).toContain(canvases.colorAt(sprite.image, support.x, support.y) ?? '');
+        }
+      }
+      expect(art.retainedBytes).toBeLessThanOrEqual(PIXEL_ACTOR_CACHE_BYTES);
+    }
+  }
+  art.clear();
+}, 120_000);
+
+test('same-instance part removal, replacement and wear invalidate actor caches without restoring absent modules', () => {
+  mockCanvases(); const art = new PixelActorArt(), animation = { mode: 'aim' as const, frame: 0, facing: 'se' as const };
+  const build = createWeaponShowcaseBuild('awm', 'field'), original = structuredClone(build), complete = art.get(scav, animation, build);
+  expect(art.get(scav, animation, structuredClone(build))).toBe(complete);
+  for (const slot of ['muzzle', 'optic', 'foregrip', 'stock', 'magazine', 'barrel', 'receiver'] as ModuleSlot[]) {
+    const previous = build.modules[slot]; expect(previous).toBeDefined();
+    delete build.modules[slot];
+    const removed = art.get(scav, animation, build); expect(removed).not.toBe(complete);
+    expect(build.modules[slot]).toBeUndefined();
+    if (slot === 'barrel') expect(removed.muzzle).toBeUndefined();
+    if (slot === 'receiver') expect(removed.ejection).toBeUndefined();
+    build.modules[slot] = previous; expect(art.get(scav, animation, build)).toBe(complete);
+  }
+  const factoryBarrel = createWeaponShowcaseBuild('awm', 'factory').modules.barrel!;
+  build.modules.barrel = factoryBarrel; expect(art.get(scav, animation, build)).not.toBe(complete);
+  build.modules.barrel = original.modules.barrel; expect(art.get(scav, animation, build)).toBe(complete);
+  build.durability = 1; expect(art.get(scav, animation, build)).not.toBe(complete); build.durability = original.durability;
+  const barrelCondition = build.modules.barrel!.durability;
+  build.modules.barrel!.durability = 1; expect(art.get(scav, animation, build)).not.toBe(complete); build.modules.barrel!.durability = barrelCondition;
+  expect(art.get(scav, animation, build)).toBe(complete);
+  const empty: PixelWeaponInput = { weaponId: build.weaponId, durability: 100, modules: {} }, emptySprite = art.get(scav, animation, empty);
+  expect(emptySprite.muzzle).toBeUndefined(); expect(emptySprite.ejection).toBeUndefined();
+  expect(art.get(scav, animation, 'unknown').muzzle).toBeDefined(); expect(art.get(scav, animation, 'private-unrecognized-model').muzzle).toBeDefined();
+  art.clear();
 });
 
-test('two-handed stocks seat beside the firing shoulder across all eight bearings', () => {
+test('the support glove follows an installed foregrip rather than the factory handguard socket', () => {
+  const canvases = mockCanvases(), art = new PixelActorArt(), build = createWeaponShowcaseBuild('m4a1', 'field');
+  const withoutGrip = structuredClone(build); delete withoutGrip.modules.foregrip;
+  for (const facing of ['s', 'se', 'e', 'sw', 'w'] as const) {
+    const animation = { mode: 'aim' as const, frame: 0, facing }, rig = pixelActorRig(animation);
+    const equipped = pixelWeaponAnchors(build, rig.grip, facing), unequipped = pixelWeaponAnchors(withoutGrip, rig.grip, facing);
+    expect(equipped.forehand).not.toEqual(unequipped.forehand);
+    for (const input of [build, withoutGrip]) {
+      const sprite = art.get(scav, animation, input), socket = pixelWeaponAnchors(input, rig.grip, facing).forehand;
+      const local = { x: socket.x - PIXEL_ACTOR_ANCHOR.x + sprite.anchor.x, y: socket.y - PIXEL_ACTOR_ANCHOR.y + sprite.anchor.y };
+      expect(['#c6a484', '#3a4e3d', '#c0ad85']).toContain(canvases.colorAt(sprite.image, local.x, local.y) ?? '');
+    }
+  }
+  art.clear();
+});
+
+test('a changing arsenal stays within24MiB and evicts old full-build frames without invalidating returned socket coordinates', () => {
+  mockCanvases(); const art = new PixelActorArt(), animation = { mode: 'aim' as const, frame: 0, facing: 'se' as const };
+  const first = art.get(scav, animation, createWeaponShowcaseBuild('awm', 'field')), firstAnchor = { ...first.anchor }, firstMuzzle = { ...first.muzzle! };
+  for (const definition of WEAPONS) for (const preset of ['factory', 'field'] as const) for (const facing of PIXEL_FACINGS) {
+    art.get({ ...scav, appearance: 4 }, { mode: 'walk', frame: 3, facing }, createWeaponShowcaseBuild(definition.id, preset));
+    expect(art.retainedBytes).toBeLessThanOrEqual(PIXEL_ACTOR_CACHE_BYTES);
+  }
+  expect(first.image.width).toBe(1); expect(first.image.height).toBe(1);
+  expect(first.anchor).toEqual(firstAnchor); expect(first.muzzle).toEqual(firstMuzzle);
+  art.clear(); expect(art.retainedBytes).toBe(0);
+}, 120_000);
+
+test('two-handed native stock volumes reach the firing shoulder envelope across all eight bearings', () => {
   for (const facing of PIXEL_FACINGS) for (const weapon of PIXEL_WEAPON_IDS) {
-    const profile = PIXEL_WEAPON_PROFILES[weapon]; if (!profile.twoHanded) continue;
-    const rig = pixelActorRig({ mode: 'aim', frame: 0, facing }), bearing = pixelBearing(facing);
-    const stock = { x: rig.grip.x - bearing.x * profile.rear, y: rig.grip.y - bearing.y * profile.rear - profile.boreHeight };
-    expect(Math.hypot(stock.x - rig.rightShoulder.x, stock.y - rig.rightShoulder.y)).toBeLessThan(18);
+    const profile = pixelWeaponProfile(weapon); if (!profile.twoHanded) continue;
+    const rig = pixelActorRig({ mode: 'aim', frame: 0, facing }), s = surface();
+    paintPixelWeapon(new PixelRaster(s.context, W, H), weapon, rig.grip, facing);
+    let nearest = Infinity;
+    // Native bullpup and hunting stocks have different butt heights. Check the
+    // painted volume beside the shoulder instead of inventing a butt at bore height.
+    for (const [index, pixel] of s.pixels.entries()) if (pixel) nearest = Math.min(nearest, Math.hypot(index % W - rig.rightShoulder.x, Math.floor(index / W) - rig.rightShoulder.y));
+    expect(nearest, `${weapon} ${facing}`).toBeLessThan(18);
   }
 });
 
@@ -124,8 +253,8 @@ test('fallen models retain each visible equipment item and leave no live firing 
     expect(palette.has('#5f7263')).toBe(armor);
     expect(['#768067', '#52664d', '#97a080'].some(color => palette.has(color))).toBe(backpack);
     expect(metadata.muzzle).toBeUndefined(); expect(metadata.ejection).toBeUndefined(); expect(s.valid).toBe(true);
-    expect(s.pixels.slice(207 * 192).every(pixel => pixel === 0)).toBe(true);
-    expect(s.pixels.every((pixel, index) => index % 192 !== 0 && index % 192 !== 191 || pixel === 0)).toBe(true);
+    expect(s.pixels.slice((H - 1) * W).every(pixel => pixel === 0)).toBe(true);
+    expect(s.pixels.every((pixel, index) => index % W !== 0 && index % W !== W - 1 || pixel === 0)).toBe(true);
   }
 });
 

@@ -1,15 +1,15 @@
 import type { LiveEntity, LivePoint } from './game/live';
 import { PixelRaster, PIXEL_PALETTE as P } from './pixel-art';
 import { pixelBearing, type PixelActorFrame } from './pixel-animation';
-import { paintPixelWeapon, pixelWeaponAnchors, PIXEL_WEAPON_PROFILES, type PixelWeaponId } from './pixel-weapons';
+import { paintPixelWeapon, pixelWeaponAnchors, pixelWeaponProfile, pixelWeaponSignature, type PixelWeaponInput } from './pixel-weapons';
 
 export type PixelActorGear = { profile: 'light' | 'assault' | 'scout'; helmet?: boolean; armor?: boolean; backpack?: boolean };
 type ActorIdentity = Pick<LiveEntity, 'appearance' | 'faction' | 'bossId' | 'role' | 'limping'>;
 export type PixelActorSprite = { image: HTMLCanvasElement; anchor: LivePoint; muzzle?: LivePoint; ejection?: LivePoint };
 export const PIXEL_ACTOR_CACHE_BYTES = 24 * 1024 * 1024;
 export const PIXEL_ACTOR_FRAMES = { idle: 4, walk: 8, aim: 2, fire: 3, hit: 2, downed: 1 } as const;
-export const PIXEL_ACTOR_ANCHOR = { x: 96, y: 176 } as const;
-export const PIXEL_ACTOR_NATIVE_SIZE = { width: 192, height: 208 } as const;
+export const PIXEL_ACTOR_ANCHOR = { x: 128, y: 192 } as const;
+export const PIXEL_ACTOR_NATIVE_SIZE = { width: 256, height: 240 } as const;
 const coats = [['#67745c', '#3e5041', '#8c9576'], ['#897654', '#62543e', '#b19b72'], ['#657c87', '#40535e', '#98aaa8'], ['#8b6d60', '#604f46', '#b29b81']] as const;
 const skins = [['#c6a484', '#957257', '#e0bf94'], ['#ad8767', '#795a42', '#c9a57e'], ['#d1b38b', '#a08765', '#ead0a3'], ['#a87755', '#75543e', '#c0956c']] as const;
 const point = (x: number, y: number): LivePoint => ({ x: Math.round(x), y: Math.round(y) });
@@ -30,7 +30,7 @@ export function pixelActorRig(animation: PixelActorFrame, limping = false): Pixe
   const leftLift = walk ? Math.round(Math.max(0, -Math.cos(angle)) * (limping ? 3 : 8)) : 0, rightLift = walk ? Math.round(Math.max(0, Math.cos(angle)) * 8) : 0;
   const bob = walk ? (limping ? [0, 1, 2, 1, 0, 0, 1, 0] : [0, 2, 3, 2, 0, 2, 3, 2])[frame]! : animation.mode === 'idle' ? [0, 1, 0, -1][frame]! : animation.mode === 'aim' ? frame : animation.mode === 'hit' ? -1 - frame : 0;
   const lean = animation.mode === 'hit' ? frame === 0 ? -4 : -1 : animation.mode === 'aim' || animation.mode === 'fire' ? 2 : walk ? 1 : 0;
-  const p = (side: number, forward: number, z: number) => point(96 + lateral.x * side + bearing.x * forward, 176 + lateral.y * side + bearing.y * forward - z);
+  const p = (side: number, forward: number, z: number) => point(PIXEL_ACTOR_ANCHOR.x + lateral.x * side + bearing.x * forward, PIXEL_ACTOR_ANCHOR.y + lateral.y * side + bearing.y * forward - z);
   const handZ = animation.mode === 'aim' || animation.mode === 'fire' ? 91 : animation.mode === 'hit' ? 77 : 79;
   // Keep the stock beside the firing shoulder, rather than in the centre of the chest.
   return { anchor: { ...PIXEL_ACTOR_ANCHOR }, grip: p(15, 17 + lean, handZ + bob), leftShoulder: p(-20, lean, 108 + bob), rightShoulder: p(20, lean, 108 + bob),
@@ -42,10 +42,10 @@ export function pixelActorRig(animation: PixelActorFrame, limping = false): Pixe
 
 /** Bounds follow every primitive, including the separately authored weapon. */
 class ActorRaster extends PixelRaster {
-  left = 192; top = 208; right = 0; bottom = 0;
+  left: number = PIXEL_ACTOR_NATIVE_SIZE.width; top: number = PIXEL_ACTOR_NATIVE_SIZE.height; right = 0; bottom = 0;
   private bounds(x: number, y: number, width: number, height: number): void {
     this.left = Math.min(this.left, Math.max(0, Math.floor(x))); this.top = Math.min(this.top, Math.max(0, Math.floor(y)));
-    this.right = Math.max(this.right, Math.min(192, Math.ceil(x + width))); this.bottom = Math.max(this.bottom, Math.min(208, Math.ceil(y + height)));
+    this.right = Math.max(this.right, Math.min(PIXEL_ACTOR_NATIVE_SIZE.width, Math.ceil(x + width))); this.bottom = Math.max(this.bottom, Math.min(PIXEL_ACTOR_NATIVE_SIZE.height, Math.ceil(y + height)));
   }
   override rect(x: number, y: number, width: number, height: number, color: string): void { super.rect(x, y, width, height, color); if (width > 0 && height > 0) this.bounds(x, y, width, height); }
   override line(x0: number, y0: number, x1: number, y1: number, color: string, width = 1): void {
@@ -59,7 +59,7 @@ class ActorRaster extends PixelRaster {
 }
 
 type PaintedActor = { muzzle?: LivePoint; ejection?: LivePoint };
-function paintModel(r: PixelRaster, entity: ActorIdentity, animation: PixelActorFrame, weaponId: PixelWeaponId, gear?: PixelActorGear): PaintedActor {
+function paintModel(r: PixelRaster, entity: ActorIdentity, animation: PixelActorFrame, weapon: PixelWeaponInput, gear?: PixelActorGear): PaintedActor {
   const look = Number.isFinite(entity.appearance) ? Math.abs(Math.trunc(entity.appearance)) % 32 : 0, frame = frameIndex(animation);
   const bearing = pixelBearing(animation.facing), lateral = { x: -bearing.y * 2, y: bearing.x * .5 }, rear = bearing.y < -.1;
   const rig = pixelActorRig(animation, entity.limping), boss = entity.bossId;
@@ -77,7 +77,7 @@ function paintModel(r: PixelRaster, entity: ActorIdentity, animation: PixelActor
   // Explicit equipment wins over both a saved cosmetic helmet and a boss's default.
   const hat = gear?.helmet !== undefined ? helmet ? 3 : cosmeticHat
     : boss === 'lesnik' ? 2 : boss === 'komendant' ? 1 : helmet || boss === 'liteyshchik' ? 3 : cosmeticHat;
-  const p = (side: number, forward: number, z = 0): LivePoint => point(96 + lateral.x * side + bearing.x * forward, 176 + lateral.y * side + bearing.y * forward - z);
+  const p = (side: number, forward: number, z = 0): LivePoint => point(PIXEL_ACTOR_ANCHOR.x + lateral.x * side + bearing.x * forward, PIXEL_ACTOR_ANCHOR.y + lateral.y * side + bearing.y * forward - z);
   const b = (side: number, forward: number, z: number): LivePoint => p(side, forward + rig.lean, z + rig.bob);
   const line = (a: LivePoint, c: LivePoint, color: string, width = 1) => r.line(a.x, a.y, c.x, c.y, color, width);
   const outline = (vertices: LivePoint[], fill: string, ink: string = P.ink) => { r.polygon(vertices, fill); vertices.forEach((a, i) => line(a, vertices[(i + 1) % vertices.length]!, ink)); };
@@ -112,7 +112,7 @@ function paintModel(r: PixelRaster, entity: ActorIdentity, animation: PixelActor
     else if (hat === 2) for (const side of [-1, 1]) r.ellipse(head.x + side * 11, head.y + 3, 4, 5, '#595b48');
     else if (hat === 1) line(point(head.x - 10, head.y + 5), point(head.x + 10, head.y + 5), '#3e514c', 3);
     limb(p(-18, 10, 18), p(-25, 23, 9), 10, shade); limb(p(17, 10, 18), p(21, 28, 8), 10, coat);
-    paintPixelWeapon(r, weaponId, p(20, 9, 10), animation.facing); return {};
+    paintPixelWeapon(r, weapon, p(20, 9, 10), animation.facing); return {};
   }
   const foot = (side: number, stride: number, lift: number) => {
     const heel = stride - 4, toe = stride + 8, toeZ = lift + (animation.mode === 'walk' && stride < -9 ? 3 : 1);
@@ -138,9 +138,9 @@ function paintModel(r: PixelRaster, entity: ActorIdentity, animation: PixelActor
     if (profile === 'scout' || boss === 'lesnik') volume(0, -16, 17, 5, 107, 113, ['#929674', '#647653', '#b5b496']);
   };
   if (!rear) pack();
-  const kick = animation.mode === 'fire' ? [0, 4, 2][frame]! : 0, weapon = pixelWeaponAnchors(weaponId, rig.grip, animation.facing, kick);
-  const twoHanded = PIXEL_WEAPON_PROFILES[weaponId].twoHanded;
-  const leftHand = twoHanded ? weapon.forehand : b(-19, -rig.leftStride * .6, animation.mode === 'aim' || animation.mode === 'fire' ? 72 : 57), rightHand = rig.grip;
+  const kick = animation.mode === 'fire' ? [0, 4, 2][frame]! : 0, sockets = pixelWeaponAnchors(weapon, rig.grip, animation.facing, kick), gunProfile = pixelWeaponProfile(weapon);
+  const twoHanded = gunProfile.twoHanded;
+  const leftHand = twoHanded ? sockets.forehand : b(-19, -rig.leftStride * .6, animation.mode === 'aim' || animation.mode === 'fire' ? 72 : 57), rightHand = rig.grip;
   const arm = (side: number, hand: LivePoint, far: boolean) => {
     const shoulder = b(side * torsoHalf, 1, 105), elbow = point(shoulder.x * .42 + hand.x * .58 - bearing.x * (far ? 6 : 3), shoulder.y * .48 + hand.y * .52 + 10);
     limb(shoulder, elbow, 12, far ? shade : coat, far ? undefined : light); limb(elbow, hand, 9, coat, far ? undefined : light);
@@ -154,7 +154,7 @@ function paintModel(r: PixelRaster, entity: ActorIdentity, animation: PixelActor
     // Both forearms reach around the front of the torso. Painting their hands last
     // would make them show through the back plate and the backpack.
     arm(nearSign, nearHand, false);
-    paintPixelWeapon(r, weaponId, rig.grip, animation.facing, kick); hand(farHand); hand(nearHand);
+    paintPixelWeapon(r, weapon, rig.grip, animation.facing, kick); hand(farHand); hand(nearHand);
   }
   outline([b(-torsoHalf, -8, 109), b(torsoHalf, -8, 109), b(torsoHalf - 5, 10, 58), b(-torsoHalf + 5, 10, 58)], shade);
   volume(0, 1, torsoHalf - 2, 11, 61, 105, [rear ? shade : coat, shade, light]);
@@ -216,15 +216,15 @@ function paintModel(r: PixelRaster, entity: ActorIdentity, animation: PixelActor
     if (boss === 'komendant') { const badge = b(0, 12, 149); r.rect(badge.x - 2, badge.y - 2, 4, 4, '#d3c17f'); }
   } else { r.ellipse(head.x, head.y - 9, headW - 1, 8, hair); r.polygon([point(head.x - headW + 2, head.y - 7), point(head.x - 8, head.y - 15), point(head.x + 5, head.y - 15), point(head.x + 9, head.y - 9)], look % 4 === 2 ? '#b0a18a' : '#927757'); line(b(nearSign * 9, 9, 143), b(nearSign * 11, 8, 136), hair, 4); }
   if (!rear) {
-    paintPixelWeapon(r, weaponId, rig.grip, animation.facing, kick);
+    paintPixelWeapon(r, weapon, rig.grip, animation.facing, kick);
     arm(nearSign, nearHand, false); hand(farHand); hand(nearHand);
   }
-  return { muzzle: weapon.muzzle, ejection: weapon.ejection };
+  return { ...(gunProfile.hasMuzzle ? { muzzle: sockets.muzzle } : {}), ...(gunProfile.hasEjection ? { ejection: sockets.ejection } : {}) };
 }
 
 /** Native render entry point for offline art previews. */
-export function paintPixelActor(context: CanvasRenderingContext2D, entity: ActorIdentity, animation: PixelActorFrame, weaponId: PixelWeaponId = 'unknown', gear?: PixelActorGear): PaintedActor {
-  return paintModel(new PixelRaster(context, 192, 208), entity, animation, weaponId, gear);
+export function paintPixelActor(context: CanvasRenderingContext2D, entity: ActorIdentity, animation: PixelActorFrame, weapon: PixelWeaponInput = 'unknown', gear?: PixelActorGear): PaintedActor {
+  return paintModel(new PixelRaster(context, PIXEL_ACTOR_NATIVE_SIZE.width, PIXEL_ACTOR_NATIVE_SIZE.height), entity, animation, weapon, gear);
 }
 
 /** Tight opaque crops keep complete visible walking cycles within 24MiB. */
@@ -232,18 +232,18 @@ export class PixelActorArt {
   private sprites = new Map<string, PixelActorSprite>(); private bytes = 0;
   get retainedBytes(): number { return this.bytes; }
   clear(): void { for (const { image } of this.sprites.values()) { image.width = 1; image.height = 1; } this.sprites.clear(); this.bytes = 0; }
-  get(entity: ActorIdentity, animation: PixelActorFrame, weaponId: PixelWeaponId = 'unknown', gear?: PixelActorGear): PixelActorSprite {
+  get(entity: ActorIdentity, animation: PixelActorFrame, weapon: PixelWeaponInput = 'unknown', gear?: PixelActorGear): PixelActorSprite {
     const look = Number.isFinite(entity.appearance) ? Math.abs(Math.trunc(entity.appearance)) % 32 : 0, normalized = { ...animation, frame: frameIndex(animation) };
-    const key = `${look}:${entity.faction}:${entity.bossId ?? ''}:${entity.role ?? ''}:${entity.limping ?? false}:${normalized.facing}:${normalized.mode}:${normalized.frame}:${weaponId}:${gear?.profile ?? ''}:${gear?.helmet ?? ''}:${gear?.armor ?? ''}:${gear?.backpack ?? ''}`;
+    const key = `${look}:${entity.faction}:${entity.bossId ?? ''}:${entity.role ?? ''}:${entity.limping ?? false}:${normalized.facing}:${normalized.mode}:${normalized.frame}:${pixelWeaponSignature(weapon)}:${gear?.profile ?? ''}:${gear?.helmet ?? ''}:${gear?.armor ?? ''}:${gear?.backpack ?? ''}`;
     const old = this.sprites.get(key); if (old) { this.sprites.delete(key); this.sprites.set(key, old); return old; }
-    const native = document.createElement('canvas'); native.width = 192; native.height = 208;
-    const context = native.getContext('2d'); let left = 0, top = 0, width = 192, height = 208, metadata: PaintedActor = {};
-    if (context) { const raster = new ActorRaster(context, 192, 208); metadata = paintModel(raster, entity, normalized, weaponId, gear); left = Math.max(0, raster.left - 2); top = Math.max(0, raster.top - 2); width = Math.min(192 - left, raster.right - left + 2); height = Math.min(208 - top, raster.bottom - top + 2); }
+    const native = document.createElement('canvas'); native.width = PIXEL_ACTOR_NATIVE_SIZE.width; native.height = PIXEL_ACTOR_NATIVE_SIZE.height;
+    const context = native.getContext('2d'); let left = 0, top = 0, width: number = native.width, height: number = native.height, metadata: PaintedActor = {};
+    if (context) { const raster = new ActorRaster(context, native.width, native.height); metadata = paintModel(raster, entity, normalized, weapon, gear); left = Math.max(0, raster.left - 2); top = Math.max(0, raster.top - 2); width = Math.min(native.width - left, raster.right - left + 2); height = Math.min(native.height - top, raster.bottom - top + 2); }
     const image = document.createElement('canvas'); image.width = width; image.height = height;
     const cropped = image.getContext('2d'); if (cropped) { cropped.imageSmoothingEnabled = false; cropped.drawImage(native, left, top, width, height, 0, 0, width, height); }
     native.width = 1; native.height = 1;
     const shifted = (p: LivePoint | undefined) => p ? point(p.x - left, p.y - top) : undefined;
-    const sprite = { image, anchor: point(96 - left, 176 - top), muzzle: shifted(metadata.muzzle), ejection: shifted(metadata.ejection) }, bytes = width * height * 4;
+    const sprite = { image, anchor: point(PIXEL_ACTOR_ANCHOR.x - left, PIXEL_ACTOR_ANCHOR.y - top), muzzle: shifted(metadata.muzzle), ejection: shifted(metadata.ejection) }, bytes = width * height * 4;
     while (this.bytes + bytes > PIXEL_ACTOR_CACHE_BYTES && this.sprites.size) { const first = this.sprites.keys().next().value!, removed = this.sprites.get(first)!; this.bytes -= removed.image.width * removed.image.height * 4; this.sprites.delete(first); removed.image.width = 1; removed.image.height = 1; }
     this.sprites.set(key, sprite); this.bytes += bytes; return sprite;
   }

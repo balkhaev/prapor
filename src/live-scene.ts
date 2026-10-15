@@ -6,7 +6,7 @@ import { WEAPON_BY_ID } from './game/data';
 import { buildingNeedsCutaway, buildingPalette, sceneBuildings, SceneryIndex } from './live-map-art';
 import { PixelRaidRenderer, pixelSpriteRect, type PixelDetail } from './pixel-renderer';
 import { PixelContainerArt } from './pixel-containers';
-import { PixelActorArt } from './pixel-actors';
+import { PixelActorArt, PIXEL_ACTOR_ANCHOR, PIXEL_ACTOR_NATIVE_SIZE } from './pixel-actors';
 import { pixelActorLoadout } from './pixel-loadout';
 import { PixelBuildingArt, pixelBuildingSpriteBytes, pixelBuildingWallHeight } from './pixel-buildings';
 import { PixelPropArt } from './pixel-props';
@@ -721,8 +721,10 @@ export class LiveScene {
     const snapshot = this.snapshot!, motion = this.motions.get(entity.id)!, point = this.interpolated(motion, now), p = this.project(point), c = this.context;
     // The widest rifle, body and labels must enter the viewport together at any
     // zoom. A fixed ground-point margin clipped magnified actors at its edges.
-    const zoom = this.tile / (this.width < 480 ? 48 : 64), margin = Math.max(16, 96 * .32 * zoom);
-    if (p.x < -margin || p.x > this.width + margin || p.y < -margin || p.y > this.height + 176 * .32 * zoom + 40) return;
+    const zoom = this.tile / (this.width < 480 ? 48 : 64), scale = .32 * zoom;
+    const horizontal = Math.max(PIXEL_ACTOR_ANCHOR.x, PIXEL_ACTOR_NATIVE_SIZE.width - PIXEL_ACTOR_ANCHOR.x) * scale;
+    if (p.x < -horizontal || p.x > this.width + horizontal || p.y < -(PIXEL_ACTOR_NATIVE_SIZE.height - PIXEL_ACTOR_ANCHOR.y) * scale - 40
+      || p.y > this.height + PIXEL_ACTOR_ANCHOR.y * scale + 40) return;
     const boss=entity.bossId?getBoss(entity.bossId):null;
     const own = entity.id === snapshot.selfId, selected = entity.id === this.selected, color = own ? '#f2d49a' : boss ? '#f0b267' : entity.kind === 'player' ? '#8dd5e4' : entity.faction === 'raiders' ? '#e48971' : '#d2a082';
     if (this.overview || this.tile < 28) {
@@ -745,7 +747,7 @@ export class LiveScene {
     const top = bounds.y - 37;
     this.label(own ? `ТЫ · ${entity.name}` : entity.name, p.x, top, color, own ? 11 : 10);
     const role = boss ? 'БОСС' : entity.kind === 'player' ? own ? 'ТВОЙ БОЕЦ' : 'ИГРОК' : entity.faction === 'raiders' ? 'РЕЙДЕР' : 'ДИКИЙ';
-    const weaponName = WEAPON_BY_ID[weapon]?.name;
+    const weaponName = WEAPON_BY_ID[typeof weapon === 'string' ? weapon : weapon.weaponId]?.name;
     this.label(`${role}${weaponName ? ` · ${weaponName}` : ''}`, p.x, top + 13, boss?'#e7bc86':own ? '#e8d8b6' : entity.kind === 'player' ? '#90c4ce' : '#ad9b88', 7);
     c.fillStyle = '#14271a'; c.fillRect(p.x - 17, top + 18, 34, 3); c.fillStyle = entity.health > 35 ? '#b6cc85' : '#e09d82'; c.fillRect(p.x - 17, top + 18, 34 * entity.health / 100, 3);
     if (entity.safeUntil > snapshot.now) this.label('ЗАЩИТА', p.x, p.y + 20, '#bddbb7', 8);

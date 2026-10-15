@@ -1,23 +1,25 @@
 import './pixel-model-preview.css';
 import { SCAV_APPEARANCES } from './game/scav-appearances';
 import { BOSSES, getBoss, type BossId } from './game/bosses';
-import { WEAPON_BY_ID } from './game/data';
+import { CATEGORY_LABELS, WEAPONS, WEAPON_BY_ID } from './game/data';
+import { getWeaponBuildIssues, getWeaponStats, type WeaponInstance } from './game/engine';
+import { MODULE_BY_ID, MODULE_SLOT_LABELS, RECEIVER_INFO, type ModuleSlot } from './game/modules';
 import { GEAR_MODEL_BY_ID } from './game/systems';
 import type { LiveEntity } from './game/live';
+import { weaponBuildArt } from './armory-art';
+import { MODULE_DISPLAY_SLOTS } from './module-catalog';
 import { PixelRaster } from './pixel-art';
 import { PIXEL_FACINGS, type PixelActorMode, type PixelFacing } from './pixel-animation';
-import { PixelActorArt, PIXEL_ACTOR_FRAMES, type PixelActorGear } from './pixel-actors';
-import { paintPixelWeapon, pixelWeaponId, PIXEL_WEAPON_IDS, type PixelWeaponId } from './pixel-weapons';
+import { PixelActorArt, PIXEL_ACTOR_ANCHOR, PIXEL_ACTOR_NATIVE_SIZE, PIXEL_ACTOR_FRAMES, type PixelActorGear } from './pixel-actors';
+import { paintPixelWeapon, type PixelWeaponInput } from './pixel-weapons';
+import { changePixelPreviewModule, copyPixelPreviewBuild, pixelPreviewModuleOptions } from './pixel-model-builds';
+import { readPixelArsenalPreview } from './pixel-arsenal-preview';
+import { createWeaponShowcaseBuild, type WeaponShowcasePreset } from './weapon-showcase';
 
-const weaponLabels: Record<PixelWeaponId, { name: string; detail: string }> = {
-  pm: { name: 'ПМ «Старик»', detail: 'Пистолет · одна рука' },
-  pp91: { name: 'Кедр «Шершень»', detail: 'Пистолет-пулемёт · рамочный приклад' },
-  sks: { name: 'СКС «Лесник»', detail: 'Карабин · деревянная ложа' },
-  mosin: { name: 'Мосинка «Дед»', detail: 'Винтовка · продольный затвор' },
-  akm: { name: 'АКМ «Гром»', detail: 'Автомат · изогнутый магазин' },
-  svd: { name: 'СВД «Горизонт»', detail: 'Винтовка · прицел ПСО' },
-  unknown: { name: 'Неизвестное оружие', detail: 'Нейтральный силуэт · без оптики' },
-};
+const weaponLabels: Readonly<Record<string, { name: string; detail: string }>> = Object.fromEntries([
+  ...WEAPONS.map(definition => [definition.id, { name: definition.name, detail: `${CATEGORY_LABELS[definition.category]} · ${RECEIVER_INFO[definition.id]!.caliber}` }]),
+  ['unknown', { name: 'Неизвестное оружие', detail: 'Нейтральный силуэт · без оптики' }],
+]);
 const facingLabels: Record<PixelFacing, string> = { e: 'Справа', se: 'Спереди справа', s: 'Спереди', sw: 'Спереди слева', w: 'Слева', nw: 'Сзади слева', n: 'Сзади', ne: 'Сзади справа' };
 const poseLabels: Record<PixelActorMode, string> = { idle: 'Стоит', walk: 'Идёт', aim: 'Целится', fire: 'Стреляет', hit: 'Получает попадание', downed: 'Ранен на земле' };
 const profileLabels: Record<PixelActorGear['profile'], string> = { light: 'Налегке', assault: 'Штурм', scout: 'Разведка' };
@@ -25,7 +27,16 @@ const frameDuration: Record<PixelActorMode, number> = { idle: 440, walk: 110, ai
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 const art = new PixelActorArt();
 type Figure = 'scav' | 'raider' | BossId;
-const state = { figure: 'scav' as Figure, appearance: 0, weapon: 'akm' as PixelWeaponId, mode: 'walk' as PixelActorMode, facing: 'se' as PixelFacing, frame: 0, playing: !reducedMotion.matches, rotating: !reducedMotion.matches, gear: { profile: 'assault', helmet: true, armor: true, backpack: true } as PixelActorGear };
+type BuildPreset = WeaponShowcasePreset | 'custom';
+const state = { figure: 'scav' as Figure, appearance: 0, weapon: 'akm', preset: 'factory' as BuildPreset, source: 'catalog' as 'catalog' | 'arsenal', mode: 'walk' as PixelActorMode, facing: 'se' as PixelFacing, frame: 0, playing: !reducedMotion.matches, rotating: !reducedMotion.matches, gear: { profile: 'assault', helmet: true, armor: true, backpack: true } as PixelActorGear };
+const customBuilds = new Map<string, WeaponInstance>();
+let selectedBuild: WeaponInstance | null = createWeaponShowcaseBuild(state.weapon);
+const importedBuild = readPixelArsenalPreview(window.location.hash);
+if (importedBuild) {
+  state.weapon = importedBuild.weapon.weaponId; state.appearance = importedBuild.appearance; state.preset = 'custom'; state.source = 'arsenal';
+  selectedBuild = copyPixelPreviewBuild(importedBuild.weapon); customBuilds.set(state.weapon, copyPixelPreviewBuild(selectedBuild));
+}
+const weaponInput = (): PixelWeaponInput => selectedBuild ?? 'unknown';
 
 function element<T extends HTMLElement>(id: string): T {
   const found = document.getElementById(id);
@@ -43,31 +54,87 @@ const frameInput = element<HTMLInputElement>('animation-frame');
 const selectedCanvas = element<HTMLCanvasElement>('selected-model');
 const stage = element<HTMLDivElement>('model-stage');
 const profileButtons = [...document.querySelectorAll<HTMLButtonElement>('[data-profile]')];
+const presetButtons = [...document.querySelectorAll<HTMLButtonElement>('[data-build-preset]')];
 const bearingCards = new Map<PixelFacing, { button: HTMLButtonElement; canvas: HTMLCanvasElement }>();
-const weaponCards = new Map<PixelWeaponId, HTMLButtonElement>();
+const weaponCards = new Map<string, HTMLButtonElement>();
+const moduleControls = new Map<ModuleSlot, { select: HTMLSelectElement; note: HTMLElement }>();
 
 for (const look of SCAV_APPEARANCES) appearanceSelect.add(new Option(`${String(look.id + 1).padStart(2, '0')} · ${look.name}`, String(look.id)));
-for (const id of PIXEL_WEAPON_IDS) weaponSelect.add(new Option(weaponLabels[id].name, id));
+for (const definition of WEAPONS) weaponSelect.add(new Option(definition.name, definition.id));
+weaponSelect.add(new Option(weaponLabels.unknown!.name, 'unknown'));
 weaponSelect.value = state.weapon;
+appearanceSelect.value = String(state.appearance);
 for (const facing of PIXEL_FACINGS) facingSelect.add(new Option(facingLabels[facing], facing));
 facingSelect.value = state.facing;
 
 for (const facing of PIXEL_FACINGS) {
   const button = document.createElement('button'), canvas = document.createElement('canvas'), label = document.createElement('span');
   button.type = 'button'; button.className = 'bearing-card'; button.setAttribute('aria-label', `Рассмотреть: ${facingLabels[facing].toLowerCase()}`);
-  canvas.width = 192; canvas.height = 208; canvas.setAttribute('aria-hidden', 'true'); label.textContent = facingLabels[facing];
+  canvas.width = PIXEL_ACTOR_NATIVE_SIZE.width; canvas.height = PIXEL_ACTOR_NATIVE_SIZE.height; canvas.setAttribute('aria-hidden', 'true'); label.textContent = facingLabels[facing];
   button.append(canvas, label); button.addEventListener('click', () => selectFacing(facing));
   bearingCards.set(facing, { button, canvas }); element('bearing-grid').append(button);
 }
-for (const id of PIXEL_WEAPON_IDS) {
+for (const id of [...WEAPONS.map(definition => definition.id), 'unknown']) {
   const button = document.createElement('button'), canvas = document.createElement('canvas'), title = document.createElement('strong'), detail = document.createElement('small');
-  button.type = 'button'; button.className = 'weapon-card'; button.setAttribute('aria-label', `Взять в руки ${weaponLabels[id].name}`);
-  canvas.width = 128; canvas.height = 56; canvas.setAttribute('aria-hidden', 'true');
+  button.type = 'button'; button.className = 'weapon-card'; button.setAttribute('aria-label', `Примерить ${weaponLabels[id]!.name}`);
+  canvas.width = 256; canvas.height = 96; canvas.setAttribute('aria-hidden', 'true');
   const context = canvas.getContext('2d');
-  if (context) paintPixelWeapon(new PixelRaster(context, canvas.width, canvas.height), id, { x: 48, y: 36 }, 'e');
-  title.textContent = weaponLabels[id].name; detail.textContent = weaponLabels[id].detail; button.append(canvas, title, detail);
-  button.addEventListener('click', () => { state.weapon = id; weaponSelect.value = id; changed(); });
+  if (context) paintPixelWeapon(new PixelRaster(context, canvas.width, canvas.height), id === 'unknown' ? 'unknown' : createWeaponShowcaseBuild(id), { x: 96, y: 60 }, 'e');
+  title.textContent = weaponLabels[id]!.name; detail.textContent = weaponLabels[id]!.detail; button.append(canvas, title, detail);
+  button.addEventListener('click', () => { selectWeapon(id); changed(); });
   weaponCards.set(id, button); element('pixel-weapon-grid').append(button);
+}
+for (const slot of MODULE_DISPLAY_SLOTS) {
+  const label = document.createElement('label'), title = document.createElement('span'), select = document.createElement('select'), note = document.createElement('small');
+  label.className = 'module-control'; title.textContent = MODULE_SLOT_LABELS[slot]; select.id = `model-module-${slot}`;
+  select.setAttribute('aria-label', MODULE_SLOT_LABELS[slot]); label.append(title, select, note); element('model-module-controls').append(label);
+  moduleControls.set(slot, { select, note });
+  select.addEventListener('change', () => {
+    if (!selectedBuild) return;
+    const result = changePixelPreviewModule(selectedBuild, slot, select.value);
+    element('model-build-note').textContent = result.error ?? (result.removed.length ? `Сняты вместе с опорой: ${result.removed.join(' · ')}.` : `${MODULE_SLOT_LABELS[slot]}: ${select.value ? 'установлено в примерке' : 'снято в примерке'}.`);
+    if (!result.error) { selectedBuild = result.weapon; state.preset = 'custom'; state.source = 'catalog'; customBuilds.set(state.weapon, copyPixelPreviewBuild(selectedBuild)); }
+    changed();
+  });
+}
+
+function selectWeapon(id: string): void {
+  state.weapon = id; state.source = 'catalog'; weaponSelect.value = id; element('model-build-note').textContent = '';
+  selectedBuild = id === 'unknown' ? null : state.preset === 'custom' ? copyPixelPreviewBuild(customBuilds.get(id) ?? createWeaponShowcaseBuild(id)) : createWeaponShowcaseBuild(id, state.preset);
+}
+
+function refreshBuild(): void {
+  for (const button of presetButtons) { button.setAttribute('aria-pressed', String(button.dataset.buildPreset === state.preset)); button.disabled = !selectedBuild; }
+  const source = state.source === 'arsenal' ? 'Сборка из арсенала' : state.preset === 'factory' ? 'Штатная сборка' : state.preset === 'field' ? 'Пример полевой сборки' : 'Своя примерка';
+  element('build-source').textContent = source;
+  element('build-help').textContent = state.source === 'arsenal' ? 'Показаны установленные детали и их состояние из арсенала. Изменения ниже остаются только в примерке.' : 'Каталог для примерки. Штатные и полевые комплекты — примеры; они не меняют оружие в арсенале.';
+  element('model-build-name').textContent = weaponLabels[state.weapon]!.name;
+  element('model-build-art').innerHTML = selectedBuild ? weaponBuildArt(selectedBuild) : '<p>Модель оружия не определена</p>';
+  const issues = selectedBuild ? getWeaponBuildIssues(selectedBuild) : [], stats = selectedBuild ? getWeaponStats(selectedBuild) : null;
+  element('model-build-summary').textContent = selectedBuild ? `${source} · ${Object.keys(selectedBuild.modules).length} / 11 деталей · состояние ${Math.round(selectedBuild.durability)}% · вес ${stats!.weight.toLocaleString('ru')} кг` : 'Нейтральный силуэт без установленных модулей';
+  const readiness = element('model-build-readiness'); readiness.classList.toggle('incomplete', Boolean(stats && !stats.ready));
+  readiness.textContent = !selectedBuild ? '' : stats?.ready ? 'Сборка готова к выходу' : 'Неполная или изношенная сборка';
+  element('model-build-issues').textContent = issues.join(' ');
+  for (const [slot, { select, note }] of moduleControls) {
+    select.replaceChildren(new Option('Не установлено', ''));
+    if (selectedBuild) for (const { model, reason } of pixelPreviewModuleOptions(selectedBuild, slot)) {
+      const option = new Option(reason ? `${model.label} · ${reason}` : model.label, model.id); option.disabled = Boolean(reason); select.add(option);
+    }
+    select.value = selectedBuild?.modules[slot]?.modelId ?? ''; select.disabled = !selectedBuild;
+    const part = selectedBuild?.modules[slot], model = part ? MODULE_BY_ID[part.modelId] : null;
+    note.textContent = model && part ? `${model.label} · ${Math.round(part.durability)}%` : selectedBuild && RECEIVER_INFO[selectedBuild.weaponId]!.requiredSlots.includes(slot) ? 'Обязательная деталь снята' : 'Свободное место';
+  }
+}
+
+function filterWeapons(): void {
+  const category = element<HTMLSelectElement>('model-weapon-category').value, query = element<HTMLInputElement>('model-weapon-search').value.toLocaleLowerCase('ru').replaceAll('ё', 'е').trim();
+  let count = 0;
+  for (const [id, button] of weaponCards) {
+    const definition = WEAPON_BY_ID[id], text = `${weaponLabels[id]!.name} ${weaponLabels[id]!.detail}`.toLocaleLowerCase('ru').replaceAll('ё', 'е');
+    button.hidden = (category !== 'all' && definition?.category !== category) || !text.includes(query);
+    if (!button.hidden && definition) count++;
+  }
+  element('model-weapon-count').textContent = `${count} из ${WEAPONS.length} платформ`;
 }
 
 function identity(): Pick<LiveEntity, 'appearance' | 'faction' | 'bossId' | 'role'> {
@@ -80,7 +147,7 @@ function modelBounds(): NonNullable<typeof framing> {
   if (framing) return framing;
   const bounds = { left: 0, right: 0, top: 0, bottom: 0 }, entity = identity();
   for (const facing of PIXEL_FACINGS) for (let frame = 0; frame < PIXEL_ACTOR_FRAMES[state.mode]; frame++) {
-    const sprite = art.get(entity, { mode: state.mode, frame, facing }, state.weapon, state.gear);
+    const sprite = art.get(entity, { mode: state.mode, frame, facing }, weaponInput(), state.gear);
     bounds.left = Math.min(bounds.left, -sprite.anchor.x); bounds.right = Math.max(bounds.right, sprite.image.width - sprite.anchor.x);
     bounds.top = Math.min(bounds.top, -sprite.anchor.y); bounds.bottom = Math.max(bounds.bottom, sprite.image.height - sprite.anchor.y);
   }
@@ -91,7 +158,7 @@ function drawActor(canvas: HTMLCanvasElement, facing: PixelFacing, large: boolea
   context.clearRect(0, 0, canvas.width, canvas.height);
   const bounds = modelBounds(), modelWidth = bounds.right - bounds.left, modelHeight = bounds.bottom - bounds.top;
   const scale = large ? Math.max(1, Math.min(2, Math.floor(Math.min((canvas.width - 32) / modelWidth, (canvas.height - 32) / modelHeight)))) : 1;
-  const anchor = large ? { x: Math.floor((canvas.width - modelWidth * scale) / 2) - bounds.left * scale, y: Math.floor((canvas.height - modelHeight * scale) / 2) - bounds.top * scale } : { x: 96, y: 176 };
+  const anchor = large ? { x: Math.floor((canvas.width - modelWidth * scale) / 2) - bounds.left * scale, y: Math.floor((canvas.height - modelHeight * scale) / 2) - bounds.top * scale } : PIXEL_ACTOR_ANCHOR;
   const ground = new PixelRaster(context, canvas.width, canvas.height);
   if (large) {
     for (let offset = -3; offset <= 3; offset++) {
@@ -104,7 +171,7 @@ function drawActor(canvas: HTMLCanvasElement, facing: PixelFacing, large: boolea
     ground.line(anchor.x, anchor.y + 38 * scale, anchor.x + 72 * scale, anchor.y + 6, '#64704a');
   }
   ground.ellipse(anchor.x, anchor.y + 3, 34 * scale, 10 * scale, large ? '#2e3a29' : '#1e2c20');
-  const sprite = art.get(identity(), { mode: state.mode, frame: state.frame, facing }, state.weapon, state.gear);
+  const sprite = art.get(identity(), { mode: state.mode, frame: state.frame, facing }, weaponInput(), state.gear);
   context.imageSmoothingEnabled = false;
   context.drawImage(sprite.image, anchor.x - sprite.anchor.x * scale, anchor.y - sprite.anchor.y * scale, sprite.image.width * scale, sprite.image.height * scale);
 }
@@ -124,7 +191,7 @@ function refreshControls(): void {
   element('model-title').textContent = name;
   element('appearance-number').textContent = `${String(state.appearance + 1).padStart(2, '0')} / 32`;
   const worn = [state.gear.helmet ? 'шлем' : '', state.gear.armor ? 'бронежилет' : '', state.gear.backpack ? 'рюкзак' : ''].filter(Boolean);
-  const description = `${name} · ${weaponLabels[state.weapon].name} · ${profileLabels[state.gear.profile]}${worn.length ? `: ${worn.join(', ')}` : ' · без защиты и рюкзака'}`;
+  const description = `${name} · ${weaponLabels[state.weapon]!.name} · ${state.source === 'arsenal' ? 'сборка из арсенала' : state.preset === 'field' ? 'пример полевой сборки' : state.preset === 'custom' ? 'своя примерка' : 'штатная сборка'} · ${profileLabels[state.gear.profile]}${worn.length ? `: ${worn.join(', ')}` : ' · без защиты и рюкзака'}`;
   element('model-summary').textContent = description;
   selectedCanvas.setAttribute('aria-label', `${description}. ${poseLabels[state.mode]}. ${facingLabels[state.facing]}.`);
   frameInput.max = String(PIXEL_ACTOR_FRAMES[state.mode]); frameInput.disabled = PIXEL_ACTOR_FRAMES[state.mode] === 1;
@@ -161,7 +228,7 @@ function animate(at: number): void {
   if (redraw) render();
   requestId = requestAnimationFrame(animate);
 }
-function changed(): void { state.frame = 0; framing = null; art.clear(); refreshControls(); render(); schedule(); }
+function changed(): void { state.frame = 0; framing = null; art.clear(); refreshControls(); refreshBuild(); render(); schedule(); }
 function selectFacing(facing: PixelFacing): void { state.facing = facing; state.rotating = false; refreshControls(); render(); schedule(); }
 
 appearanceSelect.addEventListener('change', () => { state.appearance = Number(appearanceSelect.value); changed(); });
@@ -171,15 +238,22 @@ figureSelect.addEventListener('change', () => {
   if (boss) {
     const slot = GEAR_MODEL_BY_ID[boss.armorModelId]?.slot;
     state.appearance = 28 + BOSSES.findIndex(candidate => candidate.id === boss.id);
-    state.weapon = pixelWeaponId(boss.weaponId);
+    selectWeapon(boss.weaponId);
     state.gear = { profile: WEAPON_BY_ID[boss.weaponId]?.category === 'sniper' ? 'scout' : 'assault', helmet: slot === 'helmet', armor: slot === 'armor', backpack: slot === 'backpack' };
   } else {
     state.gear = { profile: state.figure === 'raider' ? 'assault' : 'light', helmet: true, armor: true, backpack: false };
-    state.weapon = state.figure === 'raider' ? 'akm' : 'pm';
+    selectWeapon(state.figure === 'raider' ? 'akm' : 'pm');
   }
   appearanceSelect.value = String(state.appearance); weaponSelect.value = state.weapon; changed();
 });
-weaponSelect.addEventListener('change', () => { state.weapon = weaponSelect.value as PixelWeaponId; changed(); });
+weaponSelect.addEventListener('change', () => { selectWeapon(weaponSelect.value); changed(); });
+for (const button of presetButtons) button.addEventListener('click', () => {
+  const next = button.dataset.buildPreset as BuildPreset;
+  if (next === 'custom' && selectedBuild && !customBuilds.has(state.weapon)) customBuilds.set(state.weapon, copyPixelPreviewBuild(selectedBuild));
+  state.preset = next; state.source = 'catalog'; selectWeapon(state.weapon); changed();
+});
+element('model-weapon-category').addEventListener('change', filterWeapons);
+element('model-weapon-search').addEventListener('input', filterWeapons);
 poseSelect.addEventListener('change', () => { state.mode = poseSelect.value as PixelActorMode; changed(); });
 facingSelect.addEventListener('change', () => selectFacing(facingSelect.value as PixelFacing));
 for (const button of profileButtons) button.addEventListener('click', () => { state.gear.profile = button.dataset.profile as PixelActorGear['profile']; changed(); });
@@ -199,4 +273,4 @@ const resize = new ResizeObserver(entries => {
 resize.observe(stage);
 window.addEventListener('pagehide', () => { if (requestId) cancelAnimationFrame(requestId); requestId = 0; art.clear(); });
 window.addEventListener('pageshow', () => { render(); schedule(); });
-refreshControls(); render(); schedule();
+refreshControls(); refreshBuild(); filterWeapons(); render(); schedule();

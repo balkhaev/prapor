@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#171c18" />
-    <meta name="description" content="Дикие и оружие Прапора в рейде: 32 внешности, восемь ракурсов, анимация и независимая примерка снаряжения." />
+    <meta name="description" content="Все 39 оружейных платформ Прапора на бойцах: реальные сборки, 11 мест для модулей, восемь ракурсов и независимая примерка снаряжения." />
     <title>Прапор · Модели рейда</title>
   </head>
   <body>
@@ -35,9 +35,19 @@
         </section>
       </div>
 
+      <section class="build-section panel" aria-labelledby="build-title">
+        <div class="panel-heading"><div><p class="eyebrow">Оружие в руках бойца</p><h2 id="build-title">Сборка оружия</h2></div><span class="build-source" id="build-source">Штатная сборка</span></div>
+        <div class="build-presets" role="group" aria-label="Выбор сборки оружия"><button type="button" data-build-preset="factory" aria-pressed="true">Штатная</button><button type="button" data-build-preset="field" aria-pressed="false">Пример полевой</button><button type="button" data-build-preset="custom" aria-pressed="false">Своя примерка</button></div>
+        <p class="build-help" id="build-help">Каталог для примерки. Установленные здесь детали не меняют оружие в арсенале.</p>
+        <div class="build-inspection"><div class="build-art" id="model-build-art"></div><div class="build-description"><h3 id="model-build-name"></h3><p id="model-build-summary"></p><p class="build-readiness" id="model-build-readiness"></p><p id="model-build-issues"></p></div></div>
+        <div class="module-controls" id="model-module-controls" role="group" aria-label="Одиннадцать мест для оружейных модулей"></div>
+        <p class="build-change-note" id="model-build-note" role="status" aria-live="polite"></p>
+        <p class="build-help">Снимите любую деталь или выберите совместимую замену. Если снять опору, зависимые модули тоже снимаются в примерке. Пустые места остаются пустыми на модели.</p>
+      </section>
+
       <section class="bearings-section" aria-labelledby="bearings-title"><div class="section-heading"><div><p class="eyebrow">Обойти вокруг</p><h2 id="bearings-title">Восемь ракурсов</h2></div><p>Выберите сторону, чтобы рассмотреть крупно</p></div><div class="bearing-grid" id="bearing-grid"></div></section>
 
-      <section class="weapons-section" aria-labelledby="weapons-title"><div class="section-heading"><div><p class="eyebrow">Рейдовый арсенал</p><h2 id="weapons-title">У каждого оружия свой силуэт</h2></div><p>Единый масштаб · от пистолета до винтовки</p></div><div class="weapon-grid" id="pixel-weapon-grid"></div><p class="catalog-note">Здесь показаны модели рейда. Для сборки оружия по деталям откройте <a href="/characters.html">оружейную мастерскую →</a></p></section>
+      <section class="weapons-section" aria-labelledby="weapons-title"><div class="section-heading"><div><p class="eyebrow">Каталог для примерки · 39 платформ</p><h2 id="weapons-title">У каждого оружия свой силуэт</h2></div><p>Единый масштаб · штатные сборки</p></div><div class="weapon-filters"><label>Класс оружия<select id="model-weapon-category"><option value="all">Все классы</option><option value="pistol">Пистолеты</option><option value="smg">Пистолеты-пулемёты</option><option value="rifle">Автоматы и карабины</option><option value="shotgun">Дробовики</option><option value="sniper">Винтовки</option></select></label><label>Поиск<input id="model-weapon-search" type="search" placeholder="Название или калибр" /></label><p id="model-weapon-count" role="status" aria-live="polite"></p></div><div class="weapon-grid" id="pixel-weapon-grid"></div><p class="catalog-note">Выбор платформы сохраняет выбранный способ сборки. Здесь показаны демонстрационные комплекты; для работы со своим оружием откройте <a href="/">арсенал в убежище →</a></p></section>
       <footer class="workshop-footer"><span>Прапор · Полевая мастерская</span><span>Те же модели, что на карте рейда</span></footer>
       <noscript><p class="panel">Для просмотра моделей включите JavaScript в браузере.</p></noscript>
     </main>

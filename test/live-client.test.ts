@@ -3,6 +3,7 @@ import { LiveApiError, liveRequest, readLiveSnapshot, readLiveStatus, shouldRejo
 import { LIVE_TERRAIN_CODES, type LiveSnapshot } from '../src/game/live';
 import { getLiveMap } from '../src/game/live-maps';
 import { createHealth, createMedicalInventory } from '../src/game/health';
+import { FACTORY_KITS } from '../src/game/modules';
 
 const fixture = (): LiveSnapshot => {
   const { npcSpawns, lootSpawns: _loot, ...world } = structuredClone(getLiveMap('perimeter'));
@@ -17,6 +18,22 @@ const fixture = (): LiveSnapshot => {
 }; };
 
 describe('live wire parser', () => {
+  test('public installed model IDs survive parsing and reject invalid slots or private instance data', () => {
+    const packet = fixture(), modules = { ...FACTORY_KITS.ak74! };
+    packet.entities[1]!.visualLoadout = { weaponId: 'ak74', modules, profile: 'assault', helmet: true, armor: true, backpack: false };
+    const visible = readLiveSnapshot(packet).entities[1]!.visualLoadout!;
+    expect(visible.modules).toEqual(modules); expect(visible.modules).not.toBe(modules);
+    const { world: _world, ...cached } = packet;
+    expect(readLiveSnapshot(cached, packet.world).entities[1]!.visualLoadout?.modules).toEqual(modules);
+    packet.entities[1]!.visualLoadout!.modules = {};
+    expect(readLiveSnapshot(packet).entities[1]!.visualLoadout?.modules).toEqual({});
+    for (const bad of [null, [], { receiver: 'no-model' }, { optic: modules.receiver }, { ammo: 30 }, { receiver: { modelId: modules.receiver, id: 'private' } }, { constructor: 'constructor' }]) {
+      Object.assign(packet.entities[1]!.visualLoadout!, { modules: bad });
+      expect(() => readLiveSnapshot(packet)).toThrow(LiveApiError);
+    }
+    Object.assign(packet.entities[1]!.visualLoadout!, { weaponId: undefined, modules: {} });
+    expect(() => readLiveSnapshot(packet)).toThrow(LiveApiError);
+  });
   test('preserves validated public equipment through full and cached snapshots without aliasing the packet', () => {
     const source = fixture(), visualLoadout = { profile: 'scout' as const, weaponId: 'mosin', helmet: false, armor: true, backpack: false };
     source.entities[1]!.visualLoadout = visualLoadout;
