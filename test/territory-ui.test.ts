@@ -10,8 +10,8 @@ import { getShelterProductionPresentation, getShelterProductionStages } from "..
 import { getTerritoryPlanLayout } from "../src/territory-plan";
 import { shelterBuildingHitPolygon } from "../src/shelter-isometric";
 import {
-	buildingCatalogue, buildingPlacementControls, buildingRelocationControls,
-	territoryPlan, territorySummary,
+	buildingCatalogue, buildingCatalogueReason, buildingPlacementControls, buildingRelocationControls,
+	territoryBuildings, territoryPlan, territorySummary,
 } from "../src/territory-ui";
 
 const NOW = 1_792_000_000_000;
@@ -93,6 +93,52 @@ describe("territory presentation and restored controls", () => {
 		for(const need of ROOM_DEFINITIONS.hangar.lootRequirements??[])for(let i=0;i<need.quantity;i++)(state.lootItems??=[]).push({id:`loot-${state.nextId++}`,modelId:need.modelId,foundAt:NOW});
 		const unlocked = buildingCatalogue(state);
 		expect(unlocked.match(/<button[^>]*data-room-type="hangar"[^>]*>/)?.[0]).not.toContain("disabled");
+	});
+
+	test("the catalogue keeps complete material costs behind closed details and explains when payment happens", () => {
+		const state = createGame(NOW), before = saveGame(state), html = buildingCatalogue(state);
+		const cards = html.match(/<article\b[^>]*>.*?<\/article>/gs)!;
+		expect(cards).toHaveLength(Object.keys(ROOM_DEFINITIONS).length);
+		for (const card of cards) {
+			const details = card.match(/<details\b[^>]*>.*?<\/details>/s)![0];
+			expect(details.match(/^<details[^>]*>/)![0]).not.toContain("open");
+			expect(details).toContain("Предметы для постройки");
+			expect(details).toContain("На складе");
+			expect(card.replace(details, "")).not.toContain("loot-material-requirements");
+		}
+		expect(html).toContain("Материалы спишутся после подтверждения");
+		expect(html).toContain("Уже на базе:");
+		expect(saveGame(state)).toBe(before);
+	});
+
+	test("construction explains precise cash and scrap deficits before requesting raid loot", () => {
+		const state = createGame(NOW);
+		state.money = ROOM_DEFINITIONS.workshop.cost.money - 40;
+		state.supplies.scrap = ROOM_DEFINITIONS.workshop.cost.scrap - 3;
+		expect(buildingCatalogueReason(state, "workshop")).toBe("Не хватает 40 ₽ и 3 дет.");
+		state.money += 40;
+		expect(buildingCatalogueReason(state, "workshop")).toBe("Не хватает 3 дет.");
+		state.supplies.scrap += 3;
+		expect(buildingCatalogueReason(state, "workshop")).toContain("целые трофеи");
+		fundConstructionLoot(state);
+		expect(buildingCatalogueReason(state, "workshop")).toBeNull();
+	});
+
+	test("base cards expose production status and worker slots, while instructions reserve dragging for the camera", () => {
+		const state = createGame(NOW), before = saveGame(state);
+		const html = territoryBuildings(state, state.shelter.rooms[0]!.id);
+		expect(html).toContain('aria-pressed="true"');
+		expect(html).toContain("Рабочие 0/1");
+		for (const room of state.shelter.rooms) {
+			expect(html).toContain(`data-room-status="${room.id}">${getRoomProductionState(state, room).status}`);
+		}
+		const summary = territorySummary(state), relocation = buildingRelocationControls(state.shelter.rooms[0]!);
+		expect(summary).toContain("камера двигается");
+		expect(summary).toContain("Переставить постройку");
+		expect(summary).not.toContain("Перетаскивай здания");
+		expect(relocation).toContain("выбери новое место во дворе и подтверди");
+		expect(relocation).not.toContain("Перетащи здание");
+		expect(saveGame(state)).toBe(before);
 	});
 
 	test("placement confirms only a valid selection and explains errors as escaped text", () => {

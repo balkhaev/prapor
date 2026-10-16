@@ -23,3 +23,90 @@
 @media(max-width:640px){.live-entry-screen{padding:48px 12px 0}.live-entry-head{padding-bottom:14px}.live-entry-head h2{font-size:28px}.live-entry-head p{font-size:11px}.live-entry-head .live-online{font-size:7px}.live-entry-settings .live-purpose-card small{font-size:9px}.live-entry-settings .live-map-card strong{font-size:11px}.live-entry-map{max-height:340px;aspect-ratio:1.15}.live-entry-kits{grid-template-columns:1fr}.live-entry-kit-card{padding:12px}.live-entry-kit-card>strong{font-size:19px}.live-entry-kit-card.selected:after{top:8px;right:8px}.live-entry-kit-card>small{padding-right:12px;font-size:9px}.live-entry-footer .live-join{width:146px;font-size:12px}.live-entry-footer strong{font-size:11px}.live-entry-brief .live-entry-steps{display:block}.live-auto-world-status{bottom:86px;max-width:75%;width:75%}.live-auto-world-status>strong{font-size:10px}.live-field-hud{top:50px}.live-field-hud>strong{font-size:17px}.live-field-legend{gap:8px}.live-camera{bottom:37px;left:10px}.live-auto-actions .button{min-height:44px;font-size:11px}.live-contact-fold>summary,.live-goal-fold>summary,.live-medical-fold>summary{min-height:32px}.live-dock-scroll{padding:14px}.live-player-kit{grid-template-columns:repeat(2,1fr)}.live-radio-feed article{font-size:10px}.live-entry-map-caption span{font-size:7px}}
 @media(prefers-reduced-motion:reduce){.live-auto-panel *, .live-field-hud *{transition:none}}
 @media(max-width:640px){.live-dock-head{padding:12px 14px}.live-dock-head h2{font-size:20px;margin-top:3px}.live-auto-panel{display:flex;flex-direction:column;padding:12px}.live-auto-panel h3{margin:10px 0 7px;font-size:20px}.live-auto-actions,.live-auto-finish{order:3;margin-top:12px}.live-auto-progress{order:4;margin:12px 0 0}.live-auto-stages,.live-auto-panel>small{display:none}.live-auto-goal{font-size:11px}.live-auto-progress>span{font-size:8px}.live-auto-world-status{bottom:105px;width:auto;max-width:80%;min-width:55%}.live-field-legend{right:8px;bottom:77px;font-size:7px}}
+
+/* Preparation keeps the three decisions together; the map is available on demand. */
+.live-entry-plan{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;align-items:start}
+.live-entry-step{min-width:0;padding:16px;background:var(--game-panel);border:1px solid var(--game-line);border-radius:var(--game-radius-control)}
+.live-entry-step>h3{display:flex;align-items:center;gap:9px;font-size:16px;margin:0 0 9px;color:var(--game-text)}
+.live-entry-step>h3>b{display:grid;place-items:center;flex:none;width:27px;height:27px;border-radius:50%;background:var(--game-brass-surface);color:var(--game-brass-light);font:13px "IBM Plex Mono",monospace}
+.live-entry-step>p{font-size:12px;line-height:1.6;color:var(--game-muted);margin:0 0 14px}
+.live-entry-step .live-district-list,.live-entry-step .live-purpose-list,.live-entry-step .live-entry-kits{display:grid!important;grid-template-columns:1fr;gap:8px;margin:0}
+.live-entry-step .live-map-card,.live-entry-step .live-purpose-card{min-height:66px;padding:11px;gap:6px;background:var(--game-panel-raised)}
+.live-entry-step .live-map-card strong,.live-entry-step .live-purpose-card strong{font-size:13px;margin:0 0 4px}
+.live-entry-step .live-map-card small,.live-entry-step .live-purpose-card small{display:block;font-size:11px;line-height:1.5}
+.live-entry-step .live-map-card p{display:none}
+.live-entry-step .live-map-icon{width:28px;height:32px;font-size:22px;margin-right:4px}
+.live-entry-step .live-map-card.selected,.live-entry-step .live-purpose-card.selected{background:var(--game-brass-surface);border-color:var(--game-brass)}
+.live-entry-step .live-entry-kit-card{padding:12px;gap:5px}
+.live-entry-step .live-entry-kit-card>span{font-size:11px;padding-right:15px}
+.live-entry-step .live-entry-kit-card>strong{font-size:19px}
+.live-entry-step .live-entry-kit-card>small{font-size:11px;line-height:1.5}
+.live-entry-step .live-entry-kit-card>b{font-size:13px;margin-top:4px}
+.live-entry-kit-card>b>span{display:block;font:11px/1.5 Manrope,sans-serif;color:var(--game-muted);margin-top:3px}
+.live-entry-step .live-entry-kit-card>em{font-size:11px}
+.live-entry-kit-card.unavailable{border-style:dashed}
+.live-entry-step .live-entry-stock{justify-content:space-between;gap:8px;padding-top:13px;margin-top:13px;border-top:1px solid var(--game-line)}
+.live-entry-step .live-entry-stock span{font-size:11px}
+.live-entry-step .live-entry-stock strong{font-size:12px}
+.live-entry-kit-warning,.live-entry-kit-warning .text-button{font-size:12px}
+.live-entry-map-fold{margin-top:14px}
+.live-entry-map-fold>summary,.live-entry-route-fold>summary{min-height:36px;font-size:12px;line-height:1.6;color:var(--game-brass-light);cursor:pointer}
+.live-entry-route-fold{margin-top:16px;padding:11px 15px;border:1px solid var(--game-line);border-radius:var(--game-radius-small);background:var(--game-panel)}
+.live-entry-map-fold .live-entry-map-caption{margin-top:12px}
+.live-entry-screen .live-entry-footer small{font-size:12px}
+.live-entry-screen .live-entry-footer strong{font-size:15px}
+.live-entry-screen .live-entry-head p{font-size:13px}
+.live-entry-screen .live-entry-head h2{font-size:30px}
+.live-entry-screen .live-entry-footer .live-join{width:205px;font-size:15px;min-height:54px}
+.live-entry-screen .live-entry-footer .live-join span{font-size:11px}
+.live-entry-screen .live-entry-back{min-height:42px;white-space:nowrap}
+.live-entry-brief>h3{font-size:25px;margin:18px 0 13px}
+.live-entry-brief>p,.live-entry-dock .live-entry-risk{font-size:12px;line-height:1.75}
+.live-entry-brief .live-server-label,.live-entry-brief>small{font-size:11px}
+.live-entry-camera-note{padding:13px;margin:18px 0;background:var(--game-panel-raised);border:1px solid var(--game-line);border-radius:var(--game-radius-small)}
+.live-entry-camera-note>strong{font-size:13px;color:var(--game-text)}
+.live-entry-camera-note>p{font-size:12px;margin:7px 0 0;line-height:1.7;color:var(--game-muted)}
+
+/* Raid actions and essentials stay visible; detailed controls can be opened when needed. */
+.live-auto-panel{padding:14px;margin-bottom:14px}
+.live-auto-panel h3{font-size:21px;margin:13px 0 8px}
+.live-auto-goal{font-size:13px;line-height:1.65;min-height:0}
+.live-auto-reason{font-size:12px}
+.live-auto-actions{grid-template-columns:1fr;gap:8px;margin-top:14px}
+.live-auto-actions .button{min-height:42px;font-size:13px}
+.live-auto-panel>small{display:block;font-size:11px;line-height:1.7;margin-top:11px}
+.live-auto-progress{margin:15px 0 0;font-size:11px}
+.live-auto-progress b{font-size:11px}
+.live-auto-heading time{font-size:12px}
+.live-auto-signal{font-size:10px;letter-spacing:.3px}
+.live-auto-finish{min-height:44px!important;font-size:13px!important;margin-top:14px}
+.live-self-name{flex-direction:row;justify-content:space-between;align-items:baseline;gap:8px}
+.live-self-name small{font:11px Manrope,sans-serif}
+.live-player-kit{grid-template-columns:repeat(3,minmax(0,1fr));margin-bottom:3px}
+.live-player-kit>span{font-size:11px;padding:10px 8px}
+.live-health{height:20px}
+.live-health span{font-size:10px;line-height:18px}
+.live-dock .live-medical-fold,.live-dock .live-goal-fold,.live-dock .live-contact-fold,.live-dock .live-kit-fold,.live-dock .live-events{padding:0;margin:0;border-top:1px solid var(--game-line)}
+.live-dock details>summary{display:flex;align-items:center;gap:9px;justify-content:space-between;min-height:46px;font-size:13px;line-height:1.5;color:var(--game-text);cursor:pointer;list-style:none}
+.live-dock details>summary>span{margin-left:auto;font:11px Manrope,sans-serif;color:var(--game-muted);text-align:right}
+.live-dock details>summary:after{content:'+';font-size:18px;color:var(--game-muted)}
+.live-dock details[open]>summary:after{content:'−'}
+.live-dock .live-medical-fold.urgent>summary{color:var(--game-danger)}
+.live-kit-fold>p{font-size:12px;line-height:1.7;color:var(--game-muted);margin:4px 0 13px}
+.live-kit-fold .live-self-loadout{display:block}
+.live-kit-fold .live-self-loadout>span{display:block;font-size:11px;margin-top:3px}
+.live-auto-medical-note,.live-medical-help,.live-medical-effects{font-size:11px;line-height:1.7}
+.live-observed-contact strong{font-size:13px}
+.live-observed-contact small,.live-empty{font-size:11px}
+.live-observed-contact:last-child{margin-bottom:12px}
+.live-dock .live-events article{font-size:12px;line-height:1.7}
+.live-dock-footer .text-button{font-size:12px;min-height:34px}
+.live-dock-footer p{font-size:11px}
+.live-pan-help{position:absolute;left:16px;bottom:90px;margin:0;padding:7px 10px;background:color-mix(in srgb,var(--game-info-surface) 94%,transparent);border:1px solid var(--game-line);border-radius:var(--game-radius-small);font-size:12px;color:var(--game-muted);pointer-events:none}
+.live-field-legend{display:block;pointer-events:auto;max-width:230px;padding:8px 11px}
+.live-field-legend>summary{font-size:12px;color:var(--game-muted);cursor:pointer;min-height:22px}
+.live-legend-items{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:14px 0 5px}
+.live-field-legend .live-legend-items span{font-size:11px;gap:7px}
+.live-field-legend .live-legend-items i{width:7px;height:7px}
+@media(max-width:1050px){.live-entry-plan{grid-template-columns:1fr 1fr;gap:13px}.live-entry-step:last-child{grid-column:1/-1}.live-entry-step .live-entry-kits{grid-template-columns:repeat(3,minmax(0,1fr))}.live-entry-step .live-entry-stock{justify-content:flex-start;gap:25px}.live-entry-step:last-child>.live-entry-kits .live-entry-kit-card{display:flex}.live-entry-brief>h3{font-size:23px}}
+@media(max-width:640px){.live-entry-plan{grid-template-columns:1fr;gap:12px}.live-entry-step{padding:13px}.live-entry-step .live-entry-kits{grid-template-columns:1fr}.live-entry-step:last-child{grid-column:auto}.live-entry-screen .live-entry-footer{flex-wrap:wrap}.live-entry-screen .live-entry-footer>div{flex:1 1 100%}.live-entry-screen .live-entry-footer .live-join{width:100%}.live-entry-screen .live-entry-footer strong{font-size:13px}.live-entry-screen .live-entry-footer small{font-size:11px}.live-entry-screen .live-entry-head h2{font-size:25px}.live-entry-screen .live-entry-head p{font-size:12px}.live-entry-screen .live-entry-head{align-items:flex-start}.live-entry-head .live-entry-back{font-size:11px;padding:8px}.live-entry-dock .live-entry-brief{display:block}.live-auto-actions{grid-template-columns:1fr 1fr}.live-auto-actions .button{font-size:12px}.live-dock details>summary{min-height:44px;font-size:12px}.live-auto-actions,.live-auto-finish,.live-auto-progress{order:initial}.live-auto-panel>small{display:block}.live-pan-help{bottom:123px;left:10px;font-size:10px;padding:6px 8px}.live-field-legend>summary{font-size:11px}.live-field-legend{bottom:80px;right:10px}.live-player-kit{grid-template-columns:repeat(3,minmax(0,1fr))}.live-entry-brief>h3{font-size:23px}}

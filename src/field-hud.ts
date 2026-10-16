@@ -1,7 +1,7 @@
 export interface FieldHudBox { x: number; y: number; width: number; height: number }
 export interface FieldHudSize { width: number; height: number }
 
-const HUD_SELECTORS = '.command-hud > *, .command-tools, .field-location, .field-launch, .field-controls, .command-dock, .command-crew, .command-routes, .world-head > *, .world-bottom, .live-field-hud, .live-field-legend, .live-auto-world-status, .live-camera, .field-raid-status, .field-object-card';
+const HUD_SELECTORS = '.command-hud > *, .command-tools, .field-more-panel, .field-location, .field-launch, .field-controls, .field-input-hint, .command-dock, .command-crew, .command-routes, .world-head > *, .world-bottom, .live-field-hud, .live-field-legend, .live-auto-world-status, .live-camera, .field-raid-status, .field-object-card';
 export const fieldHudOverlaps = (a: FieldHudBox, b: FieldHudBox): boolean => a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
 
 /** Only painted HUD islands reserve space; their transparent fullscreen wrappers do not. */

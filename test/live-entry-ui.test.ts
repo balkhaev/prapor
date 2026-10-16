@@ -19,11 +19,11 @@ function fixture(): { entry: LiveEntry; state: LiveSnapshot } {
   return {entry:{server,now:state.now,mode:'new',fighter:null,stock,kits:quoteLiveKits(stock)},state};
 }
 class Element {
-  hidden=false;innerHTML='';disabled=false;dataset:Record<string,string>={};children:Element[]=[];parent:Element|null=null;
+  hidden=false;innerHTML='';disabled=false;open=false;dataset:Record<string,string>={};children:Element[]=[];parent:Element|null=null;queries=new Map<string,Element>();
   classList={add(){},remove(){}};listeners=new Map<string,(event:unknown)=>void>();
   append(...elements:Element[]){for(const element of elements){element.parent=this;this.children.push(element);}}
   contains(value:unknown):boolean{return value===this||this.children.some(child=>child.contains(value));}
-  querySelector(){return null;}querySelectorAll(){return [];}closest(){return this;}getAttribute(){return null;}
+  querySelector(selector:string){return this.queries.get(selector)??null;}querySelectorAll(){return [];}closest(){return this;}getAttribute(){return null;}
   setAttribute(){}removeAttribute(){}remove(){}focus(){}
   addEventListener(type:string,callback:(event:unknown)=>void){this.listeners.set(type,callback);}removeEventListener(type:string){this.listeners.delete(type);}
   click(action:string){const target=new Element();target.dataset.liveButton=action;this.append(target);this.listeners.get('click')?.({target});}
@@ -35,13 +35,13 @@ function harness(run:(path:string,init:RequestInit)=>Promise<Response>,getGameId
   const timers=new Map<number,()=>void>();let timer=0;
   Object.defineProperty(globalThis,'document',{configurable:true,value:{activeElement:null,createElement:()=>new Element(),querySelector:()=>null,addEventListener(){},removeEventListener(){}}});
   Object.defineProperty(globalThis,'window',{configurable:true,value:{setTimeout:(callback:()=>void)=>{timers.set(++timer,callback);return timer;},clearTimeout:(id:number)=>timers.delete(id)}});
-  const world=new Element(),dock=new Element(),calls:Array<{path:string;init:RequestInit}>=[];
-  const mode=createLiveMode({world:world as unknown as HTMLElement,dock:dock as unknown as HTMLElement,getAccountId:()=>null,getGameId,onExit(){},onAccount(){},onMarket(){},
+  const world=new Element(),dock=new Element(),hud=new Element(),calls:Array<{path:string;init:RequestInit}>=[];
+  const mode=createLiveMode({world:world as unknown as HTMLElement,dock:dock as unknown as HTMLElement,hudRoot:hud as unknown as HTMLElement,getAccountId:()=>null,getGameId,onExit(){},onAccount(){},onMarket(){},
     sceneFactory:()=>({show(){},hide(){},clear(){},setSelected(){},update(){},destroy(){}}),
     fetch:(async(url:string,init:RequestInit)=>{const path=url.split('/').at(-1)!;calls.push({path,init});return run(path,init);}) as typeof fetch});
   dispose=()=>{mode.destroy();if(doc)Object.defineProperty(globalThis,'document',doc);else Reflect.deleteProperty(globalThis,'document');if(win)Object.defineProperty(globalThis,'window',win);else Reflect.deleteProperty(globalThis,'window');};
   const settle=async()=>{for(let count=0;count<30;count++)await Promise.resolve();};
-  return {mode,world,dock,calls,settle,overlay:world.children[0]!,firePoll(){const next=timers.entries().next().value;if(next){timers.delete(next[0]);next[1]();}}};
+  return {mode,world,dock,calls,settle,raidStatus:hud.children[0]!,overlay:world.children[0]!,firePoll(){const next=timers.entries().next().value;if(next){timers.delete(next[0]);next[1]();}}};
 }
 
 describe('authoritative multiplayer sortie preparation',()=>{
@@ -56,11 +56,13 @@ describe('authoritative multiplayer sortie preparation',()=>{
       return Response.json({...state,server:{...state.server,maps:state.server.maps.map(({city:_city,...map})=>map)}});
     });
     h.mode.show();await h.settle();h.overlay.click('join');await h.settle();
+    expect(h.raidStatus.hidden).toBe(false);
     state.entities[0]!.health=0;state.self.body=createHealth(0);state.self.respawnAt=state.now+1000;
     h.firePoll();await h.settle();
     expect(state.world.city!.quarters.every(quarter => h.overlay.innerHTML.includes(quarter.name))).toBe(true);
     expect(h.overlay.innerHTML.includes('data-entry-roof')).toBe(true);expect(h.overlay.innerHTML).toContain(route.name);
     expect(h.dock.innerHTML).toContain('<h2>Периметр 01</h2>');expect(h.calls.some(call=>call.path==='action')).toBe(false);
+    expect(h.raidStatus.hidden).toBe(true);expect(h.raidStatus.innerHTML).toBe('');
   });
   test('automatic sortie reads server intent and sends pause, resume, route and recall once without replay during polling',async()=>{
     const {entry,state}=fixture();const route=state.world.routes!.find(route=>route.purpose==='loot'&&route.districtId==='customs')!;
@@ -88,6 +90,8 @@ describe('authoritative multiplayer sortie preparation',()=>{
     state.self.automation!.enabled=false;state.self.automation!.stage='complete';state.self.automation!.completedAt=state.now+1000;state.self.automation!.goal='Груз доставлен';
     h.firePoll();await h.settle();expect(h.dock.innerHTML).toContain('Рейд завершён');expect(h.dock.innerHTML).toContain('Вернуться в убежище');
     expect(h.dock.innerHTML).not.toContain('data-live-button="auto-toggle"');expect(h.dock.innerHTML).not.toContain('data-live-button="recall"');expect(commands).toHaveLength(4);
+    state.self.pendingDelivery=[{items:[],money:37,message:'Склад полон'}];
+    h.firePoll();await h.settle();expect(h.dock.innerHTML).toContain('Груз вынесен и ждёт доставки');expect(h.dock.innerHTML).not.toContain('Добыча доставлена');expect(commands).toHaveLength(4);
   });
   test('entry parser detaches the private body and rejects hidden actor fields, forged costs and inconsistent continuation',()=>{
     const {entry,state}=fixture();const self=state.entities[0]!;
@@ -108,7 +112,7 @@ describe('authoritative multiplayer sortie preparation',()=>{
     expect(h.overlay.innerHTML).toContain('Выход в рейд');expect(h.overlay.innerHTML).toContain('Боевой комплект');expect(h.overlay.innerHTML).toContain('ПМ');expect(h.overlay.innerHTML).toContain('СКС');
     h.overlay.click('district:village');h.overlay.click('purpose:pvp');h.overlay.click('kit:scout');h.overlay.click('join');await h.settle();
     expect(JSON.parse(h.calls.find(call=>call.path==='join')!.init.body as string)).toEqual({districtId:'village',purpose:'pvp',kitId:'scout',intent:'deploy'});
-    expect(h.dock.innerHTML).toContain('Комплект разведчика');expect(h.dock.innerHTML).toContain('К зелёному выходу');expect(h.dock.innerHTML).toContain('Игроки поблизости');
+    expect(h.dock.innerHTML).toContain('Комплект разведчика');expect(h.dock.innerHTML).toContain('Вернуть бойца');expect(h.dock.innerHTML).toContain('Игроки поблизости');
     expect(h.dock.innerHTML).toContain('live-medical-fold');expect(h.dock.innerHTML).not.toContain('class="live-medical-fold urgent" open');
     expect(h.calls.some(call=>call.path==='action')).toBe(false);
   });
@@ -122,8 +126,24 @@ describe('authoritative multiplayer sortie preparation',()=>{
     expect(h.overlay.innerHTML).toContain('Продолжить рейд');expect(h.overlay.innerHTML).toContain('55% здоровья');expect(h.overlay.innerHTML).toContain('Повторной оплаты нет');
     h.overlay.click('kit:assault');h.overlay.click('district:village');h.overlay.click('join');await h.settle();
     expect(JSON.parse(h.calls.find(call=>call.path==='join')!.init.body as string)).toEqual({intent:'continue'});
-    expect(h.dock.innerHTML).toContain('Ранения · нужна помощь');expect(h.dock.innerHTML).toContain('class="live-medical-fold urgent" open');
+    expect(h.dock.innerHTML).toContain('Ранения · нужна помощь');expect(h.dock.innerHTML).not.toContain('class="live-medical-fold urgent" open');
     expect(state.self.cargo).toBe(78);expect(h.calls.some(call=>call.path==='action')).toBe(false);
+  });
+
+  test('polling preserves a closed medical section after injury and an open map during preparation',async()=>{
+    const {entry,state}=fixture();
+    const h=harness(async path=>Response.json(path==='entry'?entry:path==='leave'?{ok:true}:state));
+    h.mode.show();await h.settle();
+    const map=new Element();map.open=true;h.overlay.queries.set('.live-entry-map-fold',map);
+    h.firePoll();await h.settle();expect(h.overlay.innerHTML).toContain('class="live-entry-map-fold" open');
+    h.overlay.click('join');await h.settle();
+    state.self.body=createHealth(0.75);state.entities[0]!.health=75;
+    const medical=new Element();medical.open=false;h.dock.queries.set('.live-medical-fold',medical);
+    h.firePoll();await h.settle();
+    expect(h.dock.innerHTML).toContain('Ранения · нужна помощь');expect(h.dock.innerHTML).not.toContain('class="live-medical-fold urgent" open');
+    medical.open=true;h.firePoll();await h.settle();expect(h.dock.innerHTML).toContain('class="live-medical-fold urgent" open');
+    medical.open=false;h.firePoll();await h.settle();expect(h.dock.innerHTML).not.toContain('class="live-medical-fold urgent" open');
+    expect(h.calls.some(call=>call.path==='action')).toBe(false);
   });
 
   test('unavailable supplies block deployment without manufacturing ammunition or replaying a command',async()=>{
