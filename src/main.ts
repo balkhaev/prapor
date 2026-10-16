@@ -1458,7 +1458,7 @@ function closeModal() {
 function focusModal() {
 	modalOrigin = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 	setOverlayState();
-	document.querySelector<HTMLButtonElement>("#modal-root button")?.focus();
+	[...document.querySelectorAll<HTMLButtonElement>("#modal-root button:not(:disabled)")].find(button => button.getClientRects().length > 0)?.focus();
 }
 function openRoom(room: BaseRoom) {
 	const target = state.shelter.rooms.find((item) => item.type === room);
