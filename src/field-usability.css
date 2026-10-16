@@ -66,6 +66,15 @@ body.immersive-game { --field-glass: #18271ff5; --game-muted: #b9c1af; }
 .immersive-game .tool-scroll { padding: 20px; font-size: 13px; line-height: 1.6; }
 .immersive-game .tool-backdrop[data-tool=base] .tool-window { width: min(980px, 100%); }
 .immersive-game .tool-backdrop[data-room-tool=true] .tool-window { width: min(480px, 100%); }
+.immersive-game.field-tools-open .command-crew,
+.immersive-game.field-tools-open .command-routes,
+.immersive-game.field-tools-open .field-controls { display: none; }
+.immersive-game .territory-building-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.immersive-game .territory-building-copy { min-width: 0; }
+.immersive-game .territory-building-copy > .territory-building-reason { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.immersive-game:has(.live-preparing) .world-head { display: none; }
+.immersive-game .live-entry-screen { top: 74px; bottom: 24px; }
+.immersive-game .live-pan-help { display: none; }
 .immersive-game .field-object-note,
 .immersive-game .field-object-weapon { font-size: 12px; line-height: 1.6; }
 .immersive-game .field-object-action { font-size: 12px; min-height: 40px; }
@@ -109,6 +118,8 @@ body.immersive-game { --field-glass: #18271ff5; --game-muted: #b9c1af; }
   .immersive-game .live-watching .command-dock.live-dock { top: 140px; bottom: 170px; left: 8px; right: 8px; width: auto; }
   .immersive-game .tool-backdrop { inset: 94px 8px 126px; }
   .immersive-game .tool-scroll { padding: 14px; }
+  .immersive-game .territory-building-list { grid-template-columns: 1fr; }
+  .immersive-game .live-entry-screen { top: 94px; bottom: 76px; left: 8px; right: 8px; padding: 12px 14px 0; }
   .immersive-game .command-dock .command-dock-scroll,
   .immersive-game .command-dock .live-dock-scroll { padding: 12px; }
 }
@@ -122,4 +133,5 @@ body.immersive-game { --field-glass: #18271ff5; --game-muted: #b9c1af; }
   .immersive-game .command-main .camera-controls { bottom: 53px; }
   .immersive-game .field-controls,
   .immersive-game .field-launch { bottom: 9px; }
+  .immersive-game .live-entry-screen { top: 56px; bottom: 12px; }
 }
