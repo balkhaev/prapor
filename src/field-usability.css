@@ -120,6 +120,11 @@ body.immersive-game { --field-glass: #18271ff5; --game-muted: #b9c1af; }
   .immersive-game .tool-scroll { padding: 14px; }
   .immersive-game .territory-building-list { grid-template-columns: 1fr; }
   .immersive-game .live-entry-screen { top: 94px; bottom: 76px; left: 8px; right: 8px; padding: 12px 14px 0; }
+  .immersive-game .live-entry-screen .live-entry-footer { gap: 10px; padding: 12px 0; }
+  .immersive-game .live-entry-screen .live-entry-footer > div { flex: 1 1 100%; }
+  .immersive-game .live-entry-screen .live-entry-footer .live-join { width: 100%; min-height: 48px; font-size: 14px; }
+  .immersive-game .live-entry-screen .live-entry-footer strong { font-size: 12px; }
+  .immersive-game .live-entry-screen .live-entry-footer small { font-size: 11px; }
   .immersive-game .command-dock .command-dock-scroll,
   .immersive-game .command-dock .live-dock-scroll { padding: 12px; }
 }
