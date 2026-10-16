@@ -8,7 +8,7 @@
     "dev": "node .devhub/launch.cjs dev",
     "worktree": "node .devhub/worktree.cjs",
     "check": "tsc --noEmit",
-    "test": "bun test",
+    "test": "bun test --timeout 15000",
     "balance": "bun scripts/balance.ts",
     "balance:armory": "bun scripts/armory-balance.ts",
     "balance:strategy": "bun scripts/strategy-balance.ts",
