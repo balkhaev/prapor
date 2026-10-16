@@ -1903,6 +1903,14 @@ function preloadVisibleWeaponArtwork() {
 	const revision = modularWeaponArtRevision();
 	void preloadModularWeaponArt([...ids]).then(() => { if (modularWeaponArtRevision() !== revision) render(); });
 }
+function updateNavigation() {
+	const destination = page === "home" ? liveMode?.isActive() ? "raids" : "base" : page;
+	for (const button of document.querySelectorAll<HTMLButtonElement>(".nav button")) {
+		const current = button.dataset.page === destination;
+		button.classList.toggle("active", current);
+		button.setAttribute("aria-current", current ? "page" : "false");
+	}
+}
 function render() {
 	queueMicrotask(preloadVisibleWeaponArtwork);
 	deferredRender = false;
@@ -1918,11 +1926,7 @@ function render() {
 	const expandedAchievements = Array.from(panel.querySelectorAll<HTMLDetailsElement>('details[data-achievement-detail][open]')).map(node => node.dataset.achievementDetail);
 	const collapsedAchievements = Array.from(panel.querySelectorAll<HTMLDetailsElement>('details[data-achievement-detail]:not([open])')).map(node => node.dataset.achievementDetail);
 	resumedJournal = [];
-	document
-		.querySelectorAll<HTMLButtonElement>(".nav button")
-		.forEach((button) =>
-			((button.classList.toggle("active", button.dataset.page === (liveMode?.isActive() ? "raids" : page))), (button.setAttribute("aria-current", button.dataset.page === (liveMode?.isActive() ? "raids" : page) ? "page" : "false")))
-		);
+	updateNavigation();
 	const captions: Record<Page, string> = {
 		home: "Железо в арсенале. Свои люди на связи.",
 		raids: "Снаряжение, лечение и работа людей убежища. Все новые рейды — на большом Периметре.",
@@ -3051,7 +3055,7 @@ function setView(view: "base" | "map" | "raid" | "live") {
 	(document.querySelector(".room-shortcuts") as HTMLElement).hidden = false;
 	updateCameraControls();
 	if (world) renderCommandBoard();
-	updateSaveBanner(); setOverlayState();
+	updateSaveBanner(); setOverlayState(); updateNavigation();
 	if (wasLive) render();
 }
 render();

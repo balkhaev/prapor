@@ -74,7 +74,8 @@ body.immersive-game { --field-glass: #18271ff5; --game-muted: #b9c1af; }
 .immersive-game .territory-building-copy > .territory-building-reason { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 .immersive-game:has(.live-preparing) .world-head { display: none; }
 .immersive-game .live-entry-screen { top: 74px; bottom: 24px; }
-.immersive-game .live-pan-help { display: none; }
+.immersive-game .live-pan-help,
+.immersive-game .live-watching .field-input-hint { display: none; }
 .immersive-game .field-object-note,
 .immersive-game .field-object-weapon { font-size: 12px; line-height: 1.6; }
 .immersive-game .field-object-action { font-size: 12px; min-height: 40px; }
