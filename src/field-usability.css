@@ -83,6 +83,11 @@ body.immersive-game { --field-glass: #18271ff5; --game-muted: #b9c1af; }
 .immersive-game .shelter-options > summary { cursor: pointer; font-weight: 600; font-size: 14px; }
 .immersive-game .shelter-options > summary small { display: block; padding-top: 3px; color: var(--game-muted); font-size: 12px; font-weight: 400; }
 .immersive-game .shelter-options[open] > summary { margin-bottom: 16px; }
+.game-help-controls { display: grid; gap: 12px; margin: 20px 0; }
+.game-help-controls > div { padding-bottom: 12px; border-bottom: 1px solid var(--game-line); }
+.game-help-controls dt { color: var(--game-text); font-size: 13px; font-weight: 600; }
+.game-help-controls dd { margin: 5px 0 0; color: var(--game-muted); font-size: 12px; line-height: 1.6; }
+.game-help-save > summary { cursor: pointer; min-height: 36px; padding: 8px 0; font-size: 13px; }
 @media (max-width: 1050px) and (min-width: 641px) {
   .immersive-game .command-tools { width: 64px; }
   .immersive-game .command-tools > button,
