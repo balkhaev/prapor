@@ -22,6 +22,7 @@ export function mountFieldInterface(options: {
 	let destroyed = false;
 	body.classList.add("immersive-game");
 	main.insertAdjacentHTML("beforeend", `<div class="field-location"><span class="eyebrow">УБЕЖИЩЕ 07</span><strong>Своя территория</strong><small>База на связи</small></div><button class="field-launch" data-open-live>${icon("raids", 19)}<span>Подготовить выход</span>${icon("arrow", 16)}</button><div class="field-controls" role="group" aria-label="Полевые панели"><button data-field-panel="crew" aria-controls="command-crew" aria-expanded="false" title="Люди и назначение на работу">${icon("people", 18)}<span>Люди</span></button><button data-field-panel="routes" aria-controls="command-routes" aria-expanded="false" title="Точки входа в Периметр">${icon("raids", 18)}<span>Маршруты</span></button><button data-field-panel="dock" aria-controls="command-dock" aria-expanded="false" title="Сводка и управление">${icon("contracts", 18)}<span>Сводка</span></button><button data-action="toggle-fullscreen" aria-label="Развернуть игру на весь экран" aria-pressed="false" title="На весь экран"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 9V3h6m6 0h6v6m0 6v6h-6M9 21H3v-6"/></svg></button></div>`);
+	main.insertAdjacentHTML("beforeend", '<div class="field-input-hint" aria-hidden="true"><span>Потяни мышью — обзор</span><span>Колесо — масштаб</span><span>Клик — выбор</span></div>');
 	function dockVisible() {
 		return !body.classList.contains("field-dock-collapsed") && (body.classList.contains("field-dock-open") || dock.matches(".context-open, .raid-dock, .live-dock"));
 	}
@@ -99,7 +100,7 @@ export function mountFieldInterface(options: {
 			const open = isPanelOpen(panel);
 			if (open) { closePanel(panel); return; }
 			body.classList.remove("field-crew-open", "field-routes-open");
-			if (panel !== "dock" && window.innerWidth <= 640) {
+			if (panel !== "dock") {
 				body.classList.remove("field-dock-open");
 				body.classList.add("field-dock-collapsed");
 			}

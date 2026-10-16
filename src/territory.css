@@ -1,6 +1,7 @@
 .territory-summary{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:20px 22px;border:1px solid color-mix(in srgb, var(--game-line) 27%, transparent);border-radius:var(--game-radius-panel);background:linear-gradient(120deg,var(--game-panel-raised),var(--game-panel-raised));margin-bottom:18px}
 .territory-summary h2{margin:5px 0;font-size:25px}
 .territory-summary p{margin:6px 0;color:var(--game-text);font-size:13px}
+.territory-summary>div>small{display:block;color:var(--game-muted);font-size:12px;line-height:1.5}
 .territory-space{display:grid;justify-items:center;min-width:115px;padding-left:20px;border-left:1px solid color-mix(in srgb, var(--game-line) 27%, transparent)}
 .territory-space strong{font:700 38px "IBM Plex Mono",monospace;color:var(--game-text)}
 .territory-space span{font-size:11px;color:var(--game-text)}
@@ -34,13 +35,29 @@
 .territory-legend span:nth-child(2):before{height:10px;border-radius:50%;background:var(--game-friendly);box-shadow:none}
 .territory-legend span:nth-child(3):before{height:10px;border:1px solid var(--game-line);border-radius:50%;background:transparent;box-shadow:none}
 
-.territory-catalogue{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin:14px 0}
-.territory-blueprint{display:grid;grid-template-columns:68px 1fr;gap:12px;padding:17px;border:1px solid color-mix(in srgb, var(--game-line) 27%, transparent);border-radius:var(--game-radius-panel);background:var(--game-panel-raised)}
+.territory-catalogue{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));align-items:start;gap:12px;margin:14px 0}
+.territory-catalogue-hint{grid-column:1/-1;margin:0 0 2px;color:var(--game-muted);font-size:12px;line-height:1.5}
+.territory-blueprint{display:grid;grid-template-columns:50px minmax(0,1fr);gap:10px 12px;padding:15px;border:1px solid color-mix(in srgb, var(--game-line) 27%, transparent);border-radius:var(--game-radius-panel);background:var(--game-panel-raised)}
 .territory-blueprint.locked{background:var(--game-panel-raised)}
-.territory-blueprint h3{font-size:15px;margin:0 0 8px}
-.territory-blueprint p{color:var(--game-text);font-size:12px;line-height:1.6;margin:0 0 9px}
-.territory-blueprint>button,.territory-blueprint>.quote-note{grid-column:1/-1}
-.blueprint-art{align-self:start;margin-top:5px}
+.territory-blueprint h3{font-size:15px;margin:0 0 5px}
+.territory-blueprint p{color:var(--game-text);font-size:12px;line-height:1.5;margin:0}
+.territory-blueprint>.button,.territory-blueprint>.quote-note,.blueprint-cost,.blueprint-details{grid-column:1/-1}
+.territory-blueprint>.quote-note{font-size:11px;line-height:1.45;margin:0;min-height:2.9em}
+.territory-blueprint>.button{width:100%;min-height:38px}
+.blueprint-copy{min-height:68px}
+.blueprint-existing{display:block;margin-top:5px;color:var(--game-muted);font-size:10px}
+.blueprint-cost{display:grid;gap:5px;padding:10px 0;border-top:1px solid color-mix(in srgb,var(--game-line) 20%,transparent)}
+.blueprint-cost strong{font-size:15px;color:var(--game-text)}
+.blueprint-cost strong span{font-size:12px;font-weight:500;color:var(--game-muted)}
+.blueprint-cost>small{font-size:11px;color:var(--game-muted)}
+.blueprint-details{border-top:1px solid color-mix(in srgb,var(--game-line) 20%,transparent);border-bottom:1px solid color-mix(in srgb,var(--game-line) 20%,transparent)}
+.blueprint-details>summary{cursor:pointer;min-height:38px;align-content:center;color:var(--game-brass-light);font-size:11px;line-height:1.5}
+.blueprint-details>summary>span{display:block;margin-left:13px;color:var(--game-muted);font-size:10px}
+.blueprint-details>summary:focus-visible{outline:2px solid var(--game-brass);outline-offset:3px;border-radius:3px}
+.blueprint-details[open]>summary{margin-bottom:8px}
+.blueprint-details[open]{padding-bottom:10px}
+.blueprint-details .loot-material-requirements{margin-bottom:0}
+.blueprint-art{align-self:start}
 .blueprint-art svg{display:block;width:100%;height:auto}
 
 .building-placement{position:absolute;z-index:24;left:12px;right:12px;bottom:44px;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;padding:13px 16px;background:color-mix(in srgb, var(--game-panel) 96%, transparent);border:1px solid var(--game-line);border-radius:var(--game-radius-panel);box-shadow:0 5px 24px #0007}
@@ -55,15 +72,19 @@
 .building-layout-actions .button{flex:1 1 170px}
 
 .territory-building-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;margin:16px 0 22px}
-.territory-building-card{position:relative;display:flex;gap:16px;align-items:center;text-align:left;min-height:112px;padding:15px;border:1px solid color-mix(in srgb, var(--game-line) 33%, transparent);border-radius:var(--game-radius-panel);background:radial-gradient(ellipse at 5% 50%,color-mix(in srgb, var(--game-brass) 9%, transparent),transparent 75%),var(--game-panel-raised);color:var(--game-brass-light);cursor:pointer}
+.territory-building-card{position:relative;display:flex;gap:12px;align-items:center;text-align:left;min-height:112px;padding:15px;border:1px solid color-mix(in srgb, var(--game-line) 33%, transparent);border-radius:var(--game-radius-panel);background:radial-gradient(ellipse at 5% 50%,color-mix(in srgb, var(--game-brass) 9%, transparent),transparent 75%),var(--game-panel-raised);color:var(--game-brass-light);cursor:pointer}
 .territory-building-card:hover,.territory-building-card.active{border-color:var(--room-color);background-color:var(--game-brass-surface)}
 .territory-building-card:focus-visible{outline:3px solid var(--game-brass);outline-offset:3px}
-.territory-building-art{display:block;flex:0 0 96px}
-.territory-building-art svg{display:block;width:96px;height:auto}
+.territory-building-card>.territory-building-art{display:block;flex:0 0 64px}
+.territory-building-card>.territory-building-art svg{display:block;width:64px;height:auto}
 .territory-building-copy{display:grid;gap:7px;flex:1}
 .territory-building-copy strong{font-size:15px}
 .territory-building-copy small{font-size:11px;color:var(--game-text)}
 .territory-building-copy>span{font-size:10px;color:var(--game-muted)}
+.territory-building-copy>.territory-building-status{font-size:12px;color:var(--game-text)}
+.territory-building-copy>.territory-building-reason{font-size:11px;line-height:1.5}
+.territory-building-reason:empty{display:none}
+.territory-building-card[data-room-kind="workers"] .territory-building-status,.territory-building-card[data-room-kind="resources"] .territory-building-status,.territory-building-card[data-room-kind="capacity"] .territory-building-status{color:var(--game-brass-light)}
 .territory-building-arrow{font-size:20px;color:var(--game-brass-light)}
 .territory-layout-tools{padding:0 17px 14px;border:1px solid color-mix(in srgb, var(--game-line) 27%, transparent);border-radius:var(--game-radius-panel);margin:15px 0 23px;background:var(--game-panel-raised)}
 .territory-layout-tools>summary{display:flex;align-items:center;justify-content:space-between;gap:20px;cursor:pointer;padding:17px 0;color:var(--game-brass-light);font-size:14px;list-style:none}

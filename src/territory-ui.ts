@@ -1,4 +1,5 @@
-import { ROOM_DEFINITIONS, getRoomFootprint, getRoomBounds, getRoomFacing, getShelterSites, type GameState, type RoomInstance, type ShelterRoomType } from "./game/engine";
+import { ROOM_DEFINITIONS, getRoomFootprint, getRoomBounds, getRoomFacing, getRoomWorkerCapacity, getRoomProductionState, getShelterSites, type GameState, type RoomInstance, type ShelterRoomType } from "./game/engine";
+import { getCommandSummary } from "./command-summary";
 import { getLootRequirementQuote } from './game/loot-uses';
 import { lootRequirementsPanel } from './loot-materials-ui';
 import { roomMiniArt } from "./command-art";
@@ -18,22 +19,37 @@ const groundTransform = `matrix(${projectionX.x - projectionOrigin.x} ${projecti
 const escape = (value: unknown) => String(value).replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
 export interface BuildingPlacement { type: ShelterRoomType; roomId?: string; rotation: 0 | 1; facing?: 0 | 1 | 2 | 3; site: { column: number; row: number } | null; point?: { x: number; y: number } | null }
 export const BUILDING_FACING_LABELS = ["во двор", "влево", "к задней границе", "вправо"] as const;
+const BUILDING_PURPOSE: Record<ShelterRoomType, string> = {
+	workshop: "Сборка оружейных модулей и ремонтных комплектов.",
+	ammo: "Патроны для рейдов и производства.",
+	recycler: "Детали для строительства и новых партий.",
+	medbay: "Медикаменты для восстановления бойцов.",
+	radio: "Разведданные для подготовки к рейдам.",
+	storage: "Больше места для оружия, деталей и припасов.",
+	dormitory: "Два новых места для бойцов на первом уровне.",
+	hangar: "Вместительное хранилище оружия, деталей и припасов.",
+};
+const buildTime = (seconds: number) => seconds < 60 ? `${seconds} с` : `${Math.floor(seconds / 60)} мин${seconds % 60 ? ` ${seconds % 60} с` : ""}`;
 export function buildingCatalogueReason(state: GameState, type: ShelterRoomType): string | null {
 	const info = ROOM_DEFINITIONS[type], unlock = info.unlockLevel ?? 1;
-	return state.level < unlock ? `Откроется на уровне ${unlock}` : state.money < info.cost.money || state.supplies.scrap < info.cost.scrap ? "Не хватает рублей или деталей" : getLootRequirementQuote(state,info.lootRequirements).reason;
+	if (state.level < unlock) return `Откроется на уровне ${unlock}`;
+	const missing = [state.money < info.cost.money ? `${Math.ceil(info.cost.money - state.money)} ₽` : "", state.supplies.scrap < info.cost.scrap ? `${Math.ceil(info.cost.scrap - state.supplies.scrap)} дет.` : ""].filter(Boolean);
+	return missing.length ? `Не хватает ${missing.join(" и ")}` : getLootRequirementQuote(state, info.lootRequirements).reason;
 }
 
 export function territorySummary(state: GameState): string {
 	const total = getShelterSites(state.shelter).length, area = total * 192 * 132;
 	const occupied = state.shelter.rooms.reduce((sum, room) => { const bounds = getRoomBounds(room); return sum + bounds.width * bounds.height; }, 0);
 	const free = Math.max(0, Math.round((area - occupied) / area * 100));
-	return `<section class="territory-summary"><div><span class="eyebrow">Твоя территория</span><h2>База · ${state.shelter.rooms.length} построек</h2><p>Перетаскивай здания прямо по двору. Место выбираешь свободно.</p></div><div class="territory-space"><strong>${free}%</strong><span>свободной земли</span></div></section>`;
+	return `<section class="territory-summary"><div><span class="eyebrow">Твоя территория</span><h2>База · ${state.shelter.rooms.length} построек</h2><p>Зажми мышь и тяни — камера двигается. Нажми на здание, чтобы управлять им.</p><small>Перенос здания: открой его и выбери «Переставить постройку».</small></div><div class="territory-space"><strong>${free}%</strong><span>свободной земли</span></div></section>`;
 }
 
 export function territoryBuildings(state: GameState, selectedId: string | null): string {
+	const summary = getCommandSummary(state);
 	return `<div class="territory-building-list">${state.shelter.rooms.map(room => {
-		const info = ROOM_DEFINITIONS[room.type];
-		return `<button class="territory-building-card ${selectedId === room.id ? "active" : ""}" data-shelter-room="${escape(room.id)}" style="--room-color:${info.color}" aria-label="Управлять постройкой: ${escape(info.label)}"><span class="territory-building-art">${roomMiniArt(room.type, `yard-${room.id}`).replace('<svg ', '<svg aria-hidden="true" ')}</span><span class="territory-building-copy"><strong>${escape(info.label)}</strong><small>Уровень ${room.level || "—"} · ${info.production ? `${room.workerIds.length} работников` : "Без персонала"}</small><span data-room-status="${escape(room.id)}">${room.status === "ready" ? "На базе" : "Строительные работы"}</span></span><span class="territory-building-arrow" aria-hidden="true">↗</span></button>`;
+		const info = ROOM_DEFINITIONS[room.type], production = getRoomProductionState(state, room), status = summary.rooms.find(item => item.roomId === room.id);
+		const reason = production.reason ?? (status?.cta ? status.detail : "");
+		return `<button class="territory-building-card ${selectedId === room.id ? "active" : ""}" data-shelter-room="${escape(room.id)}" data-room-summary="${escape(room.id)}" data-room-kind="${status?.kind ?? "passive"}" aria-pressed="${selectedId === room.id}" style="--room-color:${info.color}" aria-label="Управлять постройкой: ${escape(info.label)}"><span class="territory-building-art">${roomMiniArt(room.type, `yard-${room.id}`).replace('<svg ', '<svg aria-hidden="true" ')}</span><span class="territory-building-copy"><strong>${escape(info.label)}</strong><small>Уровень ${room.level || "—"} · ${info.production ? `Рабочие ${room.workerIds.length}/${getRoomWorkerCapacity(room)}` : "Без персонала"}</small><span class="territory-building-status" data-room-status="${escape(room.id)}">${escape(production.status)}</span><span class="territory-building-reason" data-room-reason="${escape(room.id)}">${escape(reason)}</span></span><span class="territory-building-arrow" aria-hidden="true">›</span></button>`;
 	}).join("")}</div>`;
 }
 
@@ -134,10 +150,12 @@ export function territoryPlan(state: GameState, selectedId: string | null): stri
 }
 
 export function buildingCatalogue(state: GameState): string {
-	return `<div class="territory-catalogue" tabindex="-1" aria-label="Доступные постройки">${(Object.keys(ROOM_DEFINITIONS) as ShelterRoomType[]).map(type => {
+	return `<div class="territory-catalogue" tabindex="-1" aria-label="Доступные постройки"><p class="territory-catalogue-hint">Выбери постройку и место во дворе. Материалы спишутся после подтверждения.</p>${(Object.keys(ROOM_DEFINITIONS) as ShelterRoomType[]).map(type => {
 		const info = ROOM_DEFINITIONS[type], size = getRoomFootprint({ type }), unlock = info.unlockLevel ?? 1;
-		const reason = buildingCatalogueReason(state, type);
-		return `<article class="territory-blueprint ${state.level < unlock ? "locked" : ""}"><div class="blueprint-art" aria-hidden="true">${roomMiniArt(type, `blueprint-${type}`)}</div><div><h3>${escape(info.label)}</h3><p>${escape(info.description)}</p><span class="tag">${size.width * size.height > 1 ? "Крупная постройка" : "Компактная постройка"}</span> <small>${info.cost.money} ₽ · ${info.cost.scrap} дет. · ${info.buildSeconds} с</small>${lootRequirementsPanel(getLootRequirementQuote(state,info.lootRequirements).requirements,'Предметы для постройки')}</div><button class="button secondary small" data-action="place-building" data-room-type="${type}" ${reason ? "disabled" : ""}>${state.level < unlock ? `Уровень ${unlock}` : "Выбрать место"}</button><small class="quote-note" data-blueprint-reason>${escape(reason ?? "Выбери место внутри периметра")}</small></article>`;
+		const reason = buildingCatalogueReason(state, type), quote = getLootRequirementQuote(state, info.lootRequirements);
+		const existing = state.shelter.rooms.filter(room => room.type === type).length;
+		const missing = quote.requirements.filter(need => need.owned < need.required).length;
+		return `<article class="territory-blueprint ${state.level < unlock ? "locked" : ""}"><div class="blueprint-art" aria-hidden="true">${roomMiniArt(type, `blueprint-${type}`)}</div><div class="blueprint-copy"><h3>${escape(info.label)}</h3><p>${BUILDING_PURPOSE[type]}</p>${existing ? `<small class="blueprint-existing">Уже на базе: ${existing}</small>` : ""}</div><div class="blueprint-cost"><strong>${info.cost.money} ₽ <span>+ ${info.cost.scrap} дет.</span></strong><small>${buildTime(info.buildSeconds)} · ${size.width * size.height > 1 ? "Крупная постройка" : "Компактная постройка"}</small></div><details class="blueprint-details"><summary>Состав и описание <span>${missing ? `Нет материалов: ${missing}` : "Материалы собраны"}</span></summary><p>${escape(info.description)}</p>${lootRequirementsPanel(quote.requirements, "Предметы для постройки")}</details><small class="quote-note" data-blueprint-reason>${escape(reason ?? "Выбери место внутри периметра")}</small><button class="button secondary small" data-action="place-building" data-room-type="${type}" ${reason ? "disabled" : ""}>${state.level < unlock ? `Уровень ${unlock}` : "Выбрать место"}</button></article>`;
 	}).join("")}</div>`;
 }
 
@@ -147,5 +165,5 @@ export function buildingPlacementControls(placement: BuildingPlacement, reason: 
 }
 
 export function buildingRelocationControls(room: RoomInstance): string {
-	return `<section class="room-panel-section building-layout-controls"><h3>Место и вход</h3><p>Вход ${BUILDING_FACING_LABELS[getRoomFacing(room)]}. Перетащи здание в удобное место во дворе. Перенос бесплатный; работники и оплаченные заказы сохранятся.</p><div class="building-layout-actions"><button class="button secondary" data-action="move-building" data-id="${escape(room.id)}" ${room.status !== "ready" ? "disabled" : ""}>Переставить постройку</button></div>${room.status !== "ready" ? '<small class="quote-note">Дождись окончания строительных работ.</small>' : ""}</section>`;
+	return `<section class="room-panel-section building-layout-controls"><h3>Место и вход</h3><p>Вход ${BUILDING_FACING_LABELS[getRoomFacing(room)]}. Нажми «Переставить постройку», затем выбери новое место во дворе и подтверди. Перенос бесплатный; работники и оплаченные заказы сохранятся.</p><div class="building-layout-actions"><button class="button secondary" data-action="move-building" data-id="${escape(room.id)}" ${room.status !== "ready" ? "disabled" : ""}>Переставить постройку</button></div>${room.status !== "ready" ? '<small class="quote-note">Дождись окончания строительных работ.</small>' : ""}</section>`;
 }

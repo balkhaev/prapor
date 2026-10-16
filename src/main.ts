@@ -167,6 +167,8 @@ import { MARKET_MAX_ACTIVE } from './game/flea';
 import './game-theme.css';
 import './immersive.css';
 import './field-composition.css';
+import './field-usability.css';
+import { mountFieldNavigation } from './field-navigation';
 import { mountFieldObjectUI } from './field-object-ui';
 import { mountFieldInterface } from './field-ui';
 
@@ -356,7 +358,7 @@ function canWorldDrag() {
 	if (buildingPlacement || buildingDragPreview?.active) return false;
 	return !liveMode?.isActive() && !accountDialogOpen && !accountChanging && serverReady && !saveConflict && !protectedSave && worldView === "base" && page === "home" && !isInspectorOpen() && !document.querySelector("#modal-root .modal") && !isContextDialogOpen();
 }
-function canWorldCamera() { return !buildingDragPreview?.active && !liveMode?.isActive() && !accountDialogOpen && !accountChanging && serverReady && !saveConflict && !protectedSave && (canWorldDrag() || (Boolean(buildingPlacement) && page === "home" && !isInspectorOpen() && !document.querySelector("#modal-root .modal"))) && !workerPlacement && !crewPointer; }
+function canWorldCamera() { return !buildingDragPreview?.active && !liveMode?.isActive() && !accountDialogOpen && !accountChanging && serverReady && !saveConflict && !protectedSave && worldView === "base" && page === "home" && !document.querySelector("#modal-root .modal") && !isContextDialogOpen() && !workerPlacement && !crewPointer; }
 function canWorldInteract() {
 	return !liveMode?.isActive() && !accountDialogOpen && !accountChanging && serverReady && !saveConflict && !protectedSave && !workerPlacement && !crewPointer?.started && Date.now() >= worldInputBlockedUntil && page === "home" && !isInspectorOpen() && !document.querySelector("#modal-root .modal") && !isContextDialogOpen();
 }
@@ -383,7 +385,7 @@ const panel = document.querySelector<HTMLDivElement>("#panel")!;
 document.querySelector<HTMLButtonElement>('.nav [data-page="achievements"]')!.insertAdjacentHTML('beforeend', '<b class="badge" id="achievement-badge">0/12</b>');
 app.insertAdjacentHTML('beforeend', '<aside id="achievement-notice" class="achievement-notice" aria-label="Новая нашивка" hidden></aside>');
 document.querySelector(".command-footer")!.prepend(document.querySelector("#offline-summary")!);
-document.querySelector(".world-head .view-switch")!.insertAdjacentHTML("afterend", '<div class="camera-controls" role="group" aria-label="Вид убежища"><button data-camera="out" aria-label="Отдалить убежище" title="Отдалить (−)">−</button><span id="camera-scale" class="camera-scale" aria-label="Масштаб">100%</span><button data-camera="in" aria-label="Приблизить убежище" title="Приблизить (+)">+</button><button data-camera="fit" class="camera-fit" aria-label="Обзор всего убежища" title="Обзор всего убежища (0)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 9V3h6m6 0h6v6m0 6v6h-6M9 21H3v-6"/></svg><span>Обзор</span></button><button data-camera="pan" aria-label="Рука: перемещать вид" title="Рука: перетаскивать убежище" aria-pressed="false"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 12V5a2 2 0 0 1 4 0v7-8a2 2 0 0 1 4 0v8-5a2 2 0 0 1 4 0v8c0 4-3 7-7 7h-1c-2 0-4-1-5-3L3 12a2 2 0 0 1 3-2l2 2"/></svg></button></div>');
+document.querySelector(".world-head .view-switch")!.insertAdjacentHTML("afterend", '<div class="camera-controls" role="group" aria-label="Вид убежища"><button data-camera="out" aria-label="Отдалить убежище" title="Отдалить (−)">−</button><span id="camera-scale" class="camera-scale" aria-label="Масштаб">100%</span><button data-camera="in" aria-label="Приблизить убежище" title="Приблизить (+)">+</button><button data-camera="fit" class="camera-fit" aria-label="Обзор всего убежища" title="Обзор всего убежища (0)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 9V3h6m6 0h6v6m0 6v6h-6M9 21H3v-6"/></svg><span>Обзор</span></button><button data-camera="pan" aria-label="Только камера: без выбора объектов" title="Режим камеры без выбора объектов" aria-pressed="false"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 12V5a2 2 0 0 1 4 0v7-8a2 2 0 0 1 4 0v8-5a2 2 0 0 1 4 0v8c0 4-3 7-7 7h-1c-2 0-4-1-5-3L3 12a2 2 0 0 1 3-2l2 2"/></svg></button></div>');
 const worldViewport = document.querySelector<HTMLElement>("#world")!;
 mountSceneLightControl(document.querySelector('.world-head')!);
 worldViewport.insertAdjacentHTML("afterend", '<div id="live-world" aria-label="Общий онлайн-периметр" hidden></div>');
@@ -403,6 +405,7 @@ utilityRail.append(document.querySelector(".scene-light-control")!, document.que
 utilityRail.querySelector(".settings")!.insertAdjacentHTML("beforeend", "<span>Помощь</span>");
 utilityRail.querySelector('[data-action="toggle-fullscreen"]')!.insertAdjacentHTML("beforeend", "<span>Экран</span>");
 app.append(utilityRail);
+const fieldNavigation = mountFieldNavigation(utilityRail);
 mainFieldLayer();
 function mainFieldLayer() {
  const layer = document.createElement("div"); layer.id = "field-object-layer";
@@ -444,7 +447,7 @@ updateSoundControl();
 worldViewport.tabIndex = 0;
 worldViewport.setAttribute("role", "region");
 worldViewport.setAttribute("aria-describedby", "camera-help");
-worldViewport.insertAdjacentHTML("afterend", '<p id="camera-help" class="visually-hidden">Вид убежища: плюс и минус меняют масштаб, ноль возвращает обзор, стрелки сдвигают вид. Рука позволяет перетаскивать убежище. Чтобы назначить бойца, перетащи его портрет или выбери комнату с клавиатуры.</p>');
+worldViewport.insertAdjacentHTML("afterend", '<p id="camera-help" class="visually-hidden">Зажми левую кнопку мыши и потяни, чтобы переместить камеру. Колесо меняет масштаб. Клик выбирает постройку или бойца. Плюс и минус меняют масштаб, ноль возвращает обзор, стрелки сдвигают вид. Постройки перемещаются кнопкой «Переставить постройку», а работники назначаются в разделе «Люди».</p>');
 document.querySelector(".world-card")!.insertAdjacentHTML("beforeend", '<div id="worker-room-targets" class="worker-room-targets" role="group" aria-label="Выбери рабочую комнату" hidden></div><div id="worker-placement" class="worker-placement" hidden><div><strong id="worker-placement-title"></strong><span id="worker-placement-hint"></span></div><button class="icon-button" data-worker-cancel aria-label="Отменить назначение">×</button></div>');
 document.querySelector(".world-card")!.insertAdjacentHTML("beforeend", '<div id="building-drag-status" class="building-drag-status" role="status" hidden></div><div id="building-placement" class="building-placement" role="group" aria-label="Размещение постройки" hidden></div>');
 app.insertAdjacentHTML("beforeend", '<div id="worker-drag-ghost" class="worker-drag-ghost" aria-hidden="true" hidden></div><div id="worker-drop-status" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>');
@@ -462,7 +465,7 @@ function updateCameraControls() {
 	controls.hidden = false;
 	controls.setAttribute("aria-label", "Вид убежища");
 	worldViewport.setAttribute("aria-label", "Территория базы: постройки, двор и рабочие");
-	const help = document.querySelector<HTMLElement>("#camera-help"); if (help) help.textContent = "Вид убежища: плюс и минус меняют масштаб, ноль возвращает обзор, стрелки сдвигают вид. Рука позволяет перетаскивать убежище. Чтобы назначить бойца, перетащи его портрет или выбери комнату с клавиатуры.";
+	const help = document.querySelector<HTMLElement>("#camera-help"); if (help) help.textContent = "Зажми левую кнопку мыши и потяни, чтобы переместить камеру. Колесо меняет масштаб. Клик выбирает постройку или бойца. Плюс и минус меняют масштаб, ноль возвращает обзор, стрелки сдвигают вид. Постройки перемещаются кнопкой «Переставить постройку», а работники назначаются в разделе «Люди».";
 	const coordinate = document.querySelector<HTMLElement>(".world-coordinate"); if (coordinate) coordinate.textContent = "БАЗА 07 · СЕВЕР";
 	const available = canWorldCamera();
 	controls.querySelectorAll<HTMLButtonElement>("[data-camera]").forEach((button) => { button.disabled = !available; });
@@ -475,11 +478,11 @@ function updateCameraControls() {
 	if (farther) farther.setAttribute('aria-label', "Отдалить убежище");
 	if (closer) closer.setAttribute('aria-label', "Приблизить убежище");
 	controls.querySelector<HTMLButtonElement>('[data-camera="pan"]')?.setAttribute("aria-pressed", String(cameraView.panMode));
-	const panButton = controls.querySelector<HTMLButtonElement>('[data-camera="pan"]'); if (panButton) panButton.title = "Рука: перемещать вид. Можно удерживать пробел";
+	const panButton = controls.querySelector<HTMLButtonElement>('[data-camera="pan"]'); if (panButton) panButton.title = "Только камера: без выбора объектов. Можно удерживать пробел";
 	controls.querySelector<HTMLButtonElement>('[data-camera="pan"]')?.classList.toggle("active", cameraView.panMode);
 	document.querySelector(".world-card")?.classList.toggle("camera-hand-mode", cameraView.panMode);
 	document.querySelector("#camera-scale")!.textContent = `${Math.round(cameraView.zoom * 100)}%`;
-	document.querySelector("#scene-hint")!.textContent = cameraView.panMode ? "Перетаскивай вид · Обзор — вся база" : "Перетаскивай постройки по двору · за оградой — расширение";
+	document.querySelector("#scene-hint")!.textContent = cameraView.panMode ? "Перетаскивай вид · Обзор — вся база" : "Потяни мышью — обзор · клик — выбор объекта";
 	document.querySelector('.world-card')?.classList.remove('raid-view');
 	document.querySelector('.command-main')?.classList.remove('raid-watching');
 }
@@ -1647,7 +1650,7 @@ function closeTools() {
 	render();
 	if (isContextDialogOpen()) document.querySelector<HTMLButtonElement>('#command-dock [data-action="close-context"]')?.focus({ preventScroll: true });
 	else if (toolOrigin?.isConnected && !toolOrigin.closest("[inert]") && toolOrigin.getClientRects().length) toolOrigin.focus({ preventScroll: true });
-	else document.querySelector<HTMLButtonElement>(`.command-tools [data-page="${closedPage}"]`)?.focus({ preventScroll: true });
+	else fieldNavigation.focusPage(closedPage);
 }
 function openRecruitment() {
 	toolOrigin = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -1755,7 +1758,8 @@ function commandOverview(summary = getCommandSummary(state)) {
 function renderShelter() {
 	if (roomToolOpen) { const room = state.shelter.rooms.find(item => item.id === selectedRoomId); if (room) { panel.innerHTML = managedRoomPanel(room); return; } }
 	const planOpen = Boolean(buildingPlacement) || Boolean(panel.querySelector<HTMLDetailsElement>(".territory-layout-tools")?.open);
-	panel.innerHTML = `${territorySummary(state)}<div class="section-head"><h2>Постройки во дворе</h2><span class="muted">Выбери здание для управления</span></div>${territoryBuildings(state, selectedRoomId)}<details class="territory-layout-tools" ${planOpen ? "open" : ""}><summary><span>Планировка и расширение<small>Места для строительства и новая земля</small></span><b>+</b></summary>${territoryPlan(state, selectedRoomId)}<p class="field-hint">Выбери свободное место или присоедини землю за оградой. Перетаскивай постройки прямо во дворе. Контур покажет, подходит ли место.</p></details><div class="section-head"><h2>Построить на базе</h2><span class="muted">Место выбираешь на территории</span></div>${buildingCatalogue(state)}${productionReserveEditor(state, "base", productionReserveDraft)}${fieldKitStockPanel(state)}${discoveriesSection()}`;
+	const suppliesOpen = panel.querySelector<HTMLDetailsElement>(".shelter-options")?.open ?? false;
+	panel.innerHTML = `${territorySummary(state)}<div class="section-head"><h2>Постройки во дворе</h2><span class="muted">Выбери здание для управления</span></div>${territoryBuildings(state, selectedRoomId)}<details class="territory-layout-tools" ${planOpen ? "open" : ""}><summary><span>Планировка и расширение<small>Места для строительства и новая земля</small></span><b>+</b></summary>${territoryPlan(state, selectedRoomId)}<p class="field-hint">Выбери свободное место или присоедини землю за оградой. Потяни мышью, чтобы осмотреть двор. Для переноса выбери постройку → «Развитие» → «Переставить постройку». Контур покажет, подходит ли место.</p></details><div class="section-head"><h2>Построить на базе</h2><span class="muted">Место выбираешь на территории</span></div>${buildingCatalogue(state)}<details class="shelter-options" ${suppliesOpen ? "open" : ""}><summary>Припасы и резерв<small>Комплекты для отряда и настройка запаса производства</small></summary>${productionReserveEditor(state, "base", productionReserveDraft)}${fieldKitStockPanel(state)}</details>${discoveriesSection()}`;
 }
 function buildSitePanel(column: number, row: number) {
 	const open = getShelterSites(state.shelter).some(site => site.column === column && site.row === row);
@@ -3161,6 +3165,7 @@ window.addEventListener("resize", responsiveContext);
 import.meta.hot?.dispose(() => {
 	fieldObjects?.destroy();
 	fieldInterface?.destroy();
+	fieldNavigation.destroy();
 	territoryLife?.destroy();
 	liveMode?.destroy();
 	dismissAchievementNotice();

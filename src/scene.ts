@@ -1,4 +1,5 @@
 import Phaser from "phaser";
+import { CameraGesture } from "./camera-gesture";
 import { type Raid, type RaidReport, type RoomInstance, type WeaponInstance, getShelterSites, getShelterFrontier, type ShelterSite, type ShelterExpansion, ROOM_DEFINITIONS, getRoomWorkerCapacity } from "./game/engine";
 import { getRoomFootprint, getRoomPosition, getRoomBounds, getRoomFacing, getRoomLocalPoint, getRoomEntrance, getShelterRoomAtPoint } from "./game/shelter";
 import { type BaseRoom } from "./game/data";
@@ -191,8 +192,7 @@ type ShelterCell = {
 	completedAt: number;
 };
 type DragSession = { scavId: string; roomId: string | null; reason: string | null; cellKey: string | null; point: Point | null; canvas: boolean; shelter: WorldSnapshot["shelter"]; scav: NonNullable<WorldSnapshot["scavs"]>[number] };
-type CanvasGesture = { scavId: string; pointerId: number; clientX: number; clientY: number; active: boolean };
-type BuildingGesture = BuildingDragState & { pointerId: number; clientX: number; clientY: number; offset: Point; source: Point; identityKey?: string; room: RoomInstance };
+type BaseTap = { identityKey?: string } & ({ kind: "scav"; id: string } | { kind: "room"; id: string } | { kind: "site"; site: { column: number; row: number }; point: Point } | { kind: "placement" });
 const WIDTH = 840;
 const HEIGHT = 520;
 const cellPosition = shelterRoomPosition;
@@ -278,12 +278,9 @@ export function createWorld(
 		private lastWindPaint = -1000;
 		private dragGhost!: Phaser.GameObjects.Graphics;
 		private placementGhost!: Phaser.GameObjects.Graphics;
-		private buildingGhost!: Phaser.GameObjects.Graphics;
 		private buildingPlacement: BuildingPlacement | null = null;
 		private placementHover: Point | null = null;
-		private buildingGesture: BuildingGesture | null = null;
 		private drag: DragSession | null = null;
-		private gesture: CanvasGesture | null = null;
 		private nativeEvents = new AbortController();
 		private viewState: WorldSnapshot | null = null;
 		private terrain!: Phaser.GameObjects.Graphics;
@@ -307,7 +304,7 @@ export function createWorld(
 		private stageSize = { width: 0, height: 0, density: 0 };
 		private panMode = false;
 		private spacePressed = false;
-		private panGesture: { pointerId: number; clientX: number; clientY: number } | null = null;
+		private panGesture = new CameraGesture<BaseTap | null>();
 		private cameraTouches = new Map<number, Point>();
 		private pinchGesture: { ids: [number, number]; distance: number; midpoint: Point } | null = null;
 		private scavs = new Map<string, ScavActor>();
@@ -480,7 +477,7 @@ export function createWorld(
 		}
 
 		private cameraAllowed(): boolean {
-			return Boolean(this.baseLayer && this.scene.isActive() && requestedView === "base" && !document.hidden && !this.drag && !this.gesture && !this.buildingGesture && interactions.canCamera?.() !== false);
+			return Boolean(this.baseLayer && this.scene.isActive() && requestedView === "base" && !document.hidden && !this.drag && interactions.canCamera?.() !== false);
 		}
 
 		private applyCamera(): void {
@@ -489,8 +486,8 @@ export function createWorld(
 			this.baseLayer?.setScale(this.viewCamera.zoom).setPosition(-this.viewCamera.x * this.viewCamera.zoom, -this.viewCamera.y * this.viewCamera.zoom);
 			// Weather uses CSS pixels despite both the yard camera and FIT scaling.
 			this.baseWeather?.setPosition(this.viewCamera.x, this.viewCamera.y).setScale(1 / (this.viewCamera.zoom * this.weatherDisplayScale));
-			this.input?.setDefaultCursor(this.buildingGesture?.active ? "grabbing" : this.panMode || this.spacePressed ? "grab" : "default");
-			if (this.panMode || this.spacePressed || requestedView !== "base") interactions.onHover?.(null);
+			this.input?.setDefaultCursor(this.panGesture.active?.dragged ? "grabbing" : this.buildingPlacement && !this.panMode && !this.spacePressed ? "crosshair" : "grab");
+			if (this.panGesture.active?.dragged || this.panMode || this.spacePressed || requestedView !== "base") interactions.onHover?.(null);
 			interactions.onCameraChange?.(this.getCameraState());
 		}
 
@@ -577,18 +574,17 @@ export function createWorld(
 			if (selection) this.cancelBuildingDrag();
 			this.buildingPlacement = selection ? { ...selection } : null;
 			if (!selection) this.placementHover = null;
-			this.paintBuildingPlacement();
+			this.paintBuildingPlacement(); this.applyCamera();
 		}
 
 		private paintBuildingPlacement(): void {
 			if (!this.placementGhost) return;
 			this.placementGhost.clear();
 			if (requestedView !== "base") return;
-			const drag = this.buildingGesture;
-			const placement = drag?.active ? { roomId: drag.roomId, rotation: drag.rotation, facing: drag.facing, ...getRoomFootprint(drag.room), x: drag.x, y: drag.y } : this.buildingPlacement;
+			const placement = this.buildingPlacement;
 			if (!placement) return;
 			const paint = (point: Point, pinned: boolean) => {
-				const reason = drag?.active ? drag.reason : interactions.getFreeBuildPlacementReason?.(placement, point.x, point.y)
+				const reason = interactions.getFreeBuildPlacementReason?.(placement, point.x, point.y)
 					?? (placement.roomId ? interactions.getBuildingPlacementReason?.(placement.roomId, point.x, point.y, placement.rotation, placement.facing ?? 0) : null);
 				const size = shelterRoomRect(0, 0, placement.width, placement.height);
 				const odd = (placement.facing ?? 0) % 2, width = odd ? size.height : size.width, height = odd ? size.width : size.height;
@@ -610,8 +606,8 @@ export function createWorld(
 			};
 			const pinned = placement.x !== undefined && placement.y !== undefined ? { x: placement.x, y: placement.y }
 				: placement.column !== undefined && placement.row !== undefined ? cellPosition(placement.column, placement.row) : null;
-			if (pinned) paint(pinned, !drag?.active);
-			if (!drag?.active && this.placementHover && (!pinned || Math.hypot(this.placementHover.x - pinned.x, this.placementHover.y - pinned.y) > .01)) paint(this.placementHover, false);
+			if (pinned) paint(pinned, true);
+			if (this.placementHover && (!pinned || Math.hypot(this.placementHover.x - pinned.x, this.placementHover.y - pinned.y) > .01)) paint(this.placementHover, false);
 		}
 
 		private clientWorld(clientX: number, clientY: number): Point | null {
@@ -622,59 +618,20 @@ export function createWorld(
 		private roomAtPoint(point: Point): RoomInstance | null {
 			const shelter = snapshot().shelter ?? { rooms: [] };
 			const visual = projectShelterPoint(point);
-			// Cabins are upright above their footprint; their roofs are draggable too.
+			// Cabins are upright above their footprint; the roof is clickable too.
 			return [...shelter.rooms].sort((a, b) => shelterBuildingDepth(roomRect(b)) - shelterBuildingDepth(roomRect(a)))
 				.find((room) => Phaser.Geom.Polygon.Contains(new Phaser.Geom.Polygon(shelterBuildingHitPolygon(roomRect(room))), visual.x, visual.y)) ?? null;
 		}
 
-		private buildingAllowed(): boolean {
-			return requestedView === "base" && !document.hidden && !this.panMode && !this.spacePressed
-				&& interactions.canInteract?.() !== false && interactions.canBuildingDrag?.() !== false;
-		}
-
-		private moveBuildingDrag(clientX: number, clientY: number): void {
-			const drag = this.buildingGesture;
-			if (!drag) return;
-			if (!this.buildingAllowed() || !this.buildingSourceCurrent(drag)) { this.cancelBuildingDrag(); return; }
-			const point = this.clientWorld(clientX, clientY);
-			if (!point) {
-				drag.reason = "Отпусти постройку на территории базы";
-				this.paintBuildingPlacement();
-				interactions.onBuildingDragState?.({ roomId: drag.roomId, x: drag.x, y: drag.y, rotation: drag.rotation, facing: drag.facing, reason: drag.reason, active: true });
-				return;
-			}
-			drag.x = point.x - drag.offset.x; drag.y = point.y - drag.offset.y;
-			drag.clientX = clientX; drag.clientY = clientY;
-			drag.reason = drag.room.status !== "ready" ? "Дождись окончания строительных работ" : interactions.getBuildingPlacementReason?.(drag.roomId, drag.x, drag.y, drag.rotation, drag.facing) ?? null;
-			const from = projectShelterPoint(drag.source), to = projectShelterPoint(drag);
-			this.buildingGhost.setPosition(to.x - from.x, to.y - from.y).setVisible(true);
-			this.paintBuildingPlacement();
-			interactions.onBuildingDragState?.({ roomId: drag.roomId, x: drag.x, y: drag.y, rotation: drag.rotation, facing: drag.facing, reason: drag.reason, active: true });
-		}
-
-		private buildingSourceCurrent(drag: BuildingGesture): boolean {
-			const state = snapshot(), room = state.shelter?.rooms.find((candidate) => candidate.id === drag.roomId);
-			if (state.identityKey !== drag.identityKey || !room || room.status !== drag.room.status || room.type !== drag.room.type || (room.rotation ?? 0) !== drag.rotation || getRoomFacing(room) !== getRoomFacing(drag.room)) return false;
-			const at = getRoomPosition(room);
-			return Math.hypot(at.x - drag.source.x, at.y - drag.source.y) < .001;
-		}
-
 		cancelBuildingDrag(): void {
-			const drag = this.buildingGesture;
-			this.buildingGesture = null;
-			this.buildingGhost?.clear().setPosition(0, 0).setVisible(false);
-			if (drag) {
-				this.cells.get(roomCellKey(drag.roomId))?.root.setAlpha(1);
-				this.cells.get(roomCellKey(drag.roomId))?.chrome.setAlpha(1);
-				if (this.game.canvas.hasPointerCapture?.(drag.pointerId)) this.game.canvas.releasePointerCapture(drag.pointerId);
-				interactions.onBuildingDragState?.(null);
-			}
-			this.paintBuildingPlacement(); this.applyCamera();
+			// Relocation is entered explicitly through setBuildingPlacement.
+			interactions.onBuildingDragState?.(null);
 		}
 
 		private cancelPan(): void {
-			const ids = new Set([...(this.panGesture ? [this.panGesture.pointerId] : []), ...(this.pinchGesture?.ids ?? [])]);
-			this.panGesture = null; this.pinchGesture = null; this.cameraTouches.clear();
+			const pointerId = this.panGesture.cancel();
+			const ids = new Set([...(pointerId !== null ? [pointerId] : []), ...(this.pinchGesture?.ids ?? [])]);
+			this.pinchGesture = null; this.cameraTouches.clear();
 			for (const id of ids) if (this.game.canvas.hasPointerCapture?.(id)) this.game.canvas.releasePointerCapture(id);
 		}
 
@@ -698,9 +655,9 @@ export function createWorld(
 
 		private acceptsPointer(pointer: Phaser.Input.Pointer, view: View): boolean {
 			return requestedView === view
-				&& !this.panGesture && !(view === "base" && (this.panMode || this.spacePressed))
+				&& !this.panGesture.active && !(view === "base" && (this.panMode || this.spacePressed))
 				&& (!pointer.event || !("button" in pointer.event) || pointer.event.button === 0)
-				&& !this.drag && !this.gesture && !this.buildingGesture
+				&& !this.drag
 				&& interactions.canInteract?.() !== false
 				&& pointer.event?.target === this.game.canvas;
 		}
@@ -717,7 +674,7 @@ export function createWorld(
 		}
 
 		beginScavDrag(scavId: string): boolean {
-			if (!this.baseLayer || !this.scene.isActive() || requestedView !== "base" || document.hidden || this.drag || this.buildingGesture || this.buildingPlacement || this.panGesture || this.panMode || this.spacePressed || interactions.canDrag?.() === false || !interactions.onAssignScav) return false;
+			if (!this.baseLayer || !this.scene.isActive() || requestedView !== "base" || document.hidden || this.drag || this.buildingPlacement || this.panGesture.active || this.panMode || this.spacePressed || interactions.canDrag?.() === false || !interactions.onAssignScav) return false;
 			const state = snapshot(), scav = state.scavs?.find((candidate) => candidate.id === scavId);
 			if (!scav || scav.status === "raiding" || scav.health < 25) return false;
 			this.drag = { scavId, roomId: null, reason: null, cellKey: null, point: null, canvas: false, shelter: state.shelter, scav };
@@ -753,7 +710,7 @@ export function createWorld(
 
 		endScavDrag(): void {
 			const drag = this.drag;
-			if (!drag) { this.clearGesture(); return; }
+			if (!drag) return;
 			const state = snapshot();
 			const room = drag.point ? getShelterRoomAtPoint(state.shelter ?? { rooms: [] }, drag.point.x, drag.point.y) : undefined;
 			const allowed = requestedView === "base" && !document.hidden && interactions.canDrag?.() !== false && state.shelter === drag.shelter && state.scavs?.find((scav) => scav.id === drag.scavId) === drag.scav && room?.id === drag.roomId && this.assignmentReason(drag.scavId, room.id) === null;
@@ -764,7 +721,6 @@ export function createWorld(
 		cancelScavDrag(): void {
 			const drag = this.drag;
 			this.drag = null;
-			this.clearGesture();
 			this.dragGhost?.clear();
 			if (!drag) return;
 			const scav = snapshot().scavs?.find((candidate) => candidate.id === drag.scavId);
@@ -773,63 +729,77 @@ export function createWorld(
 			interactions.onDragState?.(null);
 		}
 
-		private clearGesture(): void {
-			const gesture = this.gesture;
-			this.gesture = null;
-			if (gesture && this.game.canvas.hasPointerCapture?.(gesture.pointerId)) this.game.canvas.releasePointerCapture(gesture.pointerId);
+		private tapAtClient(clientX: number, clientY: number): BaseTap | null {
+			if (interactions.canInteract?.() === false) return null;
+			const point = this.clientWorld(clientX, clientY);
+			if (!point) return null;
+			const identityKey = snapshot().identityKey;
+			if (this.buildingPlacement) return { kind: "placement", identityKey };
+			const visual = projectShelterPoint(point);
+			const hit = [...this.scavs].filter(([, slot]) => slot.actor.visible && Math.abs(slot.actor.x - visual.x) <= 16 * slot.actor.scaleX && visual.y >= slot.actor.y - 44 * slot.actor.scaleY && visual.y <= slot.actor.y + 2).sort((a, b) => Math.hypot(a[1].actor.x - visual.x, a[1].actor.y - 21 - visual.y) - Math.hypot(b[1].actor.x - visual.x, b[1].actor.y - 21 - visual.y))[0];
+			if (hit) return { kind: "scav", id: hit[0], identityKey };
+			const room = this.roomAtPoint(point);
+			if (room) return { kind: "room", id: room.id, identityKey };
+			const site = getShelterTerritoryCell(point);
+			return site && this.cells.has(`${site.column}:${site.row}`) ? { kind: "site", site, point, identityKey } : null;
+		}
+
+		private activateTap(tap: BaseTap, clientX: number, clientY: number): void {
+			if (requestedView !== "base" || document.hidden || interactions.canInteract?.() === false || tap.identityKey !== snapshot().identityKey) return;
+			const point = this.clientWorld(clientX, clientY);
+			if (!point) return;
+			if (tap.kind === "placement") {
+				if (!this.buildingPlacement) return;
+				if (interactions.onFreeBuildSite) interactions.onFreeBuildSite(point);
+				else { const site = getShelterTerritoryCell(point); if (site) interactions.onBuildSite?.(site); }
+			} else if (this.buildingPlacement) return;
+			else if (tap.kind === "scav") {
+				if (snapshot().scavs?.some(scav => scav.id === tap.id)) interactions.onScav?.(tap.id);
+			} else if (tap.kind === "room") {
+				const room = snapshot().shelter?.rooms.find(room => room.id === tap.id);
+				if (!room) return;
+				if (interactions.onShelterRoom) interactions.onShelterRoom(room.id);
+				else if (["workshop", "medbay", "radio", "storage"].includes(room.type)) interactions.onRoom?.(room.type as BaseRoom);
+			} else {
+				this.clickFeedback(projectShelterPoint(tap.point), this.baseLayer);
+				if (interactions.onBuildSite) interactions.onBuildSite(tap.site);
+				else interactions.onShelterSite?.(tap.site.column, tap.site.row);
+			}
+		}
+
+		private moveCameraPointer(event: PointerEvent): void {
+			if (!this.panGesture.active || event.pointerId !== this.panGesture.active.pointerId) return;
+			if (!this.cameraAllowed()) { this.cancelCameraGesture(); return; }
+			const delta = this.panGesture.move(event);
+			if (!delta) return;
+			event.preventDefault();
+			const rect = this.game.canvas.getBoundingClientRect();
+			if (rect.width > 0 && rect.height > 0) this.panBy(-delta.dx * this.viewport.width / rect.width, -delta.dy * this.viewport.height / rect.height);
+			this.input.setDefaultCursor("grabbing");
 		}
 
 		private installDragListeners(): void {
 			const canvas = this.game.canvas, options = { signal: this.nativeEvents.signal };
+			let ignoreDoubleClickUntil = 0;
 			canvas.style.touchAction = "none";
+			canvas.addEventListener("contextmenu", event => event.preventDefault(), options);
 			canvas.addEventListener("pointerdown", (event) => {
-				if (event.target !== canvas || requestedView !== "base") return;
-				if (event.pointerType === "touch" && this.panMode && this.cameraAllowed()) {
+				if (event.target !== canvas || requestedView !== "base" || !this.cameraAllowed() || event.button < 0 || event.button > 2) return;
+				if (this.pinchGesture) return;
+				if (event.pointerType === "touch") {
 					this.cameraTouches.set(event.pointerId, { x: event.clientX, y: event.clientY });
-					if (this.cameraTouches.size === 2 && this.cameraAllowed()) {
+					if (this.cameraTouches.size === 2) {
 						const entries = [...this.cameraTouches], a = entries[0]!, b = entries[1]!;
+						this.panGesture.cancel();
 						this.pinchGesture = { ids: [a[0], b[0]], distance: Math.max(1, Math.hypot(a[1].x - b[1].x, a[1].y - b[1].y)), midpoint: { x: (a[1].x + b[1].x) / 2, y: (a[1].y + b[1].y) / 2 } };
 						canvas.setPointerCapture(event.pointerId); event.preventDefault(); return;
 					}
 				}
-				if (event.button === 1 || this.panMode || this.spacePressed) {
-					if (this.panGesture || !this.cameraAllowed()) return;
-					event.preventDefault();
-					this.panGesture = { pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY };
-					canvas.setPointerCapture(event.pointerId); this.input.setDefaultCursor("grabbing");
-					return;
-				}
-				if (requestedView !== "base") return;
-				if (event.button !== 0 || this.gesture || this.drag || this.buildingGesture || interactions.canInteract?.() === false) return;
-				const point = this.clientWorld(event.clientX, event.clientY);
-				if (!point) return;
-				if (this.buildingPlacement) {
-					event.preventDefault();
-					if (interactions.onFreeBuildSite) interactions.onFreeBuildSite(point);
-					else { const site = getShelterTerritoryCell(point); if (site) interactions.onBuildSite?.(site); }
-					return;
-				}
-				const visual = projectShelterPoint(point);
-				const hit = [...this.scavs].filter(([, slot]) => slot.actor.visible && Math.abs(slot.actor.x - visual.x) <= 16 * slot.actor.scaleX && visual.y >= slot.actor.y - 44 * slot.actor.scaleY && visual.y <= slot.actor.y + 2).sort((a, b) => Math.hypot(a[1].actor.x - visual.x, a[1].actor.y - 21 - visual.y) - Math.hypot(b[1].actor.x - visual.x, b[1].actor.y - 21 - visual.y))[0];
-				if (hit) {
-					this.gesture = { scavId: hit[0], pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, active: false };
-					canvas.setPointerCapture(event.pointerId); return;
-				}
-				const room = this.roomAtPoint(point);
-				if (room) {
-					const origin = getRoomPosition(room);
-					this.buildingGesture = { roomId: room.id, room, source: { ...origin }, identityKey: snapshot().identityKey, pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, offset: { x: point.x - origin.x, y: point.y - origin.y }, ...origin, rotation: room.rotation ?? 0, facing: getRoomFacing(room), active: false, reason: null };
-					canvas.setPointerCapture(event.pointerId); event.preventDefault(); return;
-				}
-				const site = getShelterTerritoryCell(point), cell = site && this.cells.get(`${site.column}:${site.row}`);
-				if (cell) { this.clickFeedback(projectShelterPoint(point), this.baseLayer); if (interactions.onBuildSite) interactions.onBuildSite(site!); else interactions.onShelterSite?.(site!.column, site!.row); }
+				const tap = event.button === 0 && !this.panMode && !this.spacePressed ? this.tapAtClient(event.clientX, event.clientY) : null;
+				if (!this.panGesture.begin(event, tap)) return;
+				event.preventDefault(); canvas.setPointerCapture(event.pointerId); canvas.focus({ preventScroll: true });
 			}, options);
 			canvas.addEventListener("pointermove", (event) => {
-				if (this.buildingPlacement && requestedView === "base") {
-					const point = this.clientWorld(event.clientX, event.clientY);
-					this.placementHover = point;
-					this.paintBuildingPlacement();
-				}
 				if (this.cameraTouches.has(event.pointerId)) this.cameraTouches.set(event.pointerId, { x: event.clientX, y: event.clientY });
 				const pinch = this.pinchGesture;
 				if (pinch && pinch.ids.includes(event.pointerId)) {
@@ -842,73 +812,32 @@ export function createWorld(
 					this.viewCamera = panShelterCamera(this.viewCamera, (pinch.midpoint.x - midpoint.x) * this.viewport.width / rect.width, (pinch.midpoint.y - midpoint.y) * this.viewport.height / rect.height, this.viewport, this.worldBounds);
 					pinch.distance = distance; pinch.midpoint = midpoint; event.preventDefault(); this.applyCamera(); return;
 				}
-				const pan = this.panGesture;
-				if (pan && event.pointerId === pan.pointerId) {
-					if (!this.cameraAllowed()) { this.cancelCameraGesture(); return; }
-					event.preventDefault();
-					const rect = canvas.getBoundingClientRect();
-					if (rect.width > 0 && rect.height > 0) this.panBy(-(event.clientX - pan.clientX) * this.viewport.width / rect.width, -(event.clientY - pan.clientY) * this.viewport.height / rect.height);
-					pan.clientX = event.clientX; pan.clientY = event.clientY;
-					this.input.setDefaultCursor("grabbing"); return;
+				this.moveCameraPointer(event);
+				if (this.buildingPlacement && requestedView === "base") {
+					this.placementHover = this.clientWorld(event.clientX, event.clientY);
+					this.paintBuildingPlacement();
 				}
-				const gesture = this.gesture;
-				const building = this.buildingGesture;
-				if (building && event.pointerId === building.pointerId) {
-					if (!building.active && Math.hypot(event.clientX - building.clientX, event.clientY - building.clientY) >= 6) {
-						if (!this.buildingAllowed() || !interactions.onPlaceBuilding) { this.cancelBuildingDrag(); return; }
-						if (building.room.status !== "ready") { interactions.onHover?.({ title: ROOM_DEFINITIONS[building.room.type].label, detail: "Дождись окончания строительных работ" }); this.cancelBuildingDrag(); return; }
-						building.active = true;
-						this.cells.get(roomCellKey(building.roomId))?.root.setAlpha(.35);
-						this.cells.get(roomCellKey(building.roomId))?.chrome.setAlpha(.35);
-						this.buildingGhost.clear().setAlpha(.65);
-						paintIsometricRoom(this.buildingGhost, building.room.column, building.room.row, building.room);
-						this.input.setDefaultCursor("grabbing");
-					}
-					if (building.active) { event.preventDefault(); this.moveBuildingDrag(event.clientX, event.clientY); }
-					return;
-				}
-				if (!gesture || event.pointerId !== gesture.pointerId) return;
-				if (!gesture.active && Math.hypot(event.clientX - gesture.clientX, event.clientY - gesture.clientY) >= 8) {
-					if (!this.beginScavDrag(gesture.scavId)) { this.clearGesture(); return; }
-					gesture.active = true;
-					if (this.drag) this.drag.canvas = true;
-				}
-				if (gesture.active) { event.preventDefault(); this.moveScavDrag(event.clientX, event.clientY); }
 			}, options);
 			canvas.addEventListener("pointerup", (event) => {
-				if (this.pinchGesture?.ids.includes(event.pointerId)) { this.cancelPan(); this.applyCamera(); return; }
-				if (this.panGesture?.pointerId === event.pointerId) { this.cancelPan(); this.applyCamera(); return; }
-				const building = this.buildingGesture;
-				if (building && event.pointerId === building.pointerId) {
-					if (building.active) {
-						this.moveBuildingDrag(event.clientX, event.clientY);
-						const allowed = this.buildingGesture === building && this.buildingAllowed() && !building.reason;
-						this.cancelBuildingDrag();
-						if (allowed) interactions.onPlaceBuilding?.(building.roomId, building.x, building.y, building.rotation, building.facing);
-						else if (building.reason) interactions.onHover?.({ title: "Постройку нельзя разместить", detail: building.reason });
-					} else {
-						const tapped = Math.hypot(event.clientX - building.clientX, event.clientY - building.clientY) < 6;
-						this.cancelBuildingDrag();
-						if (tapped && interactions.canInteract?.() !== false) {
-							if (interactions.onShelterRoom) interactions.onShelterRoom(building.roomId);
-							else if (["workshop", "medbay", "radio", "storage"].includes(building.room.type)) interactions.onRoom?.(building.room.type as BaseRoom);
-						}
-					}
-					return;
-				}
-				const gesture = this.gesture;
-				if (!gesture || event.pointerId !== gesture.pointerId) return;
-				if (gesture.active) { this.moveScavDrag(event.clientX, event.clientY); this.endScavDrag(); return; }
-				const tapped = Math.hypot(event.clientX - gesture.clientX, event.clientY - gesture.clientY) < 8;
-				this.clearGesture();
-				if (tapped && requestedView === "base" && interactions.canInteract?.() !== false && this.clientWorld(event.clientX, event.clientY)) interactions.onScav?.(gesture.scavId);
+				if (this.pinchGesture?.ids.includes(event.pointerId)) { ignoreDoubleClickUntil = performance.now() + 300; this.cancelPan(); this.applyCamera(); return; }
+				this.moveCameraPointer(event);
+				const result = this.panGesture.finish(event);
+				if (!result) return;
+				this.cameraTouches.delete(event.pointerId);
+				if (canvas.hasPointerCapture?.(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+				this.applyCamera();
+				if (result.dragged) ignoreDoubleClickUntil = performance.now() + 300;
+				else if (result.tapped && result.target) this.activateTap(result.target, event.clientX, event.clientY);
 			}, options);
-			canvas.addEventListener("pointercancel", () => { this.cancelScavDrag(); this.cancelBuildingDrag(); this.cancelCameraGesture(); }, options);
+			const cancelPointer = (event: PointerEvent) => {
+				if (this.panGesture.active?.pointerId !== event.pointerId && !this.pinchGesture?.ids.includes(event.pointerId)) return;
+				ignoreDoubleClickUntil = performance.now() + 300; this.cancelCameraGesture();
+			};
+			canvas.addEventListener("pointercancel", cancelPointer, options);
+			canvas.addEventListener("lostpointercapture", cancelPointer, options);
 			canvas.addEventListener("pointerleave", () => { this.placementHover = null; this.paintBuildingPlacement(); }, options);
-			canvas.addEventListener("lostpointercapture", () => { if (this.gesture) this.cancelScavDrag(); if (this.buildingGesture) this.cancelBuildingDrag(); if (this.panGesture) this.cancelCameraGesture(); }, options);
 			canvas.addEventListener("dblclick", (event) => {
-				if (requestedView !== "base" || !this.cameraAllowed()) return;
-				if (this.buildingPlacement) return;
+				if (requestedView !== "base" || !this.cameraAllowed() || this.buildingPlacement || performance.now() < ignoreDoubleClickUntil) return;
 				const point = this.clientWorld(event.clientX, event.clientY), room = point ? this.roomAtPoint(point) : null;
 				if (room) { event.preventDefault(); this.focusRoom(room.id); }
 			}, options);
@@ -917,23 +846,15 @@ export function createWorld(
 				event.preventDefault(); this.zoomBy(Math.exp(-Phaser.Math.Clamp(event.deltaY, -160, 160) * .0025), event.clientX, event.clientY);
 			}, { ...options, passive: false });
 			window.addEventListener("keydown", (event) => {
-				if (event.key === "Escape" && (this.drag || this.gesture || this.buildingGesture || this.panGesture)) { event.preventDefault(); this.cancelScavDrag(); this.cancelBuildingDrag(); this.cancelCameraGesture(); }
-				if (!event.defaultPrevented && !event.repeat && !event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === "r" && this.buildingAllowed() && !(event.target instanceof Element && event.target.closest("input,textarea,select,[contenteditable=true]"))) {
-					const drag = this.buildingGesture;
-					if (drag?.active) {
-						event.preventDefault(); drag.facing = ((drag.facing + 1) % 4) as 0 | 1 | 2 | 3;
-						this.buildingGhost.clear(); paintIsometricRoom(this.buildingGhost, drag.room.column, drag.room.row, { ...drag.room, facing: drag.facing });
-						this.moveBuildingDrag(drag.clientX, drag.clientY);
-					}
-				}
+				if (event.key === "Escape" && (this.drag || this.panGesture.active || this.pinchGesture)) { event.preventDefault(); this.cancelScavDrag(); this.cancelCameraGesture(); }
 				if (event.code === "Space" && this.cameraAllowed() && (document.activeElement === canvas || parent.contains(document.activeElement)) && !(event.target instanceof Element && event.target.closest("input,textarea,select,[contenteditable=true],button"))) {
 					event.preventDefault(); this.spacePressed = true; this.applyCamera();
 				}
 			}, options);
 			window.addEventListener("keyup", (event) => { if (event.code === "Space" && this.spacePressed) { this.spacePressed = false; this.cancelPan(); this.applyCamera(); } }, options);
-			window.addEventListener("blur", () => { this.cancelScavDrag(); this.cancelBuildingDrag(); this.cancelCameraGesture(); }, options);
-			window.addEventListener("resize", () => { this.cancelScavDrag(); this.cancelBuildingDrag(); this.cancelCameraGesture(); }, options);
-			document.addEventListener("visibilitychange", () => { if (document.hidden) { this.cancelScavDrag(); this.cancelBuildingDrag(); this.cancelCameraGesture(); } }, options);
+			window.addEventListener("blur", () => { this.cancelScavDrag(); this.cancelCameraGesture(); }, options);
+			window.addEventListener("resize", () => { this.cancelScavDrag(); this.cancelCameraGesture(); }, options);
+			document.addEventListener("visibilitychange", () => { if (document.hidden) { this.cancelScavDrag(); this.cancelCameraGesture(); } }, options);
 		}
 
 		private paintBunker(): void {
@@ -956,7 +877,6 @@ export function createWorld(
 			this.ambient = this.add.graphics().setDepth(1_000_000); this.baseLayer.add(this.ambient);
 			this.dragGhost = this.add.graphics().setDepth(100_000_000); this.baseLayer.add(this.dragGhost);
 			this.placementGhost = this.add.graphics().setDepth(100_000_002); this.baseLayer.add(this.placementGhost);
-			this.buildingGhost = this.add.graphics().setDepth(100_000_001).setVisible(false); this.baseLayer.add(this.buildingGhost);
 			this.baseCaption = this.text(29, 27, "ТЕРРИТОРИЯ БАЗЫ 07", 15, "#ded2ae").setVisible(false);
 			this.shelterCaption = this.text(29, 477, "ПОСТРОЙКИ · ДВОР · ПРОИЗВОДСТВО", 10, "#abb69c").setVisible(false);
 			this.baseLayer.add([this.baseCaption, this.shelterCaption]);
@@ -1084,7 +1004,7 @@ export function createWorld(
 			const bounds = projectShelterBounds(lot);
 			const zone = this.add.zone(bounds.x, bounds.y, bounds.width, bounds.height).setOrigin(0);
 			zone.setInteractive(new Phaser.Geom.Polygon(corners.map((point) => ({ x: point.x - bounds.x, y: point.y - bounds.y }))), Phaser.Geom.Polygon.Contains);
-			zone.input!.cursor = "pointer";
+			zone.input!.cursor = "grab";
 			const root = this.add.container(0, 0, [art, animation, frame, progress]).setDepth(at.y - 20);
 			const chrome = this.add.container(0, 0, [label, status, productLabel, feedback]).setDepth(10_000_000);
 			this.baseLayer.add([root, chrome, zone.setDepth(-100_000_000)]);
@@ -1092,7 +1012,7 @@ export function createWorld(
 			this.cells.set(room ? roomCellKey(room.id) : `${column}:${row}`, cell);
 			zone.on("pointerover", (pointer: Phaser.Input.Pointer) => { if (this.acceptsPointer(pointer, "base")) { cell.hovered = true; for (const candidate of this.cells.values()) if (candidate === cell || candidate.room?.id === cell.room?.id) this.paintCellFrame(candidate); if (!this.buildingPlacement) this.describeCell(cell); } });
 			zone.on("pointerout", () => { cell.hovered = false; for (const candidate of this.cells.values()) if (candidate === cell || candidate.room?.id === cell.room?.id) this.paintCellFrame(candidate); interactions.onHover?.(null); });
-			// Taps and building drags share native pointer-up, so opening an inspector
+			// Taps and camera drags share native pointer-up, so opening an inspector
 			// cannot replace the scene beneath a held pointer.
 		}
 
@@ -1163,7 +1083,7 @@ export function createWorld(
 				const width = Math.max(...hit.map((point) => point.x)) - x, height = Math.max(...hit.map((point) => point.y)) - y;
 				cell.zone.setPosition(x, y).setSize(width, height).setDepth(cell.root.depth + .1);
 				cell.zone.setInteractive(new Phaser.Geom.Polygon(hit.map((point) => ({ x: point.x - x, y: point.y - y }))), Phaser.Geom.Polygon.Contains);
-				cell.zone.input!.cursor = cell.room.status === "ready" ? "grab" : "pointer";
+				cell.zone.input!.cursor = "grab";
 			}
 		}
 
@@ -1194,7 +1114,7 @@ export function createWorld(
 				{ screenScale: .78 * this.viewCamera.zoom * this.weatherDisplayScale, deviceRatio: window.devicePixelRatio || 1 });
 			const label = this.text(0, -64, "", 16, "#ffedc7").setOrigin(.5).setFontFamily("Manrope, sans-serif").setFontStyle("bold").setLetterSpacing(0).setBackgroundColor("#0b1b20").setPadding(7, 4).setVisible(false);
 			const order = this.add.circle(-10, -34, 3.5, C.sage).setStrokeStyle(1, 0x10242b).setVisible(false);
-			const hit = this.add.zone(0, -21, 32, 46).setInteractive({ useHandCursor: true });
+			const hit = this.add.zone(0, -21, 32, 46).setInteractive({ cursor: "grab" });
 			const slot: ScavActor = { actor, body, legA, legB, hand, sprite, poses, animation: createScavAnimation(index * .37), appearance, direction: "se", pixel, visualLoadout, tool, label, order, selection, hovered: false, gearSignature: "", routine: null, position: { ...at }, anchor: { ...at }, route: [], goal: "", assignment: null, role: "idle", dwellUntil: this.time.now + 2000 + index * 800, visit: 0, facing: 1, climbing: false, status: "ready", health: 100, working: false, walking: false, walkSpan: 0, phase: index * 1.71 };
 			hit.on("pointerover", (pointer: Phaser.Input.Pointer) => { if (this.acceptsPointer(pointer, "base")) { slot.hovered = true; selection.setVisible(true); label.setVisible(true); actor.setDepth(1_000_001); } });
 			hit.on("pointerout", () => { slot.hovered = false; const selected = snapshot().selectedScavId === scavId; selection.setVisible(selected); label.setVisible(selected); actor.setDepth(actor.y); });
@@ -1536,8 +1456,7 @@ export function createWorld(
 
 		update(time: number, delta: number): void {
 			if (this.drag && (document.hidden || interactions.canDrag?.() === false)) this.cancelScavDrag();
-			if (this.buildingGesture && (!this.buildingAllowed() || !this.buildingSourceCurrent(this.buildingGesture))) this.cancelBuildingDrag();
-			if ((this.panGesture || this.spacePressed) && !this.cameraAllowed()) this.cancelCameraGesture();
+			if ((this.panGesture.active || this.pinchGesture || this.spacePressed) && !this.cameraAllowed()) this.cancelCameraGesture();
 			const selection = snapshot();
 			if (time - this.lastSync > 1000 || `${selection.selectedScavId ?? ""}:${selection.selectedMapId ?? ""}:${selection.selectedRoomId ?? ""}:${selection.selectedSite?.column ?? ""}:${selection.selectedSite?.row ?? ""}` !== this.lastSelection) {
 				this.lastSync = time;

@@ -38,6 +38,7 @@ import { distantStreetPropSurfaces, type DistantStreetPropSurface } from './live
 import { buildStreetTerrainDetails, paintStreetTerrainDetail, type StreetTerrainDetail } from './live-street-terrain';
 import { buildRoadSurfaceArt, paintRoadSurfaceArt, type RoadSurfaceArt } from './live-road-surface';
 import { paintActorGroundShadows } from './live-actor-ground-shadows';
+import { CameraGesture, panIsometricCamera } from './camera-gesture';
 
 type Motion = PixelMotion;
 type LabelBox = { x: number; y: number; width: number; height: number };
@@ -79,8 +80,9 @@ export class LiveScene {
   private following = true;
   private overview = false;
   private cityOverview = false;
-  private dragging: { id: number; startX: number; startY: number; camera: LivePoint; moved: boolean } | null = null;
-  private ignoreClickUntil = 0;
+  private dragging = new CameraGesture<null>();
+  private suppressPointerClick = false;
+  private interactionEvents = new AbortController();
   private combatAnimation = new PixelCombatAnimation();
   private snapshotAt = 0;
   private weaponMounts = new Map<string, { point: LivePoint; muzzle: LivePoint; ejection: LivePoint; offset: LivePoint; ejectOffset: LivePoint }>();
@@ -144,31 +146,38 @@ export class LiveScene {
     this.canvas.addEventListener('pointermove', this.pointerMove);
     this.canvas.addEventListener('pointerup', this.pointerUp);
     this.canvas.addEventListener('pointercancel', this.pointerCancel);
+    this.canvas.addEventListener('lostpointercapture', this.pointerCancel);
+    this.canvas.addEventListener('contextmenu', this.contextMenu);
     this.canvas.addEventListener('wheel', this.wheel, { passive: false });
+    const signal = this.interactionEvents.signal, ownerDocument = host.ownerDocument;
+    ownerDocument?.defaultView?.addEventListener('blur', () => this.cancelDragging(), { signal });
+    ownerDocument?.addEventListener('visibilitychange', () => { if (ownerDocument.hidden) this.cancelDragging(); }, { signal });
+    ownerDocument?.addEventListener('keydown', event => { if (event.key === 'Escape' && this.dragging.active) { event.preventDefault(); this.cancelDragging(); } }, { signal });
     this.controls.addEventListener('click', this.zoomClick);
     this.resize();
   }
 
   show(): void { if (this.active) return; this.active = true; this.resize(); this.animate(); }
-  hide(): void { this.active = false; cancelAnimationFrame(this.frame); this.frame = 0; this.weatherCache.clear(); }
-  clear(): void { this.snapshot = null; this.weatherCache.clear(); this.clearWorldArt(); this.motions.clear(); this.selected = null; this.routePoiIds = []; this.waypointTargets = []; this.hitTargets = []; this.combatAnimation.clear(); this.weaponMounts.clear(); this.shotRigs.clear(); this.paint(); }
+  hide(): void { this.cancelDragging(); this.active = false; cancelAnimationFrame(this.frame); this.frame = 0; this.weatherCache.clear(); }
+  clear(): void { this.cancelDragging(); this.snapshot = null; this.weatherCache.clear(); this.clearWorldArt(); this.motions.clear(); this.selected = null; this.routePoiIds = []; this.waypointTargets = []; this.hitTargets = []; this.combatAnimation.clear(); this.weaponMounts.clear(); this.shotRigs.clear(); this.paint(); }
   setSelected(id: string | null): void { this.selected = id; }
   /** Inspect public architecture without issuing a movement command. */
   focusPoint(point: LivePoint): void {
     const world = this.snapshot?.world;
     if (!world || !Number.isFinite(point.x) || !Number.isFinite(point.y) || point.x < 0 || point.y < 0 || point.x >= world.width || point.y >= world.height) return;
-    this.camera = { ...point }; this.following = false; this.overview = false; this.cityOverview = false;
+    this.cancelDragging(); this.camera = { ...point }; this.following = false; this.overview = false; this.cityOverview = false;
     this.zoom = this.width < 480 ? .75 : .85; this.waypointTargets = []; this.hitTargets = [];
     this.updateCameraControls(); this.canvas.focus({ preventScroll: true });
   }
   /** Camera-only controls are also used by the public, read-only city gallery. */
   showOverview(city = false): void {
     if (!this.snapshot) return;
-    this.following = false; this.overview = true; this.cityOverview = city && !!this.snapshot.world.city;
+    this.cancelDragging(); this.following = false; this.overview = true; this.cityOverview = city && !!this.snapshot.world.city;
     this.waypointTargets = []; this.hitTargets = []; this.updateCameraControls(); this.paint();
   }
   zoomBy(factor: number): void {
     if (!this.snapshot || !Number.isFinite(factor) || factor <= 0) return;
+    this.cancelDragging();
     const base = this.width < 480 ? 48 : 64, scale = this.viewTile(this.snapshot.world) / base;
     if (this.overview) { const frame = this.viewFrame(this.snapshot.world); this.camera = { x: frame.x + frame.width / 2, y: frame.y + frame.height / 2 }; }
     this.overview = false; this.cityOverview = false;
@@ -182,7 +191,7 @@ export class LiveScene {
   update(snapshot: LiveSnapshot): void {
     const at = performance.now();
     this.overlayBoundsDirty = true;
-    if (this.snapshot?.worldVersion !== snapshot.worldVersion) { this.motions.clear(); this.combatAnimation.clear(); this.weaponMounts.clear(); this.shotRigs.clear(); this.selected = null; this.routePoiIds = []; this.waypointTargets = []; this.hitTargets = []; this.following = true; this.overview = false; this.cityOverview = false; this.zoom = 1; this.dragging = null; this.canvas.classList.remove('is-dragging'); this.cacheTerrain(snapshot.world); }
+    if (this.snapshot?.worldVersion !== snapshot.worldVersion) { this.cancelDragging(); this.motions.clear(); this.combatAnimation.clear(); this.weaponMounts.clear(); this.shotRigs.clear(); this.selected = null; this.routePoiIds = []; this.waypointTargets = []; this.hitTargets = []; this.following = true; this.overview = false; this.cityOverview = false; this.zoom = 1; this.cacheTerrain(snapshot.world); }
     const cityButton = this.controls.querySelector<HTMLButtonElement>('[data-live-zoom=city]');
     if (cityButton) cityButton.hidden = !snapshot.world.city;
     for (const entity of snapshot.entities) {
@@ -201,7 +210,7 @@ export class LiveScene {
     this.snapshot = snapshot;
     if (!this.active) this.paint();
   }
-  destroy(): void { this.hide(); this.clear(); this.lightBuffer.clear(); this.observer.disconnect(); this.overlayObserver.disconnect(); this.canvas.removeEventListener('click', this.click); this.canvas.removeEventListener('pointerdown', this.pointerDown); this.canvas.removeEventListener('pointermove', this.pointerMove); this.canvas.removeEventListener('pointerup', this.pointerUp); this.canvas.removeEventListener('pointercancel', this.pointerCancel); this.canvas.removeEventListener('wheel', this.wheel); this.controls.removeEventListener('click', this.zoomClick); this.canvas.remove(); this.controls.remove(); }
+  destroy(): void { this.hide(); this.clear(); this.interactionEvents.abort(); this.lightBuffer.clear(); this.observer.disconnect(); this.overlayObserver.disconnect(); this.canvas.removeEventListener('click', this.click); this.canvas.removeEventListener('pointerdown', this.pointerDown); this.canvas.removeEventListener('pointermove', this.pointerMove); this.canvas.removeEventListener('pointerup', this.pointerUp); this.canvas.removeEventListener('pointercancel', this.pointerCancel); this.canvas.removeEventListener('lostpointercapture', this.pointerCancel); this.canvas.removeEventListener('contextmenu', this.contextMenu); this.canvas.removeEventListener('wheel', this.wheel); this.controls.removeEventListener('click', this.zoomClick); this.canvas.remove(); this.controls.remove(); }
 
   private clearWorldArt(): void {
     for (const bitmap of [this.terrainTexture, this.minimapTerrain, this.overviewTerrain]) if (bitmap) { bitmap.width = 0; bitmap.height = 0; }
@@ -227,6 +236,7 @@ export class LiveScene {
   private resize(): void {
     const box = this.host.getBoundingClientRect();
     if (box.width < 1 || box.height < 1) return;
+    this.cancelDragging();
     this.width = box.width; this.height = box.height;
     this.renderer.resize(this.width, this.height, window.devicePixelRatio || 1);
     this.overlayBoundsDirty = true;
@@ -235,6 +245,7 @@ export class LiveScene {
   private zoomClick = (event: MouseEvent): void => {
     const action = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-live-zoom]')?.dataset.liveZoom;
     if (!action) return;
+    this.cancelDragging();
     if (action === 'follow') { this.following = true; this.overview = false; this.cityOverview = false; this.zoom = 1; }
     else if (action === 'overview' || action === 'city' && this.snapshot?.world.city) this.showOverview(action === 'city');
     else this.zoomBy(action === 'in' ? 1.25 : .8);
@@ -252,7 +263,8 @@ export class LiveScene {
     return this.overview ? Math.min(this.fieldRect.width * 1.8 / (frame.width + frame.height), Math.max(120, this.fieldRect.height - 30) * 3.6 / (frame.width + frame.height)) : (this.width < 480 ? 48 : 64) * this.zoom;
   }
   private click = (event: MouseEvent): void => {
-    if (!this.snapshot || !this.active || performance.now() < this.ignoreClickUntil) return;
+    if (!this.snapshot || !this.active) return;
+    if (this.suppressPointerClick) { this.suppressPointerClick = false; return; }
     this.canvas.focus({ preventScroll: true });
     const rect = this.canvas.getBoundingClientRect(), x = event.clientX - rect.left, y = event.clientY - rect.top;
     const mini = this.minimapBounds(this.snapshot);
@@ -273,39 +285,56 @@ export class LiveScene {
     event.preventDefault();
     const rect = this.canvas.getBoundingClientRect(), x = event.clientX - rect.left, y = event.clientY - rect.top;
     const before = this.unproject(x, y);
+    this.freeCamera();
     const base = this.width < 480 ? 48 : 64;
     this.zoom = clamp(this.viewTile(this.snapshot.world) / base * Math.exp(-clamp(event.deltaY, -120, 120) * .002), .005, this.width < 480 ? 2.2 : 2.8);
-    this.overview = false; this.cityOverview = false;
-    if (!this.following) {
-      this.tile = base * this.zoom;
-      const after = this.unproject(x, y);
-      this.camera = { x: clamp(this.camera.x + before.x - after.x, 0, this.snapshot.world.width - 1), y: clamp(this.camera.y + before.y - after.y, 0, this.snapshot.world.height - 1) };
-    }
+    this.tile = base * this.zoom;
+    const after = this.unproject(x, y);
+    this.camera = { x: clamp(this.camera.x + before.x - after.x, 0, this.snapshot.world.width - 1), y: clamp(this.camera.y + before.y - after.y, 0, this.snapshot.world.height - 1) };
     this.waypointTargets = []; this.hitTargets = []; this.updateCameraControls();
   };
+  /** Keep the rendered ground fixed when leaving overview or automatic follow. */
+  private freeCamera(): void {
+    this.following = false;
+    if (!this.overview) return;
+    this.zoom = this.tile / (this.width < 480 ? 48 : 64); this.overview = false; this.cityOverview = false;
+    const origin = { x: this.fieldRect.x + this.fieldRect.width * .5, y: this.fieldRect.y + this.fieldRect.height * .58 };
+    this.camera = panIsometricCamera(this.camera, this.origin.x - origin.x, this.origin.y - origin.y, this.tile);
+    this.origin = origin;
+  }
   private pointerDown = (event: PointerEvent): void => {
-    if (!this.active || !this.snapshot || event.button !== 0) return;
-    this.dragging = { id: event.pointerId, startX: event.clientX, startY: event.clientY, camera: { ...this.camera }, moved: false };
+    if (!this.active || !this.snapshot || event.button < 0 || event.button > 2 || !this.dragging.begin(event, null)) return;
+    this.suppressPointerClick = false;
+    if (event.button !== 0) event.preventDefault();
     this.canvas.setPointerCapture(event.pointerId);
+    this.canvas.focus({ preventScroll: true });
   };
   private pointerMove = (event: PointerEvent): void => {
-    const drag = this.dragging;
-    if (!drag || drag.id !== event.pointerId || !this.snapshot) return;
-    const dx = event.clientX - drag.startX, dy = event.clientY - drag.startY;
-    if (!drag.moved && Math.hypot(dx, dy) < 7) return;
-    drag.moved = true; this.following = false;
-    // Keep the same scale while leaving overview, so a drag never jumps the map.
-    if (this.overview) { this.zoom = this.tile / (this.width < 480 ? 48 : 64); this.overview = false; this.cityOverview = false; }
-    this.camera = { x: clamp(drag.camera.x - (dx / (this.tile / 2) + dy / (this.tile / 4)) / 2, 0, this.snapshot.world.width - 1), y: clamp(drag.camera.y - (dy / (this.tile / 4) - dx / (this.tile / 2)) / 2, 0, this.snapshot.world.height - 1) };
+    if (!this.snapshot) return;
+    const delta = this.dragging.move(event);
+    if (!delta) return;
+    event.preventDefault(); this.freeCamera();
+    const camera = panIsometricCamera(this.camera, delta.dx, delta.dy, this.tile);
+    this.camera = { x: clamp(camera.x, 0, this.snapshot.world.width - 1), y: clamp(camera.y, 0, this.snapshot.world.height - 1) };
+    if (delta.started) this.updateCameraControls();
     this.canvas.classList.add('is-dragging');
   };
   private pointerUp = (event: PointerEvent): void => {
-    if (this.dragging?.id !== event.pointerId) return;
-    if (this.dragging.moved) this.ignoreClickUntil = performance.now() + 200;
-    this.dragging = null; this.canvas.classList.remove('is-dragging');
-    if (this.canvas.hasPointerCapture(event.pointerId)) this.canvas.releasePointerCapture(event.pointerId);
+    this.pointerMove(event);
+    const result = this.dragging.finish(event);
+    if (!result) return;
+    this.suppressPointerClick = result.dragged || !result.tapped;
+    this.canvas.classList.remove('is-dragging');
+    if (this.canvas.hasPointerCapture?.(event.pointerId)) this.canvas.releasePointerCapture(event.pointerId);
   };
-  private pointerCancel = (): void => { this.dragging = null; this.canvas.classList.remove('is-dragging'); this.ignoreClickUntil = performance.now() + 200; };
+  private cancelDragging(): void {
+    const id = this.dragging.cancel();
+    if (id === null) return;
+    this.suppressPointerClick = true; this.canvas.classList.remove('is-dragging');
+    if (this.canvas.hasPointerCapture?.(id)) this.canvas.releasePointerCapture(id);
+  }
+  private pointerCancel = (event: PointerEvent): void => { if (this.dragging.active?.pointerId === event.pointerId) this.cancelDragging(); };
+  private contextMenu = (event: MouseEvent): void => { event.preventDefault(); };
   private animate = (at = performance.now()): void => {
     if (!this.active) return;
     const interval = 1000 / 60, elapsed = at - this.paintedAt;

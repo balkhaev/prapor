@@ -38,7 +38,7 @@ afterEach(() => {
   for (const [name, descriptor] of replacements) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name);
 });
 
-function setup() {
+function setup(width = 390) {
   const body = new FieldElement(), root = new FieldElement(), dock = new FieldElement(), main = new FieldElement(), shade = new FieldElement(), location = new FieldElement(), fullscreen = new FieldElement('button');
   root.queries.set('#command-dock', dock); root.queries.set('.command-main', main); root.queries.set('#context-shade', shade); root.queries.set('.field-location', location); root.queries.set('[data-action="toggle-fullscreen"]', fullscreen);
   for (const selector of ['.eyebrow', 'strong', 'small']) location.queries.set(selector, new FieldElement());
@@ -54,7 +54,7 @@ function setup() {
   Object.assign(root, { querySelectorAll: queryAll });
   replace('Element', FieldElement);
   replace('document', { body, fullscreenElement: null, addEventListener() {}, removeEventListener() {} });
-  replace('window', { innerWidth: 390 });
+  replace('window', { innerWidth: width });
   replace('MutationObserver', class { observe() {} disconnect() {} });
   const worldState = { view: 'base' as const, context: 'room:workbench:4:7', status: 'На связи' };
   let closeContextCalls = 0, visibilityChanges = 0;
@@ -64,6 +64,23 @@ function setup() {
 }
 
 describe('field panel visibility', () => {
+  test('desktop panels replace one another without losing the selected room', () => {
+    const h = setup(1280);
+    h.dock.classList.add('context-open'); field!.sync();
+    const selection = { ...h.worldState };
+    h.click(h.buttons.crew[0]!);
+    expect(field!.isPanelOpen('crew')).toBe(true);
+    expect(field!.isPanelOpen('dock')).toBe(false);
+    h.click(h.buttons.routes[0]!);
+    expect(field!.isPanelOpen('routes')).toBe(true);
+    expect(field!.isPanelOpen('crew')).toBe(false);
+    h.click(h.buttons.dock[0]!);
+    expect(field!.isPanelOpen('dock')).toBe(true);
+    expect(field!.isPanelOpen('routes')).toBe(false);
+    expect(h.worldState).toEqual(selection);
+    expect(h.closeContextCalls).toBe(0);
+  });
+
   test('collapsing a selected room retains the context and restores the same panel', () => {
     const h = setup(); h.dock.classList.add('context-open'); field!.sync();
     const state = { ...h.worldState };
