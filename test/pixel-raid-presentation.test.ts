@@ -32,9 +32,9 @@ describe('paid raid pixel presentation', () => {
     plan.segments = [{ ...plan.segments[0]!, path: [{ x: 0, y: 0 }, { x: 10, y: 0 }] }];
     for (const displayHeight of [40, 48, 64]) {
       const scale = displayHeight / 160, positions = [];
-      // A six-frame support stroke moves the body by the leg's native stride.
-      for (let phase = 0; phase < 6; phase++) {
-        const distance = (56 / .6 / Math.SQRT2 * scale / 32) * (phase + .01) / 12;
+      // Follow the planted heel until push-off, independent of cycle resolution.
+      for (let phase = 0; phase / PIXEL_ACTOR_FRAMES.walk < .43; phase++) {
+        const distance = (56 / .6 / Math.SQRT2 * scale / 32) * (phase + .01) / PIXEL_ACTOR_FRAMES.walk;
         const animation = raidPixelFrame(plan, { ...source, walking: true, segmentIndex: 0, segmentProgress: distance / 10 }, { facing: 'se', appearance: 0, displayHeight });
         expect(animation).toMatchObject({ mode: 'walk', frame: phase });
         const rig = pixelActorRig(animation);

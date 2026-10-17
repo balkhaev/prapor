@@ -56,7 +56,9 @@ interface PersonNode {
 	spriteKey: string;
 	propKey: string;
 }
-const FRAME_INTERVAL = 1000 / 12;
+// The shared 24-phase gait needs more frequent positions than the old atlas.
+// Keep DOM painting capped; cached poses redraw only when their frame changes.
+const FRAME_INTERVAL = 1000 / 30;
 const FIGURE_SCALE = .78;
 const BODY_HEIGHT = 48 * FIGURE_SCALE;
 const svg = (content: string) => `<svg viewBox="-24 -52 48 60" aria-hidden="true">${content}</svg>`;

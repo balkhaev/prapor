@@ -11,6 +11,7 @@ import './autobattle.css';
 import { liveBossRoster, liveBossGuidance, readLiveBossRoute, getLiveBossHuntGuide } from './live-boss-ui';
 import { raidEntryMap, raidEntryPurposeName } from './raid-entry-ui';
 import { liveAutobattlePanel, liveAutobattleStatus, liveObservedContact } from './live-autobattle-ui';
+import { livePollDelay } from './game/live-timing';
 
 const escape = (value: unknown) => String(value).replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!);
 const integer = (value: number) => Math.floor(value).toLocaleString('ru-RU');
@@ -56,6 +57,7 @@ export function createLiveMode(options: LiveModeOptions) {
   let revealContacts = false;
   let selectedPart: BodyPart = 'chest';
   let pollTimer = 0;
+  let renderedAt = -Infinity, renderedState = '';
   let controller: AbortController | null = null;
   let connection: Promise<unknown> = Promise.resolve();
   let reconnectPresence = false;
@@ -76,16 +78,25 @@ export function createLiveMode(options: LiveModeOptions) {
   const isCurrent = (version: number, account: string | null, game: string | null) => active && !destroyed && version === generation && account === options.getAccountId() && game === options.getGameId();
   const identityChanged = () => identityAccount !== options.getAccountId() || identityGame !== options.getGameId();
   const stopRequest = () => { window.clearTimeout(pollTimer); pollTimer = 0; controller?.abort(); controller = null; requestBusy = false; actionBusy = false; };
-  const schedule = (version: number) => { window.clearTimeout(pollTimer); if (active && version === generation && !destroyed) pollTimer = window.setTimeout(() => void poll(), snapshot ? 500 : 2000); };
+  const schedule = (version: number, startedAt?: number) => {
+    window.clearTimeout(pollTimer);
+    if (active && version === generation && !destroyed) pollTimer = window.setTimeout(() => void poll(), livePollDelay(Boolean(snapshot), offline, Boolean(document.hidden), startedAt === undefined ? 0 : Date.now() - startedAt));
+  };
   const clearSession = () => { snapshot = null; entry = null; entryReceivedAt = 0; receivedAt = 0; selectedId = null; selectedRouteId = null; exitIntent = false; scene.clear(); };
+  const panelState = (): string => {
+    const self = snapshot?.self, actor = snapshot?.entities.find(entity => entity.id === snapshot?.selfId);
+    // Entity positions arrive eight times a second; meaningful fighter state must still update immediately.
+    return JSON.stringify([snapshot?.worldVersion, self, actor?.health, entry, message, offline, exitIntent]);
+  };
   const acceptSnapshot = (next: LiveSnapshot, command?: LiveCommand) => {
     if (next.self.gameId && next.self.gameId !== identityGame) throw new LiveApiError(401, 'game_identity_changed');
     const economyChanged = liveEconomyChanged(snapshot?.self ?? null, next.self, command?.type);
     if (snapshot?.worldVersion !== next.worldVersion) { selectedId = null; selectedRouteId = null; scene.setSelected(null); }
     if (command?.type === 'respawn') selectedRouteId = null;
     else if (selectedId && !next.entities.some(entity => entity.id === selectedId && entity.health > 0)) selectedId = null;
+    const wasDowned = Boolean(snapshot && snapshot.entities.find(entity => entity.id === snapshot!.selfId)!.health <= 0);
     snapshot = next; status = next.server; receivedAt = Date.now(); scene.update(next);
-    if (command?.type === 'respawn' || next.entities.find(entity => entity.id === next.selfId)!.health <= 0 && entry?.mode !== 'downed') entry = null;
+    if (command?.type === 'respawn' || !wasDowned && next.entities.find(entity => entity.id === next.selfId)!.health <= 0) entry = null;
     if (economyChanged || command?.type === 'loot') options.onEconomyChange?.();
   };
 
@@ -142,6 +153,7 @@ export function createLiveMode(options: LiveModeOptions) {
     const version = generation, account = identityAccount, game = identityGame;
     if (requestBusy) { schedule(version); return; }
     if (reconnectPresence && !snapshot) { void join(true); return; }
+    const startedAt = Date.now();
     requestBusy = true; controller = new AbortController();
     try {
       if (snapshot) {
@@ -152,7 +164,7 @@ export function createLiveMode(options: LiveModeOptions) {
         if (next.selfId !== expected) throw new LiveApiError(401, 'identity_changed');
         if (exitIntent && next.self.leaveAt === 0) { exitIntent = false; message = 'Выход прерван. Боец остаётся на Периметре.'; }
         acceptSnapshot(next);
-        if (next.entities.find(entity => entity.id === next.selfId)!.health <= 0 && game) {
+        if (next.entities.find(entity => entity.id === next.selfId)!.health <= 0 && game && (!entry || Date.now() - entryReceivedAt >= 2000)) {
           const preparation = await liveRequest('entry', { accountId: account, gameId: game }, readLiveEntry, undefined, controller.signal, undefined, options.fetch);
           if (!isCurrent(version, account, game)) return;
           entry = preparation; entryReceivedAt = Date.now();
@@ -173,7 +185,11 @@ export function createLiveMode(options: LiveModeOptions) {
       if (isCurrent(version, account, game) && exitIntent && error instanceof LiveApiError && error.status === 401 && ['join_required', 'not_joined', 'not_online', 'player_missing'].includes(error.code)) finishExit();
       else explain(error, version, account, game);
     }
-    finally { if (version === generation) { controller = null; requestBusy = false; render(); schedule(version); } }
+    finally { if (version === generation) {
+      controller = null; requestBusy = false;
+      if (!snapshot || Date.now() - renderedAt >= 500 || panelState() !== renderedState) render();
+      schedule(version, startedAt);
+    } }
   }
 
   async function join(reconnecting = false): Promise<void> {
@@ -263,6 +279,7 @@ export function createLiveMode(options: LiveModeOptions) {
   }
 
   function render(): void {
+    renderedAt = Date.now(); renderedState = panelState();
     if (!active) return;
     dock.classList.remove('context-open', 'raid-dock', 'gameplay-overview'); dock.classList.add('live-dock');
     dock.removeAttribute('role'); dock.removeAttribute('aria-modal'); dock.setAttribute('aria-label', 'Автоматический рейд: состояние бойца и маршрут');

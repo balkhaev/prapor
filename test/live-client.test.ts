@@ -19,6 +19,16 @@ const fixture = (): LiveSnapshot => {
 }; };
 
 describe('live wire parser', () => {
+  test('accepts only bounded public walking pace and remains compatible with older snapshots', () => {
+    const source = fixture();
+    expect(readLiveSnapshot(source).entities[0]!.moveIntervalMs).toBeUndefined();
+    source.entities[0]!.moveIntervalMs = 500;
+    expect(readLiveSnapshot(source).entities[0]!.moveIntervalMs).toBe(500);
+    for (const value of [0, -1, 99, 4001, Infinity, NaN, '500', null]) {
+      Object.assign(source.entities[0]!, { moveIntervalMs: value });
+      expect(() => readLiveSnapshot(source)).toThrow(LiveApiError);
+    }
+  });
   test('public installed model IDs survive parsing and reject invalid slots or private instance data', () => {
     const packet = fixture(), modules = { ...FACTORY_KITS.ak74! };
     packet.entities[1]!.visualLoadout = { weaponId: 'ak74', modules, profile: 'assault', helmet: true, armor: true, backpack: false };

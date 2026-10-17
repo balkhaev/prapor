@@ -165,7 +165,8 @@ describe('articulated fighter rig and shared phases', () => {
       expect(rig.sway * rig.hipSway).toBeLessThanOrEqual(0);
     }
     expect(doubleSupport).toBeGreaterThan(0); expect(doubleSupport).toBeLessThan(PIXEL_ACTOR_FRAMES.walk / 2);
-    for (const baseTile of [48, 64]) for (const [joint, phases] of [['leftHeel', [0, 1, 2, 3, 4, 5]], ['leftToe', [2, 3, 4, 5, 6, 7]]] as const) {
+    for (const baseTile of [48, 64]) for (const [joint, start, end] of [['leftHeel', 0, .42], ['leftToe', .17, .58]] as const) {
+      const phases = Array.from({ length: PIXEL_ACTOR_FRAMES.walk }, (_, frame) => frame).filter(frame => frame / PIXEL_ACTOR_FRAMES.walk >= start && frame / PIXEL_ACTOR_FRAMES.walk <= end);
       const points = phases.map(frame => {
         const rig = pixelActorRig({ mode: 'walk', frame, facing: 'se' }), distance = pixelActorWalkCycleDistance(baseTile) * frame / PIXEL_ACTOR_FRAMES.walk;
         return { x: distance * baseTile / 2 + (rig[joint].x - rig.anchor.x) * .32, y: distance * baseTile / 4 + (rig[joint].y - rig.anchor.y) * .32 };

@@ -141,8 +141,8 @@ describe('authoritative multiplayer sortie preparation',()=>{
     const medical=new Element();medical.open=false;h.dock.queries.set('.live-medical-fold',medical);
     h.firePoll();await h.settle();
     expect(h.dock.innerHTML).toContain('Ранения · нужна помощь');expect(h.dock.innerHTML).not.toContain('class="live-medical-fold urgent" open');
-    medical.open=true;h.firePoll();await h.settle();expect(h.dock.innerHTML).toContain('class="live-medical-fold urgent" open');
-    medical.open=false;h.firePoll();await h.settle();expect(h.dock.innerHTML).not.toContain('class="live-medical-fold urgent" open');
+    medical.open=true;state.self.ammo--;h.firePoll();await h.settle();expect(h.dock.innerHTML).toContain('class="live-medical-fold urgent" open');
+    medical.open=false;state.self.ammo--;h.firePoll();await h.settle();expect(h.dock.innerHTML).not.toContain('class="live-medical-fold urgent" open');
     expect(h.calls.some(call=>call.path==='action')).toBe(false);
   });
 
