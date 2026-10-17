@@ -22,6 +22,7 @@ import { LIVE_FIELD_KITS, getLiveLoadout, isLiveKitId, quoteLiveKits, type LiveE
 import { WEAPON_BY_ID } from '../src/game/data';
 import { FACTORY_KITS } from '../src/game/modules';
 import { GEAR_MODEL_BY_ID } from '../src/game/systems';
+import { LIVE_TICK_MS, liveMovementInterval } from '../src/game/live-timing';
 
 export interface LiveOptions {
   dbPath: string;
@@ -77,7 +78,7 @@ interface Drop extends LiveDrop { mapId: LiveMapId; expiresAt: number; source?: 
 interface MapEvent extends LiveEvent { mapId: LiveMapId; point?: LivePoint }
 interface EconomyBinding { live_identity: string; owner_key: string; game_id: string }
 interface OutboxRow { id: string; identity: string; kind: "delivery" | "supply"; payload: string; message: string }
-const TICK_MS = 250, HEARTBEAT_MS = 15_000, RESPAWN_MS = 10_000, COOKIE_SECONDS = 30 * 24 * 60 * 60;
+const HEARTBEAT_MS = 15_000, RESPAWN_MS = 10_000, COOKIE_SECONDS = 30 * 24 * 60 * 60;
 const DISCONNECT_GRACE_MS = 30_000, LEAVE_MS = 5000;
 const MEDICINES: TreatmentType[] = ["medkit", "bandage", "tourniquet", "splint", "painkiller", "surgery"];
 const LIVE_PROTECTION: Partial<Record<BodyPart, number>> = { head: .2, chest: .3, stomach: .3 };
@@ -363,6 +364,7 @@ export function createLiveService(options: LiveOptions): LiveService {
     return { id: entity.id, kind: entity.kind, name: entity.name, appearance: entity.appearance, health: entity.health, action: entity.action, safeUntil: entity.safeUntil, x: entity.x, y: entity.y,
       ...(visualLoadout ? { visualLoadout } : {}), ...(entity.faction ? { faction: entity.faction } : {}), ...(entity.role ? { role: entity.role } : {}), ...(entity.bossId ? { bossId: entity.bossId } : {}),
       bleeding: BODY_PARTS.some(part => entity.body.parts[part].bleeding !== "none"), limping: injuryEffects(entity.body, now()).movement < 1,
+      moveIntervalMs: liveMovementInterval(entity.kind, injuryEffects(entity.body, now()).movement),
       ...(entity.aim ? { aimUntil: entity.aim.endsAt, aimTargetId: entity.aim.targetId } : {}) };
   };
   const persist = (): void => {
@@ -1035,13 +1037,22 @@ export function createLiveService(options: LiveOptions): LiveService {
   };
   const leashOf = (scav: Scav): number => scav.bossId ? getBoss(scav.bossId)!.live.aggroRange : scav.role === "patrol" ? Math.max(14, ...scav.route.map(point => distance(scav.home, point) + 9)) : scav.role === "marksman" ? 10 : 8;
   const nearestTarget = (entity: Participant | Scav): Participant | Scav | undefined => {
-    const targets: Array<Participant | Scav> = "identity" in entity
-      ? [...scavs.values()].filter(scav => scav.mapId === entity.mapId && scav.health > 0 && (entity.purpose !== 'boss' || scav.bossId))
-      : [...players.values(), ...scavs.values()].filter(target => target.id !== entity.id && target.mapId === entity.mapId && target.health > 0 && target.safeUntil <= now()
-        && (isParticipant(target) ? exposed(target) : !entity.bossId && !target.bossId && target.faction !== entity.faction)
-        && distance(entity, target) <= (entity.bossId ? getBoss(entity.bossId)!.live.aggroRange : entity.role === "marksman" ? 11 : entity.role === "patrol" ? 9 : 7)
-        && distance(entity.home, target) <= leashOf(entity));
-    return targets.sort((a, b) => distance(entity, a) - distance(entity, b))[0];
+    let nearest: Participant | Scav | undefined, nearestDistance = Infinity;
+    const participant = isParticipant(entity), time = now();
+    const range = participant ? Infinity : entity.bossId ? getBoss(entity.bossId)!.live.aggroRange : entity.role === 'marksman' ? 11 : entity.role === 'patrol' ? 9 : 7;
+    const leash = participant ? Infinity : leashOf(entity);
+    const consider = (target: Participant | Scav): void => {
+      if (target.mapId !== entity.mapId || target.health <= 0 || target.id === entity.id) return;
+      if (participant) { if (isParticipant(target) || entity.purpose === 'boss' && !target.bossId) return; }
+      else if (target.safeUntil > time || (isParticipant(target) ? !exposed(target) : entity.bossId || target.bossId || target.faction === entity.faction)) return;
+      const separation = distance(entity, target);
+      if (separation >= nearestDistance || separation > range || !participant && distance(entity.home, target) > leash) return;
+      nearest = target; nearestDistance = separation;
+    };
+    // Keep the old stable player-before-NPC tie order, without allocating and sorting N arrays per tick.
+    if (!participant) for (const player of players.values()) consider(player);
+    for (const scav of scavs.values()) consider(scav);
+    return nearest;
   };
   const targetFor = (player: Participant, id: string): Participant | Scav => {
     const target = [...players.values(), ...scavs.values()].find(entity => entity.id === id && entity.mapId === player.mapId && entity.health > 0 && (!isParticipant(entity) || exposed(entity)));
@@ -1090,7 +1101,12 @@ export function createLiveService(options: LiveOptions): LiveService {
     expire();
     for (const drop of drops.values()) if (drop.expiresAt <= now()) drops.delete(drop.id);
     for (const [key, ready] of lootCooldowns) if (ready <= now()) lootCooldowns.delete(key);
-    for (const map of LIVE_MAPS) for (const anchor of map.containers) if ((lootCooldowns.get(lootKey(map.id, anchor, anchor.id)) ?? 0) <= now() && ![...drops.values()].some(drop => drop.containerId === anchor.id)) addDrop(map.id, anchor, 10 + Math.floor(random() * 21), "supply");
+    const occupiedContainers = new Set<string>();
+    for (const drop of drops.values()) if (drop.containerId) occupiedContainers.add(drop.containerId);
+    for (const map of LIVE_MAPS) for (const anchor of map.containers) if ((lootCooldowns.get(lootKey(map.id, anchor, anchor.id)) ?? 0) <= now() && !occupiedContainers.has(anchor.id)) {
+      addDrop(map.id, anchor, 10 + Math.floor(random() * 21), "supply");
+      occupiedContainers.add(anchor.id);
+    }
     for (const scav of scavs.values()) {
       if (scav.health <= 0) {
         if (scav.respawnAt <= now()) {
@@ -1120,7 +1136,7 @@ export function createLiveService(options: LiveOptions): LiveService {
           .filter(point => clear(scav.mapId, point, scav.id) && (!target || distance(scav.home, point) <= leashOf(scav)) && (!scav.bossId || insideBossArena(scav.bossId, point))).sort((a, b) => distance(scav, a) - distance(scav, b))[0] : destination;
         const step = goal ? pathStep(scav, goal) : null;
         if (step && (!scav.bossId || insideBossArena(scav.bossId, step))) { scav.x = step.x; scav.y = step.y; scav.action = "moving"; }
-        scav.aim = null; scav.nextMove = now() + Math.ceil(750 / Math.max(.25, injuryEffects(scav.body, now()).movement));
+        scav.aim = null; scav.nextMove = now() + liveMovementInterval('scav', injuryEffects(scav.body, now()).movement);
       }
     }
     for (const player of players.values()) {
@@ -1183,14 +1199,15 @@ export function createLiveService(options: LiveOptions): LiveService {
         if (step) { player.x = step.x; player.y = step.y; player.action = "moving"; if (player.sortie) player.sortie.blockedAt = 0; }
         else { player.action = "idle"; if (player.sortie && player.automation?.enabled) player.sortie.blockedAt ||= now(); }
         if (player.destination?.x === player.x && player.destination.y === player.y) { player.destination = null; player.action = "idle"; }
-        player.nextMove = now() + Math.ceil(350 / Math.max(.25, injuryEffects(player.body, now()).movement));
+        player.nextMove = now() + liveMovementInterval('player', injuryEffects(player.body, now()).movement);
       }
     }
   };
   const tick = (): void => {
     if (closed || failed) return;
     try {
-      if (now() - lastTick >= TICK_MS) { simulate(); lastTick = now(); }
+      const tickStartedAt = now();
+      if (tickStartedAt - lastTick >= LIVE_TICK_MS) { lastTick = tickStartedAt; simulate(); }
       const retryEconomy = Boolean(options.economy) && now() - lastEconomy >= 1000;
       if (now() - lastSave >= 1000 || retryEconomy) persist();
       if (retryEconomy) flushEconomy();
@@ -1358,7 +1375,8 @@ export function createLiveService(options: LiveOptions): LiveService {
       if (!method) return response({ code: "not_found" }, 404);
       if (request.method !== method) return response({ code: "method_not_allowed" }, 405, { Allow: method });
       const ipKey = hashToken(clientAddress);
-      limit(`api:${ipKey}`, 6000);
+      // A full server may share one household, office or carrier NAT; each fighter retains its own quota below.
+      limit(`api:${ipKey}`, LIVE_CAPACITY * 600);
       if (request.method === "POST" && (!origins.has(request.headers.get("origin") ?? "") || request.headers.get("sec-fetch-site") === "cross-site")) throw new LiveError(403, "origin_not_allowed");
       if (path === '/api/live/entry') return response(entry(request));
       tick();
@@ -1449,7 +1467,7 @@ export function createLiveService(options: LiveOptions): LiveService {
   };
   for (const boss of scavs.values()) if (boss.bossId) settleBossHealth(boss, now());
   persist(); flushEconomy();
-  const timer = options.automaticTicks === false ? undefined : setInterval(tick, TICK_MS);
+  const timer = options.automaticTicks === false ? undefined : setInterval(tick, LIVE_TICK_MS);
   timer?.unref();
   return { fetch: fetchApi, tick, healthy: () => { try { return !closed && !failed && Boolean(db.query("SELECT 1 AS ready").get()); } catch { return false; } }, close: () => {
     if (closed) return;

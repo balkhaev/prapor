@@ -10,6 +10,7 @@ import { createHandler } from "../server/handler";
 import type { LiveCommand, LiveDistrictId, LivePurpose, LiveSnapshot, LiveStatus } from "../src/game/live";
 import { getLiveMap, hasLiveLineOfSight, isLiveWalkable } from "../src/game/live-maps";
 import { LIVE_GENERATOR_VERSION, LIVE_WORLD_OFFSET, LIVE_WORLD_SIZE } from "../src/game/world-generation";
+import { LIVE_CAPACITY } from '../src/game/live';
 
 const ORIGIN = "https://game.delopusk.ru";
 let directory: string, dbPath: string, service: LiveService, accounts: AccountService | undefined;
@@ -97,6 +98,40 @@ beforeEach(async () => {
 afterEach(async () => { service.close(); accounts?.close(); await rm(directory, { recursive: true, force: true }); });
 
 describe("shared endless live server", () => {
+  test('simulation work does not shift the next scheduled tick beyond its start deadline', async () => {
+    const fighter = await enter();
+    service.close();
+    let slowTick = false;
+    service = createLiveService({ ...options(), now: () => { const current = time; if (slowTick) { slowTick = false; time += 10; } return current; } });
+    await enter(fighter.session);
+    time += 50; slowTick = true; service.tick();
+    time += 40; service.tick();
+    service.close();
+    const db = new Database(dbPath, { readonly: true });
+    try {
+      const fighterState = db.query<{ state: string }, []>('SELECT state FROM live_players').all().map(row => JSON.parse(row.state)).find(player => player.id === fighter.session.id)!;
+      expect(fighterState.healthAt).toBe(time);
+    } finally { db.close(); }
+  });
+
+  test('20 Hz responds on the next tick without accelerating walking or repeating same-time steps', async () => {
+    const fighter = await enter();
+    placePlayers([{ session: fighter.session, x: 0, y: 0 }]);
+    await enter(fighter.session);
+    await act(fighter.session, { type: 'move', x: 5, y: 0 });
+    time += 49; service.tick();
+    expect((await state(fighter.session)).entities.find(entity => entity.id === fighter.session.id)!.x).toBe(0);
+    time += 1; service.tick();
+    const moved = (await state(fighter.session)).entities.find(entity => entity.id === fighter.session.id)!;
+    expect(moved.x).toBe(1); expect(moved.moveIntervalMs).toBe(500);
+    for (let frame = 0; frame < 9; frame++) { time += 50; service.tick(); }
+    expect((await state(fighter.session)).entities.find(entity => entity.id === fighter.session.id)!.x).toBe(1);
+    time += 50; service.tick();
+    expect((await state(fighter.session)).entities.find(entity => entity.id === fighter.session.id)!.x).toBe(2);
+    for (let repeat = 0; repeat < 10; repeat++) service.tick();
+    expect((await state(fighter.session)).entities.find(entity => entity.id === fighter.session.id)!.x).toBe(2);
+  });
+
   test("independent guests meet in one world, cannot impersonate each other, and only command a server-paced path", async () => {
     const first = await enter(), second = await enter();
     expect(first.session.id).not.toBe(second.session.id);
@@ -615,6 +650,17 @@ describe("live API security and account ownership", () => {
     for (let index = 0; index < 180; index++) expect((await call("action", "POST", { type: "patrol", enabled: false }, first.session)).status).toBe(200);
     expect((await call("action", "POST", { type: "patrol", enabled: false }, first.session)).status).toBe(429);
     expect((await state(first.session)).selfId).toBe(first.session.id);
+  }, 15_000);
+
+  test('aggregate IP allowance supports a full shared network but still rejects requests beyond its bound', async () => {
+    for (let index = 0; index < LIVE_CAPACITY * 600; index++) {
+      const reply = await call('state', 'GET', undefined, undefined, undefined, '192.0.2.250');
+      expect(reply.status).toBe(401);
+    }
+    expect((await call('state', 'GET', undefined, undefined, undefined, '192.0.2.250')).status).toBe(429);
+    const fighter = await enter();
+    for (let index = 0; index < 600; index++) expect((await call('state', 'GET', undefined, fighter.session, { 'x-prapor-world-version': cachedWorld!.version })).status).toBe(200);
+    expect((await call('state', 'GET', undefined, fighter.session)).status).toBe(429);
   }, 15_000);
 
   test("logged-in account identity is stable across sessions, guest/account changes are bound, and logout revokes commands", async () => {

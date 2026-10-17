@@ -1,9 +1,9 @@
 /** Shared art cycles. The scene samples analytic world distance; the model
  * viewer samples these same phases from a cosmetic playback clock. */
-export const PIXEL_ACTOR_FRAMES = { idle: 8, walk: 12, aim: 6, fire: 5, hit: 4, downed: 1 } as const;
+export const PIXEL_ACTOR_FRAMES = { idle: 8, walk: 24, aim: 6, fire: 5, hit: 4, downed: 1 } as const;
 export type PixelActorMode = keyof typeof PIXEL_ACTOR_FRAMES;
 export const PIXEL_ACTOR_FRAME_MS: Readonly<Record<PixelActorMode, number>> = {
-  idle: 280, walk: 80, aim: 200, fire: 44, hit: 55, downed: 1000,
+  idle: 280, walk: 40, aim: 200, fire: 44, hit: 55, downed: 1000,
 };
 export const PIXEL_ACTOR_CYCLE_MS = Object.fromEntries(Object.entries(PIXEL_ACTOR_FRAMES).map(([mode, count]) => [mode, count * PIXEL_ACTOR_FRAME_MS[mode as PixelActorMode]])) as Readonly<Record<PixelActorMode, number>>;
 export const PIXEL_ACTOR_ANCHOR = { x: 128, y: 192 } as const;
