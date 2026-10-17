@@ -1,6 +1,7 @@
 import { LIVE_TERRAIN_CODES, type LiveCityBuilding, type LiveCommand, type LiveDrop, type LiveEntity, type LiveLandscapePath, type LiveObstacle, type LivePoint, type LiveSnapshot, type LiveTerrain, type LiveWorld, type LiveWorldProp } from './game/live';
 import { PixelCombatAnimation, pixelFacing, samplePixelMotion, stopPixelMotion, updatePixelMotion, type PixelMotion } from './pixel-animation';
 import { liveDropLabel, liveLootTotals } from './live-loot-ui';
+import { liveNpcActivityLabel } from './live-npc-activity';
 import { getBoss } from './game/bosses';
 import { WEAPON_BY_ID } from './game/data';
 import { buildingNeedsCutaway, distantBuildingSurfaces, liveMapRasterPlan, paintMapFootprints, sceneBuildings, SceneryIndex, type DistantBuildingSurface } from './live-map-art';
@@ -1113,7 +1114,8 @@ export class LiveScene {
     if (!compact) {
       const role = boss ? 'БОСС' : entity.kind === 'player' ? own ? 'ТВОЙ БОЕЦ' : 'ИГРОК' : entity.faction === 'raiders' ? 'РЕЙДЕР' : 'ДИКИЙ';
       const weaponName = WEAPON_BY_ID[typeof weapon === 'string' ? weapon : weapon.weaponId]?.name;
-      this.label(`${role}${weaponName ? ` · ${weaponName}` : ''}`, p.x, top + 13, boss?T.boss:own ? T.text : entity.kind === 'player' ? T.ally : T.muted, 7);
+      const detail = selected ? liveNpcActivityLabel(entity) ?? weaponName : weaponName;
+      this.label(`${role}${detail ? ` · ${detail}` : ''}`, p.x, top + 13, boss?T.boss:own ? T.text : entity.kind === 'player' ? T.ally : T.muted, 7);
     }
     if (named || entity.health < 100) {
       const width = compact ? 22 : 34, y = compact ? bounds.y - 8 : top + 18;

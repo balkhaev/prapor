@@ -136,6 +136,8 @@ export interface LiveVisualLoadout {
   armor: boolean;
   backpack: boolean;
 }
+export const LIVE_NPC_ACTIVITIES = ['patrol', 'travel', 'inspect', 'rest', 'investigate', 'return', 'combat'] as const;
+export type LiveNpcActivity = typeof LIVE_NPC_ACTIVITIES[number];
 export interface LiveEntity extends LivePoint {
   id: string;
   kind: "player" | "scav";
@@ -155,6 +157,8 @@ export interface LiveEntity extends LivePoint {
   aimTargetId?: string;
   faction?: "scavs" | "raiders";
   role?: "patrol" | "guard" | "marksman";
+  /** Visible ordinary NPC activity only; goals, hearing and memory stay private. */
+  npcActivity?: LiveNpcActivity;
   bossId?: BossId;
 }
 export interface LiveTreatment { type: TreatmentType; part: BodyPart; startedAt: number; endsAt: number }
