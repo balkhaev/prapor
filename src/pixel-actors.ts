@@ -3,7 +3,7 @@ import { PixelRaster, PIXEL_PALETTE as P } from './pixel-art';
 import { pixelBearing, type PixelActorFrame } from './pixel-animation';
 import { paintPixelWeapon, pixelWeaponAnchors, pixelWeaponProfile, pixelWeaponSignature, type PixelWeaponInput } from './pixel-weapons';
 import { pixelActorRig } from './pixel-actor-rig';
-import { PIXEL_ACTOR_CACHE_BYTES, PIXEL_ACTOR_ANCHOR, PIXEL_ACTOR_NATIVE_SIZE, frameIndex } from './pixel-actor-config';
+import { PIXEL_ACTOR_CACHE_BYTES, PIXEL_ACTOR_ANCHOR, PIXEL_ACTOR_NATIVE_SIZE, frameIndex, pixelActorPresentationKey } from './pixel-actor-config';
 import { clarifyPixelActor, type PixelActorDetail } from './pixel-actor-clarity';
 export { pixelActorRig, type PixelActorRig } from './pixel-actor-rig';
 export { PIXEL_ACTOR_CACHE_BYTES, PIXEL_ACTOR_FRAMES, PIXEL_ACTOR_ANCHOR, PIXEL_ACTOR_NATIVE_SIZE } from './pixel-actor-config';
@@ -50,7 +50,7 @@ function paintModel(r: PixelRaster, entity: ActorIdentity, animation: PixelActor
   const trousers = look & 4 ? '#50645a' : '#635f4b', trouserLight = look & 4 ? '#829180' : '#938a6c';
   const hair = look % 4 === 0 ? '#74573f' : look % 4 === 1 ? '#3e3931' : look % 4 === 2 ? '#918570' : '#946249';
   const torsoHalf = boss === 'bugor' || boss === 'liteyshchik' ? 24 : boss === 'lesnik' ? 19 : boss === 'komendant' ? 22 : 21;
-  const shouldered = animation.mode === 'aim' || animation.mode === 'fire';
+  const shouldered = rig.aim;
   const helmet = gear?.helmet ?? (entity.faction === 'raiders' || profile === 'assault'), armor = gear?.armor ?? (profile === 'assault' || !!boss);
   const backpack = gear?.backpack ?? (profile !== 'light' || look % 3 !== 1);
   const cosmeticHat = gear?.helmet === false && Math.floor(look / 8) === 3 ? 1 : Math.floor(look / 8);
@@ -152,10 +152,10 @@ function paintModel(r: PixelRaster, entity: ActorIdentity, animation: PixelActor
   if (!rear) pack();
   const kick = rig.weaponKick, sockets = pixelWeaponAnchors(weapon, rig.grip, animation.facing, kick), gunProfile = pixelWeaponProfile(weapon);
   const twoHanded = gunProfile.twoHanded;
-  const leftHand = twoHanded ? sockets.forehand : b(-19, -rig.leftStride * .6, animation.mode === 'aim' || animation.mode === 'fire' ? 72 : 57), rightHand = rig.grip;
+  const leftHand = twoHanded ? sockets.forehand : b(-19, -rig.leftStride * .6, 57 + shouldered * 15), rightHand = rig.grip;
   const arm = (side: number, hand: LivePoint, far: boolean) => {
     const shoulder = side < 0 ? rig.leftShoulder : rig.rightShoulder;
-    const elbow = point(shoulder.x * .48 + hand.x * .52 - bearing.x * (far ? 6 : 3), shoulder.y * .48 + hand.y * .52 + (shouldered ? 12 : 10));
+    const elbow = point(shoulder.x * .48 + hand.x * .52 - bearing.x * (far ? 6 : 3), shoulder.y * .48 + hand.y * .52 + 10 + shouldered * 2);
     limb(shoulder, elbow, 14, far ? shade : coat, far ? undefined : light); limb(elbow, hand, 10, coat, far ? undefined : light);
     r.ellipse(elbow.x, elbow.y, 6, 5, shade); line(point(elbow.x - 4, elbow.y - 1), point(elbow.x + 2, elbow.y + 2), light, distant ? 3 : 2);
     const crease = point(shoulder.x * .45 + elbow.x * .55, shoulder.y * .45 + elbow.y * .55);
@@ -171,7 +171,7 @@ function paintModel(r: PixelRaster, entity: ActorIdentity, animation: PixelActor
     arm(nearSign, nearHand, false);
     paintPixelWeapon(r, weapon, rig.grip, animation.facing, kick); hand(farHand); hand(nearHand);
   }
-  softVolume(0, 0, [[62, 14, 9], [77, 17, 10], [96, torsoHalf - 1, 12], [106, torsoHalf, 10], [shouldered ? 115 : 112, 12, 8]], [rear ? shade : coat, shade, light]);
+  softVolume(0, 0, [[62, 14, 9], [77, 17, 10], [96, torsoHalf - 1, 12], [106, torsoHalf, 10], [112 + shouldered * 3, 12, 8]], [rear ? shade : coat, shade, light]);
   softVolume(0, 1, [[53, 13, 8], [58, 16, 10], [64, 14, 9]], [trousers, '#435248', trouserLight]);
   line(b(-12, 11, 64), b(12, 11, 64), '#354a39', 4);
   const buckle = b(0, 12, 64); r.rect(buckle.x - 3, buckle.y - 2, 6, 4, '#c9b27e');
@@ -256,7 +256,7 @@ export class PixelActorArt {
   clear(): void { for (const { image } of this.sprites.values()) { image.width = 1; image.height = 1; } this.sprites.clear(); this.bytes = 0; }
   get(entity: ActorIdentity, animation: PixelActorFrame, weapon: PixelWeaponInput = 'unknown', gear?: PixelActorGear, detail: PixelActorDetail = 160): PixelActorSprite {
     const look = Number.isFinite(entity.appearance) ? Math.abs(Math.trunc(entity.appearance)) % 32 : 0, normalized = { ...animation, frame: frameIndex(animation) };
-    const key = `${look}:${entity.faction}:${entity.bossId ?? ''}:${entity.role ?? ''}:${entity.limping ?? false}:${normalized.facing}:${normalized.mode}:${normalized.frame}:${pixelWeaponSignature(weapon)}:${gear?.profile ?? ''}:${gear?.helmet ?? ''}:${gear?.armor ?? ''}:${gear?.backpack ?? ''}:${detail}`;
+    const key = `${look}:${entity.faction}:${entity.bossId ?? ''}:${entity.role ?? ''}:${entity.limping ?? false}:${normalized.facing}:${pixelActorPresentationKey(normalized)}:${pixelWeaponSignature(weapon)}:${gear?.profile ?? ''}:${gear?.helmet ?? ''}:${gear?.armor ?? ''}:${gear?.backpack ?? ''}:${detail}`;
     const old = this.sprites.get(key); if (old) { this.sprites.delete(key); this.sprites.set(key, old); return old; }
     const native = document.createElement('canvas'); native.width = PIXEL_ACTOR_NATIVE_SIZE.width; native.height = PIXEL_ACTOR_NATIVE_SIZE.height;
     const context = native.getContext('2d'); let left = 0, top = 0, width: number = native.width, height: number = native.height, metadata: PaintedActor = {};
