@@ -1,9 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
-	advanceScavAnimation, createScavAnimation, MAX_SCAV_WORK_INTERPOLATION_MS,
+	advanceScavAnimation, createScavAnimation, pixelScavWalkDistance, MAX_SCAV_WORK_INTERPOLATION_MS,
 	SCAV_STRIDE_DISTANCE, type ScavAnimationInput, type ScavAnimationPose, type ScavAnimationState,
 } from "../src/shelter-animation";
 import { advance, assignWorker, createGame, getRoomProductionState, queueModuleProduction, saveGame } from "../src/game/engine";
+import { projectShelterPoint } from "../src/shelter-isometric";
+import { scavDirection, scavPixelFrame } from "../src/scav-isometric";
+import { pixelActorRig } from "../src/pixel-actor-rig";
+import { PIXEL_ACTOR_FRAMES, PIXEL_ACTOR_LIMP_CYCLE_SCALE } from "../src/pixel-actor-config";
 
 const IDLE: ScavAnimationInput = { distance: 0, elapsedMs: 0, walking: false, working: false, facing: 1,
 	role: "workshop", workDone: 0, workRate: 0, jobId: null };
@@ -25,6 +29,36 @@ function frames(state: ScavAnimationState, input: ScavAnimationInput, hz: number
 }
 
 describe("continuous distance driven scav animation", () => {
+	test("pixel support feet stay planted along both unequal shelter axes at the displayed actor scale", () => {
+		const start = { x: 200, y: 200 }, origin = projectShelterPoint(start);
+		for (const axis of ["x", "y"] as const) for (const actorScale of [.78, 1]) {
+			const unit = projectShelterPoint({ ...start, [axis]: start[axis] + 1 });
+			const direction = scavDirection(unit.x - origin.x, unit.y - origin.y);
+			const projectedUnit = Math.hypot(unit.x - origin.x, 2 * (unit.y - origin.y));
+			const cycleDistance = 28 * actorScale / projectedUnit, feet = [];
+			for (let frame = 0; frame / PIXEL_ACTOR_FRAMES.walk <= .4; frame++) {
+				const position = projectShelterPoint({ ...start, [axis]: start[axis] + cycleDistance * (frame + .001) / PIXEL_ACTOR_FRAMES.walk });
+				const animation = advanceScavAnimation(createScavAnimation(), { ...IDLE, walking: true,
+					distance: pixelScavWalkDistance(origin, position, actorScale) });
+				const pose = scavPixelFrame(direction, animation.state.stride, 0, true);
+				expect(pose.frame).toBe(frame);
+				const rig = pixelActorRig(pose), scale = 48 / 160 * actorScale;
+				feet.push({ x: position.x + (rig.leftHeel.x - rig.anchor.x) * scale, y: position.y + (rig.leftHeel.y - rig.anchor.y) * scale });
+			}
+			expect(Math.max(...feet.map(point => point.x)) - Math.min(...feet.map(point => point.x))).toBeLessThan(.4);
+			expect(Math.max(...feet.map(point => point.y)) - Math.min(...feet.map(point => point.y))).toBeLessThan(.4);
+		}
+	});
+
+	test("injured pixel strides shorten without changing the route or accumulating idle steps", () => {
+		const from = { x: 12, y: 20 }, to = { x: 24, y: 26 }, original = structuredClone({ from, to });
+		const normal = pixelScavWalkDistance(from, to, .78), injured = pixelScavWalkDistance(from, to, .78, true);
+		expect(injured * PIXEL_ACTOR_LIMP_CYCLE_SCALE).toBeCloseTo(normal, 8);
+		expect(pixelScavWalkDistance(from, from, .78, true)).toBe(0);
+		expect(pixelScavWalkDistance(from, { x: NaN, y: 0 })).toBe(0);
+		expect({ from, to }).toEqual(original);
+	});
+
 	test("30, 60 and 120 Hz produce the same gait and stopping pose for the same actual path and time", () => {
 		const initial = createScavAnimation(.23), walk = { ...IDLE, walking: true, facing: -1 as const };
 		const walking = [30, 60, 120].map((hz) => frames(initial, walk, hz, 2400, 58));

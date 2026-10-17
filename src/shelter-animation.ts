@@ -1,3 +1,5 @@
+import { PIXEL_ACTOR_LIMP_CYCLE_SCALE } from "./pixel-actor-config";
+
 export interface ScavAnimationState {
 	/** Unwrapped stride cycles; the renderer wraps only when evaluating a pose. */
 	stride: number;
@@ -44,6 +46,15 @@ const finite = (n: number, fallback = 0) => Number.isFinite(n) ? n : fallback;
 const clamp = (n: number, low: number, high: number) => Math.min(high, Math.max(low, n));
 const smooth = (from: number, target: number, ms: number, response: number) => target + (from - target) * Math.exp(-ms / response);
 const smoothstep = (value: number) => { const t = clamp(value, 0, 1); return t * t * (3 - 2 * t); };
+
+/** The 48px pixel figure walks in projected ground space. Remove isometric
+ * compression and the actor's own scale; camera zoom affects feet and ground
+ * equally. A shorter injured stride advances through the same distance sooner. */
+export function pixelScavWalkDistance(from: { x: number; y: number }, to: { x: number; y: number }, actorScale = 1, limping = false): number {
+	const scale = Number.isFinite(actorScale) && actorScale > 0 ? actorScale : 1;
+	const distance = Math.hypot(to.x - from.x, (to.y - from.y) * 2);
+	return Number.isFinite(distance) ? distance / scale / (limping ? PIXEL_ACTOR_LIMP_CYCLE_SCALE : 1) : 0;
+}
 
 export function createScavAnimation(seed = 0, facing: -1 | 1 = 1): ScavAnimationState {
 	return { stride: finite(seed), walkBlend: 0, workBlend: 0, facing: facing === -1 ? -1 : 1, idleSeconds: finite(seed), observedWork: 0, observedJob: null, workAgeMs: 0, workCursor: 0 };

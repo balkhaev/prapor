@@ -11,7 +11,7 @@ import { getScavVisualLoadout } from "./scav-loadout";
 import { advanceShelterRoute, clientToShelterPoint } from "./shelter-motion";
 import { clampShelterCamera, getMinShelterZoom, shelterOverviewCamera, focusShelterRect, panShelterCamera, projectShelterRect, resizeShelterCamera, shelterViewportForSize, viewportToShelter, zoomShelterCamera, type ShelterCamera, type ShelterRect, type ShelterViewport, type ClientRect } from "./shelter-camera";
 import { getShelterTerritoryCell, getShelterCorridorSegments, getShelterOpenGroundPoints, getShelterBuildingRect, isShelterPointInTerritory, getShelterWalkingRoute, getShelterWorldBounds, type ShelterLayoutBuilding } from "./shelter-layout";
-import { advanceScavAnimation, createScavAnimation, type ScavAnimationState } from "./shelter-animation";
+import { advanceScavAnimation, createScavAnimation, pixelScavWalkDistance, type ScavAnimationState } from "./shelter-animation";
 import { SCAV_DIRECTIONS, scavAppearance, scavAttachment, scavDirection, scavPixelGear, scavPixelFrame, type ScavDirection } from "./scav-isometric";
 import { advanceShelterStationClock, getShelterProductionPresentation, type ProductionPresentation } from "./shelter-production";
 import { projectShelterPoint, unprojectShelterPoint, projectShelterBounds, shelterBuildingDepth, shelterBuildingHitPolygon, shelterRectPolygon, shelterRoomPolygon, shelterRoomPosition, shelterRoomRect } from "./shelter-isometric";
@@ -1346,7 +1346,7 @@ export function createWorld(
 			this.animateAtmosphere(time);
 			this.ambient.clear();
 			for (const [id, slot] of this.scavs) {
-				let walkedDistance = 0;
+				let walkedDistance = 0, animationDistance = 0;
 				if (slot.actor.visible && this.drag?.scavId !== id) {
 					this.patrolActor(slot, id, time);
 					const speed = slot.status === "wounded" ? 27 : 58;
@@ -1356,12 +1356,13 @@ export function createWorld(
 					const before = slot.position;
 					const motion = advanceShelterRoute(slot.position, slot.route, Math.min(speed * step, distance));
 					walkedDistance = Math.hypot(motion.point.x - slot.position.x, motion.point.y - slot.position.y);
+					const previous = projectShelterPoint(before), current = projectShelterPoint(motion.point);
+					animationDistance = pixelScavWalkDistance(previous, current, slot.actor.scaleX, slot.status === "wounded");
 					slot.route = motion.route;
 					if (hadRoute) this.placeActor(slot, motion.point);
 					slot.walking = hadRoute; slot.climbing = false;
 					if (slot.walking && Math.abs(motion.point.x - before.x) > .001) slot.facing = motion.facing;
 					if (walkedDistance > .001) {
-						const previous = projectShelterPoint(before), current = projectShelterPoint(motion.point);
 						slot.direction = scavDirection(current.x - previous.x, current.y - previous.y, slot.direction);
 					}
 					if (hadRoute && motion.arrived) { slot.dwellUntil = time + (slot.routine?.dwellMs ?? 6500 + (slot.phase % 4) * 1700); slot.walking = false; slot.climbing = false; if (slot.status === "raiding") slot.actor.setVisible(false); }
@@ -1378,7 +1379,7 @@ export function createWorld(
 					const from = projectShelterPoint(slot.position), to = projectShelterPoint(slot.routine.lookAt);
 					slot.direction = scavDirection(to.x - from.x, to.y - from.y, slot.direction); slot.facing = slot.direction.endsWith("e") ? 1 : -1;
 				}
-				const animation = advanceScavAnimation(slot.animation, { distance: walkedDistance, elapsedMs: step * 1000, walking: slot.walking || walkedDistance > 0, working: slot.working, facing: slot.facing, role: slot.role, workDone: (room?.queue[0]?.workDone ?? 0) / 1_000_000, workRate: production?.rate ?? 0, jobId: presentation?.jobId ?? null, stage: presentation?.stage, stageProgress: presentation?.stageProgress, reducedMotion, paused: !slot.actor.visible || this.drag?.scavId === id });
+				const animation = advanceScavAnimation(slot.animation, { distance: animationDistance, elapsedMs: step * 1000, walking: slot.walking || walkedDistance > 0, working: slot.working, facing: slot.facing, role: slot.role, workDone: (room?.queue[0]?.workDone ?? 0) / 1_000_000, workRate: production?.rate ?? 0, jobId: presentation?.jobId ?? null, stage: presentation?.stage, stageProgress: presentation?.stageProgress, reducedMotion, paused: !slot.actor.visible || this.drag?.scavId === id });
 				slot.animation = animation.state;
 				const pose = animation.pose;
 				const activityPose = getShelterActivityPose({ activity: slot.routine?.activity, elapsedMs: time, phase: slot.phase,

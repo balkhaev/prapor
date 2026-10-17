@@ -144,6 +144,8 @@ export interface LiveEntity extends LivePoint {
   health: number;
   action: "idle" | "moving" | "combat" | "downed";
   safeUntil: number;
+  /** Observed walking pace only; never exposes a destination or unobserved path. */
+  moveIntervalMs?: number;
   /** Optional for older snapshots; visible equipment is projected after visibility filtering. */
   visualLoadout?: LiveVisualLoadout;
   /** Visible signs only; another player's body and medicines stay private. */

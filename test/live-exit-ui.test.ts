@@ -6,9 +6,13 @@ import { getLiveMap } from '../src/game/live-maps';
 import { BOSSES } from '../src/game/bosses';
 import { getLiveBossArena } from '../src/game/live-boss-arenas';
 import { quoteLiveKits, type LiveEntry } from '../src/game/live-entry';
+import { LIVE_SNAPSHOT_MS } from '../src/game/live-timing';
 
 class ElementStub {
-  hidden = false; innerHTML = ''; className = ''; tabIndex = 0; disabled = false;
+  hidden = false; className = ''; tabIndex = 0; disabled = false;
+  htmlWrites = 0; private html = '';
+  get innerHTML() { return this.html; }
+  set innerHTML(value: string) { this.html = value; this.htmlWrites++; }
   dataset: Record<string, string> = {};
   children: ElementStub[] = []; parent: ElementStub | null = null;
   handlers = new Map<string, (event: unknown) => void>();
@@ -31,6 +35,7 @@ let server: LiveSnapshot, mode: ReturnType<typeof createLiveMode> | undefined;
 let nextTimer: number, timers: Map<number, { delay: number; run: () => void }>, replacements: Map<string, PropertyDescriptor | undefined>;
 let clockSpy: ReturnType<typeof spyOn<typeof Date, 'now'>>;
 let sceneRoute:string[],commands:unknown[],sceneFocus:LivePoint[];
+let stateReads: number, entryReads: number, sceneUpdates: number, responseDelay: number, stateReadGate: Promise<void> | undefined;
 function replace(key: string, value: unknown) {
   replacements.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
   Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
@@ -42,11 +47,12 @@ async function click(button: string, hostOverride?: ElementStub) {
   host.handlers.get('click')!({ target }); await settle();
 }
 async function poll() {
-  const pending = [...timers.entries()].find(([, item]) => item.delay === 500);
+  const pending = timers.entries().next().value;
   expect(pending).toBeDefined(); timers.delete(pending![0]); pending![1].run(); await settle();
 }
 beforeEach(() => {
   time = 1_800_000_000_000; exited = 0; marketOpened = 0; missionsOpened = 0; joins = 0; leaves = 0; failedReads = 0;
+  stateReads = 0; entryReads = 0; sceneUpdates = 0; responseDelay = 0; stateReadGate = undefined;
   sceneRoute=[];commands=[];sceneFocus=[];
   nextTimer = 0; timers = new Map(); replacements = new Map(); world = new ElementStub(); dock = new ElementStub(); hud = new ElementStub();
   clockSpy = spyOn(Date, 'now').mockImplementation(() => time);
@@ -67,6 +73,7 @@ beforeEach(() => {
     const path = url.split('/').at(-1);
     if (path === 'status') return Response.json(server.server);
     if (path === 'entry') {
+      entryReads++;
       const stock = { money: 640, ammo: 100, medicine: 3 };
       const entry: LiveEntry = { server: server.server, now: time, mode: 'new', fighter: null, stock, kits: quoteLiveKits(stock) };
       return Response.json(entry);
@@ -80,6 +87,8 @@ beforeEach(() => {
       return Response.json({ ...server, now: time });
     }
     if (path === 'state') {
+      stateReads++; if (stateReadGate) await stateReadGate;
+      time += responseDelay;
       if (failedReads-- > 0) return Response.json({ code: 'service_unavailable' }, { status: 503 });
       if (server.self.leaveAt > 0 && server.self.leaveAt <= time) return Response.json({ code: 'join_required' }, { status: 401 });
       return Response.json({ ...server, now: time });
@@ -87,7 +96,7 @@ beforeEach(() => {
     throw new Error(`Unexpected request ${url}`);
   });
   mode = createLiveMode({ world: world as unknown as HTMLElement, dock: dock as unknown as HTMLElement, hudRoot: hud as unknown as HTMLElement, onExit: () => { exited++; }, onAccount() {}, onMarket: () => { marketOpened++; }, onMissionBoard: () => { missionsOpened++; }, getAccountId: () => null, getGameId: () => server.self.gameId ?? null,
-    sceneFactory: () => ({ show() {}, hide() {}, clear() {}, setSelected() {}, update() {}, destroy() {},setRoute(ids){sceneRoute=[...ids];},focusPoint(point){sceneFocus.push({...point});} }),
+    sceneFactory: () => ({ show() {}, hide() {}, clear() {}, setSelected() {}, update() { sceneUpdates++; }, destroy() {},setRoute(ids){sceneRoute=[...ids];},focusPoint(point){sceneFocus.push({...point});} }),
   });
 });
 afterEach(() => {
@@ -96,6 +105,41 @@ afterEach(() => {
 });
 
 describe('visible server-confirmed live exit', () => {
+  test('fast snapshots update the scene without rebuilding unchanged panels and include response time', async () => {
+    mode!.show(); await settle(); await click('join');
+    expect([...timers.values()][0]!.delay).toBe(LIVE_SNAPSHOT_MS);
+    const writes = dock.htmlWrites, updates = sceneUpdates;
+    responseDelay = 30; time += LIVE_SNAPSHOT_MS;
+    await poll();
+    expect(sceneUpdates).toBe(updates + 1); expect(dock.htmlWrites).toBe(writes);
+    expect([...timers.values()][0]!.delay).toBe(LIVE_SNAPSHOT_MS - 30);
+    time += 500; await poll(); expect(dock.htmlWrites).toBeGreaterThan(writes);
+  });
+
+  test('slow reads never overlap, background reads slow down, and failures back off', async () => {
+    mode!.show(); await settle(); await click('join');
+    let release!: () => void;
+    stateReadGate = new Promise(resolve => { release = resolve; });
+    await poll();
+    expect(stateReads).toBe(1); expect(timers.size).toBe(0);
+    mode!.refreshPanel(); await settle(); expect(stateReads).toBe(1);
+    release(); stateReadGate = undefined; await settle();
+    Object.assign(document, { hidden: true }); await poll();
+    expect([...timers.values()][0]!.delay).toBe(1000);
+    failedReads = 1; await poll();
+    expect([...timers.values()][0]!.delay).toBe(2000);
+  });
+
+  test('a downed fighter does not fetch preparation on every fast snapshot', async () => {
+    mode!.show(); await settle(); await click('join');
+    const initial = entryReads;
+    server.entities[0]!.health = 0;
+    await poll(); expect(entryReads).toBe(initial + 1);
+    for (let frame = 0; frame < 7; frame++) { time += LIVE_SNAPSHOT_MS; await poll(); }
+    expect(entryReads).toBe(initial + 1);
+    time += 2000; await poll(); expect(entryReads).toBe(initial + 2);
+  });
+
   test('the independent raid HUD keeps vitals and recall available while the full dock is hidden', async () => {
     mode!.show(); await settle();
     const status = hud.children[0]!;

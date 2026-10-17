@@ -202,7 +202,7 @@ export class LiveScene {
         : target ? { x: target.x - entity.x, y: target.y - entity.y }
           : existing ? { x: entity.x - existing.to.x, y: entity.y - existing.to.y } : { x: 0, y: 0 };
       const facing = pixelFacing(bearing.x - bearing.y, (bearing.x + bearing.y) / 2, existing?.facing);
-      this.motions.set(entity.id, entity.health <= 0 ? stopPixelMotion(existing, entity, at) : updatePixelMotion(existing, entity, at, facing));
+      this.motions.set(entity.id, entity.health <= 0 ? stopPixelMotion(existing, entity, at) : updatePixelMotion(existing, entity, at, facing, entity.moveIntervalMs));
     }
     for (const id of this.motions.keys()) if (!snapshot.entities.some(entity => entity.id === id)) this.motions.delete(id);
     this.combatAnimation.update(snapshot.events, snapshot.now, at);
