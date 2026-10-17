@@ -5,7 +5,7 @@ import { dirname } from "node:path";
 import { LIVE_CAPACITY, LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT, LIVE_MEDICAL_CAPACITY, LIVE_PENDING_CAPACITY, LIVE_SERVER_ID, LIVE_SERVER_NAME, liveMedicalSupplyNeeded, type LiveCommand, type LiveDistrictId, type LiveDrop, type LiveEntity, type LiveEvent, type LiveMapId, type LivePlayer, type LivePoint, type LivePurpose, type LiveSnapshot, type LiveStatus, type LiveVisualLoadout, type LiveWorld } from "../src/game/live";
 import { LIVE_MAPS } from "../src/game/live-maps";
 import { createLiveNavigation } from "./live-navigation";
-import { createLiveSortie, type LiveSortiePlan } from './live-autobattle';
+import { createLiveSortie, LIVE_LOOT_COMMITMENT_MS, type LiveSortiePlan } from './live-autobattle';
 import { NPC_RESPAWN_MS, NPC_RESPAWN_QUIET_MS, NPC_RESPAWN_CLEAR_RADIUS, NPC_RESPAWN_CHECK_MS, NPC_SITE_REPLENISH_MS } from './live-spawning';
 import { advanceNpcRoutine, createNpcLife, createNpcLifePlans, investigateNpcNoise, rememberNpcContact, restoreNpcLife, NPC_HEARING_RADIUS, NPC_NOISE_INCIDENT_MS, NPC_NOISE_RESPONDERS, NPC_THINK_MS, type NpcLifeState } from './live-alife';
 import { migratedContainerAnchor, migratedLootCooldownKey } from "./live-world-migration";
@@ -272,6 +272,7 @@ export function createLiveService(options: LiveOptions): LiveService {
   };
   const pauseSortie = (player: Participant, reason = 'Ручное управление'): void => {
     if (!player.automation || player.automation.stage === 'complete' || player.automation.stage === 'downed') return;
+    if (player.sortie) delete player.sortie.lootCommitment;
     Object.assign(player.automation, { enabled: false, stage: 'paused', goal: 'Автобой приостановлен', reason, target: null, targetId: null });
   };
   const durable = (entity: Participant | Scav): Omit<Participant | Scav, keyof PathCache> => {
@@ -764,6 +765,7 @@ export function createLiveService(options: LiveOptions): LiveService {
       if (amount > 0 || target.lootItems?.length) addDrop(target.mapId, target, amount, "body", target.lootItems ?? []);
       target.cargo = 0; if (options.economy) target.lootItems = [];
       target.destination = null; target.patrol = false; target.targetId = null; target.treatment = null; target.searching = null; Object.assign(target, freshPath());
+      if (target.sortie) delete target.sortie.lootCommitment;
       if (target.automation) Object.assign(target.automation, { enabled: false, stage: 'downed', goal: 'Боец погиб', target: null, targetId: null, reason: 'Груз остался на месте боя', completedAt: defeatedAt });
     } else if (amount > 0) addDrop(target.mapId, target, amount);
     if (attacker && "kills" in attacker) attacker.kills++;
@@ -934,6 +936,7 @@ export function createLiveService(options: LiveOptions): LiveService {
     if (!player.automation || !player.sortie) startSortie(player);
     player.sortie!.recalling = true;
     player.sortie!.extractTarget = null; player.sortie!.blockedExtractKeys = []; player.sortie!.blockedAt = 0;
+    delete player.sortie!.lootCommitment;
     Object.assign(player.automation!, { enabled: true, stage: 'extract', goal: 'Возвращение к выходу', reason, targetId: null, target: null });
     player.targetId = null; player.destination = null; player.searching = null; player.patrol = false; Object.assign(player, freshPath());
   };
@@ -979,6 +982,7 @@ export function createLiveService(options: LiveOptions): LiveService {
         || distance(player, a) - distance(player, b));
     const inRange = hostiles.find(target => distance(player, target) <= rangeOf(player));
     if (inRange && player.ammo > 0 && !(plan.recalling && player.health < 40)) {
+      delete plan.lootCommitment;
       status('combat', `Бой: ${inRange.name}`, inRange, inRange.id);
       player.destination = null; player.searching = null;
       if (player.treatment) cancelTreatment(player);
@@ -1031,13 +1035,32 @@ export function createLiveService(options: LiveOptions): LiveService {
     }
     const chasing = hostiles.find(target => distance(player, target) <= (player.purpose === 'pvp' || player.purpose === 'boss' ? 14 : rangeOf(player) + 2));
     if (chasing && player.ammo > 0 && ['pvp', 'pve', 'boss'].includes(player.purpose)) {
+      delete plan.lootCommitment;
       navigate(chasing, 'route', `Сближение: ${chasing.name}`, chasing.id);
       return false;
     }
     if (player.searching) { status('search', 'Обыск контейнера', drops.get(player.searching.id) ?? null, player.searching.id); return true; }
     const poi = world.pois.find(poi => poi.id === plan.poiIds[automatic.stopIndex]);
     if (!poi) { returnSortie(player, 'Маршрут пройден'); return false; }
+    let remembered = plan.lootCommitment;
+    const rememberedAnchor = remembered && world.containers.find(anchor => anchor.id === remembered!.containerId);
+    // A restart retains this fixed observation, never a hidden live position.
+    // Changed geometry or route invalidates it instead of following stale data.
+    if (remembered && (!rememberedAnchor || remembered.point?.x !== rememberedAnchor.x || remembered.point?.y !== rememberedAnchor.y
+      || typeof remembered.dropId !== 'string' || remembered.stopIndex !== automatic.stopIndex || !Number.isSafeInteger(remembered.until)
+      || remembered.until > time + LIVE_LOOT_COMMITMENT_MS || plan.visitedContainerIds.includes(remembered.containerId) || plan.skippedDropIds.includes(remembered.dropId))) {
+      delete plan.lootCommitment; remembered = undefined;
+    }
+    const skipRememberedContainer = (): void => {
+      if (remembered) {
+        plan.skippedDropIds.push(remembered.dropId); plan.visitedContainerIds.push(remembered.containerId);
+      }
+      delete plan.lootCommitment; remembered = undefined; plan.blockedAt = 0;
+      player.destination = null; Object.assign(player, freshPath()); status('route', 'Продолжение маршрута');
+    };
+    if (remembered && remembered.until <= time) { skipRememberedContainer(); return false; }
     if (plan.blockedAt && time - plan.blockedAt >= 8_000) {
+      if (remembered) { skipRememberedContainer(); return false; }
       const blockedDrop = automatic.targetId ? drops.get(automatic.targetId) : undefined;
       const blocked = automatic.target;
       const anchor = blockedDrop?.containerId ? world.containers.find(anchor => anchor.id === blockedDrop.containerId)
@@ -1048,15 +1071,32 @@ export function createLiveService(options: LiveOptions): LiveService {
       plan.blockedAt = 0; player.destination = null; Object.assign(player, freshPath());
       return false;
     }
+    // Continue to a container that was actually seen even if a doorway hides it
+    // for one step. Re-selecting only currently visible drops can oscillate forever.
+    if (remembered && !observe(remembered.point)) {
+      navigate(remembered.point, 'loot', 'Проверка контейнера', remembered.dropId);
+      return false;
+    }
+    const rememberedDrop = remembered ? drops.get(remembered.dropId) : undefined;
+    if (remembered && (!rememberedDrop || rememberedDrop.mapId !== player.mapId || rememberedDrop.expiresAt <= time || rememberedDrop.containerId !== remembered.containerId
+      || rememberedDrop.x !== remembered.point.x || rememberedDrop.y !== remembered.point.y)) {
+      // Only a current observation can establish that the remembered cycle is gone.
+      skipRememberedContainer(); return false;
+    }
     const visibleDrops = [...drops.values()].filter(drop => drop.mapId === player.mapId && drop.expiresAt > time && !plan.skippedDropIds.includes(drop.id) && observe(drop)
       && (!drop.containerId || !plan.visitedContainerIds.includes(drop.containerId))
       && (distance(player, drop) <= 5 || plan.enteredStop === automatic.stopIndex && world.containers.some(anchor => anchor.id === drop.containerId && anchor.poiId === poi.id)))
       .sort((a, b) => distance(player, a) - distance(player, b));
-    const drop = visibleDrops[0];
+    const drop = rememberedDrop ?? visibleDrops[0];
     if (drop) {
+      if (!remembered && drop.containerId) {
+        const anchor = world.containers.find(anchor => anchor.id === drop.containerId && anchor.x === drop.x && anchor.y === drop.y);
+        if (anchor) plan.lootCommitment = { containerId: anchor.id, dropId: drop.id, point: { x: anchor.x, y: anchor.y }, stopIndex: automatic.stopIndex, until: time + LIVE_LOOT_COMMITMENT_MS };
+      }
       // Unsearched contents are never considered by the planner, including weight.
       const searched = !drop.containerId || player.searchedDropIds.includes(drop.id);
       if (searched && !canCarry(player, drop)) {
+        delete plan.lootCommitment;
         plan.skippedDropIds.push(drop.id);
         if (drop.containerId) plan.visitedContainerIds.push(drop.containerId);
         if (player.cargo > 0 || player.lootItems?.length) returnSortie(player, 'Следующая находка не помещается');
@@ -1064,8 +1104,9 @@ export function createLiveService(options: LiveOptions): LiveService {
       }
       navigate(drop, 'loot', drop.containerId ? 'Проверка контейнера' : 'Сбор трофеев', drop.id);
       if (distance(player, drop) <= 1.5 && lineOfSight(player.mapId, player, drop)) {
-        if (!searched) { search(player, drop.id); status('search', 'Обыск контейнера', drop, drop.id); return true; }
+        if (!searched) { search(player, drop.id); delete plan.lootCommitment; status('search', 'Обыск контейнера', drop, drop.id); return true; }
         loot(player, drop.id);
+        delete plan.lootCommitment;
         if (drop.containerId) plan.visitedContainerIds.push(drop.containerId);
         plan.skippedDropIds.push(drop.id); player.destination = null;
         return true;

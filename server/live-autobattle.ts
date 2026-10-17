@@ -1,5 +1,7 @@
 import type { LiveAutomation, LiveDistrictId, LivePoint, LivePurpose, LiveWorld } from '../src/game/live';
 
+export const LIVE_LOOT_COMMITMENT_MS = 45_000;
+
 /** Only public, authored landmarks form the plan; live actors and cargo stay observed. */
 export interface LiveSortiePlan {
   poiIds: string[];
@@ -10,6 +12,8 @@ export interface LiveSortiePlan {
   blockedAt: number;
   extractTarget: LivePoint | null;
   blockedExtractKeys: string[];
+  /** A previously observed static container; never a moving actor or hidden contents. */
+  lootCommitment?: { containerId: string; dropId: string; point: LivePoint; stopIndex: number; until: number };
 }
 
 export function createLiveSortie(world: LiveWorld, districtId: LiveDistrictId, purpose: LivePurpose, time: number, routeId?: string, bossPoiIds: string[] = []): { automation: LiveAutomation; sortie: LiveSortiePlan } {
