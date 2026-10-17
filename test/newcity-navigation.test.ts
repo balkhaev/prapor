@@ -187,15 +187,17 @@ describe('city passages use the actual server collision grid', () => {
     for (const goal of authoredRoute.slice(0, firstInterior + 1)) {
       const length = walkingDistance(waypoint, goal); expect(length).not.toBeNull(); approachSteps += length!; waypoint = goal;
     }
-    // Expanded blocks have longer first legs; allow the real authored approach
-    // at the patrol's 750ms pace rather than assuming every room is 20s away.
-    const tickBudget = (approachSteps + firstInterior + 8) * 3;
+    // Drive one simulation tick per durable one-second sample. Every tick still
+    // moves at most one cell, so checking consecutive samples cannot hide jumps.
+    // Include the patrol's inspection/rest schedule in the observation window.
+    const tickBudget = Math.max(300, (approachSteps + firstInterior + 8) * 3);
     let last = map.npcSpawns[index]!.point, steps = 0, visitedInterior = false;
     await enter(observer.session);
     for (let tick = 0; tick < tickBudget && (!visitedInterior || steps < 8); tick++) {
-      time += 250; service.tick();
-      // A command persists this exact frame; the periodic save alone samples only once a second.
-      expect((await call('action', { type: 'cancelTreatment' }, observer.session)).status).toBe(200);
+      time += 1000; service.tick();
+      // Keep the observer connected at normal heartbeat cadence; the regular
+      // save already persists this frame without issuing a gameplay command.
+      if (tick % 5 === 0) expect((await call('state', undefined, observer.session)).status).toBe(200);
       const actor = storedWorld().scavs.find(scav => scav.id === id)!; const point = { x: actor.x as number, y: actor.y as number };
       expect(clear(point)).toBe(true);
       visitedInterior ||= indoors(point);
