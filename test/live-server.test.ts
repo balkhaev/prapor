@@ -244,7 +244,7 @@ describe("shared endless live server", () => {
     expect(restored.selfId).toBe(first.session.id); expect(restored.self.cargo).toBeGreaterThanOrEqual(35); expect(restored.self.patrol).toBe(false);
   });
 
-  test("NPCs attack online players and respawn indefinitely; patrol never automatically shoots another player", async () => {
+  test("NPCs attack online players but stay dead during their encounter; patrol never automatically shoots another player", async () => {
     const first = await enter(), second = await enter();
     placePlayers([{ session: first.session, x: 0, y: 0 }, { session: second.session, x: 1, y: 0 }]);
     editStorage(db => {
@@ -266,7 +266,7 @@ describe("shared endless live server", () => {
     await act(first.session, { type: "cancelTreatment" });
     await act(first.session, { type: "patrol", enabled: false }); await advance(8500, [first.session, second.session]);
     const db = new Database(dbPath, { readonly: true });
-    try { const stored = JSON.parse(db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!.state) as { scavs: Array<{ id: string; health: number }> }; expect(stored.scavs.find(entity => entity.id === "scav-0")!.health).toBe(100); }
+    try { const stored = JSON.parse(db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!.state) as { scavs: Array<{ id: string; health: number }> }; expect(stored.scavs.find(entity => entity.id === "scav-0")!.health).toBe(0); }
     finally { db.close(); }
   });
 
@@ -486,7 +486,16 @@ describe("shared endless live server", () => {
     expect(restored.entities.find(entity => entity.id === guest.session.id)).toMatchObject({ x: LIVE_WORLD_OFFSET, y: district.y });
     expect(restored.drops.find(drop => drop.id === "legacy-body")).toMatchObject({ x: LIVE_WORLD_OFFSET + 1, y: district.y, amount: 73 });
     expect(restored.server.bosses).toHaveLength(4);
-    expect(restored.server.maps[0]!.npcs).toBe(getLiveMap("perimeter").npcSpawns.length + restored.server.bosses!.filter(boss => boss.state === 'alive').length); expect(service.healthy()).toBe(true);
+    const db = new Database(dbPath, { readonly: true });
+    try {
+      const saved = JSON.parse(db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!.state) as { scavs: Array<{ health: number; home: { x: number; y: number }; route: Array<{ x: number; y: number }> }> };
+      expect(saved.scavs).toHaveLength(getLiveMap("perimeter").npcSpawns.length);
+      expect(restored.server.maps[0]!.npcs).toBe(saved.scavs.filter(npc => npc.health > 0).length + restored.server.bosses!.filter(boss => boss.state === 'alive').length);
+      // A geometry rebuild keeps the full roster, but defers posts around the saved live body.
+      const deferred = saved.scavs.filter(npc => npc.health <= 0); expect(deferred.length).toBeGreaterThan(0);
+      for (const npc of deferred) expect([npc.home, ...npc.route].some(point => Math.hypot(point.x - LIVE_WORLD_OFFSET, point.y - district.y) <= 40)).toBe(true);
+    } finally { db.close(); }
+    expect(service.healthy()).toBe(true);
   });
   test.each(["perimeter-g2-a827381f", "perimeter-g3-b38b4b0d", "perimeter-g6-shipped", "perimeter-g7-shipped", "perimeter-g8-shipped", "perimeter-g9-shipped"])("expanding saved geometry %s preserves translated body positions, private kit and durable loose cargo across two restarts", async geometryVersion => {
     const guest = await enter(), map = getLiveMap("perimeter"), previousOffset = geometryVersion.startsWith("perimeter-g9-") ? 128 : geometryVersion.startsWith("perimeter-g8-") ? 96 : geometryVersion.startsWith("perimeter-g7-") ? 32 : 0, point = { x: previousOffset, y: previousOffset };

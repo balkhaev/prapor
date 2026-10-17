@@ -19,7 +19,7 @@ import type { GameSnapshot } from '../src/game/commands';
 
 const ORIGIN = 'http://visible-equipment.test', NOW = 1_800_000_000_000, world = getLiveMap('perimeter');
 interface Session { cookie: string; gameId: string; id: string }
-interface SavedEntity extends LiveEntity { nextMove: number; nextAttack: number; respawnAt: number; body: ReturnType<typeof createHealth> }
+interface SavedEntity extends LiveEntity { nextMove: number; nextAttack: number; respawnAt: number; respawnQuietSince?: number | null; body: ReturnType<typeof createHealth> }
 const fixtures: Array<{ folder: string; game: GameService; live: LiveService }> = [];
 afterEach(async () => { for (const f of fixtures.splice(0)) { f.live.close(); f.game.close(); await rm(f.folder, { recursive: true, force: true }); } });
 
@@ -118,12 +118,17 @@ describe('authoritative public actor equipment', () => {
     const target = representatives.get('raiders:marksman')!, before = target.visualLoadout;
     f.restart(db => {
       const saved = f.savedWorld(); for (const scav of saved.scavs) delete scav.visualLoadout;
-      const targetSaved = saved.scavs.find(scav => scav.id === target.id)!; targetSaved.body = createHealth(); targetSaved.body.parts.head.hp = 0; targetSaved.health = 0; targetSaved.respawnAt = NOW;
+      const targetSaved = saved.scavs.find(scav => scav.id === target.id)!; targetSaved.body = createHealth(); targetSaved.body.parts.head.hp = 0; targetSaved.health = 0; targetSaved.respawnAt = NOW; targetSaved.respawnQuietSince = null;
       db.query('UPDATE live_world SET state=? WHERE id=1').run(JSON.stringify({ ...JSON.parse(db.query<{ state: string }, []>('SELECT state FROM live_world WHERE id=1').get()!.state), scavs: saved.scavs }));
       f.player(db, session, player => { Object.assign(player, f.nearby(target)); });
     });
     let snapshot = await f.state(session, { intent: 'continue' }); expect(snapshot.entities.find(entity => entity.id === target.id)?.visualLoadout).toEqual(before);
-    f.advance(250); snapshot = await f.state(session); const respawned = snapshot.entities.find(entity => entity.id === target.id)!;
+    f.advance(250); snapshot = await f.state(session); expect(snapshot.entities.find(entity => entity.id === target.id)!.health).toBe(0);
+    f.restart(db => f.player(db, session, player => { Object.assign(player, { x: 0, y: 0 }); }));
+    f.advance(1000); f.advance(30_000);
+    const renewed = f.savedWorld().scavs.find(scav => scav.id === target.id)!;
+    f.restart(db => f.player(db, session, player => { Object.assign(player, f.nearby(renewed)); }));
+    snapshot = await f.state(session, { intent: 'continue' }); const respawned = snapshot.entities.find(entity => entity.id === target.id)!;
     expect(respawned.health).toBe(100); expect(respawned.visualLoadout).toEqual(before);
   });
 
