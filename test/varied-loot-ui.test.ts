@@ -6,7 +6,7 @@ import { getConfirmedRaidCargo } from '../src/raid-ui';
 import { catalogGroupFilter, fleaPage, pendingLootParcels, physicalLootCatalog, raidGearReceipt, raidLootReceipt, type FleaView } from '../src/flea-ui';
 import { getLiveLootDefinition } from '../src/game/live-loot';
 import { liveDropDetails, liveDropLabel, liveLootCargo, liveLootTotals } from '../src/live-loot-ui';
-import type { EconomyLoot, LivePlayer } from '../src/game/live';
+import type { EconomyLoot, LiveDrop, LivePlayer } from '../src/game/live';
 import { readGameSession } from '../src/game-session';
 
 const NOW=1_792_000_000_000;
@@ -61,6 +61,18 @@ test('multiplayer mixed inventory uses real module and armour definitions, condi
   const totals=liveLootTotals(items),definitions=items.map(getLiveLootDefinition);expect(totals.weight).toBe(definitions.reduce((sum,value)=>sum+value.weight,0));expect(totals.guide).toBe(definitions.reduce((sum,value)=>sum+value.guidePrice,0));expect(totals.trader).toBe(definitions.reduce((sum,value)=>sum+(value.traderPrice??0),0));
   const player={gameId:'guest-test',lootItems:items,pendingDelivery:[]} as unknown as LivePlayer,html=liveLootCargo(player);expect(html).toContain(module.label);expect(html).toContain('Грузовая рама');expect(html).toContain('Состояние 64%');expect(html).toContain('Состояние 50%');expect(html).toContain('Вместимость 27.6');expect(html).toContain('live-physical-loot-art');expect(html).toContain('установить на оружие');expect(html).toContain('выдать своему дикому');
   const gearOnly={id:'drop-1',x:0,y:0,amount:0,items:[items[0]!]} as const;expect(liveDropLabel({...gearOnly,items:[...gearOnly.items]})).toBe('Грузовая рама');expect(liveDropDetails({...gearOnly,items:[...gearOnly.items]})).not.toContain('торговцу');
+});
+
+test('visible NPC base caches label the same physical loot without changing contents or details',()=>{
+  const drop:LiveDrop={id:'drop-cache',x:10,y:12,amount:25,items:[{id:crypto.randomUUID(),modelId:'gold-ring',foundAt:NOW}]};
+  const before=structuredClone(drop),normalLabel=liveDropLabel(drop),normalDetails=liveDropDetails(drop);
+  for(const [faction,label] of [['scavs','Тайник диких'],['raiders','Тайник рейдеров']] as const){
+    const cache={...drop,npcBase:{id:'sawmill-poi',faction}};
+    expect(liveDropLabel(cache)).toBe(`${label} · ${normalLabel}`);
+    expect(liveDropDetails(cache)).toBe(normalDetails);
+    expect(cache.items).toBe(drop.items);
+  }
+  expect(drop).toEqual(before);
 });
 test('category session references are harmless, bounded and reject invented groups',()=>{
   const state=createGame(NOW),before=saveGame(state);

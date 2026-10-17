@@ -136,7 +136,7 @@ export interface LiveVisualLoadout {
   armor: boolean;
   backpack: boolean;
 }
-export const LIVE_NPC_ACTIVITIES = ['patrol', 'travel', 'inspect', 'rest', 'investigate', 'return', 'combat'] as const;
+export const LIVE_NPC_ACTIVITIES = ['patrol', 'travel', 'inspect', 'rest', 'investigate', 'return', 'combat', 'assemble', 'capture', 'forage', 'haul', 'withdraw'] as const;
 export type LiveNpcActivity = typeof LIVE_NPC_ACTIVITIES[number];
 export interface LiveEntity extends LivePoint {
   id: string;
@@ -159,6 +159,8 @@ export interface LiveEntity extends LivePoint {
   role?: "patrol" | "guard" | "marksman";
   /** Visible ordinary NPC activity only; goals, hearing and memory stay private. */
   npcActivity?: LiveNpcActivity;
+  /** Visible affiliation only; other members, orders and cargo remain private. */
+  npcSquad?: { id: string; leader: boolean };
   bossId?: BossId;
 }
 export interface LiveTreatment { type: TreatmentType; part: BodyPart; startedAt: number; endsAt: number }
@@ -212,6 +214,12 @@ export interface LiveDrop extends LivePoint {
   bossId?: BossId;
   containerId?: string; containerKind?: LiveContainerKind;
   searched?: boolean;
+  /** A physical cache at an authored base; its normal loot rules are unchanged. */
+  npcBase?: { id: string; faction: 'scavs' | 'raiders' };
+}
+/** Current local observations only, never a global faction intelligence feed. */
+export interface LiveFactionSite extends LivePoint {
+  id: string; kind: 'base' | 'control'; owner: 'scavs' | 'raiders' | null; contested: boolean;
 }
 export interface LiveEvent {
   id: string;
@@ -252,6 +260,7 @@ export interface LiveSnapshot {
   events: LiveEvent[];
   worldVersion: string;
   visibleChunks: LivePoint[];
+  factionSites?: LiveFactionSite[];
 }
 export type LiveCommand =
   | { type: "move"; x: number; y: number }

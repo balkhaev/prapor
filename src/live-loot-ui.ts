@@ -43,7 +43,8 @@ export function liveLootCargo(player: LivePlayer): string {
 export function liveDropLabel(drop: LiveDrop): string {
   const items = drop.items ?? [];
   const named = items.map(item => getLiveLootDefinition(item).label).join(', ');
-  return items.length ? `${named}${drop.amount ? ` · ${money(drop.amount)} ₽` : ''}` : `Груз · ${money(drop.amount)} ₽`;
+  const contents = items.length ? `${named}${drop.amount ? ` · ${money(drop.amount)} ₽` : ''}` : `Груз · ${money(drop.amount)} ₽`;
+  return drop.npcBase ? `${drop.npcBase.faction === 'raiders' ? 'Тайник рейдеров' : 'Тайник диких'} · ${contents}` : contents;
 }
 
 export function liveDropDetails(drop: LiveDrop): string {

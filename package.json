@@ -15,6 +15,7 @@
     "balance:shelter": "bun scripts/shelter-balance.ts",
     "balance:loot": "bun scripts/loot-balance.ts",
     "balance:alife": "bun scripts/alife-balance.ts",
+    "balance:squads": "bun scripts/alife-squads-balance.ts",
     "world:generate": "bun scripts/world.ts",
     "build": "vite build",
     "start": "bun server.ts"

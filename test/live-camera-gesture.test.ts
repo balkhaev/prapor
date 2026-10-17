@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from 'bun:test';
 import { LiveScene } from '../src/live-scene';
-import type { LiveCommand, LiveEntity, LivePoint, LiveSnapshot } from '../src/game/live';
+import type { LiveCommand, LiveEntity, LiveFactionSite, LivePoint, LiveSnapshot } from '../src/game/live';
 
 class Element {
 	listeners = new Map<string, (event: any) => void>();
@@ -11,6 +11,7 @@ class Element {
 	getBoundingClientRect() { return { left: 0, top: 0, width: 0, height: 0 }; }
 	setAttribute() {} append() {} focus() {} remove() {}
 	querySelectorAll() { return []; }
+	querySelector() { return null; }
 	addEventListener(name: string, callback: (event: any) => void) { this.listeners.set(name, callback); }
 	removeEventListener(name: string) { this.listeners.delete(name); }
 	setPointerCapture(id: number) { this.captures.add(id); }
@@ -112,4 +113,28 @@ test('wheel zoom stays anchored under the pointer when leaving overview or autom
 		expect(after.x).toBeCloseTo(before.x, 8); expect(after.y).toBeCloseTo(before.y, 8);
 		expect(view.following).toBe(false); expect(view.overview).toBe(false);
 	}
+});
+
+test('faction markers show only current local observations and their selection never commands an actor', () => {
+	const { canvas, view, scene, commands, selections } = setup();
+	const markers = scene as unknown as { context: CanvasRenderingContext2D; selectedFactionSite: string | null;
+		factionSiteTargets: { site: LiveFactionSite; x: number; y: number }[]; paintFactionSites(snapshot: LiveSnapshot): void };
+	const labels: string[] = [];
+	Object.assign(markers.context, { save() {}, restore() {}, beginPath() {}, moveTo() {}, lineTo() {}, closePath() {}, stroke() {}, fill() {},
+		measureText(text: string) { return { width: text.length * 5 }; }, strokeText() {}, fillText(text: string) { labels.push(text); } });
+	const site: LiveFactionSite = { id: 'observed-base', x: 512, y: 512, kind: 'base', owner: 'scavs', contested: false };
+	view.snapshot = { ...view.snapshot, now: 1000, events: [], entities: [], factionSites: [site] };
+	markers.paintFactionSites(view.snapshot);
+	expect(markers.factionSiteTargets.map(target => target.site.id)).toEqual([site.id]); expect(labels).toEqual([]);
+	const target = markers.factionSiteTargets[0]!;
+	canvas.emit('click', target.x, target.y); markers.paintFactionSites(view.snapshot);
+	expect(markers.selectedFactionSite).toBe(site.id); expect(labels).toEqual(['База диких']);
+	scene.setSelected(null); // The surrounding HUD repeats this on normal refreshes.
+	expect(markers.selectedFactionSite).toBe(site.id);
+	expect(commands).toEqual([]); expect(selections).toEqual([]);
+	labels.length = 0; view.overview = true; markers.paintFactionSites(view.snapshot);
+	expect(markers.factionSiteTargets).toEqual([]); expect(labels).toEqual([]);
+	view.overview = false; scene.update({ ...view.snapshot, factionSites: [] });
+	expect(markers.selectedFactionSite).toBeNull(); expect(markers.factionSiteTargets).toEqual([]);
+	markers.paintFactionSites(view.snapshot); expect(labels).toEqual([]);
 });

@@ -1,6 +1,6 @@
 import { LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT, LIVE_TERRAIN_CODES, LIVE_PROP_KINDS, type EconomyLoot, type LiveCitySite, type LiveCommand, type LiveDrop, type LiveEntity, type LiveEvent, type LiveContainerKind, type LiveDistrict, type LiveDistrictId, type LiveMapSummary, type LivePlayer, type LivePurpose, type LiveSnapshot, type LiveStatus, type LiveWorld } from './game/live';
 import { readEconomyLootItems } from './game/live-loot';
-import { LIVE_NPC_ACTIVITIES, type LiveNpcActivity } from './game/live';
+import { LIVE_NPC_ACTIVITIES, type LiveFactionSite, type LiveNpcActivity } from './game/live';
 import { BODY_PARTS, parseHealth, parseMedicalInventory, type BodyPart, type TreatmentType } from './game/health';
 import { getBoss, type BossId } from './game/bosses';
 import { isLiveKitId, type LiveEntry, type LiveKitId, type LiveLoadout } from './game/live-entry';
@@ -344,10 +344,22 @@ export function readLiveWorld(source: unknown): LiveWorld {
 }
 
 export function readLiveSnapshot(value: unknown, cachedWorld?: LiveWorld): LiveSnapshot {
-  if (!record(value) || !keys(value, ['server', 'now', 'selfId', 'world', 'self', 'entities', 'drops', 'events', 'worldVersion', 'visibleChunks']) || !number(value.now) || !text(value.selfId) || !text(value.worldVersion, 128) || !record(value.self)) return invalid();
+  if (!record(value) || !keys(value, ['server', 'now', 'selfId', 'world', 'self', 'entities', 'drops', 'events', 'worldVersion', 'visibleChunks', 'factionSites']) || !number(value.now) || !text(value.selfId) || !text(value.worldVersion, 128) || !record(value.self)) return invalid();
   const world = value.world === undefined ? cachedWorld : readLiveWorld(value.world);
   if (!world || world.version !== value.worldVersion) return invalid();
   const bounds = { width: world.width, height: world.height };
+  const poiIds = new Set(world.pois.map(poi => poi.id));
+  const factionSites: LiveFactionSite[] | undefined = value.factionSites === undefined ? undefined : (() => {
+    if (!Array.isArray(value.factionSites) || value.factionSites.length > 64) return invalid();
+    const sites = value.factionSites.map(site => {
+      if (!point(site, bounds) || !keys(site, ['id', 'x', 'y', 'kind', 'owner', 'contested']) || !integer(site.x) || !integer(site.y)
+        || !text(site.id) || !poiIds.has(site.id) || !['base', 'control'].includes(site.kind as string)
+        || !(site.owner === null || site.owner === 'scavs' || site.owner === 'raiders') || typeof site.contested !== 'boolean') return invalid();
+      return { id: site.id, x: site.x, y: site.y, kind: site.kind as LiveFactionSite['kind'], owner: site.owner as LiveFactionSite['owner'], contested: site.contested };
+    });
+    if (new Set(sites.map(site => site.id)).size !== sites.length) return invalid();
+    return sites;
+  })();
   const self = value.self;
   if (!keys(self, ['id', 'ammo', 'medkits', 'cargo', 'stash', 'kills', 'bossKills', 'respawnAt', 'travelReadyAt', 'patrol', 'targetId', 'districtId', 'purpose', 'searching', 'body', 'medicine', 'treatment', 'leaveAt', 'gameId', 'lootItems', 'pendingDelivery', 'economyMessage', 'loadout', 'launchPending', 'automation']) || self.id !== value.selfId || !['ammo', 'medkits', 'cargo', 'stash', 'kills', 'respawnAt', 'travelReadyAt', 'leaveAt'].every(key => integer(self[key])) || typeof self.patrol !== 'boolean' || !(self.targetId === null || text(self.targetId)) || !districtId(self.districtId) || !purpose(self.purpose) || !(self.searching === null || record(self.searching) && keys(self.searching, ['id', 'readyAt']) && text(self.searching.id) && integer(self.searching.readyAt)) || !(self.gameId === undefined || uuid(self.gameId)) || !(self.economyMessage === undefined || typeof self.economyMessage === 'string' && self.economyMessage.length <= 2000) || !(self.bossKills === undefined || integer(self.bossKills, 0, self.kills as number))) return invalid();
   let body: LivePlayer['body'], medicine: LivePlayer['medicine'];
@@ -376,11 +388,26 @@ export function readLiveSnapshot(value: unknown, cachedWorld?: LiveWorld): LiveS
     if (!(entity.moveIntervalMs === undefined || number(entity.moveIntervalMs, 100, 4000)) || !(entity.bleeding === undefined || typeof entity.bleeding === 'boolean') || !(entity.limping === undefined || typeof entity.limping === 'boolean') || !(entity.aimUntil === undefined || number(entity.aimUntil)) || !(entity.aimTargetId === undefined || text(entity.aimTargetId))
       || !(entity.bossId === undefined || bossId(entity.bossId) && entity.kind === 'scav' && entity.id === `boss-${entity.bossId}` && entity.name === getBoss(entity.bossId)!.name)
       || !(entity.npcActivity === undefined || entity.kind === 'scav' && entity.bossId === undefined && LIVE_NPC_ACTIVITIES.includes(entity.npcActivity as LiveNpcActivity))) return invalid();
-    return { x: entity.x, y: entity.y, id: entity.id, name: entity.name, kind: entity.kind as LiveEntity['kind'], appearance: entity.appearance, health: entity.health, action: entity.action as LiveEntity['action'], safeUntil: entity.safeUntil, ...(entity.moveIntervalMs === undefined ? {} : { moveIntervalMs: entity.moveIntervalMs as number }), ...(entity.visualLoadout === undefined ? {} : { visualLoadout: readVisualLoadout(entity.visualLoadout) }), ...(entity.faction ? { faction: entity.faction as LiveEntity['faction'] } : {}), ...(entity.role ? { role: entity.role as LiveEntity['role'] } : {}), ...(entity.npcActivity === undefined ? {} : { npcActivity: entity.npcActivity as LiveNpcActivity }), ...(entity.bossId ? { bossId: entity.bossId as BossId } : {}), ...(entity.bleeding === undefined ? {} : { bleeding: entity.bleeding as boolean }), ...(entity.limping === undefined ? {} : { limping: entity.limping as boolean }), ...(entity.aimUntil === undefined ? {} : { aimUntil: entity.aimUntil as number }), ...(entity.aimTargetId === undefined ? {} : { aimTargetId: entity.aimTargetId as string }) };
+    let npcSquad: LiveEntity['npcSquad'];
+    if (entity.npcSquad !== undefined) {
+      const squad = entity.npcSquad;
+      if (entity.kind !== 'scav' || entity.bossId !== undefined || !record(squad) || !keys(squad, ['id', 'leader']) || typeof squad.leader !== 'boolean' || !text(squad.id, 64)) return invalid();
+      const match = /^squad-(customs|sawmill|depot|village)-(scavs|raiders)-[0-9]$/.exec(squad.id);
+      if (!match || match[2] !== entity.faction) return invalid();
+      npcSquad = { id: squad.id, leader: squad.leader };
+    }
+    return { x: entity.x, y: entity.y, id: entity.id, name: entity.name, kind: entity.kind as LiveEntity['kind'], appearance: entity.appearance, health: entity.health, action: entity.action as LiveEntity['action'], safeUntil: entity.safeUntil, ...(npcSquad ? { npcSquad } : {}), ...(entity.moveIntervalMs === undefined ? {} : { moveIntervalMs: entity.moveIntervalMs as number }), ...(entity.visualLoadout === undefined ? {} : { visualLoadout: readVisualLoadout(entity.visualLoadout) }), ...(entity.faction ? { faction: entity.faction as LiveEntity['faction'] } : {}), ...(entity.role ? { role: entity.role as LiveEntity['role'] } : {}), ...(entity.npcActivity === undefined ? {} : { npcActivity: entity.npcActivity as LiveNpcActivity }), ...(entity.bossId ? { bossId: entity.bossId as BossId } : {}), ...(entity.bleeding === undefined ? {} : { bleeding: entity.bleeding as boolean }), ...(entity.limping === undefined ? {} : { limping: entity.limping as boolean }), ...(entity.aimUntil === undefined ? {} : { aimUntil: entity.aimUntil as number }), ...(entity.aimTargetId === undefined ? {} : { aimTargetId: entity.aimTargetId as string }) };
   });
   if (new Set(entities.map(entity => entity.id)).size !== entities.length || !entities.some(entity => entity.id === value.selfId && entity.kind === 'player')) return invalid();
   const drops: LiveDrop[] = value.drops.map(drop => {
-    if (!point(drop, bounds) || !keys(drop, ['id', 'x', 'y', 'amount', 'items', 'containerId', 'containerKind', 'searched', 'bossId']) || !integer(drop.x) || !integer(drop.y) || !text(drop.id) || !integer(drop.amount) || !(drop.bossId === undefined || bossId(drop.bossId) && drop.containerId === undefined)) return invalid();
+    if (!point(drop, bounds) || !keys(drop, ['id', 'x', 'y', 'amount', 'items', 'containerId', 'containerKind', 'searched', 'bossId', 'npcBase']) || !integer(drop.x) || !integer(drop.y) || !text(drop.id) || !integer(drop.amount) || !(drop.bossId === undefined || bossId(drop.bossId) && drop.containerId === undefined)) return invalid();
+    let npcBase: LiveDrop['npcBase'];
+    if (drop.npcBase !== undefined) {
+      const base = drop.npcBase;
+      if (drop.bossId !== undefined || drop.containerId !== undefined || !record(base) || !keys(base, ['id', 'faction']) || !text(base.id) || !poiIds.has(base.id)
+        || !(base.faction === 'scavs' || base.faction === 'raiders')) return invalid();
+      npcBase = { id: base.id, faction: base.faction };
+    }
     const items = drop.items === undefined ? undefined : readLoot(drop.items);
     if (drop.containerId !== undefined) {
       const anchor = world.containers.find(anchor => anchor.id === drop.containerId);
@@ -388,7 +415,7 @@ export function readLiveSnapshot(value: unknown, cachedWorld?: LiveWorld): LiveS
       return { x: drop.x, y: drop.y, id: drop.id, amount: drop.amount, containerId: anchor.id, containerKind: drop.containerKind, searched: drop.searched, ...(items ? { items } : {}) };
     }
     if ((!drop.amount && !items?.length) || drop.containerKind !== undefined || drop.searched !== undefined) return invalid();
-    return { x: drop.x, y: drop.y, id: drop.id, amount: drop.amount, ...(items ? { items } : {}), ...(drop.bossId ? { bossId: drop.bossId as BossId } : {}) };
+    return { x: drop.x, y: drop.y, id: drop.id, amount: drop.amount, ...(npcBase ? { npcBase } : {}), ...(items ? { items } : {}), ...(drop.bossId ? { bossId: drop.bossId as BossId } : {}) };
   });
   const physicalIds = [...(player.lootItems ?? []), ...(player.pendingDelivery ?? []).flatMap(parcel => parcel.items), ...drops.flatMap(drop => drop.items ?? [])].map(item => item.id);
   if (new Set(drops.map(drop => drop.id)).size !== drops.length || new Set(physicalIds).size !== physicalIds.length) return invalid();
@@ -408,7 +435,7 @@ export function readLiveSnapshot(value: unknown, cachedWorld?: LiveWorld): LiveS
   }
   if (map.width !== world.width || map.height !== world.height || map.theme !== world.theme || map.name !== world.name) return invalid();
   if (map.city && JSON.stringify(map.city) !== JSON.stringify(world.city)) return invalid();
-  return { server, now: value.now, selfId: value.selfId, self: player, world, entities, drops, events, worldVersion: value.worldVersion, visibleChunks };
+  return { server, now: value.now, selfId: value.selfId, self: player, world, entities, drops, events, worldVersion: value.worldVersion, visibleChunks, ...(factionSites ? { factionSites } : {}) };
 }
 export interface LiveIdentity { accountId: string | null; playerId?: string; worldVersion?: string; gameId?: string | null }
 export interface LiveJoinOptions { districtId?: LiveDistrictId; purpose?: LivePurpose; kitId?: LiveKitId; intent?: 'deploy' | 'continue' }
