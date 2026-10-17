@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { createGame, dispatchRaid, type Raid } from '../src/game/engine';
 import { MAPS } from '../src/game/data';
 import { getRaidFieldFrame, getRaidFieldPlan } from '../src/raid-field';
-import { PIXEL_ACTOR_CYCLE_MS, PIXEL_ACTOR_FRAMES } from '../src/pixel-actor-config';
+import { PIXEL_ACTOR_CYCLE_MS, PIXEL_ACTOR_FRAME_MS, PIXEL_ACTOR_FRAMES } from '../src/pixel-actor-config';
 import { pixelActorRig } from '../src/pixel-actor-rig';
 import { raidPixelBuilding, raidPixelDistance, raidPixelFrame, raidPixelProp } from '../src/pixel-raid-presentation';
 
@@ -49,7 +49,7 @@ describe('paid raid pixel presentation', () => {
     const raid = fixture(), plan = getRaidFieldPlan(raid), source = { ...getRaidFieldFrame(raid, NOW, plan), walking: false, action: 'skirmish' as const };
     const input = { facing: 'e' as const, appearance: 7 };
     expect(raidPixelFrame(plan, source, input).mode).toBe('aim');
-    for (const shotAge of [0, 44, 88, 132, 176]) expect(raidPixelFrame(plan, source, { ...input, shotAge })).toMatchObject({ mode: 'fire', frame: shotAge / 44 });
+    for (let frame = 0; frame < PIXEL_ACTOR_FRAMES.fire; frame++) expect(raidPixelFrame(plan, source, { ...input, shotAge: frame * PIXEL_ACTOR_FRAME_MS.fire })).toMatchObject({ mode: 'fire', frame });
     for (const shotAge of [-1, NaN, Infinity, PIXEL_ACTOR_CYCLE_MS.fire, 10000]) expect(raidPixelFrame(plan, source, { ...input, shotAge }).mode).toBe('aim');
     expect(raidPixelFrame(plan, { ...source, paused: true }, { ...input, shotAge: 0 })).toMatchObject({ mode: 'aim', frame: 0 });
     expect(raidPixelFrame(plan, source, { ...input, shotAge: 0, reducedMotion: true })).toMatchObject({ mode: 'aim', frame: 0 });

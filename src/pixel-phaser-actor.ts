@@ -1,7 +1,7 @@
 import type Phaser from 'phaser';
 import type { LiveEntity, LivePoint } from './game/live';
 import { PixelActorArt, type PixelActorGear, type PixelActorSprite } from './pixel-actors';
-import { pixelActorFrameIndex } from './pixel-actor-config';
+import { pixelActorPresentationKey } from './pixel-actor-config';
 import type { PixelActorFrame } from './pixel-animation';
 import { pixelWeaponSignature, type PixelWeaponInput } from './pixel-weapons';
 import { pixelActorDetail, type PixelActorDetail } from './pixel-actor-clarity';
@@ -21,7 +21,7 @@ class Pool {
   constructor(private textures: Phaser.Textures.TextureManager) {}
   acquire(identity: Identity, animation: PixelActorFrame, weapon: PixelWeaponInput, gear?: PixelActorGear, detail: PixelActorDetail = 160): Entry {
     const signature = JSON.stringify([identity.appearance, identity.faction, identity.bossId, identity.role, identity.limping,
-      animation.facing, animation.mode, pixelActorFrameIndex(animation), pixelWeaponSignature(weapon), gear?.profile, gear?.helmet, gear?.armor, gear?.backpack, detail]);
+      animation.facing, pixelActorPresentationKey(animation), pixelWeaponSignature(weapon), gear?.profile, gear?.helmet, gear?.armor, gear?.backpack, detail]);
     let entry = this.entries.get(signature);
     if (!entry) {
       const sprite = this.art.get(identity, animation, weapon, gear, detail), copy = document.createElement('canvas');
@@ -69,7 +69,7 @@ export class PixelPhaserActor {
     if (this.destroyed) return;
     const input = weapon ?? emptyWeapon;
     const detail = sampling ? pixelActorDetail(displayHeight * sampling.screenScale, sampling.deviceRatio) : 160;
-    const signature = JSON.stringify([identity, animation.mode, animation.facing, pixelActorFrameIndex(animation), pixelWeaponSignature(input), gear, detail]);
+    const signature = JSON.stringify([identity, animation.facing, pixelActorPresentationKey(animation), pixelWeaponSignature(input), gear, detail]);
     if (signature !== this.signature) {
       const previous = this.entry;
       this.entry = this.pool.acquire(identity, animation, input, gear, detail); this.signature = signature;

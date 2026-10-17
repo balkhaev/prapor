@@ -9,26 +9,35 @@ import type { LiveEntity } from './game/live';
 import { weaponBuildArt } from './armory-art';
 import { MODULE_DISPLAY_SLOTS } from './module-catalog';
 import { PixelRaster } from './pixel-art';
-import { PIXEL_FACINGS, type PixelActorMode, type PixelFacing } from './pixel-animation';
+import { PIXEL_FACINGS, type PixelActorFrame, type PixelActorMode, type PixelFacing } from './pixel-animation';
 import { PixelActorArt, type PixelActorGear } from './pixel-actors';
 import { PIXEL_ACTOR_ANCHOR, PIXEL_ACTOR_NATIVE_SIZE, PIXEL_ACTOR_FRAMES, PIXEL_ACTOR_FRAME_MS } from './pixel-actor-config';
 import { paintPixelWeapon, type PixelWeaponInput } from './pixel-weapons';
 import { changePixelPreviewModule, copyPixelPreviewBuild, pixelPreviewModuleOptions } from './pixel-model-builds';
 import { readPixelArsenalPreview } from './pixel-arsenal-preview';
 import { createWeaponShowcaseBuild, type WeaponShowcasePreset } from './weapon-showcase';
+import { createPixelCombatPreview, pixelCombatPreviewLabel, PIXEL_COMBAT_PREVIEW_FRAME_MS, PIXEL_COMBAT_PREVIEW_FRAMES } from './pixel-combat-preview';
 
 const weaponLabels: Readonly<Record<string, { name: string; detail: string }>> = Object.fromEntries([
   ...WEAPONS.map(definition => [definition.id, { name: definition.name, detail: `${CATEGORY_LABELS[definition.category]} · ${RECEIVER_INFO[definition.id]!.caliber}` }]),
   ['unknown', { name: 'Неизвестное оружие', detail: 'Нейтральный силуэт · без оптики' }],
 ]);
 const facingLabels: Record<PixelFacing, string> = { e: 'Справа', se: 'Спереди справа', s: 'Спереди', sw: 'Спереди слева', w: 'Слева', nw: 'Сзади слева', n: 'Сзади', ne: 'Сзади справа' };
-const poseLabels: Record<PixelActorMode, string> = { idle: 'Стоит', walk: 'Идёт', aim: 'Целится', fire: 'Стреляет', hit: 'Получает попадание', downed: 'Ранен на земле' };
+type PreviewMode = PixelActorMode | 'transition';
+const poseLabels: Record<PreviewMode, string> = { transition: 'Ходьба → бой', idle: 'Стоит', walk: 'Идёт', aim: 'Целится', fire: 'Стреляет', hit: 'Получает попадание', downed: 'Ранен на земле' };
 const profileLabels: Record<PixelActorGear['profile'], string> = { light: 'Налегке', assault: 'Штурм', scout: 'Разведка' };
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 const art = new PixelActorArt();
 type Figure = 'scav' | 'raider' | BossId;
 type BuildPreset = WeaponShowcasePreset | 'custom';
-const state = { figure: 'scav' as Figure, appearance: 0, weapon: 'akm', preset: 'factory' as BuildPreset, source: 'catalog' as 'catalog' | 'arsenal', mode: 'walk' as PixelActorMode, facing: 'se' as PixelFacing, frame: 0, speed: 1, limping: false, playing: !reducedMotion.matches, rotating: !reducedMotion.matches, gear: { profile: 'assault', helmet: true, armor: true, backpack: true } as PixelActorGear };
+const state = { figure: 'scav' as Figure, appearance: 0, weapon: 'akm', preset: 'factory' as BuildPreset, source: 'catalog' as 'catalog' | 'arsenal', mode: 'transition' as PreviewMode, facing: 'se' as PixelFacing, frame: 0, speed: 1, limping: false, playing: !reducedMotion.matches, rotating: !reducedMotion.matches, gear: { profile: 'assault', helmet: true, armor: true, backpack: true } as PixelActorGear };
+const transitionFrames = new Map<boolean, readonly PixelActorFrame[]>();
+const frameCount = () => state.mode === 'transition' ? PIXEL_COMBAT_PREVIEW_FRAMES : PIXEL_ACTOR_FRAMES[state.mode];
+function animationFrame(facing: PixelFacing): PixelActorFrame {
+  if (state.mode !== 'transition') return { mode: state.mode, frame: state.frame, facing };
+  if (!transitionFrames.has(state.limping)) transitionFrames.set(state.limping, createPixelCombatPreview(state.limping));
+  return { ...transitionFrames.get(state.limping)![state.frame]!, facing };
+}
 const customBuilds = new Map<string, WeaponInstance>();
 let selectedBuild: WeaponInstance | null = createWeaponShowcaseBuild(state.weapon);
 const importedBuild = readPixelArsenalPreview(window.location.hash);
@@ -148,6 +157,13 @@ let framing: { left: number; right: number; top: number; bottom: number } | null
 /** Frame every bearing and pose frame together so walking never recentres the feet. */
 function modelBounds(): NonNullable<typeof framing> {
   if (framing) return framing;
+  // A mixed sequence keeps one camera rectangle even while the gun is raised.
+  // Native bounds include every layered pose without generating hundreds of
+  // intermediate textures merely to find the preview's camera placement.
+  if (state.mode === 'transition') {
+    framing = { left: -PIXEL_ACTOR_ANCHOR.x, right: PIXEL_ACTOR_NATIVE_SIZE.width - PIXEL_ACTOR_ANCHOR.x, top: -PIXEL_ACTOR_ANCHOR.y, bottom: PIXEL_ACTOR_NATIVE_SIZE.height - PIXEL_ACTOR_ANCHOR.y };
+    return framing;
+  }
   const bounds = { left: Infinity, right: -Infinity, top: Infinity, bottom: -Infinity }, entity = identity();
   for (const facing of PIXEL_FACINGS) for (let frame = 0; frame < PIXEL_ACTOR_FRAMES[state.mode]; frame++) {
     const sprite = art.get(entity, { mode: state.mode, frame, facing }, weaponInput(), state.gear);
@@ -174,7 +190,7 @@ function drawActor(canvas: HTMLCanvasElement, facing: PixelFacing, large: boolea
     ground.line(anchor.x, anchor.y + 38 * scale, anchor.x + 72 * scale, anchor.y + 6, '#64704a');
   }
   ground.ellipse(anchor.x, anchor.y + 3, 34 * scale, 10 * scale, large ? '#2e3a29' : '#1e2c20');
-  const sprite = art.get(identity(), { mode: state.mode, frame: state.frame, facing }, weaponInput(), state.gear);
+  const sprite = art.get(identity(), animationFrame(facing), weaponInput(), state.gear);
   context.imageSmoothingEnabled = false;
   context.save();
   // One origin for the whole cycle keeps the pixel grid stable when tight crops change.
@@ -187,11 +203,13 @@ function render(): void {
   drawActor(selectedCanvas, state.facing, true);
   for (const [facing, { button, canvas }] of bearingCards) { drawActor(canvas, facing, false); button.setAttribute('aria-pressed', String(facing === state.facing)); }
   element('stage-direction').textContent = facingLabels[state.facing];
-  const description = `${element('model-summary').textContent}. ${poseLabels[state.mode]}. ${facingLabels[state.facing]}.`;
+  const poseLabel = state.mode === 'transition' ? pixelCombatPreviewLabel(state.frame) : poseLabels[state.mode];
+  element('stage-pose').textContent = poseLabel;
+  const description = `${element('model-summary').textContent}. ${poseLabel}. ${facingLabels[state.facing]}.`;
   if (selectedCanvas.getAttribute('aria-label') !== description) selectedCanvas.setAttribute('aria-label', description);
   frameInput.value = String(state.frame + 1);
-  frameInput.setAttribute('aria-valuetext', `${state.frame + 1} из ${PIXEL_ACTOR_FRAMES[state.mode]}`);
-  element<HTMLOutputElement>('frame-number').value = `${state.frame + 1} / ${PIXEL_ACTOR_FRAMES[state.mode]}`;
+  frameInput.setAttribute('aria-valuetext', `${state.frame + 1} из ${frameCount()}, ${poseLabel}`);
+  element<HTMLOutputElement>('frame-number').value = `${state.frame + 1} / ${frameCount()}`;
 }
 
 function refreshControls(): void {
@@ -202,7 +220,8 @@ function refreshControls(): void {
   const description = `${name} · ${weaponLabels[state.weapon]!.name} · ${state.source === 'arsenal' ? 'сборка из арсенала' : state.preset === 'field' ? 'пример полевой сборки' : state.preset === 'custom' ? 'своя примерка' : 'штатная сборка'} · ${profileLabels[state.gear.profile]}${worn.length ? `: ${worn.join(', ')}` : ' · без защиты и рюкзака'}`;
   element('model-summary').textContent = description;
   selectedCanvas.setAttribute('aria-label', `${description}. ${poseLabels[state.mode]}. ${facingLabels[state.facing]}.`);
-  frameInput.max = String(PIXEL_ACTOR_FRAMES[state.mode]); frameInput.disabled = PIXEL_ACTOR_FRAMES[state.mode] === 1;
+  frameInput.max = String(frameCount()); frameInput.disabled = frameCount() === 1;
+  element('motion-guide').textContent = state.mode === 'transition' ? 'Боец идёт, останавливается, прицеливается, делает два выстрела и продолжает путь. Стрелки и ползунок позволяют рассмотреть каждый переход.' : 'Стрелки останавливают движение и показывают соседний кадр. Скорость меняется только в этом просмотре.';
   previousFrame.disabled = frameInput.disabled; nextFrame.disabled = frameInput.disabled;
   speedSelect.value = String(state.speed);
   element<HTMLInputElement>('model-limping').checked = state.limping;
@@ -227,7 +246,7 @@ function animate(at: number): void {
   requestId = 0;
   if (!state.playing || document.hidden) return;
   let redraw = false;
-  const duration = PIXEL_ACTOR_FRAME_MS[state.mode] / state.speed, frames = PIXEL_ACTOR_FRAMES[state.mode];
+  const duration = (state.mode === 'transition' ? PIXEL_COMBAT_PREVIEW_FRAME_MS : PIXEL_ACTOR_FRAME_MS[state.mode]) / state.speed, frames = frameCount();
   if (at - lastFrameAt >= duration) {
     const steps = Math.floor((at - lastFrameAt) / duration); lastFrameAt += steps * duration;
     if (frames > 1) { state.frame = (state.frame + steps) % frames; redraw = true; }
@@ -243,7 +262,7 @@ function changed(): void { state.frame = 0; framing = null; art.clear(); refresh
 function selectFacing(facing: PixelFacing): void { state.facing = facing; state.rotating = false; refreshControls(); render(); schedule(); }
 function stepFrame(offset: number): void {
   state.playing = false;
-  const frames = PIXEL_ACTOR_FRAMES[state.mode]; state.frame = (state.frame + offset + frames) % frames;
+  const frames = frameCount(); state.frame = (state.frame + offset + frames) % frames;
   refreshControls(); render(); schedule();
 }
 
@@ -270,7 +289,7 @@ for (const button of presetButtons) button.addEventListener('click', () => {
 });
 element('model-weapon-category').addEventListener('change', filterWeapons);
 element('model-weapon-search').addEventListener('input', filterWeapons);
-poseSelect.addEventListener('change', () => { state.mode = poseSelect.value as PixelActorMode; changed(); });
+poseSelect.addEventListener('change', () => { state.mode = poseSelect.value as PreviewMode; changed(); });
 facingSelect.addEventListener('change', () => selectFacing(facingSelect.value as PixelFacing));
 for (const button of profileButtons) button.addEventListener('click', () => { state.gear.profile = button.dataset.profile as PixelActorGear['profile']; changed(); });
 for (const part of ['helmet', 'armor', 'backpack'] as const) element<HTMLInputElement>(`model-${part}`).addEventListener('change', event => { state.gear[part] = (event.currentTarget as HTMLInputElement).checked; changed(); });
@@ -278,7 +297,7 @@ element('turn-left').addEventListener('click', () => selectFacing(PIXEL_FACINGS[
 element('turn-right').addEventListener('click', () => selectFacing(PIXEL_FACINGS[(PIXEL_FACINGS.indexOf(state.facing) + 1) % 8]!));
 playButton.addEventListener('click', () => { state.playing = !state.playing; refreshControls(); schedule(); });
 rotateButton.addEventListener('click', () => { state.rotating = !state.rotating; refreshControls(); schedule(); });
-frameInput.addEventListener('input', () => { state.playing = false; state.frame = Math.max(0, Math.min(PIXEL_ACTOR_FRAMES[state.mode] - 1, Number(frameInput.value) - 1)); refreshControls(); render(); schedule(); });
+frameInput.addEventListener('input', () => { state.playing = false; state.frame = Math.max(0, Math.min(frameCount() - 1, Number(frameInput.value) - 1)); refreshControls(); render(); schedule(); });
 previousFrame.addEventListener('click', () => stepFrame(-1));
 nextFrame.addEventListener('click', () => stepFrame(1));
 speedSelect.addEventListener('change', () => {
@@ -287,7 +306,7 @@ speedSelect.addEventListener('change', () => {
 });
 element<HTMLInputElement>('model-limping').addEventListener('change', event => {
   state.limping = (event.currentTarget as HTMLInputElement).checked;
-  if (state.limping) { state.mode = 'walk'; poseSelect.value = state.mode; }
+  if (state.limping && state.mode !== 'transition') { state.mode = 'walk'; poseSelect.value = state.mode; }
   changed();
 });
 document.addEventListener('visibilitychange', schedule);

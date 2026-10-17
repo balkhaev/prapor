@@ -62,6 +62,28 @@ test('actual assembly, absent parts, empty hands and gear changes invalidate the
   a.destroy(); a.update(look, frame, weapon, gear); expect((a.image as unknown as { destroyed: boolean }).destroyed).toBe(true);
 });
 
+test('aim and gait blends refresh the displayed texture while equivalent quantized poses share it', () => {
+  const h = harness(), a = h.actor(), b = h.actor();
+  const pose = { walkFrame: 3, move: .5, aim: .5 };
+  a.update(look, { ...frame, pose }, 'akm', gear);
+  const halfKey = imageKey(a), halfMuzzle = a.muzzlePoint();
+  const equivalent = { ...frame, frame: 8, pose: { walkFrame: 27, move: .51, aim: .49 } };
+  a.update(look, equivalent, 'akm', gear); b.update(look, equivalent, 'akm', gear);
+  expect(imageKey(a)).toBe(halfKey); expect(imageKey(b)).toBe(halfKey); expect(h.textures.size).toBe(1);
+  a.update(look, { ...frame, pose: { ...pose, aim: 1 } }, 'akm', gear);
+  expect(imageKey(a)).not.toBe(halfKey); expect(a.muzzlePoint()).not.toEqual(halfMuzzle);
+  const aimedKey = imageKey(a);
+  a.update(look, { ...frame, pose: { ...pose, aim: 1, walkFrame: 9 } }, 'akm', gear);
+  expect(imageKey(a)).not.toBe(aimedKey);
+  const steppingKey = imageKey(a);
+  a.update(look, { ...frame, pose: { ...pose, aim: 1, walkFrame: 9, move: 1 } }, 'akm', gear);
+  expect(imageKey(a)).not.toBe(steppingKey);
+  // The second actor still owns the original texture throughout all transitions.
+  expect(h.textures.get(halfKey)!.width).toBeGreaterThan(1);
+  expect(b.muzzlePoint()).toEqual(halfMuzzle);
+  a.destroy(); b.destroy();
+});
+
 test('retina minification keeps readable tiers without moving the body or weapon sockets', () => {
   const h = harness(), a = h.actor();
   a.update(look, frame, 'sks', gear, 48, { screenScale: .5, deviceRatio: 2 });
@@ -79,11 +101,12 @@ test('retina minification keeps readable tiers without moving the body or weapon
   a.destroy();
 });
 
-test('the texture cache remains bounded while an earlier actor is still displaying its frame', () => {
+test('the texture cache remains bounded through blended movement while an earlier actor still displays its frame', () => {
   const h = harness(), pinned = h.actor(), moving = h.actor();
   pinned.update(look, frame, 'svd', gear); const pinnedKey = imageKey(pinned);
   for (let i = 0; i < 800; i++) moving.update({ appearance: i % 32 }, {
     facing: PIXEL_FACINGS[Math.floor(i / 32) % 8]!, mode: 'walk', frame: Math.floor(i / 256),
+    pose: { walkFrame: i % 24, move: (i % 9) / 8, aim: (Math.floor(i / 9) % 9) / 8 },
   }, 'svd', { profile: 'assault', armor: true, helmet: true, backpack: true });
   expect(h.removed.length).toBeGreaterThan(0); expect(h.textures.has(pinnedKey)).toBe(true);
   const bytes = [...h.textures.values()].reduce((sum, canvas) => sum + canvas.width * canvas.height * 4, 0);
