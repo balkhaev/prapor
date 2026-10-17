@@ -30,7 +30,7 @@ describe('live wire parser', () => {
       expect(observed).not.toHaveProperty('alife');
     }
     const { world: _world, ...cached } = packet;
-    expect(readLiveSnapshot(cached, packet.world).entities[1]!.npcActivity).toBe('combat');
+    expect(readLiveSnapshot(cached, packet.world).entities[1]!.npcActivity).toBe(LIVE_NPC_ACTIVITIES.at(-1));
     for (const invalid of [null, {}, [], 'teleport', 'constructor', 0]) {
       Object.assign(packet.entities[1]!, { npcActivity: invalid });
       expect(() => readLiveSnapshot(packet)).toThrow(LiveApiError);
@@ -38,6 +38,83 @@ describe('live wire parser', () => {
     delete packet.entities[1]!.npcActivity;
     Object.assign(packet.entities[0]!, { npcActivity: 'patrol' });
     expect(() => readLiveSnapshot(packet)).toThrow(LiveApiError);
+  });
+  test('copies only visible squad affiliation for ordinary NPCs in full and cached snapshots', () => {
+    const source = fixture(), member = source.entities[1]!;
+    expect(readLiveSnapshot(source).entities[1]!.npcSquad).toBeUndefined();
+    for (const district of ['customs', 'sawmill', 'depot', 'village']) {
+      for (const faction of ['scavs', 'raiders'] as const) {
+        member.faction = faction;
+        member.npcSquad = { id: `squad-${district}-${faction}-9`, leader: faction === 'scavs' };
+        const parsed = readLiveSnapshot(source);
+        expect(parsed.entities[1]!.npcSquad).toEqual(member.npcSquad);
+        expect(parsed.entities[1]!.npcSquad).not.toBe(member.npcSquad);
+        const { world: _world, ...cached } = source;
+        expect(readLiveSnapshot(cached, parsed.world).entities[1]!.npcSquad).toEqual(member.npcSquad);
+      }
+    }
+  });
+  test('rejects invented squad identity, private orders and non-NPC membership', () => {
+    const squad = { id: 'squad-sawmill-raiders-0', leader: true };
+    for (const bad of [null, [], {}, { ...squad, id: 'squad-sawmill-raiders-10' }, { ...squad, id: 'squad-city-raiders-0' },
+      { ...squad, id: 'squad-sawmill-scavs-0' }, { ...squad, id: 'squad-sawmill-raiders-0-hidden' },
+      { ...squad, leader: 1 }, { ...squad, members: ['hidden-1'] }, { ...squad, target: { x: 10, y: 10 } }]) {
+      const source = fixture(); Object.assign(source.entities[1]!, { npcSquad: bad });
+      expect(() => readLiveSnapshot(source)).toThrow(LiveApiError);
+    }
+    for (const change of [{ kind: 'player' }, { bossId: 'lesnik' }, { faction: undefined }]) {
+      const source = fixture(); Object.assign(source.entities[1]!, { npcSquad: squad }, change);
+      expect(() => readLiveSnapshot(source)).toThrow(LiveApiError);
+    }
+  });
+  test('local faction observations remain optional, copied and replaced in cached-world updates', () => {
+    const source = fixture();
+    expect(readLiveSnapshot(source).factionSites).toBeUndefined();
+    source.factionSites = source.world.pois.slice(0, 3).map((poi, index) => ({ id: poi.id, x: poi.x, y: poi.y,
+      kind: index ? 'control' : 'base', owner: index === 0 ? 'scavs' : index === 1 ? 'raiders' : null, contested: index === 2 }));
+    const parsed = readLiveSnapshot(source);
+    expect(parsed.factionSites).toEqual(source.factionSites);
+    expect(parsed.factionSites).not.toBe(source.factionSites);
+    expect(parsed.factionSites![0]).not.toBe(source.factionSites[0]);
+    const { world: _world, ...cached } = source;
+    expect(readLiveSnapshot(cached, parsed.world).factionSites).toEqual(source.factionSites);
+    expect(readLiveSnapshot({ ...cached, factionSites: [] }, parsed.world).factionSites).toEqual([]);
+    delete cached.factionSites;
+    expect(readLiveSnapshot(cached, parsed.world).factionSites).toBeUndefined();
+  });
+  test('rejects unbounded faction observations, unknown places and hidden capture state', () => {
+    const source = fixture(), poi = source.world.pois[0]!;
+    const site = { id: poi.id, x: poi.x, y: poi.y, kind: 'control', owner: null, contested: false };
+    for (const sites of [null, {}, [site, site], Array.from({ length: 65 }, () => site),
+      [{ ...site, id: 'squad-customs-scavs-0' }], [{ ...site, id: 'unknown-poi' }],
+      [{ ...site, x: -1 }], [{ ...site, x: source.world.width }], [{ ...site, y: source.world.height }], [{ ...site, x: .5 }],
+      [{ ...site, kind: 'supply' }], [{ ...site, owner: 'players' }], [{ ...site, owner: undefined }],
+      [{ ...site, contested: 1 }], [{ ...site, members: ['hidden-npc'] }], [{ ...site, progress: 50 }]]) {
+      expect(() => readLiveSnapshot({ ...source, factionSites: sites })).toThrow(LiveApiError);
+    }
+  });
+  test('physical base cache metadata preserves its real loot and exact instance identity', () => {
+    const source = fixture(), poi = source.world.pois[0]!, drop = source.drops[0]!;
+    drop.items = [{ id: crypto.randomUUID(), modelId: 'gold-ring', foundAt: 1000 }];
+    for (const faction of ['scavs', 'raiders'] as const) {
+      drop.npcBase = { id: poi.id, faction };
+      const parsed = readLiveSnapshot(source);
+      expect(parsed.drops[0]).toEqual(drop);
+      expect(parsed.drops[0]!.npcBase).not.toBe(drop.npcBase);
+      expect(parsed.drops[0]!.items![0]!.id).toBe(drop.items[0]!.id);
+      const { world: _world, ...cached } = source;
+      expect(readLiveSnapshot(cached, parsed.world).drops[0]).toEqual(drop);
+    }
+  });
+  test('rejects invented base caches, private inventories and ambiguous container or boss identity', () => {
+    const source = fixture(), base = { id: source.world.pois[0]!.id, faction: 'scavs' };
+    for (const bad of [null, [], {}, { ...base, id: 'unknown-poi' }, { ...base, id: 'squad-sawmill-scavs-0' },
+      { ...base, faction: 'players' }, { ...base, members: [] }, { ...base, cargo: 20 }]) {
+      expect(() => readLiveSnapshot({ ...source, drops: [{ ...source.drops[0]!, npcBase: bad }] })).toThrow(LiveApiError);
+    }
+    for (const extra of [{ bossId: 'lesnik' }, { containerId: 'box-1', containerKind: 'crate', searched: false }]) {
+      expect(() => readLiveSnapshot({ ...source, drops: [{ ...source.drops[0]!, npcBase: base, ...extra }] })).toThrow(LiveApiError);
+    }
   });
   test('accepts only bounded public walking pace and remains compatible with older snapshots', () => {
     const source = fixture();

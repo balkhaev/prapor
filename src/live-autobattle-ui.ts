@@ -1,5 +1,5 @@
 import type { LiveSnapshot } from './game/live';
-import { liveNpcActivityLabel } from './live-npc-activity';
+import { liveNpcActivityLabel, liveNpcSquadLabel } from './live-npc-activity';
 
 const escape = (value: unknown) => String(value).replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!);
 const labels = {
@@ -36,6 +36,6 @@ export function liveAutobattlePanel(snapshot: LiveSnapshot, blocked: boolean): s
 export function liveObservedContact(entity: LiveSnapshot['entities'][number], self: { x: number; y: number }, selectedId: string | null): string {
   const range = Math.hypot(entity.x - self.x, entity.y - self.y);
   const kind = entity.bossId ? 'Главарь' : entity.kind === 'player' ? 'Игрок' : entity.faction === 'raiders' ? 'Рейдер' : 'Дикий';
-  const activity = liveNpcActivityLabel(entity);
+  const activity = [liveNpcSquadLabel(entity), liveNpcActivityLabel(entity)].filter(Boolean).join(' · ');
   return `<article class="live-observed-contact ${entity.bossId ? 'boss' : entity.kind}" ><button data-live-button="select:${escape(entity.id)}" aria-pressed="${selectedId === entity.id}"><i>${entity.bossId ? '◆' : entity.kind === 'player' ? 'И' : 'Д'}</i><span><strong>${escape(entity.name)}</strong><small>${kind} · ${range.toFixed(1)} кл. · ${Math.ceil(entity.health)}% здоровья</small>${activity ? `<small>${activity}</small>` : ''}</span><b>◎</b></button></article>`;
 }

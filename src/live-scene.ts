@@ -1,7 +1,7 @@
-import { LIVE_TERRAIN_CODES, type LiveCityBuilding, type LiveCommand, type LiveDrop, type LiveEntity, type LiveLandscapePath, type LiveObstacle, type LivePoint, type LiveSnapshot, type LiveTerrain, type LiveWorld, type LiveWorldProp } from './game/live';
+import { LIVE_TERRAIN_CODES, type LiveCityBuilding, type LiveCommand, type LiveDrop, type LiveEntity, type LiveFactionSite, type LiveLandscapePath, type LiveObstacle, type LivePoint, type LiveSnapshot, type LiveTerrain, type LiveWorld, type LiveWorldProp } from './game/live';
 import { PixelCombatAnimation, pixelFacing, samplePixelMotion, stopPixelMotion, updatePixelMotion, type PixelMotion } from './pixel-animation';
 import { liveDropLabel, liveLootTotals } from './live-loot-ui';
-import { liveNpcActivityLabel } from './live-npc-activity';
+import { liveFactionSiteLabel, liveNpcActivityLabel, liveNpcSquadLabel } from './live-npc-activity';
 import { getBoss } from './game/bosses';
 import { WEAPON_BY_ID } from './game/data';
 import { buildingNeedsCutaway, distantBuildingSurfaces, liveMapRasterPlan, paintMapFootprints, sceneBuildings, SceneryIndex, type DistantBuildingSurface } from './live-map-art';
@@ -74,6 +74,8 @@ export class LiveScene {
   private camera: LivePoint = { x: 16, y: 12 };
   private zoom = 1;
   private selected: string | null = null;
+  private selectedFactionSite: string | null = null;
+  private factionSiteTargets: { site: LiveFactionSite; x: number; y: number; bounds: LabelBox }[] = [];
   private routePoiIds: string[] = [];
   private waypointTargets: Array<{ point: LivePoint; x: number; y: number }> = [];
   private hitTargets: { entity: LiveEntity; x: number; y: number; bounds?: LabelBox }[] = [];
@@ -160,8 +162,8 @@ export class LiveScene {
 
   show(): void { if (this.active) return; this.active = true; this.resize(); this.animate(); }
   hide(): void { this.cancelDragging(); this.active = false; cancelAnimationFrame(this.frame); this.frame = 0; this.weatherCache.clear(); }
-  clear(): void { this.cancelDragging(); this.snapshot = null; this.weatherCache.clear(); this.clearWorldArt(); this.motions.clear(); this.selected = null; this.routePoiIds = []; this.waypointTargets = []; this.hitTargets = []; this.combatAnimation.clear(); this.weaponMounts.clear(); this.shotRigs.clear(); this.paint(); }
-  setSelected(id: string | null): void { this.selected = id; }
+  clear(): void { this.cancelDragging(); this.snapshot = null; this.weatherCache.clear(); this.clearWorldArt(); this.motions.clear(); this.selected = null; this.selectedFactionSite = null; this.factionSiteTargets = []; this.routePoiIds = []; this.waypointTargets = []; this.hitTargets = []; this.combatAnimation.clear(); this.weaponMounts.clear(); this.shotRigs.clear(); this.paint(); }
+  setSelected(id: string | null): void { if (this.selected !== id) this.selectedFactionSite = null; this.selected = id; }
   /** Inspect public architecture without issuing a movement command. */
   focusPoint(point: LivePoint): void {
     const world = this.snapshot?.world;
@@ -192,6 +194,8 @@ export class LiveScene {
   update(snapshot: LiveSnapshot): void {
     const at = performance.now();
     this.overlayBoundsDirty = true;
+    this.factionSiteTargets = [];
+    if (this.snapshot?.worldVersion !== snapshot.worldVersion || !snapshot.factionSites?.some(site => site.id === this.selectedFactionSite)) this.selectedFactionSite = null;
     if (this.snapshot?.worldVersion !== snapshot.worldVersion) { this.cancelDragging(); this.motions.clear(); this.combatAnimation.clear(); this.weaponMounts.clear(); this.shotRigs.clear(); this.selected = null; this.routePoiIds = []; this.waypointTargets = []; this.hitTargets = []; this.following = true; this.overview = false; this.cityOverview = false; this.zoom = 1; this.cacheTerrain(snapshot.world); }
     const cityButton = this.controls.querySelector<HTMLButtonElement>('[data-live-zoom=city]');
     if (cityButton) cityButton.hidden = !snapshot.world.city;
@@ -278,9 +282,11 @@ export class LiveScene {
     const target = [...this.hitTargets].reverse().find(target => target.bounds
       ? x >= target.bounds.x - 4 && x <= target.bounds.x + target.bounds.width + 4 && y >= target.bounds.y - 4 && y <= target.bounds.y + target.bounds.height + 4
       : Math.hypot(target.x - x, target.y - y) < 9);
-    if (target && target.entity.id !== this.snapshot.selfId) { this.selected = target.entity.id; this.select(target.entity.id); return; }
+    if (target && target.entity.id !== this.snapshot.selfId) { this.selected = target.entity.id; this.selectedFactionSite = null; this.select(target.entity.id); return; }
     const waypoint = this.waypointTargets.find(target => Math.hypot(target.x - x, target.y - y) < 12);
     if (waypoint) { this.focusPoint(waypoint.point); return; }
+    const site = this.factionSiteTargets.find(target => Math.hypot(target.x - x, target.y - y) < 12);
+    if (site) { this.selectedFactionSite = this.selectedFactionSite === site.site.id ? null : site.site.id; return; }
     if (this.overview || this.tile < 16) this.focusPoint(this.unproject(x, y));
   };
   private wheel = (event: WheelEvent): void => {
@@ -781,6 +787,7 @@ export class LiveScene {
     paintCanvasSceneWeather(c, this.weatherCache.get({ width: this.width, height: this.height, timeMs: climate.timeMs,
       rain: climate.rain, fog: climate.fog, wind: climate.wind, reducedMotion: this.reducedMotion?.matches }));
     this.paintIntent(snapshot, now);
+    this.paintFactionSites(snapshot);
     this.paintLandmarks(world, area);
     this.paintWaypoints(world);
     this.paintCombat(now);
@@ -931,7 +938,7 @@ export class LiveScene {
   }
   private paintLandmarks(world: LiveWorld, area: LabelBox): void {
     const c = this.context, small = this.overview || this.tile < 12;
-    const boxes: LabelBox[] = [...this.overlayBounds];
+    const boxes: LabelBox[] = [...this.overlayBounds, ...this.factionSiteTargets.map(target => target.bounds)];
     if (this.snapshot) {
       const mini = this.minimapBounds(this.snapshot);
       if (mini.visible) boxes.push({ x: mini.x - 12, y: mini.y - 18, width: mini.width + 24, height: mini.height + 40 });
@@ -995,6 +1002,37 @@ export class LiveScene {
         c.fillStyle = chosen ? T.self : poi.danger === 3 ? T.hostile : T.loot; c.fillRect(p.x - 2, p.y - 2, 4, 4);
         if ((chosen || !this.cityOverview && this.width >= 480 && labelCount < 12) && placeLabel(poi.name, { x: p.x, y: p.y + 13 }, chosen ? 10 : 8, chosen ? T.text : T.muted)) labelCount++;
       } else if (this.tile > 30 && !sitePoiIds.has(poi.id)) placeLabel(poi.name, p, chosen ? 11 : 9, chosen ? T.text : T.text);
+    }
+  }
+  private paintFactionSites(snapshot: LiveSnapshot): void {
+    this.factionSiteTargets = [];
+    // Server observations expire with each snapshot; never paint these on the global map.
+    if (this.overview || this.tile < 12) return;
+    const c = this.context;
+    for (const site of snapshot.factionSites ?? []) {
+      const p = this.project(site), x = p.x, y = p.y - 14;
+      if (x < 12 || x > this.width - 12 || y < 48 || y > this.height - 30) continue;
+      const color = site.contested ? T.injured : site.owner === 'raiders' ? T.hostile : site.owner === 'scavs' ? T.scav : T.muted;
+      c.save(); c.strokeStyle = T.panel; c.lineWidth = 3;
+      c.beginPath(); c.moveTo(x - 4, y + 12); c.lineTo(x - 4, y - 6); c.stroke();
+      c.strokeStyle = color; c.lineWidth = 1;
+      c.beginPath(); c.moveTo(x - 4, y + 12); c.lineTo(x - 4, y - 6); c.stroke();
+      c.beginPath(); c.moveTo(x - 4, y - 6); c.lineTo(x + 8, y - 6);
+      if (site.kind === 'control') c.lineTo(x + 4, y - 2);
+      c.lineTo(x + 8, y + 2); c.lineTo(x - 4, y + 2); c.closePath();
+      c.fillStyle = color; c.fill(); c.strokeStyle = T.panel; c.stroke();
+      if (site.contested) { c.fillStyle = T.text; c.font = '800 9px Manrope, sans-serif'; c.textAlign = 'center'; c.fillText('!', x + 2, y + 1); }
+      c.restore();
+      let bounds: LabelBox = { x: x - 10, y: y - 10, width: 24, height: 26 };
+      if (site.id === this.selectedFactionSite) {
+        const label = liveFactionSiteLabel(site);
+        c.font = '600 9px Manrope, sans-serif';
+        const width = c.measureText(label).width + 10;
+        const labelX = clamp(x, width / 2 + 5, this.width - width / 2 - 5);
+        this.label(label, labelX, y - 14, color, 9);
+        bounds = { x: labelX - width / 2, y: y - 28, width, height: 44 };
+      }
+      this.factionSiteTargets.push({ site, x, y, bounds });
     }
   }
   private paintWaypoints(world: LiveWorld): void {
@@ -1114,7 +1152,7 @@ export class LiveScene {
     const top = bounds.y - (compact ? 18 : 37);
     if (named) this.label(own ? `ТЫ · ${entity.name}` : boss && compact ? `БОСС · ${boss.name}` : entity.name, p.x, top, color, own ? 11 : 10);
     if (!compact) {
-      const role = boss ? 'БОСС' : entity.kind === 'player' ? own ? 'ТВОЙ БОЕЦ' : 'ИГРОК' : entity.faction === 'raiders' ? 'РЕЙДЕР' : 'ДИКИЙ';
+      const role = selected && liveNpcSquadLabel(entity) || (boss ? 'БОСС' : entity.kind === 'player' ? own ? 'ТВОЙ БОЕЦ' : 'ИГРОК' : entity.faction === 'raiders' ? 'РЕЙДЕР' : 'ДИКИЙ');
       const weaponName = WEAPON_BY_ID[typeof weapon === 'string' ? weapon : weapon.weaponId]?.name;
       const detail = selected ? liveNpcActivityLabel(entity) ?? weaponName : weaponName;
       this.label(`${role}${detail ? ` · ${detail}` : ''}`, p.x, top + 13, boss?T.boss:own ? T.text : entity.kind === 'player' ? T.ally : T.muted, 7);
