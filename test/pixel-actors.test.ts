@@ -235,6 +235,43 @@ test('same-instance part removal, replacement and wear invalidate actor caches w
   art.clear();
 });
 
+test('actor caches distinguish aim and gait blends and reuse equivalent quantized presentation', () => {
+  const canvases = mockCanvases(), art = new PixelActorArt();
+  const animation = { mode: 'idle' as const, frame: 0, facing: 'se' as const, pose: { walkFrame: 3, move: .5, aim: .5 } };
+  const half = art.get(scav, animation, 'akm'), created = canvases.created;
+  expect(art.get(scav, { ...animation, frame: 8, pose: { walkFrame: 27, move: .51, aim: .49 } }, 'akm')).toBe(half);
+  expect(canvases.created).toBe(created);
+  for (const pose of [{ ...animation.pose, aim: 1 }, { ...animation.pose, move: 1 }, { ...animation.pose, walkFrame: 9 }]) {
+    expect(art.get(scav, { ...animation, pose }, 'akm')).not.toBe(half);
+  }
+  for (let aim = 0; aim <= 1; aim += 1 / 8) {
+    const raised = art.get(scav, { ...animation, pose: { ...animation.pose, aim } }, 'akm');
+    expect(raised.muzzle).toBeDefined(); expect(art.retainedBytes).toBeLessThanOrEqual(PIXEL_ACTOR_CACHE_BYTES);
+  }
+  art.clear();
+});
+
+test('blended combat poses preserve weapon sockets, support hands and native frame padding', () => {
+  const canvases = mockCanvases(), art = new PixelActorArt();
+  for (const facing of PIXEL_FACINGS) for (const weapon of ['pm', 'akm', 'awm']) {
+    const build = createWeaponShowcaseBuild(weapon, 'field'), silhouettes = new Set<number>();
+    for (let step = 0; step <= 8; step++) {
+      const animation: PixelActorFrame = { mode: 'aim', frame: 0, facing, pose: { walkFrame: 17, move: .5, aim: step / 8 } };
+      const native = surface(), metadata = paintPixelActor(native.context, scav, animation, build), rig = pixelActorRig(animation);
+      const sockets = pixelWeaponAnchors(build, rig.grip, facing, rig.weaponKick);
+      expect(native.valid).toBe(true); expect(hasPadding(native.pixels), `${weapon} ${facing} ${step}`).toBe(true);
+      silhouettes.add(digest(native.pixels)); expect(metadata).toEqual({ muzzle: sockets.muzzle, ejection: sockets.ejection });
+      const sprite = art.get(scav, animation, build), crop = { x: PIXEL_ACTOR_ANCHOR.x - sprite.anchor.x, y: PIXEL_ACTOR_ANCHOR.y - sprite.anchor.y };
+      for (const socket of ['muzzle', 'ejection'] as const) expect(sprite[socket]).toEqual({ x: sockets[socket].x - crop.x, y: sockets[socket].y - crop.y });
+      if (pixelWeaponProfile(build).twoHanded && pixelBearing(facing).y >= -.1) {
+        expect(['#c6a484', '#3a4e3d', '#c0ad85']).toContain(canvases.colorAt(sprite.image, sockets.forehand.x - crop.x, sockets.forehand.y - crop.y) ?? '');
+      }
+    }
+    expect(silhouettes.size, `${weapon} ${facing} raised poses`).toBe(9);
+  }
+  art.clear();
+}, 30_000);
+
 test('the support glove follows an installed foregrip rather than the factory handguard socket', () => {
   const canvases = mockCanvases(), art = new PixelActorArt(), build = createWeaponShowcaseBuild('m4a1', 'field');
   const withoutGrip = structuredClone(build); delete withoutGrip.modules.foregrip;

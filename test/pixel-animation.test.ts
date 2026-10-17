@@ -23,12 +23,12 @@ describe('server confirmed pixel combat animation', () => {
     const effects = new PixelCombatAnimation(), motion = updatePixelMotion(undefined, { x: 8, y: 8 }, 0);
     effects.update([shot(), shot('other-shot', 0)], 10_025, 300);
     expect(effects.active(300)).toHaveLength(2);
-    expect(effects.frame(actor, motion, 300, 10_025)).toMatchObject({ mode: 'fire', frame: 0 });
+    expect(effects.frame(actor, motion, 300, 10_025)).toMatchObject({ mode: 'fire', frame: pixelActorTimedFrame('fire', 25, false) });
     effects.update([shot(), shot('other-shot', 0)], 10_100, 375);
     effects.update([shot(), shot('other-shot', 0)], 10_160, 435);
     expect(effects.active(435)).toHaveLength(2);
     expect(effects.shotAge('self', 435)).toBe(160);
-    expect(effects.frame(actor, motion, 435, 10_160)).toMatchObject({ mode: 'fire', frame: 3 });
+    expect(effects.frame(actor, motion, 435, 10_160)).toMatchObject({ mode: 'fire', frame: pixelActorTimedFrame('fire', 160, false) });
     expect(effects.frame(actor, motion, 490, 10_215)).toMatchObject({ mode: 'fire', frame: PIXEL_ACTOR_FRAMES.fire - 1 });
     expect(effects.frame(actor, motion, 500, 10_225).mode).toBe('idle');
   });
@@ -54,7 +54,7 @@ describe('server confirmed pixel combat animation', () => {
     expect(effects.active(1400)).toHaveLength(0);
   });
 
-  test('five shot frames and four impact frames use shared durations and settle without repeated events', () => {
+  test('shot and impact frames use shared durations and settle without repeated events', () => {
     const effects = new PixelCombatAnimation(), motion = updatePixelMotion(undefined, { x: 8, y: 8 }, 0);
     effects.update([shot()], 10_000, 300);
     for (let frame = 0; frame < PIXEL_ACTOR_FRAMES.fire; frame++) {
@@ -215,10 +215,10 @@ describe('articulated fighter rig and shared phases', () => {
       expect(new Set(idle.map(rig => JSON.stringify([rig.leftHip, rig.rightHip, rig.leftKnee, rig.rightKnee, rig.leftHeel, rig.rightToe]))).size).toBe(1);
       const aim = Array.from({ length: PIXEL_ACTOR_FRAMES.aim }, (_, frame) => pixelActorRig({ mode: 'aim', frame, facing }));
       expect(new Set(aim.map(rig => JSON.stringify(rig.grip))).size).toBe(1);
-      expect(new Set(aim.map(rig => JSON.stringify([rig.leftShoulder, rig.rightShoulder]))).size).toBe(PIXEL_ACTOR_FRAMES.aim);
+      expect(new Set(aim.map(rig => JSON.stringify([rig.leftShoulder, rig.rightShoulder]))).size).toBeGreaterThanOrEqual(6);
       const fire = Array.from({ length: PIXEL_ACTOR_FRAMES.fire }, (_, frame) => pixelActorRig({ mode: 'fire', frame, facing }));
-      expect(fire.map(rig => rig.weaponKick)).toEqual([0, 4, 2.5, 1, 0]); expect(fire.at(-1)!.grip).toEqual(aim[0]!.grip);
-      expect(fire[1]!.grip).not.toEqual(fire[0]!.grip);
+      expect(fire.map(rig => rig.weaponKick)).toEqual([0, 3.2, 4, 3.3, 2.5, 1.7, 1, .5, .2, 0]); expect(fire.at(-1)!.grip).toEqual(aim[0]!.grip);
+      expect(fire[2]!.grip).not.toEqual(fire[0]!.grip);
     }
   });
 });

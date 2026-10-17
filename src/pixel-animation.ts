@@ -1,10 +1,10 @@
 import type { LiveEntity, LiveEvent, LivePoint } from './game/live';
-import { PIXEL_ACTOR_CYCLE_MS, PIXEL_ACTOR_FRAMES, PIXEL_ACTOR_LIMP_CYCLE_SCALE, PIXEL_ACTOR_WALK_CYCLE_DISTANCE, pixelActorTimedFrame, type PixelActorMode } from './pixel-actor-config';
+import { PIXEL_ACTOR_CYCLE_MS, PIXEL_ACTOR_FRAMES, PIXEL_ACTOR_LIMP_CYCLE_SCALE, PIXEL_ACTOR_WALK_CYCLE_DISTANCE, pixelActorPresentation, pixelActorTimedFrame, type PixelActorMode, type PixelActorPose } from './pixel-actor-config';
 export type { PixelActorMode } from './pixel-actor-config';
 
 export const PIXEL_FACINGS = ['e', 'se', 's', 'sw', 'w', 'nw', 'n', 'ne'] as const;
 export type PixelFacing = typeof PIXEL_FACINGS[number];
-export type PixelActorFrame = { mode: PixelActorMode; frame: number; facing: PixelFacing };
+export type PixelActorFrame = { mode: PixelActorMode; frame: number; facing: PixelFacing; pose?: PixelActorPose };
 
 /** The art bearing is screen space. World position stays in the server coordinate system. */
 export function pixelFacing(dx: number, dy: number, fallback: PixelFacing = 'se'): PixelFacing {
@@ -116,13 +116,45 @@ export function isConfirmedPixelShot(event: LiveEvent): boolean {
 }
 
 export type PixelShotEffect = { event: LiveEvent; at: number };
+type CombatActor = Pick<LiveEntity, 'id' | 'health' | 'action' | 'aimUntil' | 'limping'>;
+type AimEnvelope = { from: number; target: number; at: number; duration: number; expiresAt: number };
+const ease = (value: number) => { const t = clamp(value, 0, 1); return t * t * (3 - 2 * t); };
+const aimAt = (aim: AimEnvelope, at: number): number => {
+  const raised = (time: number) => aim.from + (aim.target - aim.from) * ease((time - aim.at) / aim.duration);
+  if (at <= aim.expiresAt) return raised(at);
+  const from = raised(aim.expiresAt);
+  return from * (1 - ease((at - aim.expiresAt) / Math.max(1, 260 * from)));
+};
 /** Public shot IDs and server timestamps own the flash clock, never a polling or pose timer. */
 export class PixelCombatAnimation {
   private seen = new Map<string, number>();
   private fired = new Map<string, number>();
   private hit = new Map<string, number>();
   private shots: PixelShotEffect[] = [];
-  clear(): void { this.seen.clear(); this.fired.clear(); this.hit.clear(); this.shots = []; }
+  private aims = new Map<string, AimEnvelope>();
+  clear(): void { this.seen.clear(); this.fired.clear(); this.hit.clear(); this.shots = []; this.aims.clear(); }
+  /** Observe all public actors at snapshot time, including those outside the
+   * camera. Rendering then samples envelopes without advancing their clocks. */
+  observe(entity: CombatActor, _motion: PixelMotion, at: number, serverNow: number): void {
+    if (entity.health <= 0 || entity.action === 'downed') { this.aims.delete(entity.id); return; }
+    const shotAt = this.fired.get(entity.id) ?? -Infinity;
+    const expiresAt = entity.action === 'combat' ? Infinity : Math.max(
+      entity.aimUntil && entity.aimUntil > serverNow ? at + entity.aimUntil - serverNow : -Infinity,
+      shotAt + 320,
+    );
+    const target = expiresAt > at ? 1 : 0, previous = this.aims.get(entity.id);
+    const previousTarget = previous && at < previous.expiresAt ? previous.target : 0;
+    if (previous && previousTarget === target) {
+      if (target) previous.expiresAt = expiresAt;
+      return;
+    }
+    // An actor first seen mid-shot is already shouldered. A known actor raises
+    // from the current pose, even if aim is interrupted before it finishes.
+    const from = previous ? aimAt(previous, at) : at - shotAt < 320 ? 1 : 0;
+    const duration = Math.max(1, Math.abs(target - from) * (target ? at - shotAt < 220 ? 90 : 200 : 260));
+    this.aims.set(entity.id, { from, target, at, duration, expiresAt: target ? expiresAt : Infinity });
+  }
+  retain(ids: ReadonlySet<string>): void { for (const id of this.aims.keys()) if (!ids.has(id)) this.aims.delete(id); }
   update(events: readonly LiveEvent[], serverNow: number, at: number): void {
     for (const event of events) {
       if (this.seen.has(event.id)) continue;
@@ -143,18 +175,29 @@ export class PixelCombatAnimation {
   active(at: number): readonly PixelShotEffect[] { return this.shots.filter(shot => at - shot.at >= 0 && at - shot.at < 850); }
   shotAge(id: string, at: number): number { return at - (this.fired.get(id) ?? -Infinity); }
   hitAge(id: string, at: number): number { return at - (this.hit.get(id) ?? -Infinity); }
-  frame(entity: Pick<LiveEntity, 'id' | 'health' | 'action' | 'aimUntil' | 'limping'>, motion: PixelMotion, at: number, serverNow: number, walkCycleDistance = PIXEL_ACTOR_WALK_CYCLE_DISTANCE): PixelActorFrame {
+  frame(entity: CombatActor, motion: PixelMotion, at: number, serverNow: number, walkCycleDistance = PIXEL_ACTOR_WALK_CYCLE_DISTANCE): PixelActorFrame {
     const sampled = samplePixelMotion(motion, at), shotAge = this.shotAge(entity.id, at), hitAge = this.hitAge(entity.id, at);
     if (entity.health <= 0 || entity.action === 'downed') return { mode: 'downed', frame: 0, facing: motion.facing };
-    if (shotAge >= 0 && shotAge < PIXEL_ACTOR_CYCLE_MS.fire) return { mode: 'fire', frame: pixelActorTimedFrame('fire', shotAge, false), facing: motion.facing };
-    if (hitAge >= 0 && hitAge < PIXEL_ACTOR_CYCLE_MS.hit) return { mode: 'hit', frame: pixelActorTimedFrame('hit', hitAge, false), facing: motion.facing };
-    if (sampled.walking) {
-      const cycle = clamp(Number.isFinite(walkCycleDistance) && walkCycleDistance > 0 ? walkCycleDistance : PIXEL_ACTOR_WALK_CYCLE_DISTANCE, .2, 2) * (entity.limping ? PIXEL_ACTOR_LIMP_CYCLE_SCALE : 1);
-      return { mode: 'walk', frame: Math.floor(sampled.distance / cycle * PIXEL_ACTOR_FRAMES.walk) % PIXEL_ACTOR_FRAMES.walk, facing: walkingFacing(motion, at) };
-    }
+    const cycle = clamp(Number.isFinite(walkCycleDistance) && walkCycleDistance > 0 ? walkCycleDistance : PIXEL_ACTOR_WALK_CYCLE_DISTANCE, .2, 2) * (entity.limping ? PIXEL_ACTOR_LIMP_CYCLE_SCALE : 1);
+    const walkFrame = Math.floor(sampled.distance / cycle * PIXEL_ACTOR_FRAMES.walk) % PIXEL_ACTOR_FRAMES.walk;
+    const move = motion.length <= .015 ? 0 : motion.pace ? sampled.speed / motion.pace.speed
+      : sampled.walking ? ease((at - motion.at) / 100) : 1 - ease((at - motion.at - motion.duration) / 160);
     let phase = 0;
     for (let i = 0; i < entity.id.length; i++) phase = (Math.imul(phase, 31) + entity.id.charCodeAt(i)) >>> 0;
-    if (entity.action === 'combat' || entity.aimUntil && entity.aimUntil > serverNow) return { mode: 'aim', frame: pixelActorTimedFrame('aim', at + phase % PIXEL_ACTOR_CYCLE_MS.aim), facing: motion.facing };
-    return { mode: 'idle', frame: pixelActorTimedFrame('idle', at + phase % PIXEL_ACTOR_CYCLE_MS.idle), facing: motion.facing };
+    const mode: PixelActorMode = shotAge >= 0 && shotAge < PIXEL_ACTOR_CYCLE_MS.fire ? 'fire'
+      : hitAge >= 0 && hitAge < PIXEL_ACTOR_CYCLE_MS.hit ? 'hit' : sampled.walking ? 'walk'
+      : entity.action === 'combat' || entity.aimUntil && entity.aimUntil > serverNow ? 'aim' : 'idle';
+    const frame = mode === 'fire' ? pixelActorTimedFrame('fire', shotAge, false) : mode === 'hit' ? pixelActorTimedFrame('hit', hitAge, false)
+      : mode === 'walk' ? walkFrame : pixelActorTimedFrame(mode, at + phase % PIXEL_ACTOR_CYCLE_MS[mode]);
+    const envelope = this.aims.get(entity.id);
+    const aim = envelope ? aimAt(envelope, at) : mode === 'aim' || mode === 'fire' ? 1 : 0;
+    // Raising the weapon and planting the final step also turn the body toward
+    // its target. A shot's mode switch must not swivel planted feet back and
+    // forth between movement and combat bearings.
+    const walking = PIXEL_FACINGS.indexOf(walkingFacing(motion, at)), target = PIXEL_FACINGS.indexOf(motion.facing);
+    const turn = (target - walking + 12) % 8 - 4;
+    const facing = PIXEL_FACINGS[(walking + Math.round(turn * (1 - clamp(move, 0, 1) * (1 - aim))) + 8) % 8]!;
+    return { mode, frame, facing,
+      pose: pixelActorPresentation({ mode, frame, pose: { walkFrame, move, aim } }) };
   }
 }

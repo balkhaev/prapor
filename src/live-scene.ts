@@ -195,6 +195,7 @@ export class LiveScene {
     if (this.snapshot?.worldVersion !== snapshot.worldVersion) { this.cancelDragging(); this.motions.clear(); this.combatAnimation.clear(); this.weaponMounts.clear(); this.shotRigs.clear(); this.selected = null; this.routePoiIds = []; this.waypointTargets = []; this.hitTargets = []; this.following = true; this.overview = false; this.cityOverview = false; this.zoom = 1; this.cacheTerrain(snapshot.world); }
     const cityButton = this.controls.querySelector<HTMLButtonElement>('[data-live-zoom=city]');
     if (cityButton) cityButton.hidden = !snapshot.world.city;
+    this.combatAnimation.update(snapshot.events, snapshot.now, at);
     for (const entity of snapshot.entities) {
       const existing = this.motions.get(entity.id);
       const shot = [...snapshot.events].reverse().find(event => event.kind === 'combat' && event.actorId === entity.id && event.from && event.to && typeof event.damage === 'number' && snapshot.now - event.at >= 0 && snapshot.now - event.at < 200);
@@ -204,9 +205,10 @@ export class LiveScene {
           : existing ? { x: entity.x - existing.to.x, y: entity.y - existing.to.y } : { x: 0, y: 0 };
       const facing = pixelFacing(bearing.x - bearing.y, (bearing.x + bearing.y) / 2, existing?.facing);
       this.motions.set(entity.id, entity.health <= 0 ? stopPixelMotion(existing, entity, at) : updatePixelMotion(existing, entity, at, facing, entity.moveIntervalMs));
+      this.combatAnimation.observe(entity, this.motions.get(entity.id)!, at, snapshot.now);
     }
     for (const id of this.motions.keys()) if (!snapshot.entities.some(entity => entity.id === id)) this.motions.delete(id);
-    this.combatAnimation.update(snapshot.events, snapshot.now, at);
+    this.combatAnimation.retain(new Set(snapshot.entities.map(entity => entity.id)));
     this.snapshotAt = at;
     this.snapshot = snapshot;
     if (!this.active) this.paint();
