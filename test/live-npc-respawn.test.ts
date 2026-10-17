@@ -5,11 +5,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createLiveService, type LiveService } from '../server/live';
 import { NPC_RESPAWN_MS, NPC_RESPAWN_QUIET_MS } from '../server/live-spawning';
+import { createNpcLifePlans } from '../server/live-alife';
+import { createLiveNavigation } from '../server/live-navigation';
 import { createHealth } from '../src/game/health';
 import { getLiveMap, hasLiveLineOfSight, isLiveWalkable } from '../src/game/live-maps';
 import type { LiveCommand, LiveEntity, LiveEvent, LivePoint, LiveSnapshot } from '../src/game/live';
 
 const ORIGIN = 'http://npc-respawn.test', NOW = 1_800_000_000_000, world = getLiveMap('perimeter');
+const navigation = createLiveNavigation(world);
+const lifePlans = createNpcLifePlans(world, navigation.walkable, navigation.hasLineOfSight, () => false);
 // The two authored sawmill posts beside the reported PP-91 raid's death tile.
 const PATROL = 167, GUARD = 166, DEATH_TILE = { x: 755, y: 292 };
 interface Session { cookie: string; id: string }
@@ -116,12 +120,13 @@ describe('ordinary NPC replenishment after a shared encounter', () => {
   test('an online dead observer cannot see an NPC materialize; an unseen nearby candidate remains eligible', async () => {
     const f = await fixture(), { session } = await f.enter();
     f.restart(db => { f.dead(db); f.player(db, session, DEATH_TILE, false); }); await f.enter(session);
-    await f.advance(NPC_RESPAWN_QUIET_MS + 2000, [session]);
+    await f.advance(NPC_RESPAWN_QUIET_MS + 1000, [session]);
     const npc = f.target();
     if (npc.health > 0) {
       expect(hasLiveLineOfSight(world, DEATH_TILE, npc)).toBe(false);
       expect((await f.state(session)).entities.some(entity => entity.id === f.targetId)).toBe(false);
-      expect(Math.hypot(npc.x - npc.home.x, npc.y - npc.home.y)).toBeLessThanOrEqual(4);
+      expect(Math.hypot(npc.x - npc.home.x, npc.y - npc.home.y) <= 4
+        || lifePlans[PATROL]!.approaches.some(point => point.x === npc.x && point.y === npc.y)).toBe(true);
     } else expect(f.respawns()).toHaveLength(0);
   });
 
@@ -155,10 +160,12 @@ describe('ordinary NPC replenishment after a shared encounter', () => {
     f.restart(db => {
       f.dead(db); const saved = f.readWorld(db), target = saved.scavs.find(npc => npc.id === f.targetId)!;
       saved.scavs = [target];
+      const candidates = [...lifePlans[PATROL]!.approaches];
       for (let y = home.y - 4; y <= home.y + 4; y++) for (let x = home.x - 4; x <= home.x + 4; x++) {
-        const point = { x, y }; if (Math.hypot(x - home.x, y - home.y) > 4 || !isLiveWalkable(world, point)) continue;
-        saved.scavs.push({ ...structuredClone(target), ...point, id: `blocker-${x}-${y}`, health: 100, body: createHealth(), respawnAt: 0 });
+        const point = { x, y }; if (Math.hypot(x - home.x, y - home.y) <= 4 && isLiveWalkable(world, point)) candidates.push(point);
       }
+      for (const point of new Map(candidates.map(point => [`${point.x}-${point.y}`, point])).values())
+        saved.scavs.push({ ...structuredClone(target), ...point, id: `blocker-${point.x}-${point.y}`, health: 100, body: createHealth(), respawnAt: 0 });
       f.writeWorld(db, saved);
     });
     await f.advance(NPC_RESPAWN_QUIET_MS + 2000);

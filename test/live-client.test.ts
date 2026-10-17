@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { LiveApiError, liveRequest, readLiveSnapshot, readLiveStatus, shouldRejoinLivePresence } from '../src/live-client';
-import { LIVE_TERRAIN_CODES, type LiveSnapshot } from '../src/game/live';
+import { LIVE_NPC_ACTIVITIES, LIVE_TERRAIN_CODES, type LiveSnapshot } from '../src/game/live';
 import { getLiveMap } from '../src/game/live-maps';
 import { createHealth, createMedicalInventory } from '../src/game/health';
 import { FACTORY_KITS } from '../src/game/modules';
@@ -19,6 +19,26 @@ const fixture = (): LiveSnapshot => {
 }; };
 
 describe('live wire parser', () => {
+  test('keeps only bounded observed NPC activity and accepts legacy snapshots', () => {
+    const packet = fixture();
+    expect(readLiveSnapshot(packet).entities[1]!.npcActivity).toBeUndefined();
+    for (const activity of LIVE_NPC_ACTIVITIES) {
+      packet.entities[1]!.npcActivity = activity;
+      Object.assign(packet.entities[1]!, { alife: { targetId: 'hidden', goal: { x: 99, y: 99 } } });
+      const observed = readLiveSnapshot(packet).entities[1]!;
+      expect(observed.npcActivity).toBe(activity);
+      expect(observed).not.toHaveProperty('alife');
+    }
+    const { world: _world, ...cached } = packet;
+    expect(readLiveSnapshot(cached, packet.world).entities[1]!.npcActivity).toBe('combat');
+    for (const invalid of [null, {}, [], 'teleport', 'constructor', 0]) {
+      Object.assign(packet.entities[1]!, { npcActivity: invalid });
+      expect(() => readLiveSnapshot(packet)).toThrow(LiveApiError);
+    }
+    delete packet.entities[1]!.npcActivity;
+    Object.assign(packet.entities[0]!, { npcActivity: 'patrol' });
+    expect(() => readLiveSnapshot(packet)).toThrow(LiveApiError);
+  });
   test('accepts only bounded public walking pace and remains compatible with older snapshots', () => {
     const source = fixture();
     expect(readLiveSnapshot(source).entities[0]!.moveIntervalMs).toBeUndefined();
