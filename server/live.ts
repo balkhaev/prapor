@@ -6,6 +6,7 @@ import { LIVE_CAPACITY, LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT, LIVE_MEDICAL_CAPAC
 import { LIVE_MAPS } from "../src/game/live-maps";
 import { createLiveNavigation } from "./live-navigation";
 import { createLiveSortie, type LiveSortiePlan } from './live-autobattle';
+import { NPC_RESPAWN_MS, NPC_RESPAWN_QUIET_MS, NPC_RESPAWN_CLEAR_RADIUS, NPC_RESPAWN_CHECK_MS } from './live-spawning';
 import { migratedContainerAnchor, migratedLootCooldownKey } from "./live-world-migration";
 import { migrateExpandedLiveCoordinates } from './live-coordinate-migration';
 import { invalidateLiveGeometryRoutes } from './live-geometry-revision';
@@ -68,6 +69,9 @@ interface Scav extends LiveEntity, PathCache {
   mapId: LiveMapId; faction: "scavs" | "raiders"; role: "patrol" | "guard" | "marksman";
   home: LivePoint; route: LivePoint[]; routeIndex: number; spawnIndex: number;
   respawnAt: number; nextMove: number; nextAttack: number;
+  /** Absolute vacancy time survives restarts; proximity resets it, never the death cooldown. */
+  respawnQuietSince?: number | null;
+  nextRespawnCheckAt?: number;
   bossCycle?: number; bossDeathSettled?: boolean;
   bossLastHit?: { identity: string; playerId: string; at: number };
 }
@@ -318,6 +322,27 @@ export function createLiveService(options: LiveOptions): LiveService {
     }
   };
   const exposed = (player: Participant): boolean => player.automation?.stage !== 'complete' && (player.online || player.graceUntil > now());
+  // Players reconnect lazily after a server restart. Retain their last observed
+  // positions briefly so a tick or a geometry rebuild cannot refill their fight
+  // before their first join request restores the authoritative participant.
+  const restoredSpawnObservers = new Map(db.query<{ identity: string; state: string }, []>('SELECT identity,state FROM live_players').all().flatMap(row => {
+    const player = JSON.parse(row.state) as Participant;
+    if (!player.online && !(player.graceUntil > now())) return [];
+    return [[row.identity, { mapId: player.mapId, x: player.x, y: player.y, alive: player.health > 0 && player.automation?.stage !== 'complete',
+      watching: player.online, until: Math.max(now() + DISCONNECT_GRACE_MS, player.graceUntil || 0) }] as const];
+  }));
+  const spawnObservers = (mapId: LiveMapId) => {
+    for (const [identity, player] of restoredSpawnObservers) if (players.has(identity) || player.until <= now()) restoredSpawnObservers.delete(identity);
+    return [
+      ...[...players.values()].filter(player => player.mapId === mapId && (exposed(player) || player.online))
+        .map(player => ({ x: player.x, y: player.y, alive: player.health > 0 && exposed(player), watching: player.online })),
+      ...[...restoredSpawnObservers.values()].filter(player => player.mapId === mapId),
+    ];
+  };
+  const spawnAreaOccupied = (mapId: LiveMapId, points: readonly LivePoint[]): boolean => spawnObservers(mapId)
+    .some(player => player.alive && points.some(point => distance(player, point) <= NPC_RESPAWN_CLEAR_RADIUS));
+  const spawnPointVisible = (mapId: LiveMapId, point: LivePoint): boolean => spawnObservers(mapId)
+    .some(player => player.watching && distance(player, point) <= VISION_RADIUS && navigation.get(mapId)!.hasLineOfSight(player, point));
   const occupied = (mapId: LiveMapId, point: LivePoint, exceptId?: string): boolean => {
     for (const player of players.values()) if (player.mapId === mapId && player.id !== exceptId && player.health > 0 && exposed(player) && player.x === point.x && player.y === point.y) return true;
     for (const scav of scavs.values()) if (scav.mapId === mapId && scav.id !== exceptId && scav.health > 0 && scav.x === point.x && scav.y === point.y) return true;
@@ -480,36 +505,42 @@ export function createLiveService(options: LiveOptions): LiveService {
   const spawnScav = (mapId: LiveMapId, index: number, id = `scav-${mapId}-${index}`): Scav => {
     const spawn = maps.get(mapId)!.npcSpawns[index % maps.get(mapId)!.npcSpawns.length]!;
     const nearby: LivePoint[] = [];
-    if (!clear(mapId, spawn.point, id)) for (let y = spawn.point.y - 4; y <= spawn.point.y + 4; y++) for (let x = spawn.point.x - 4; x <= spawn.point.x + 4; x++) {
+    const acceptable = (point: LivePoint): boolean => clear(mapId, point, id) && !spawnPointVisible(mapId, point)
+      && !spawnAreaOccupied(mapId, [point]);
+    const vacant = !spawnAreaOccupied(mapId, [spawn.point, ...spawn.route]);
+    if (vacant && !acceptable(spawn.point)) for (let y = spawn.point.y - 4; y <= spawn.point.y + 4; y++) for (let x = spawn.point.x - 4; x <= spawn.point.x + 4; x++) {
       const point = { x, y };
-      if (distance(point, spawn.point) <= 4 && clear(mapId, point, id) && !maps.get(mapId)!.extracts.some(exit => distance(exit, point) < 6)) nearby.push(point);
+      if (distance(point, spawn.point) <= 4 && acceptable(point) && navigation.get(mapId)!.hasLineOfSight(spawn.point, point)
+        && !maps.get(mapId)!.extracts.some(exit => distance(exit, point) < 6)) nearby.push(point);
     }
-    nearby.sort((a, b) => distance(a, spawn.point) - distance(b, spawn.point));
-    const point = clear(mapId, spawn.point, id) ? spawn.point : nearby[0];
+    nearby.sort((a, b) => distance(a, spawn.point) - distance(b, spawn.point) || a.y - b.y || a.x - b.x);
+    const point = vacant ? acceptable(spawn.point) ? spawn.point : nearby[0] : undefined;
     return { ...point, ...freshPath(), mapId, id, kind: "scav", name: spawn.faction === "raiders" ? ["Рейдер Борз", "Рейдер Яр", "Рейдер Туман", "Рейдер Север"][index % 4]! : ["Косой", "Бродяга", "Шрам", "Лис", "Глухарь", "Рыжий"][index % 6]!,
       x: point?.x ?? spawn.point.x, y: point?.y ?? spawn.point.y,
       appearance: (spawn.faction === "raiders" ? 16 : 0) + index % 16, faction: spawn.faction, role: spawn.role,
       visualLoadout: npcVisualLoadout(spawn.faction, spawn.role),
       home: { ...spawn.point }, route: spawn.route.length ? spawn.route.map(point => ({ ...point })) : [{ ...spawn.point }], routeIndex: Math.max(0, spawn.route.findIndex(point => point.x === spawn.point.x && point.y === spawn.point.y)), spawnIndex: index,
-      health: point ? 100 : 0, body: storedBody(undefined, point ? 100 : 0), healthAt: now(), aim: null, action: point ? "idle" : "downed", safeUntil: 0, respawnAt: point ? 0 : now() + 1000, nextMove: now() + 750, nextAttack: now() + 1000 };
+      health: point ? 100 : 0, body: storedBody(undefined, point ? 100 : 0), healthAt: now(), aim: null, action: point ? "idle" : "downed", safeUntil: 0,
+      respawnAt: point ? 0 : now(), respawnQuietSince: null, nextRespawnCheckAt: 0, nextMove: now() + 750, nextAttack: now() + 1000 };
   };
   const insideBossArena = (bossId: BossId, point: LivePoint): boolean => {
     const arena = bossArenas.get(bossId)!, area = arena.area;
     return districtAt(point) === getBoss(bossId)!.districtId && point.x >= area.x && point.y >= area.y && point.x < area.x + area.width && point.y < area.y + area.height
       && distance(arena.home, point) <= 16 && walkable(DEFAULT_MAP, point);
   };
-  const bossSpawnPoint = (bossId: BossId): LivePoint => {
+  const bossSpawnPoint = (bossId: BossId, unobserved = false): LivePoint => {
     const arena = bossArenas.get(bossId)!, candidates: LivePoint[] = [];
     for (let y = arena.area.y; y < arena.area.y + arena.area.height; y++) for (let x = arena.area.x; x < arena.area.x + arena.area.width; x++) {
       const point = { x, y };
-      if (insideBossArena(bossId, point) && clear(DEFAULT_MAP, point, `boss-${bossId}`)) candidates.push(point);
+      if (insideBossArena(bossId, point) && clear(DEFAULT_MAP, point, `boss-${bossId}`)
+        && (!unobserved || !spawnPointVisible(DEFAULT_MAP, point) && !spawnAreaOccupied(DEFAULT_MAP, [point]))) candidates.push(point);
     }
     const point = candidates.sort((a, b) => distance(arena.home, a) - distance(arena.home, b) || a.y - b.y || a.x - b.x)[0];
     if (!point) throw new BossSpawnBlockedError(`Boss arena has no available spawn: ${bossId}`);
     return point;
   };
-  const spawnBoss = (bossId: BossId, cycle = 1): Scav => {
-    const definition = getBoss(bossId)!, arena = bossArenas.get(bossId)!, point = bossSpawnPoint(bossId);
+  const spawnBoss = (bossId: BossId, cycle = 1, unobserved = false): Scav => {
+    const definition = getBoss(bossId)!, arena = bossArenas.get(bossId)!, point = bossSpawnPoint(bossId, unobserved);
     return { ...point, ...freshPath(), id: `boss-${bossId}`, bossId, bossCycle: cycle, bossDeathSettled: false,
       mapId: DEFAULT_MAP, kind: 'scav', name: definition.name, appearance: 28 + BOSSES.findIndex(boss => boss.id === bossId), faction: 'raiders', role: 'guard',
       visualLoadout: npcVisualLoadout('raiders', 'guard', bossId),
@@ -568,6 +599,12 @@ export function createLiveService(options: LiveOptions): LiveService {
       scav.routeIndex ??= 0; scav.spawnIndex ??= index; Object.assign(scav, freshPath());
       scav.body = storedBody(scav.body, scav.health); scav.healthAt = now(); scav.aim = null;
       scav.health = isAlive(scav.body) ? healthPercent(scav.body) : 0;
+      // A pre-policy death used the player's ten-second timer. Migrate that
+      // absolute deadline once; subsequent restarts preserve the NPC deadline.
+      if (scav.health <= 0 && scav.respawnQuietSince === undefined)
+        scav.respawnAt += NPC_RESPAWN_MS - RESPAWN_MS;
+      scav.respawnQuietSince = Number.isSafeInteger(scav.respawnQuietSince) && scav.respawnQuietSince! >= 0 && scav.respawnQuietSince! <= now() ? scav.respawnQuietSince : null;
+      scav.nextRespawnCheckAt = 0;
       scavs.set(scav.id, scav);
     }
     const claimedAnchors = new Set<string>(), currentWorld = maps.get(DEFAULT_MAP)!;
@@ -698,7 +735,8 @@ export function createLiveService(options: LiveOptions): LiveService {
       event(target.mapId, 'combat', `${definition.name} повержен. Трофеи лежат на месте боя; новый выход через ${definition.live.respawnMs / 60_000} минут.`, direct?.playerId ?? credit?.playerId, target.id);
       return;
     }
-    target.health = 0; target.action = "downed"; target.respawnAt = now() + RESPAWN_MS; target.aim = null;
+    target.health = 0; target.action = "downed"; target.respawnAt = defeatedAt + (isParticipant(target) ? RESPAWN_MS : NPC_RESPAWN_MS); target.aim = null;
+    if (!isParticipant(target)) { target.respawnQuietSince = null; target.nextRespawnCheckAt = 0; }
     const amount = "cargo" in target ? target.cargo : 25 + Math.floor(random() * 26);
     if ("cargo" in target) {
       if (amount > 0 || target.lootItems?.length) addDrop(target.mapId, target, amount, "body", target.lootItems ?? []);
@@ -1093,16 +1131,24 @@ export function createLiveService(options: LiveOptions): LiveService {
     for (const map of LIVE_MAPS) for (const anchor of map.containers) if ((lootCooldowns.get(lootKey(map.id, anchor, anchor.id)) ?? 0) <= now() && ![...drops.values()].some(drop => drop.containerId === anchor.id)) addDrop(map.id, anchor, 10 + Math.floor(random() * 21), "supply");
     for (const scav of scavs.values()) {
       if (scav.health <= 0) {
-        if (scav.respawnAt <= now()) {
-          if (scav.bossId) {
-            let fresh: Scav;
-            try { fresh = spawnBoss(scav.bossId, scav.bossCycle! + 1); }
-            catch (error) { if (error instanceof BossSpawnBlockedError) continue; throw error; }
-            delete scav.bossLastHit; Object.assign(scav, fresh);
-          }
-          else Object.assign(scav, spawnScav(scav.mapId, scav.spawnIndex, scav.id));
-          event(scav.mapId, "respawn", `${scav.name} появился в районе.`, scav.id);
+        if ((scav.nextRespawnCheckAt ?? 0) > now()) continue;
+        scav.nextRespawnCheckAt = scav.respawnAt > now() ? Math.min(now() + NPC_RESPAWN_CHECK_MS, scav.respawnAt) : now() + NPC_RESPAWN_CHECK_MS;
+        const authored = scav.bossId ? null : maps.get(scav.mapId)!.npcSpawns[scav.spawnIndex % maps.get(scav.mapId)!.npcSpawns.length]!;
+        const occupiedArea = spawnAreaOccupied(scav.mapId, [scav, scav.home, ...scav.route, ...(authored ? [authored.point, ...authored.route] : [])]);
+        if (occupiedArea) { scav.respawnQuietSince = null; continue; }
+        scav.respawnQuietSince ??= now();
+        if (scav.respawnAt > now() || !scav.bossId && now() - scav.respawnQuietSince < NPC_RESPAWN_QUIET_MS) continue;
+        let fresh: Scav;
+        if (scav.bossId) {
+          try { fresh = spawnBoss(scav.bossId, scav.bossCycle! + 1, true); }
+          catch (error) { if (error instanceof BossSpawnBlockedError) continue; throw error; }
+          delete scav.bossLastHit;
+        } else {
+          fresh = spawnScav(scav.mapId, scav.spawnIndex, scav.id);
+          if (fresh.health <= 0) { scav.respawnQuietSince = null; continue; }
         }
+        Object.assign(scav, fresh);
+        event(scav.mapId, "respawn", `${scav.name} появился в районе.`, scav.id);
         continue;
       }
       const target = nearestTarget(scav);
