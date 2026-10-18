@@ -55,7 +55,7 @@ interface Node { point: LivePoint; parent: number; steps: number; exposed: numbe
 /** Cardinal BFS is deliberately local: at most 85 cells, no map-wide paths or
  * access to an opponent's current position. Occupancy belongs to the caller. */
 function search(actor: LiveFireteamActor, threat: LivePoint, geometry: LiveFireteamGeometry,
-  allowed: (point: LivePoint) => boolean = () => true): Node[] {
+  allowed: (point: LivePoint, from: LivePoint) => boolean = () => true): Node[] {
   const nodes: Node[] = [{ point: copy(actor.point), parent: -1, steps: 0, exposed: 0 }];
   const visited = new Set([`${actor.point.x},${actor.point.y}`]);
   for (let cursor = 0; cursor < nodes.length; cursor++) {
@@ -64,8 +64,8 @@ function search(actor: LiveFireteamActor, threat: LivePoint, geometry: LiveFiret
     for (const point of adjacent(node.point)) {
       const key = `${point.x},${point.y}`;
       if (visited.has(key)) continue;
+      if (!geometry.clear(point, actor.id) || !(geometry.permitted?.(point, actor.id) ?? true) || !allowed(point, node.point)) continue;
       visited.add(key);
-      if (!geometry.clear(point, actor.id) || !(geometry.permitted?.(point, actor.id) ?? true) || !allowed(point)) continue;
       nodes.push({ point, parent: cursor, steps: node.steps + 1,
         exposed: node.exposed + Number(geometry.hasLineOfSight(point, threat)) });
     }
@@ -122,8 +122,8 @@ function nextTo(actor: LiveFireteamActor, goal: LivePoint, threat: LivePoint, ge
 function retreat(actor: LiveFireteamActor, memory: Withdrawal, actors: readonly LiveFireteamActor[], geometry: LiveFireteamGeometry,
   reserved: readonly LivePoint[]): LivePoint | undefined {
   const initialDistance = distance(memory.origin, memory.threat), currentDistance = distance(actor.point, memory.threat);
-  const allowed = (point: LivePoint): boolean => distance(point, memory.origin) <= 10
-    && distance(point, memory.threat) >= currentDistance - .35
+  const allowed = (point: LivePoint, from: LivePoint): boolean => distance(point, memory.origin) <= 10
+    && distance(point, memory.threat) >= distance(from, memory.threat) - (memory.startedHidden ? 0 : .35)
     && (!memory.startedHidden || !geometry.hasLineOfSight(point, memory.threat))
     && !reserved.some(other => same(other, point))
     && !actors.some(other => other.id !== actor.id && distance(other.point, point) < .9);

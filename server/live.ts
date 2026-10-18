@@ -6,7 +6,7 @@ import { LIVE_CAPACITY, LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT, LIVE_MEDICAL_CAPAC
 import { LIVE_MAPS } from "../src/game/live-maps";
 import { createLiveNavigation } from "./live-navigation";
 import { findLiveCombatCover, LIVE_COVER_CONTACT_MS, type LiveCoverPlan } from './live-combat-cover';
-import { createLiveFireteamState, stepLiveFireteam, LIVE_FIRETEAM_SUPPORT_MS, type LiveFireteamActor, type LiveFireteamOrder } from '../src/game/live-fireteam';
+import { createLiveFireteamState, stepLiveFireteam, LIVE_FIRETEAM_CONTACT_MS, LIVE_FIRETEAM_SUPPORT_MS, type LiveFireteamActor, type LiveFireteamOrder } from '../src/game/live-fireteam';
 import { applyLiveIncomingFire, createLiveFirefightState, liveFirefightHitChance, stepLiveFirefight, type LiveFirefightState } from '../src/game/live-firefight';
 import { traceLiveBulletImpact } from '../src/game/live-ballistics';
 import { createLiveSortie, LIVE_LOOT_COMMITMENT_MS, type LiveSortiePlan } from './live-autobattle';
@@ -1585,16 +1585,24 @@ export function createLiveService(options: LiveOptions): LiveService {
         if (nearest) candidates.set(nearest.id, nearest);
         if (known && npcSees(actor, known, time)) candidates.set(known.id, known);
       }
-      const committed = fireteamStates.get(plan.id)?.bound?.targetId;
+      const bound = fireteamStates.get(plan.id)?.bound, committed = bound?.targetId;
       const shared = [...candidates.values()].map(target => ({ target, witnesses: members.filter(actor => npcSees(actor, target, time)) }))
         .filter(item => item.witnesses.length >= 2)
         .sort((a, b) => Number(b.target.id === committed) - Number(a.target.id === committed)
           || b.witnesses.length - a.witnesses.length || a.witnesses.reduce((sum, actor) => sum + distance(actor, a.target), 0)
           - b.witnesses.reduce((sum, actor) => sum + distance(actor, b.target), 0) || a.target.id.localeCompare(b.target.id))[0]?.target;
       const actors: LiveFireteamActor[] = members.map(actor => {
-        const contact = combatCover.get(actor.id), visible = shared && npcSees(actor, shared, time) ? shared
+        const contact = combatCover.get(actor.id), committedTarget = committed ? findTarget(committed) : undefined;
+        const seesCommitted = Boolean(committedTarget && npcSees(actor, committedTarget, time));
+        const holdsBound = Boolean(bound && (bound.moverId === actor.id || bound.supporterId === actor.id)
+          && (seesCommitted || contact && contact.targetId === committed && time - contact.seenAt <= LIVE_FIRETEAM_CONTACT_MS));
+        const visible = holdsBound ? seesCommitted ? committedTarget : undefined : shared && npcSees(actor, shared, time) ? shared
           : [...candidates.values()].filter(target => npcSees(actor, target, time)).sort((a, b) => distance(actor, a) - distance(actor, b))[0];
-        if (visible) fireteamTargets.set(actor.id, visible.id);
+        // A briefly ducked opponent does not cancel the buddy's current bound
+        // merely because a different opponent appeared. Only this actor's old
+        // observation is retained, never the hidden body's updated coordinates.
+        if (holdsBound) fireteamTargets.set(actor.id, committed!);
+        else if (visible) fireteamTargets.set(actor.id, visible.id);
         const observed = visible ? { targetId: visible.id, point: { x: visible.x, y: visible.y }, seenAt: time, visible: true }
           : contact && time - contact.seenAt <= LIVE_COVER_CONTACT_MS
             ? { targetId: contact.targetId, point: { ...contact.observed }, seenAt: contact.seenAt, visible: false } : undefined;
@@ -1899,8 +1907,9 @@ export function createLiveService(options: LiveOptions): LiveService {
           else state.targetId = null;
         }
         const coordinated = fireteamTargets.get(scav.id), coordinatedTarget = coordinated ? findTarget(coordinated) : undefined;
-        if (!withdrawing && coordinatedTarget && npcSees(scav, coordinatedTarget, time)) {
-          target = coordinatedTarget; rememberNpcContact(state, target, time);
+        if (!withdrawing && coordinated) {
+          target = coordinatedTarget && npcSees(scav, coordinatedTarget, time) ? coordinatedTarget : undefined;
+          if (target) rememberNpcContact(state, target, time);
         }
         scav.action = scav.aim ? 'combat' : 'idle';
         if (!withdrawing && takeFireteamOrder(scav, target, time)) continue;
