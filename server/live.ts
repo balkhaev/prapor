@@ -6,6 +6,7 @@ import { LIVE_CAPACITY, LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT, LIVE_MEDICAL_CAPAC
 import { LIVE_MAPS } from "../src/game/live-maps";
 import { createLiveNavigation } from "./live-navigation";
 import { findLiveCombatCover, LIVE_COVER_CONTACT_MS, type LiveCoverPlan } from './live-combat-cover';
+import { createLiveFireteamState, stepLiveFireteam, LIVE_FIRETEAM_SUPPORT_MS, type LiveFireteamActor, type LiveFireteamOrder } from '../src/game/live-fireteam';
 import { applyLiveIncomingFire, createLiveFirefightState, liveFirefightHitChance, stepLiveFirefight, type LiveFirefightState } from '../src/game/live-firefight';
 import { traceLiveBulletImpact } from '../src/game/live-ballistics';
 import { createLiveSortie, LIVE_LOOT_COMMITMENT_MS, type LiveSortiePlan } from './live-autobattle';
@@ -287,6 +288,12 @@ export function createLiveService(options: LiveOptions): LiveService {
   const players = new Map<string, Participant>(), scavs = new Map<string, Scav>(), drops = new Map<string, Drop>();
   // Short-lived tactical observations never survive a restart or reveal enemy routes.
   const combatCover = new Map<string, CombatCover>();
+  const fireteamStates = new Map<string, ReturnType<typeof createLiveFireteamState>>();
+  const fireteamOrders = new Map<string, LiveFireteamOrder>();
+  const fireteamTargets = new Map<string, string>();
+  // Only accepted projectiles count as covering fire. Aim animations, timers and
+  // a remembered enemy position cannot release a buddy into the open.
+  const combatShots = new Map<string, { at: number; targetId: string }>();
   const bossArenas = new Map(getLiveBossArenas(maps.get(DEFAULT_MAP)!).map(arena => [arena.bossId, arena]));
   const lifePlans = new Map(LIVE_MAPS.map(map => [map.id, createNpcLifePlans(map, point => walkable(map.id, point), (a, b) => navigation.get(map.id)!.hasLineOfSight(a, b),
     point => [...bossArenas.values()].some(arena => point.x >= arena.area.x && point.y >= arena.area.y && point.x < arena.area.x + arena.area.width && point.y < arena.area.y + arena.area.height))]));
@@ -481,6 +488,7 @@ export function createLiveService(options: LiveOptions): LiveService {
       moveIntervalMs: liveMovementInterval(entity.kind, injuryEffects(entity.body, now()).movement),
       ...(entity.health > 0 && combatCover.get(entity.id)?.stance ? { combatStance: combatCover.get(entity.id)!.stance } : {}),
       ...(entity.health > 0 && combatCover.get(entity.id)?.behavior ? { combatBehavior: combatCover.get(entity.id)!.behavior, suppression: Math.round(combatCover.get(entity.id)!.fight.suppression * 100) / 100 } : {}),
+      ...(entity.health > 0 && fireteamOrders.has(entity.id) ? { combatRole: fireteamOrders.get(entity.id)!.role } : {}),
       ...(entity.aim ? { aimUntil: entity.aim.endsAt, aimTargetId: entity.aim.targetId } : {}) };
   };
   const durableWorld = () => ({ version: WORLD_VERSION, geometryVersion: maps.get(DEFAULT_MAP)!.version, startedAt,
@@ -874,6 +882,7 @@ export function createLiveService(options: LiveOptions): LiveService {
   };
   const down = (target: Participant | Scav, attacker?: Participant | Scav, defeatedAt = now()): void => {
     combatCover.delete(target.id);
+    fireteamOrders.delete(target.id); fireteamTargets.delete(target.id); combatShots.delete(target.id);
     if (!isParticipant(target) && target.bossId) {
       if (target.bossDeathSettled) return;
       const definition = getBoss(target.bossId)!;
@@ -924,11 +933,22 @@ export function createLiveService(options: LiveOptions): LiveService {
   };
   const findTarget = (id: string): Participant | Scav | undefined => [...players.values(), ...scavs.values()].find(target => target.id === id);
   const rangeOf = (entity: Participant | Scav): number => isParticipant(entity) && entity.loadout ? entity.loadout.range : entity.bossId ? getBoss(entity.bossId)!.live.range : entity.kind === "player" || "role" in entity && entity.role === "marksman" ? 7 : 5;
+  const clearSquadFireLane = (attacker: Participant | Scav, target: LivePoint): boolean => {
+    const squad = isParticipant(attacker) ? undefined : squadOf(attacker);
+    if (!squad) return true;
+    const dx = target.x - attacker.x, dy = target.y - attacker.y, length2 = dx * dx + dy * dy;
+    if (!length2) return false;
+    return squad.memberIds.every(id => {
+      const buddy = scavs.get(id); if (!buddy || buddy.id === attacker.id || buddy.health <= 0 || buddy.mapId !== attacker.mapId) return true;
+      const t = ((buddy.x - attacker.x) * dx + (buddy.y - attacker.y) * dy) / length2;
+      return t <= 0 || t >= 1 || distance(buddy, { x: attacker.x + t * dx, y: attacker.y + t * dy }) >= .65;
+    });
+  };
   const attackTarget = (attacker: Participant | Scav, target: Participant | Scav): void => {
     if (!isParticipant(attacker) && (target.bossId || attacker.bossId && !isParticipant(target))) throw new LiveError(409, 'target_unavailable');
     if (target.mapId !== attacker.mapId || target.health <= 0 || attacker.health <= 0 || target.id === attacker.id || "online" in target && !exposed(target)) throw new LiveError(409, "target_unavailable");
     if (now() < target.safeUntil) throw new LiveError(409, "spawn_protection");
-    if (distance(attacker, target) > rangeOf(attacker) || !lineOfSight(attacker.mapId, attacker, target)) throw new LiveError(409, "target_out_of_range");
+    if (distance(attacker, target) > rangeOf(attacker) || !lineOfSight(attacker.mapId, attacker, target) || !clearSquadFireLane(attacker, target)) throw new LiveError(409, "target_out_of_range");
     if ("ammo" in attacker && attacker.ammo <= 0) throw new LiveError(409, "no_ammo");
   };
   const cancelTreatment = (player: Participant): void => {
@@ -959,6 +979,7 @@ export function createLiveService(options: LiveOptions): LiveService {
   };
   const shot = (attacker: Participant | Scav, target: Participant | Scav, part: BodyPart, aimed = false, reactive = false): void => {
     attackTarget(attacker, target);
+    if (!isParticipant(attacker) && squadOf(attacker)) combatShots.set(attacker.id, { at: now(), targetId: target.id });
     // A validated attack can be reported even by the last defender before a
     // lethal hit. The radio carries the base location, never the attacker's GPS.
     if (!isParticipant(target) && !target.bossId) {
@@ -1032,11 +1053,17 @@ export function createLiveService(options: LiveOptions): LiveService {
       attacker.nextAttack = now() + Math.ceil((isParticipant(attacker) && attacker.loadout ? attacker.loadout.attackMs : 900) / slowdown); shot(attacker, target, randomPart());
     }
   };
-  const createCombatContact = (entity: Participant | Scav, target: Participant | Scav, time: number): CombatCover => ({
-    targetId: target.id, observed: { x: target.x, y: target.y }, seenAt: time, rethinkAt: 0, plan: null,
-    fight: createLiveFirefightState([...entity.id].reduce((seed, letter) => Math.imul(seed, 31) + letter.charCodeAt(0), 17), time),
-    avoid: [], movedAt: entity.action === 'moving' ? time : 0,
-  });
+  const createCombatContact = (entity: Participant | Scav, target: Participant | Scav, time: number, previous?: CombatCover): CombatCover => {
+    const fight = previous?.fight ?? createLiveFirefightState([...entity.id].reduce((seed, letter) => Math.imul(seed, 31) + letter.charCodeAt(0), 17), time);
+    if (previous) {
+      // Choosing another observed threat interrupts acquisition, not wounds,
+      // pressure or the ammunition/reload already spent on the first threat.
+      fight.roundsLeft = 0; fight.settledSince = 0;
+      if (fight.phase === 'acquiring' || fight.phase === 'firing') { fight.phase = 'recovering'; fight.until = time + 500; }
+    }
+    return { targetId: target.id, observed: { x: target.x, y: target.y }, seenAt: time, rethinkAt: 0, plan: null,
+      fight, avoid: [], movedAt: previous?.movedAt ?? (entity.action === 'moving' ? time : 0) };
+  };
   /** Physical shelter and shared reactive timing own automatic contacts, including
    * open ground. Only current visual contact can authorize a projectile. */
   const takeCombatCover = (entity: Participant | Scav, visibleTarget?: Participant | Scav): boolean => {
@@ -1053,15 +1080,22 @@ export function createLiveService(options: LiveOptions): LiveService {
     }
     const clearContact = (): false => { combatCover.delete(entity.id); if (entity.aim?.reactive) entity.aim = null; return false; };
     if (visibleTarget && distance(entity, visibleTarget) > rangeOf(entity)) return clearContact();
+    const previous = visibleTarget && cover && cover.targetId !== visibleTarget.id ? cover : undefined;
     if (cover && (visibleTarget && cover.targetId !== visibleTarget.id || !visibleTarget && time - cover.seenAt > LIVE_COVER_CONTACT_MS)) {
       clearContact(); cover = undefined;
     }
     if (!cover && !visibleTarget) return false;
-    if (!cover) { cover = createCombatContact(entity, visibleTarget!, time); combatCover.set(entity.id, cover); }
+    if (!cover) { cover = createCombatContact(entity, visibleTarget!, time, previous); combatCover.set(entity.id, cover); }
     if (visibleTarget) { cover.observed = { x: visibleTarget.x, y: visibleTarget.y }; cover.seenAt = time; }
+    const holdPosition = fireteamOrders.get(entity.id)?.holdPosition === true;
+    if (holdPosition) cover.plan = null;
+    const resetForCover = (): void => {
+      cover!.fight.roundsLeft = 0; cover!.fight.settledSince = 0;
+      if (!['suppressed', 'reloading', 'recovering'].includes(cover!.fight.phase)) cover!.fight.phase = 'seeking';
+    };
     const abandonPlan = (): void => {
       cover!.plan = null; cover!.stance = undefined; cover!.rethinkAt = time + 700;
-      cover!.fight.phase = 'seeking'; cover!.fight.settledSince = 0; entity.aim = null;
+      resetForCover(); entity.aim = null;
     };
     if (cover.plan && visibleTarget && (nav.hasLineOfSight(cover.plan.covered, cover.observed)
       || !nav.hasLineOfSight(cover.plan.peek, cover.observed) || distance(cover.plan.peek, cover.observed) > rangeOf(entity))) abandonPlan();
@@ -1070,9 +1104,9 @@ export function createLiveService(options: LiveOptions): LiveService {
       permitted: point => isParticipant(entity) || insidePursuit(entity, point), avoid,
       solid: nav.blocksSight,
     });
-    if (!cover.plan && cover.rethinkAt <= time) {
+    if (!holdPosition && !cover.plan && cover.rethinkAt <= time) {
       cover.plan = findPlan(); cover.rethinkAt = time + 2000;
-      if (cover.plan) { cover.fight.phase = 'seeking'; Object.assign(entity, freshPath()); }
+      if (cover.plan) { resetForCover(); Object.assign(entity, freshPath()); }
     }
     if (isParticipant(entity)) { entity.destination = null; entity.searching = null; cancelTreatment(entity); }
     const at = (point: LivePoint): boolean => point.x === entity.x && point.y === entity.y;
@@ -1089,8 +1123,9 @@ export function createLiveService(options: LiveOptions): LiveService {
     const effects = injuryEffects(entity.body, time), plan = cover.plan;
     const weaponId = isParticipant(entity) ? entity.loadout?.weaponId : entity.visualLoadout.weaponId;
     const decision = stepLiveFirefight(cover.fight, { now: time, visible: Boolean(visibleTarget),
-      canFire: Boolean(visibleTarget && entity.nextAttack <= time && (!isParticipant(entity) || entity.ammo > 0)),
+      canFire: Boolean(visibleTarget && entity.nextAttack <= time && (!isParticipant(entity) || entity.ammo > 0) && clearSquadFireLane(entity, visibleTarget)),
       hasCover: Boolean(plan), inCover: Boolean(plan && at(plan.covered)), atPeek: Boolean(plan && at(plan.peek)),
+      covering: fireteamOrders.get(entity.id)?.role === 'covering',
       moving: time - cover.movedAt < 300, weaponCategory: weaponId ? WEAPON_BY_ID[weaponId]?.category : 'pistol',
       attackMs: (isParticipant(entity) ? entity.loadout?.attackMs ?? 900 : 2500) / Math.max(.25, effects.aim * effects.reload),
       injured: !isParticipant(entity) && (entity.health < 28 || effects.movement < .35),
@@ -1521,6 +1556,112 @@ export function createLiveService(options: LiveOptions): LiveService {
     for (const scav of scavs.values()) consider(scav);
     return nearest;
   };
+  const npcWithdrawing = (scav: Scav, time: number): boolean => {
+    const order = squadOrders.get(scav.id);
+    return scav.health < 28 || injuryEffects(scav.body, time).movement < .35 || Boolean(garrisonOrders.get(scav.id)?.withdrawing
+      || order && (order.decision.retreating || order.decision.phase === 'return' || ['haul', 'withdraw'].includes(order.directive.activity)));
+  };
+  const npcSees = (scav: Scav, target: Participant | Scav, time: number): boolean => target.health > 0 && target.id !== scav.id
+    && target.mapId === scav.mapId && !target.bossId && target.safeUntil <= time
+    && (isParticipant(target) ? exposed(target) : target.faction !== scav.faction)
+    && distance(scav, target) <= perceptionOf(scav) && insidePursuit(scav, target) && lineOfSight(scav.mapId, scav, target);
+  /** All members decide from one observation snapshot before any member moves.
+   * Authored membership and personal sight are both required: a shared faction
+   * or another squad's distant contact is never enough to issue a flank. */
+  const advanceFireteams = (time: number): void => {
+    fireteamOrders.clear(); fireteamTargets.clear();
+    for (const [id, receipt] of combatShots) if (time - receipt.at > LIVE_COVER_CONTACT_MS) combatShots.delete(id);
+    for (const plan of squadGeometry.squads) {
+      const members = plan.memberIds.flatMap(id => {
+        const actor = scavs.get(id);
+        return actor && actor.health > 0 && squadOf(actor) && !npcWithdrawing(actor, time) ? [actor] : [];
+      });
+      if (members.length < 2 && !fireteamStates.has(plan.id)) continue;
+      if (!members.length) { fireteamStates.delete(plan.id); continue; }
+      if (!fireteamStates.has(plan.id) && !members.some(actor => actor.alife?.targetId || combatCover.has(actor.id))) continue;
+      const candidates = new Map<string, Participant | Scav>();
+      for (const actor of members) {
+        const nearest = nearestTarget(actor), remembered = combatCover.get(actor.id), known = remembered && findTarget(remembered.targetId);
+        if (nearest) candidates.set(nearest.id, nearest);
+        if (known && npcSees(actor, known, time)) candidates.set(known.id, known);
+      }
+      const committed = fireteamStates.get(plan.id)?.bound?.targetId;
+      const shared = [...candidates.values()].map(target => ({ target, witnesses: members.filter(actor => npcSees(actor, target, time)) }))
+        .filter(item => item.witnesses.length >= 2)
+        .sort((a, b) => Number(b.target.id === committed) - Number(a.target.id === committed)
+          || b.witnesses.length - a.witnesses.length || a.witnesses.reduce((sum, actor) => sum + distance(actor, a.target), 0)
+          - b.witnesses.reduce((sum, actor) => sum + distance(actor, b.target), 0) || a.target.id.localeCompare(b.target.id))[0]?.target;
+      const actors: LiveFireteamActor[] = members.map(actor => {
+        const contact = combatCover.get(actor.id), visible = shared && npcSees(actor, shared, time) ? shared
+          : [...candidates.values()].filter(target => npcSees(actor, target, time)).sort((a, b) => distance(actor, a) - distance(actor, b))[0];
+        if (visible) fireteamTargets.set(actor.id, visible.id);
+        const observed = visible ? { targetId: visible.id, point: { x: visible.x, y: visible.y }, seenAt: time, visible: true }
+          : contact && time - contact.seenAt <= LIVE_COVER_CONTACT_MS
+            ? { targetId: contact.targetId, point: { ...contact.observed }, seenAt: contact.seenAt, visible: false } : undefined;
+        const weapon = actor.visualLoadout.weaponId, category = weapon ? WEAPON_BY_ID[weapon]?.category : 'pistol';
+        const magazine = category === 'pistol' ? 8 : category === 'sniper' || category === 'shotgun' ? 5 : 24;
+        return { id: actor.id, point: { x: actor.x, y: actor.y }, health: actor.health, range: rangeOf(actor),
+          suppression: contact?.fight.suppression ?? 0, moving: contact ? time - contact.movedAt < 300 : actor.action === 'moving',
+          ready: contact?.fight.phase !== 'reloading' && contact?.fight.phase !== 'suppressed'
+            && (contact?.fight.roundsSinceReload ?? 0) < magazine && (contact?.fight.suppression ?? 0) < .65
+            && Boolean((visible || contact) && clearSquadFireLane(actor, visible ?? contact!.observed)),
+          ...(observed ? { contact: observed } : {}), ...(combatShots.has(actor.id) ? { lastShot: combatShots.get(actor.id)! } : {}),
+          ...(contact?.plan ? { cover: contact.plan.covered } : {}) };
+      });
+      const state = fireteamStates.get(plan.id) ?? createLiveFireteamState(); fireteamStates.set(plan.id, state);
+      const orders = stepLiveFireteam(state, actors, time, {
+        clear: (point, actorId) => clear(DEFAULT_MAP, point, actorId), hasLineOfSight: navigation.get(DEFAULT_MAP)!.hasLineOfSight,
+        permitted: (point, actorId) => { const actor = scavs.get(actorId); return Boolean(actor && insidePursuit(actor, point)); },
+      });
+      for (const [id, order] of orders) fireteamOrders.set(id, order);
+      if (!state.bound && !state.withdrawals.size && !state.stations.size && !actors.some(actor => actor.contact && time - actor.contact.seenAt <= LIVE_COVER_CONTACT_MS)) fireteamStates.delete(plan.id);
+    }
+  };
+  const takeFireteamOrder = (actor: Scav, visibleTarget: Participant | Scav | undefined, time: number): boolean => {
+    let order = fireteamOrders.get(actor.id);
+    if (!order || order.role === 'covering') return false;
+    if (order.role === 'flanking') {
+      const supporter = order.supporterId ? scavs.get(order.supporterId) : undefined, threat = order.targetId ? findTarget(order.targetId) : undefined;
+      const support = supporter && combatCover.get(supporter.id), receipt = supporter && combatShots.get(supporter.id);
+      // Earlier members may have been hit, moved or killed since the shared
+      // observation snapshot. Such a lane cannot cover this later step.
+      if (!supporter || supporter.health <= 0 || !threat || !support || support.targetId !== threat.id
+        || time - support.seenAt > LIVE_FIRETEAM_SUPPORT_MS || !lineOfSight(supporter.mapId, supporter, support.observed) || !clearSquadFireLane(supporter, support.observed)
+        || !receipt || receipt.targetId !== threat.id || time - receipt.at > LIVE_FIRETEAM_SUPPORT_MS
+        || time - support.movedAt < 300 || support.fight.phase === 'reloading' || support.fight.phase === 'suppressed' || support.fight.suppression >= .52) {
+        order = { ...order, role: 'regrouping', destination: undefined }; fireteamOrders.set(actor.id, order);
+      }
+    }
+    let contact = combatCover.get(actor.id);
+    if (visibleTarget && (!contact || contact.targetId !== visibleTarget.id)) {
+      contact = createCombatContact(actor, visibleTarget, time, contact); combatCover.set(actor.id, contact);
+    }
+    actor.aim = null; actor.action = 'combat';
+    if (contact) {
+      if (visibleTarget) { contact.observed = { x: visibleTarget.x, y: visibleTarget.y }; contact.seenAt = time; }
+      // Pressure and reload clocks keep advancing during a retreat. The move
+      // order itself never authorizes a shot or silently refills a magazine.
+      const weapon = actor.visualLoadout.weaponId;
+      stepLiveFirefight(contact.fight, { now: time, visible: false, canFire: false, hasCover: false, inCover: false, atPeek: false,
+        weaponCategory: weapon ? WEAPON_BY_ID[weapon]?.category : 'pistol' });
+      contact.behavior = order.role === 'regrouping' ? contact.fight.suppression >= .45 ? 'suppressed' : 'recovering' : 'relocating';
+      contact.stance = contact.plan && distance(actor, contact.plan.covered) === 0 ? 'covered' : 'seeking-cover';
+    }
+    const destination = order.destination;
+    if (!destination || actor.nextMove > time) return true;
+    // Recheck occupancy and the leash after earlier actors acted. A cached
+    // tactical order grants exactly one adjacent step, never a teleport/path.
+    if (Math.abs(actor.x - destination.x) + Math.abs(actor.y - destination.y) !== 1
+      || !clear(actor.mapId, destination, actor.id) || !insidePursuit(actor, destination)) return true;
+    actor.x = destination.x; actor.y = destination.y; actor.action = 'moving'; Object.assign(actor, freshPath());
+    actor.nextMove = time + liveMovementInterval('scav', injuryEffects(actor.body, time).movement);
+    if (contact) {
+      contact.movedAt = time; contact.plan = null; contact.rethinkAt = time + 350;
+      if (!['reloading', 'suppressed', 'recovering'].includes(contact.fight.phase)) contact.fight.phase = 'seeking';
+      contact.fight.settledSince = 0;
+    }
+    return true;
+  };
   const targetFor = (player: Participant, id: string): Participant | Scav => {
     const target = [...players.values(), ...scavs.values()].find(entity => entity.id === id && entity.mapId === player.mapId && entity.health > 0 && (!isParticipant(entity) || exposed(entity)));
     if (!target || target.id === player.id) throw new LiveError(409, "target_unavailable");
@@ -1705,6 +1846,7 @@ export function createLiveService(options: LiveOptions): LiveService {
       occupiedContainers.add(anchor.id);
     }
     advanceSquads(now());
+    advanceFireteams(now());
     for (const scav of scavs.values()) {
       if (scav.health <= 0) {
         if ((scav.nextRespawnCheckAt ?? 0) > now()) continue;
@@ -1730,6 +1872,8 @@ export function createLiveService(options: LiveOptions): LiveService {
           delete scav.npcGarrison; garrisonRefugeChecks.delete(scav.id);
         }
         Object.assign(scav, fresh);
+        combatShots.delete(scav.id); fireteamOrders.delete(scav.id); fireteamTargets.delete(scav.id);
+        const squad = squadOf(scav); if (squad) fireteamStates.delete(squad.id);
         if (siteKey) npcReplenishments.set(siteKey, now() + NPC_SITE_REPLENISH_MS);
         event(scav.mapId, "respawn", `${scav.name} появился в районе.`, scav.id);
         continue;
@@ -1737,7 +1881,7 @@ export function createLiveService(options: LiveOptions): LiveService {
       if (!scav.bossId) {
         const state = scav.alife ??= createNpcLife(scav, now()), time = now();
         const badlyHurt = scav.health < 28 || injuryEffects(scav.body, time).movement < .35;
-        const order = squadOrders.get(scav.id), garrison = garrisonOrders.get(scav.id), withdrawing = Boolean(badlyHurt || garrison?.withdrawing || order && (order.decision.retreating || order.decision.phase === 'return' || ['haul', 'withdraw'].includes(order.directive.activity)));
+        const order = squadOrders.get(scav.id), garrison = garrisonOrders.get(scav.id), withdrawing = npcWithdrawing(scav, time);
         if (withdrawing) { scav.aim = null; combatCover.delete(scav.id); }
         let target: Participant | Scav | undefined;
         if (state.nextThinkAt <= time) {
@@ -1754,7 +1898,12 @@ export function createLiveService(options: LiveOptions): LiveService {
             && insidePursuit(scav, known) && lineOfSight(scav.mapId, scav, known)) target = known;
           else state.targetId = null;
         }
+        const coordinated = fireteamTargets.get(scav.id), coordinatedTarget = coordinated ? findTarget(coordinated) : undefined;
+        if (!withdrawing && coordinatedTarget && npcSees(scav, coordinatedTarget, time)) {
+          target = coordinatedTarget; rememberNpcContact(state, target, time);
+        }
         scav.action = scav.aim ? 'combat' : 'idle';
+        if (!withdrawing && takeFireteamOrder(scav, target, time)) continue;
         if (!withdrawing && takeCombatCover(scav, target)) continue;
         if (!withdrawing && target && distance(scav, target) <= rangeOf(scav) && lineOfSight(scav.mapId, scav, target)) {
           if (scav.nextAttack <= time && !scav.aim) attack(scav, target);

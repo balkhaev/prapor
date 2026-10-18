@@ -4,6 +4,26 @@ import { traceLiveBulletImpact } from '../src/game/live-ballistics';
 
 const open = (now: number): LiveFirefightInput => ({ now, visible: true, canFire: true, hasCover: false, inCover: false, atPeek: false, weaponCategory: 'rifle', attackMs: 900 });
 describe('reactive firefight decisions', () => {
+  test('a covering shooter holds the firing corner after a real burst without gaining rounds, then ducks when hit', () => {
+    const fight = createLiveFirefightState(71, 0);
+    const input = (now: number): LiveFirefightInput => ({ ...open(now), hasCover: true, inCover: false, atPeek: true, covering: true, attackMs: 2500 });
+    // Start with an acquired firing position and let the ordinary burst run.
+    fight.phase = 'acquiring'; fight.settledSince = 1; fight.until = 0;
+    let lastShot = 0;
+    for (let now = 1000; now < 1600; now += 50) if (stepLiveFirefight(fight, input(now)).action === 'fire') lastShot = now;
+    const rounds = fight.roundsSinceReload, recovery = fight.recoverUntil;
+    expect(rounds).toBeGreaterThanOrEqual(2);
+    for (let now = lastShot + 300; now <= lastShot + 1800; now += 50) {
+      expect(stepLiveFirefight(fight, input(now))).toMatchObject({ action: 'hold', behavior: 'acquiring' });
+      expect(fight.roundsSinceReload).toBe(rounds); expect(fight.recoverUntil).toBe(recovery);
+    }
+    expect(stepLiveFirefight(fight, { ...input(lastShot + 1850), visible: false }).action).toBe('hold');
+    expect(fight.roundsSinceReload).toBe(rounds);
+    expect(stepLiveFirefight(structuredClone(fight), { ...input(lastShot + 2200), visible: false }).action).toBe('cover');
+    applyLiveIncomingFire(fight, lastShot + 1900, .46);
+    expect(stepLiveFirefight(fight, input(lastShot + 2200))).toMatchObject({ action: 'cover', behavior: 'suppressed' });
+    expect(fight.roundsSinceReload).toBe(rounds);
+  });
   test('automatic bursts need settling and real recovery, with no automatic shot while moving or out of sight', () => {
     const fight = createLiveFirefightState(71, 0), shots: number[] = []; let nextAttack = 0;
     for (let time = 0; time <= 30_000; time += 50) {

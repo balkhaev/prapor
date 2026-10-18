@@ -19,6 +19,21 @@ const fixture = (): LiveSnapshot => {
 }; };
 
 describe('live wire parser', () => {
+  test('observed team roles survive snapshots without exposing orders or unseen positions', () => {
+    const packet = fixture();
+    expect(readLiveSnapshot(packet).entities[1]!.combatRole).toBeUndefined();
+    for (const combatRole of ['covering', 'flanking', 'withdrawing', 'regrouping'] as const) {
+      Object.assign(packet.entities[1]!, { combatRole, fireteam: { supporterId: 'unseen', destination: { x: 99, y: 99 } } });
+      const parsed = readLiveSnapshot(packet).entities[1]!;
+      expect(parsed.combatRole).toBe(combatRole); expect(parsed).not.toHaveProperty('fireteam');
+      const { world: _world, ...cached } = packet;
+      expect(readLiveSnapshot(cached, packet.world).entities[1]!.combatRole).toBe(combatRole);
+    }
+    for (const combatRole of ['ambush-unseen', {}, null, 3]) {
+      Object.assign(packet.entities[1]!, { combatRole });
+      expect(() => readLiveSnapshot(packet)).toThrow(LiveApiError);
+    }
+  });
   test('only observed cover posture and confirmed hit surface enter public snapshots', () => {
     const packet = fixture();
     for (const combatStance of ['seeking-cover', 'covered', 'peeking'] as const) {

@@ -1152,7 +1152,10 @@ export class LiveScene {
       c.fillStyle = T.panel; c.fillRect(p.x - width / 2, y, width, 3);
       c.fillStyle = entity.health > 35 ? T.healthy : T.injured; c.fillRect(p.x - width / 2, y, width * entity.health / 100, 3);
     }
-    if (entity.combatStance && selected) this.label(entity.combatBehavior === 'suppressed' ? 'ПОД ОГНЁМ' : entity.combatBehavior === 'relocating' ? 'МЕНЯЕТ ПОЗИЦИЮ' : entity.combatStance === 'covered' ? 'В УКРЫТИИ' : entity.combatStance === 'peeking' ? 'НА ПОЗИЦИИ' : 'К УКРЫТИЮ', p.x, p.y + 34, T.muted, 7);
+    if (entity.combatRole && entity.health > 0 && (selected || this.options.observer && !compact)) {
+      const roles = { covering: 'ПРИКРЫТИЕ', flanking: 'ОБХОД', withdrawing: 'ОТХОД', regrouping: 'ПЕРЕГРУППИРОВКА' };
+      this.label(roles[entity.combatRole], p.x, p.y + 26, entity.combatRole === 'withdrawing' ? T.injured : color, 7);
+    } else if (entity.combatStance && selected) this.label(entity.combatBehavior === 'suppressed' ? 'ПОД ОГНЁМ' : entity.combatBehavior === 'relocating' ? 'МЕНЯЕТ ПОЗИЦИЮ' : entity.combatStance === 'covered' ? 'В УКРЫТИИ' : entity.combatStance === 'peeking' ? 'НА ПОЗИЦИИ' : 'К УКРЫТИЮ', p.x, p.y + 34, T.muted, 7);
     if (entity.safeUntil > snapshot.now) this.label('ЗАЩИТА', p.x, p.y + 20, T.extract, 8);
     if (!this.options.observer && entity.aimUntil && entity.aimUntil > snapshot.now && entity.aimTargetId === snapshot.selfId) {
       c.strokeStyle = T.hostile; c.lineWidth = 2; c.beginPath(); c.ellipse(p.x, p.y, 18 * zoom, 9 * zoom, 0, 0, Math.PI * 2); c.stroke();
