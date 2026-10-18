@@ -28,6 +28,7 @@ test('visible squad role and expedition activity explain the actor without expos
     ['travel', 'Идёт с отрядом'],
     ['assemble', 'Собирается с отрядом'], ['capture', 'Занимает точку'], ['forage', 'Ищет припасы'],
     ['haul', 'Несёт добычу на базу'], ['withdraw', 'Отступает с отрядом'],
+    ['defend', 'Защищает базу'], ['reinforce', 'Идёт на помощь'], ['retake', 'Отбивает точку'],
   ] as const) {
     const contact = liveObservedContact({ ...squad, npcActivity }, npc, squad.id);
     expect(contact).toContain('Командир отряда 3');
@@ -35,6 +36,8 @@ test('visible squad role and expedition activity explain the actor without expos
     expect(contact).not.toContain(squad.npcSquad.id);
     expect(contact).not.toContain('members');
     expect(contact).not.toContain('target');
+    for (const hidden of [{ ...squad, npcActivity, health: 0 }, { ...squad, npcActivity, kind: 'player' as const },
+      { ...squad, npcActivity, bossId: 'lesnik' as const }]) expect(liveNpcActivityLabel(hidden)).toBeNull();
   }
   expect(liveNpcSquadLabel({ ...squad, npcSquad: { ...squad.npcSquad, leader: false } })).toBe('Боец отряда 3');
   for (const entity of [{ ...squad, npcSquad: undefined }, { ...squad, health: 0 },
@@ -45,6 +48,8 @@ test('observed site text describes ownership and contest without inventing progr
   const site = { id: 'visible-poi', x: 10, y: 10, kind: 'base' as const, owner: 'scavs' as const, contested: false };
   expect(liveFactionSiteLabel(site)).toBe('База диких');
   expect(liveFactionSiteLabel({ ...site, owner: 'raiders' })).toBe('База рейдеров');
+  expect(liveFactionSiteLabel({ ...site, contested: true })).toBe('База диких · идёт бой за базу');
+  expect(liveFactionSiteLabel({ ...site, owner: 'raiders', contested: true })).toBe('База рейдеров · идёт бой за базу');
   expect(liveFactionSiteLabel({ ...site, kind: 'control', owner: null })).toBe('Точка без владельца');
   expect(liveFactionSiteLabel({ ...site, kind: 'control', owner: 'raiders', contested: true })).toBe('Точка рейдеров · идёт бой за точку');
 });

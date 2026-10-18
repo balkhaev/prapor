@@ -10,6 +10,7 @@ import { NPC_RESPAWN_MS, NPC_RESPAWN_QUIET_MS, NPC_RESPAWN_CLEAR_RADIUS, NPC_RES
 import { advanceNpcRoutine, createNpcLife, createNpcLifePlans, investigateNpcNoise, rememberNpcContact, restoreNpcLife, NPC_HEARING_RADIUS, NPC_NOISE_INCIDENT_MS, NPC_NOISE_RESPONDERS, NPC_THINK_MS, type NpcLifeState } from './live-alife';
 import { buildNpcSquadPlans, createNpcSquadState, restoreNpcSquadState, advanceNpcSquads, completeObjective, type NpcSquadState, type NpcSquadDecision, type NpcSquadPlan } from './live-squads';
 import { readNpcInventory, readNpcCacheInventory, canNpcCarry, takeNpcLoot, depositNpcLoot, drainNpcLoot, type NpcInventory } from './live-npc-loot';
+import { createNpcFactionAlerts, restoreNpcFactionAlerts, recordNpcBaseContact, recordNpcTerritoryLoss, NPC_BASE_ALARM_QUIET_MS, type NpcFactionAlerts } from './live-faction-alerts';
 import { migratedContainerAnchor, migratedLootCooldownKey } from "./live-world-migration";
 import { migrateExpandedLiveCoordinates } from './live-coordinate-migration';
 import { invalidateLiveGeometryRoutes } from './live-geometry-revision';
@@ -274,6 +275,7 @@ export function createLiveService(options: LiveOptions): LiveService {
   const npcReplenishments = new Map<string, number>();
   const noiseIncidents: NoiseIncident[] = [];
   const squadStates = new Map(squadGeometry.squads.map(plan => [plan.id, createNpcSquadState(plan, now())]));
+  let npcFactionAlerts = createNpcFactionAlerts();
   const territoryOwners = new Map(squadGeometry.territories.map(site => [site.id, site.initialOwner]));
   const territoryById = new Map(squadGeometry.territories.map(site => [site.id, site]));
   const baseIds = new Set(squadGeometry.squads.map(plan => plan.baseId));
@@ -281,11 +283,23 @@ export function createLiveService(options: LiveOptions): LiveService {
   const squadWork = new Map<string, SquadWork>(), npcForageCooldowns = new Map<string, number>();
   const squadOrders = new Map<string, { plan: NpcSquadPlan; decision: NpcSquadDecision; directive: NpcSquadDecision['directives'][number] }>();
   const contestedSites = new Set<string>();
+  const baseDefenseOrders = new Map<string, NpcSquadPlan>();
   let nextSquadThinkAt = 0;
   const squadOf = (scav: Scav): NpcSquadPlan | undefined => {
     const plan = squadByActor.get(scav.id), authored = maps.get(scav.mapId)!.npcSpawns[scav.spawnIndex];
     return plan && !scav.bossId && scav.mapId === DEFAULT_MAP && authored && scav.role === 'patrol' && authored.role === scav.role
       && scav.faction === plan.faction && authored.faction === scav.faction && distance(scav.home, authored.point) === 0 ? plan : undefined;
+  };
+  const homeBaseOf = (scav: Scav): NpcSquadPlan | undefined => {
+    if (scav.bossId || scav.mapId !== DEFAULT_MAP) return;
+    const authored = maps.get(DEFAULT_MAP)!.npcSpawns[scav.spawnIndex];
+    if (!authored || authored.faction !== scav.faction || distance(authored.point, scav.home) !== 0) return;
+    return squadOf(scav) ?? squadGeometry.squads.find(plan => plan.faction === scav.faction && plan.baseId === planOf(scav).siteId && distance(scav.home, plan.base) <= 18);
+  };
+  const defendedBaseOf = (scav: Scav): NpcSquadPlan | undefined => {
+    const order = squadOrders.get(scav.id);
+    return order?.decision.missionKind === 'defend' && !order.decision.retreating && order.decision.phase !== 'return'
+      ? squadGeometry.squads.find(plan => plan.baseId === order.decision.targetId) : baseDefenseOrders.get(scav.id);
   };
   let preparedBossCredits: BossKillCredit[] = [];
   const lootCooldowns = new Map<string, number>();
@@ -425,7 +439,7 @@ export function createLiveService(options: LiveOptions): LiveService {
     const order = squadOrders.get(entity.id);
     return { id: entity.id, kind: entity.kind, name: entity.name, appearance: entity.appearance, health: entity.health, action: entity.action, safeUntil: entity.safeUntil, x: entity.x, y: entity.y,
       ...(visualLoadout ? { visualLoadout } : {}), ...(entity.faction ? { faction: entity.faction } : {}), ...(entity.role ? { role: entity.role } : {}), ...(entity.bossId ? { bossId: entity.bossId } : {}),
-      ...(!isParticipant(entity) && !entity.bossId && entity.health > 0 && entity.alife ? { npcActivity: entity.aim ? 'combat' as const : order?.directive.activity ?? entity.alife.phase } : {}),
+      ...(!isParticipant(entity) && !entity.bossId && entity.health > 0 && entity.alife ? { npcActivity: entity.aim ? 'combat' as const : order?.directive.activity ?? (baseDefenseOrders.has(entity.id) ? 'defend' as const : entity.alife.phase) } : {}),
       ...(squad ? { npcSquad: { id: squad.id, leader: squadStates.get(squad.id)?.leaderId === entity.id } } : {}),
       bleeding: BODY_PARTS.some(part => entity.body.parts[part].bleeding !== "none"), limping: injuryEffects(entity.body, now()).movement < 1,
       moveIntervalMs: liveMovementInterval(entity.kind, injuryEffects(entity.body, now()).movement),
@@ -434,7 +448,7 @@ export function createLiveService(options: LiveOptions): LiveService {
   const durableWorld = () => ({ version: WORLD_VERSION, geometryVersion: maps.get(DEFAULT_MAP)!.version, startedAt,
     scavs: [...scavs.values()].filter(scav => !scav.bossId).map(durable), drops: [...drops.values()], events,
     lootCooldowns: [...lootCooldowns], npcReplenishments: [...npcReplenishments], noiseIncidents,
-    npcSquads: [...squadStates.values()], territoryOwners: [...territoryOwners], squadWork: [...squadWork], npcForageCooldowns: [...npcForageCooldowns] });
+    npcSquads: [...squadStates.values()], npcFactionAlerts, territoryOwners: [...territoryOwners], squadWork: [...squadWork], npcForageCooldowns: [...npcForageCooldowns] });
   const persist = (): void => {
     db.transaction(() => {
       for (const player of players.values()) savePlayer.run(player.identity, JSON.stringify(durable(player)));
@@ -635,7 +649,7 @@ export function createLiveService(options: LiveOptions): LiveService {
   const stored = db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get();
   if (stored) {
     const world = JSON.parse(stored.state) as { version?: number; geometryVersion?: string; startedAt: number; scavs: Scav[]; drops: Drop[]; events: MapEvent[]; lootCooldowns?: Array<[string, number]>; npcReplenishments?: Array<[string, number]>; noiseIncidents?: NoiseIncident[];
-      npcSquads?: NpcSquadState[]; territoryOwners?: Array<[string, 'scavs' | 'raiders' | null]>; squadWork?: Array<[string, SquadWork]>; npcForageCooldowns?: Array<[string, number]> };
+      npcSquads?: NpcSquadState[]; npcFactionAlerts?: NpcFactionAlerts; territoryOwners?: Array<[string, 'scavs' | 'raiders' | null]>; squadWork?: Array<[string, SquadWork]>; npcForageCooldowns?: Array<[string, number]> };
     startedAt = world.startedAt;
     if (world.version !== WORLD_VERSION || world.geometryVersion !== maps.get(DEFAULT_MAP)!.version) for (const previous of world.scavs) {
       const carried = readNpcInventory(previous.npcInventory);
@@ -702,6 +716,7 @@ export function createLiveService(options: LiveOptions): LiveService {
     if (world.version === WORLD_VERSION && world.geometryVersion === maps.get(DEFAULT_MAP)!.version) {
       events = world.events.slice(-120).map(item => ({ ...item, mapId: DEFAULT_MAP }));
       for (const plan of squadGeometry.squads) squadStates.set(plan.id, restoreNpcSquadState(plan, world.npcSquads?.find(state => state.id === plan.id), now()));
+      npcFactionAlerts = restoreNpcFactionAlerts(squadGeometry.squads, squadGeometry.territories, world.npcFactionAlerts, now());
       for (const [id, owner] of world.territoryOwners ?? []) if (territoryById.has(id) && !baseIds.has(id) && (owner === null || owner === 'scavs' || owner === 'raiders')) territoryOwners.set(id, owner);
       for (const [id, work] of world.squadWork ?? []) if (squadStates.has(id) && work && territoryById.has(work.targetId)
         && [work.lastAt, work.captureMs, work.readyAt ?? 0].every(value => Number.isSafeInteger(value) && value >= 0)
@@ -890,6 +905,12 @@ export function createLiveService(options: LiveOptions): LiveService {
   };
   const shot = (attacker: Participant | Scav, target: Participant | Scav, part: BodyPart, aimed = false): void => {
     attackTarget(attacker, target);
+    // A validated attack can be reported even by the last defender before a
+    // lethal hit. The radio carries the base location, never the attacker's GPS.
+    if (!isParticipant(target) && !target.bossId) {
+      const base = defendedBaseOf(target) ?? homeBaseOf(target);
+      if (base && distance(target, base.base) <= 14) recordNpcBaseContact(npcFactionAlerts, base.baseId, base.faction, now());
+    }
     if ("ammo" in attacker) { attacker.ammo--; attacker.destination = null; attacker.dangerUntil = now() + DISCONNECT_GRACE_MS; cancelTreatment(attacker); attacker.searching = null; Object.assign(attacker, freshPath()); }
     if ("dangerUntil" in target) target.dangerUntil = now() + DISCONNECT_GRACE_MS;
     if (isParticipant(attacker)) attacker.lastCombatAt = now();
@@ -1233,19 +1254,26 @@ export function createLiveService(options: LiveOptions): LiveService {
   const leashOf = (scav: Scav): number => {
     if (scav.bossId) return getBoss(scav.bossId)!.live.aggroRange;
     const order = squadOrders.get(scav.id), target = order?.decision.targetId ? territoryById.get(order.decision.targetId) : undefined;
-    return Math.max(planOf(scav).leash, order ? distance(scav.home, order.plan.base) + 10 : 0, target ? distance(scav.home, target.point) + 10 : 0);
+    const defense = defendedBaseOf(scav);
+    return Math.max(planOf(scav).leash, order ? distance(scav.home, order.plan.base) + 10 : 0,
+      target ? distance(scav.home, target.point) + (order?.decision.missionKind === 'defend' ? 14 : 10) : 0,
+      defense ? distance(scav.home, defense.base) + 14 : 0);
+  };
+  const perceptionOf = (scav: Scav): number => defendedBaseOf(scav) ? 14 : scav.role === 'marksman' ? 11 : scav.role === 'patrol' ? 9 : 7;
+  const insidePursuit = (scav: Scav, point: LivePoint): boolean => {
+    const defense = defendedBaseOf(scav);
+    return distance(scav.home, point) <= leashOf(scav) && (!defense || distance(scav, defense.base) > 18 || distance(point, defense.base) <= 14);
   };
   const nearestTarget = (entity: Participant | Scav): Participant | Scav | undefined => {
     let nearest: Participant | Scav | undefined, nearestDistance = Infinity;
     const participant = isParticipant(entity), time = now();
-    const range = participant ? Infinity : entity.bossId ? getBoss(entity.bossId)!.live.aggroRange : entity.role === 'marksman' ? 11 : entity.role === 'patrol' ? 9 : 7;
-    const leash = participant ? Infinity : leashOf(entity);
+    const range = participant ? Infinity : entity.bossId ? getBoss(entity.bossId)!.live.aggroRange : perceptionOf(entity);
     const consider = (target: Participant | Scav): void => {
       if (target.mapId !== entity.mapId || target.health <= 0 || target.id === entity.id) return;
       if (participant) { if (isParticipant(target) || entity.purpose === 'boss' && !target.bossId) return; }
       else if (target.safeUntil > time || (isParticipant(target) ? !exposed(target) : entity.bossId || target.bossId || target.faction === entity.faction)) return;
       const separation = distance(entity, target);
-      if (separation >= nearestDistance || separation > range || !participant && distance(entity.home, target) > leash) return;
+      if (separation >= nearestDistance || separation > range || !participant && !insidePursuit(entity, target)) return;
       if (!participant && !entity.bossId && !lineOfSight(entity.mapId, entity, target)) return;
       nearest = target; nearestDistance = separation;
     };
@@ -1262,7 +1290,21 @@ export function createLiveService(options: LiveOptions): LiveService {
   const advanceSquads = (time: number): void => {
     if (nextSquadThinkAt > time) return;
     nextSquadThinkAt = time + NPC_THINK_MS;
-    squadOrders.clear(); contestedSites.clear();
+    // NPC invasions require a living local witness. Player proximity alone
+    // never summons help; their attack must pass the normal shot validation.
+    const living = [...scavs.values()].filter(scav => !scav.bossId && scav.health > 0 && scav.mapId === DEFAULT_MAP);
+    for (const base of squadGeometry.squads) {
+      const witnesses = living.filter(scav => scav.faction === base.faction && distance(scav, base.base) <= 14
+        && (homeBaseOf(scav)?.baseId === base.baseId || defendedBaseOf(scav)?.baseId === base.baseId));
+      if (witnesses.some(witness => living.some(enemy => enemy.faction !== base.faction && distance(enemy, base.base) <= 14
+        && distance(witness, enemy) <= 14 && lineOfSight(DEFAULT_MAP, witness, enemy)))) recordNpcBaseContact(npcFactionAlerts, base.baseId, base.faction, time);
+    }
+    squadOrders.clear(); baseDefenseOrders.clear(); contestedSites.clear();
+    for (const scav of living) {
+      if (squadOf(scav)) continue;
+      const base = homeBaseOf(scav);
+      if (base && npcFactionAlerts.alarms.some(alarm => alarm.baseId === base.baseId && time - alarm.lastContactAt < NPC_BASE_ALARM_QUIET_MS)) baseDefenseOrders.set(scav.id, base);
+    }
     for (const [id, until] of npcForageCooldowns) if (until <= time) npcForageCooldowns.delete(id);
     const caches = new Map([...drops.values()].filter(drop => drop.source === 'base' && drop.npcBase).map(drop => [drop.npcBase!.id, drop]));
     const actors = new Map([...scavs.values()].filter(scav => squadOf(scav)).map(scav => {
@@ -1271,10 +1313,11 @@ export function createLiveService(options: LiveOptions): LiveService {
         inCombat: Boolean(scav.aim || scav.alife?.targetId), carried: Boolean(inventory.items.length || inventory.money),
         canForage: !inventory.items.length && !inventory.money && (!cache || (cache.items?.length ?? 0) < 32 && (cache.items ?? []).reduce((sum, item) => sum + getLiveLootWeight(item), 0) < 12 && cache.amount < 500) }] as const;
     }));
-    const decisions = advanceNpcSquads(squadGeometry.squads, squadStates, actors, territoryOwners, time);
+    const decisions = advanceNpcSquads(squadGeometry.squads, squadStates, actors, territoryOwners, time, npcFactionAlerts);
     const siteContested = (point: LivePoint, faction: Scav['faction']): boolean =>
       [...scavs.values()].some(other => !other.bossId && other.health > 0 && other.faction !== faction && distance(other, point) <= 8 && lineOfSight(DEFAULT_MAP, other, point))
       || [...players.values()].some(player => exposed(player) && player.health > 0 && distance(player, point) <= 8 && lineOfSight(DEFAULT_MAP, player, point));
+    for (const base of squadGeometry.squads) if (siteContested(base.base, base.faction)) contestedSites.add(base.baseId);
     for (const decision of decisions) {
       const plan = squadGeometry.squads.find(candidate => candidate.id === decision.squadId)!;
       for (const directive of decision.directives) squadOrders.set(directive.actorId, { plan, decision, directive });
@@ -1292,6 +1335,7 @@ export function createLiveService(options: LiveOptions): LiveService {
       }
       const target = decision.targetId ? territoryById.get(decision.targetId) : undefined;
       if (decision.phase !== 'objective' || !target || decision.retreating) { squadWork.delete(plan.id); continue; }
+      if (decision.missionKind === 'defend') { squadWork.delete(plan.id); continue; }
       let work = squadWork.get(plan.id);
       if (!work || work.targetId !== target.id) { work = { targetId: target.id, lastAt: time, captureMs: 0, attempted: [] }; squadWork.set(plan.id, work); }
       const elapsed = Math.max(0, Math.min(1000, time - work.lastAt)); work.lastAt = time;
@@ -1299,14 +1343,15 @@ export function createLiveService(options: LiveOptions): LiveService {
       const contested = siteContested(target.point, plan.faction);
       if (contested) contestedSites.add(target.id);
       const present = crew.filter(scav => distance(scav, target.point) <= 6 && lineOfSight(DEFAULT_MAP, scav, target.point));
-      if (decision.missionKind === 'capture') {
+      if (decision.missionKind === 'capture' || decision.missionKind === 'retake') {
         if (territoryOwners.get(target.id) === plan.faction) { completeObjective(squadStates.get(plan.id)!, time); continue; }
         if (contested || present.length < 2 || present.some(scav => scav.aim || nearestTarget(scav))) { work.captureMs = 0; continue; }
         work.captureMs += elapsed;
         if (work.captureMs >= 20_000 && !baseIds.has(target.id)) {
+          recordNpcTerritoryLoss(npcFactionAlerts, target.id, territoryOwners.get(target.id) ?? null, plan.faction, time);
           territoryOwners.set(target.id, plan.faction);
           const name = maps.get(DEFAULT_MAP)!.pois.find(poi => poi.id === target.poiId)!.name;
-          event(DEFAULT_MAP, 'travel', `${plan.faction === 'scavs' ? 'Отряд диких' : 'Отряд рейдеров'} взял под контроль ${name}.`, present[0]!.id);
+          event(DEFAULT_MAP, 'travel', `${plan.faction === 'scavs' ? 'Отряд диких' : 'Отряд рейдеров'} ${decision.missionKind === 'retake' ? 'отбил' : 'взял под контроль'} ${name}.`, present[0]!.id);
           completeObjective(squadStates.get(plan.id)!, time); squadWork.delete(plan.id);
         }
         continue;
@@ -1383,7 +1428,7 @@ export function createLiveService(options: LiveOptions): LiveService {
       if (entity.health <= 0) { down(entity); continue; }
       if (entity.aim && entity.aim.endsAt <= now()) {
         const aim = entity.aim; entity.aim = null; const target = findTarget(aim.targetId);
-        if (target) {
+        if (target && (isParticipant(entity) || entity.bossId || insidePursuit(entity, target))) {
           try { shot(entity, target, aim.part, aim.part === "head"); }
           catch (error) { if (!(error instanceof LiveError)) throw error; event(entity.mapId, "combat", `${entity.name} потерял линию огня.`, entity.id, aim.targetId); }
         }
@@ -1442,8 +1487,8 @@ export function createLiveService(options: LiveOptions): LiveService {
           // Perception can lose a contact immediately between thoughts. Its
           // hidden coordinates must never become a movement destination.
           if (known && known.health > 0 && known.mapId === scav.mapId && known.safeUntil <= time && (!isParticipant(known) || exposed(known))
-            && distance(scav, known) <= (scav.role === 'marksman' ? 11 : scav.role === 'patrol' ? 9 : 7)
-            && distance(scav.home, known) <= leashOf(scav) && lineOfSight(scav.mapId, scav, known)) target = known;
+            && distance(scav, known) <= perceptionOf(scav)
+            && insidePursuit(scav, known) && lineOfSight(scav.mapId, scav, known)) target = known;
           else state.targetId = null;
         }
         scav.action = scav.aim ? 'combat' : 'idle';
@@ -1452,17 +1497,19 @@ export function createLiveService(options: LiveOptions): LiveService {
           scav.action = 'combat';
         } else {
           // Squad orders keep a shared route. Only a personally observed target may interrupt it.
-          const previousPhase = state.phase, destination = target && !withdrawing ? { x: target.x, y: target.y } : order ? order.directive.destination : advanceNpcRoutine(scav, state, planOf(scav), time);
+          const defense = baseDefenseOrders.get(scav.id);
+          const previousPhase = state.phase, destination = target && !withdrawing ? { x: target.x, y: target.y } : order ? order.directive.destination
+            : defense ? distance(scav, scav.home) > 2 ? scav.home : null : advanceNpcRoutine(scav, state, planOf(scav), time);
           // Static visit validation happens once when a trip starts. An excessive
           // detour is abandoned; dynamic movement still uses occupied cells.
-          if (!order && !target && state.phase === 'travel' && previousPhase !== 'travel' && destination) {
+          if (!order && !defense && !target && state.phase === 'travel' && previousPhase !== 'travel' && destination) {
             const route = navigation.get(scav.mapId)!.findPath(scav, destination);
             if (!route || route.length > 160) { state.phase = 'return'; state.destination = { ...scav.home }; state.until = time + 90_000; Object.assign(scav, freshPath()); continue; }
           }
           if (destination && scav.nextMove <= time) {
             const approach = target && !withdrawing || occupied(scav.mapId, destination, scav.id);
             const goal = approach ? [{ x: destination.x + 1, y: destination.y }, { x: destination.x - 1, y: destination.y }, { x: destination.x, y: destination.y + 1 }, { x: destination.x, y: destination.y - 1 }]
-              .filter(point => clear(scav.mapId, point, scav.id) && (!target || distance(scav.home, point) <= leashOf(scav))
+              .filter(point => clear(scav.mapId, point, scav.id) && (!target || insidePursuit(scav, point))
                 && (!order || !['haul', 'forage'].includes(order.directive.activity) || lineOfSight(scav.mapId, point, destination))).sort((a, b) => distance(scav, a) - distance(scav, b))[0] : destination;
             const step = goal ? pathStep(scav, goal) : null;
             if (step) { scav.x = step.x; scav.y = step.y; scav.action = 'moving'; }

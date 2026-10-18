@@ -54,6 +54,20 @@ describe('live wire parser', () => {
       }
     }
   });
+  test('defense activity never imports private alarm, destination or reinforcement state', () => {
+    const source = fixture();
+    for (const npcActivity of ['defend', 'reinforce', 'retake'] as const) {
+      Object.assign(source.entities[1]!, { npcActivity, alarmId: 'base-private-1', responseTarget: { id: 'hidden-site', x: 99, y: 88 }, incomingCount: 3 });
+      const parsed = readLiveSnapshot(source), actor = parsed.entities[1]!;
+      expect(actor.npcActivity).toBe(npcActivity);
+      for (const key of ['alarmId', 'responseTarget', 'incomingCount']) expect(actor).not.toHaveProperty(key);
+      const { world: _world, ...cached } = source;
+      expect(readLiveSnapshot(cached, parsed.world).entities[1]).toEqual(actor);
+    }
+    const poi = source.world.pois[0]!, site = { id: poi.id, x: poi.x, y: poi.y, kind: 'base', owner: 'raiders', contested: true };
+    for (const extra of [{ alarmId: 'private-alarm' }, { incomingCount: 3 }, { target: { x: 99, y: 88 } }])
+      expect(() => readLiveSnapshot({ ...source, factionSites: [{ ...site, ...extra }] })).toThrow(LiveApiError);
+  });
   test('rejects invented squad identity, private orders and non-NPC membership', () => {
     const squad = { id: 'squad-sawmill-raiders-0', leader: true };
     for (const bad of [null, [], {}, { ...squad, id: 'squad-sawmill-raiders-10' }, { ...squad, id: 'squad-city-raiders-0' },
