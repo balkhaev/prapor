@@ -15,7 +15,7 @@ const locationLabel = document.querySelector<HTMLElement>('#environment-location
 const toolbar = document.querySelector<HTMLElement>('.environment-toolbar')!;
 mountSceneLightControl(toolbar, { preview: true });
 choice.add(new Option('Ольховск · большой город', 'metropolis'));
-choice.add(new Option('Контакт · стрельба и укрытия', 'contact'));
+choice.add(new Option('Контакт · бой двух групп', 'contact'));
 const requested = new URLSearchParams(location.search).get('scene');
 choice.value = requested === 'contact' ? 'contact' : requested === 'base' ? 'base' : requested ? 'metropolis' : 'base';
 

@@ -3,13 +3,15 @@
 export interface LiveFirefightState {
   phase: 'seeking' | 'holding' | 'acquiring' | 'firing' | 'recovering' | 'suppressed' | 'reloading';
   seed: number; updatedAt: number; suppression: number; lastIncomingAt: number;
-  until: number; nextShotAt: number; recoverUntil: number; settledSince: number; reactionUntil: number;
+  until: number; nextShotAt: number; lastShotAt: number; recoverUntil: number; settledSince: number; reactionUntil: number;
   roundsLeft: number; roundsSinceReload: number; compromised: number; exposures: number;
   relocate: boolean;
 }
 export interface LiveFirefightInput {
   now: number; visible: boolean; canFire: boolean; hasCover: boolean; inCover: boolean; atPeek: boolean;
   moving?: boolean; weaponCategory?: string; attackMs?: number; injured?: boolean;
+  /** Hold the observed lane briefly after a real burst while a buddy moves. */
+  covering?: boolean;
 }
 export interface LiveFirefightDecision {
   action: 'cover' | 'peek' | 'fire' | 'hold' | 'relocate' | 'watch';
@@ -26,7 +28,7 @@ const decay = (state: LiveFirefightState, now: number): void => {
 };
 export function createLiveFirefightState(seed: number, now: number): LiveFirefightState {
   return { phase: 'seeking', seed: seed >>> 0, updatedAt: now, suppression: 0, lastIncomingAt: -Infinity,
-    until: now, nextShotAt: now, recoverUntil: now, settledSince: 0, reactionUntil: now, roundsLeft: 0, roundsSinceReload: 0,
+    until: now, nextShotAt: now, lastShotAt: -Infinity, recoverUntil: now, settledSince: 0, reactionUntil: now, roundsLeft: 0, roundsSinceReload: 0,
     compromised: 0, exposures: 0, relocate: false };
 }
 /** An actual hit or nearby passing round, never knowledge of an unseen aim. */
@@ -59,6 +61,13 @@ export function stepLiveFirefight(state: LiveFirefightState, input: LiveFirefigh
     state.roundsSinceReload = 0; state.phase = 'seeking';
   }
   if (state.phase === 'recovering') {
+    // Covering fire includes a short planted watch after the burst. Keep the
+    // original recovery deadline: coordination never grants additional rounds
+    // or a faster attack cadence. Incoming fire and reloads take priority above.
+    // The enemy ducking out of sight is precisely the opening for the buddy.
+    // Watch that last lane briefly, but the fire branches still require sight.
+    if (input.covering && !input.moving && input.atPeek && state.roundsSinceReload < magazine
+      && now - state.lastShotAt < 2100) return result('hold', 'acquiring');
     if (now < Math.max(state.until, state.recoverUntil)) return shelter('recovering');
     state.phase = 'seeking';
   }
@@ -110,7 +119,7 @@ export function stepLiveFirefight(state: LiveFirefightState, input: LiveFirefigh
       state.roundsLeft = 0; state.phase = 'recovering'; state.until = now + 450;
       return shelter('recovering');
     }
-    state.roundsLeft--; state.roundsSinceReload++;
+    state.roundsLeft--; state.roundsSinceReload++; state.lastShotAt = now;
     state.nextShotAt = now + 170 + variation(state) * 90;
     if (!state.roundsLeft) {
       state.phase = state.roundsSinceReload >= magazine ? 'reloading' : 'recovering';

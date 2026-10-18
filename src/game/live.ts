@@ -138,6 +138,7 @@ export interface LiveVisualLoadout {
 }
 export const LIVE_NPC_ACTIVITIES = ['patrol', 'travel', 'inspect', 'rest', 'investigate', 'return', 'combat', 'assemble', 'capture', 'forage', 'haul', 'withdraw', 'defend', 'reinforce', 'retake', 'assault', 'regroup'] as const;
 export type LiveNpcActivity = typeof LIVE_NPC_ACTIVITIES[number];
+export const LIVE_COMBAT_ROLES = ['covering', 'flanking', 'withdrawing', 'regrouping'] as const;
 export interface LiveEntity extends LivePoint {
   id: string;
   kind: "player" | "scav";
@@ -159,6 +160,8 @@ export interface LiveEntity extends LivePoint {
   combatStance?: 'seeking-cover' | 'covered' | 'peeking';
   /** Visible body language, never a private target, firing timer or route. */
   combatBehavior?: 'acquiring' | 'firing' | 'suppressed' | 'relocating' | 'recovering' | 'reloading';
+  /** Observed team action only; partners, planned positions and routes remain private. */
+  combatRole?: typeof LIVE_COMBAT_ROLES[number];
   suppression?: number;
   faction?: "scavs" | "raiders";
   role?: "patrol" | "guard" | "marksman";
