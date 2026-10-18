@@ -116,9 +116,12 @@ export function isConfirmedPixelShot(event: LiveEvent): boolean {
 }
 
 export type PixelShotEffect = { event: LiveEvent; at: number };
-type CombatActor = Pick<LiveEntity, 'id' | 'health' | 'action' | 'aimUntil' | 'limping'>;
+type CombatActor = Pick<LiveEntity, 'id' | 'health' | 'action' | 'aimUntil' | 'limping' | 'combatStance'>;
 type AimEnvelope = { from: number; target: number; at: number; duration: number; expiresAt: number };
+type CoverEnvelope = { from: number; target: number; at: number; duration: number };
 const ease = (value: number) => { const t = clamp(value, 0, 1); return t * t * (3 - 2 * t); };
+const coverAt = (cover: CoverEnvelope, at: number): number => cover.from + (cover.target - cover.from) * ease((at - cover.at) / cover.duration);
+const coverTarget = (entity: CombatActor): number => entity.combatStance === 'covered' ? 1 : entity.combatStance === 'peeking' ? .375 : entity.combatStance === 'seeking-cover' ? .25 : 0;
 const aimAt = (aim: AimEnvelope, at: number): number => {
   const raised = (time: number) => aim.from + (aim.target - aim.from) * ease((time - aim.at) / aim.duration);
   if (at <= aim.expiresAt) return raised(at);
@@ -132,11 +135,19 @@ export class PixelCombatAnimation {
   private hit = new Map<string, number>();
   private shots: PixelShotEffect[] = [];
   private aims = new Map<string, AimEnvelope>();
-  clear(): void { this.seen.clear(); this.fired.clear(); this.hit.clear(); this.shots = []; this.aims.clear(); }
+  private covers = new Map<string, CoverEnvelope>();
+  clear(): void { this.seen.clear(); this.fired.clear(); this.hit.clear(); this.shots = []; this.aims.clear(); this.covers.clear(); }
   /** Observe all public actors at snapshot time, including those outside the
    * camera. Rendering then samples envelopes without advancing their clocks. */
   observe(entity: CombatActor, _motion: PixelMotion, at: number, serverNow: number): void {
-    if (entity.health <= 0 || entity.action === 'downed') { this.aims.delete(entity.id); return; }
+    if (entity.health <= 0 || entity.action === 'downed') { this.aims.delete(entity.id); this.covers.delete(entity.id); return; }
+    const cover = this.covers.get(entity.id), crouch = coverTarget(entity);
+    if (!cover || cover.target !== crouch) {
+      // A newly observed fighter already occupies its reported cover. Later
+      // changes ease from the sampled posture without restarting at every poll.
+      const from = cover ? coverAt(cover, at) : crouch;
+      this.covers.set(entity.id, { from, target: crouch, at, duration: Math.max(1, Math.abs(crouch - from) * (crouch > from ? 220 : 280)) });
+    }
     const shotAt = this.fired.get(entity.id) ?? -Infinity;
     const expiresAt = entity.action === 'combat' ? Infinity : Math.max(
       entity.aimUntil && entity.aimUntil > serverNow ? at + entity.aimUntil - serverNow : -Infinity,
@@ -154,7 +165,9 @@ export class PixelCombatAnimation {
     const duration = Math.max(1, Math.abs(target - from) * (target ? at - shotAt < 220 ? 90 : 200 : 260));
     this.aims.set(entity.id, { from, target, at, duration, expiresAt: target ? expiresAt : Infinity });
   }
-  retain(ids: ReadonlySet<string>): void { for (const id of this.aims.keys()) if (!ids.has(id)) this.aims.delete(id); }
+  retain(ids: ReadonlySet<string>): void {
+    for (const map of [this.aims, this.covers]) for (const id of map.keys()) if (!ids.has(id)) map.delete(id);
+  }
   update(events: readonly LiveEvent[], serverNow: number, at: number): void {
     for (const event of events) {
       if (this.seen.has(event.id)) continue;
@@ -191,6 +204,7 @@ export class PixelCombatAnimation {
       : mode === 'walk' ? walkFrame : pixelActorTimedFrame(mode, at + phase % PIXEL_ACTOR_CYCLE_MS[mode]);
     const envelope = this.aims.get(entity.id);
     const aim = envelope ? aimAt(envelope, at) : mode === 'aim' || mode === 'fire' ? 1 : 0;
+    const cover = this.covers.get(entity.id), crouch = cover ? coverAt(cover, at) : coverTarget(entity);
     // Raising the weapon and planting the final step also turn the body toward
     // its target. A shot's mode switch must not swivel planted feet back and
     // forth between movement and combat bearings.
@@ -198,6 +212,6 @@ export class PixelCombatAnimation {
     const turn = (target - walking + 12) % 8 - 4;
     const facing = PIXEL_FACINGS[(walking + Math.round(turn * (1 - clamp(move, 0, 1) * (1 - aim))) + 8) % 8]!;
     return { mode, frame, facing,
-      pose: pixelActorPresentation({ mode, frame, pose: { walkFrame, move, aim } }) };
+      pose: pixelActorPresentation({ mode, frame, pose: { walkFrame, move, aim, crouch } }) };
   }
 }

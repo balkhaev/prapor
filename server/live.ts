@@ -5,6 +5,7 @@ import { dirname } from "node:path";
 import { LIVE_CAPACITY, LIVE_LOOT_CAPACITY, LIVE_LOOT_WEIGHT, LIVE_MEDICAL_CAPACITY, LIVE_PENDING_CAPACITY, LIVE_SERVER_ID, LIVE_SERVER_NAME, liveMedicalSupplyNeeded, type LiveCommand, type LiveDistrictId, type LiveDrop, type LiveEntity, type LiveEvent, type LiveMapId, type LivePlayer, type LivePoint, type LivePurpose, type LiveSnapshot, type LiveStatus, type LiveVisualLoadout, type LiveWorld } from "../src/game/live";
 import { LIVE_MAPS } from "../src/game/live-maps";
 import { createLiveNavigation } from "./live-navigation";
+import { findLiveCombatCover, LIVE_COVER_CONTACT_MS, type LiveCoverPlan } from './live-combat-cover';
 import { createLiveSortie, LIVE_LOOT_COMMITMENT_MS, type LiveSortiePlan } from './live-autobattle';
 import { NPC_RESPAWN_MS, NPC_RESPAWN_QUIET_MS, NPC_RESPAWN_CLEAR_RADIUS, NPC_RESPAWN_CHECK_MS, NPC_SITE_REPLENISH_MS } from './live-spawning';
 import { advanceNpcRoutine, createNpcLife, createNpcLifePlans, investigateNpcNoise, rememberNpcContact, restoreNpcLife, NPC_HEARING_RADIUS, NPC_NOISE_INCIDENT_MS, NPC_NOISE_RESPONDERS, NPC_THINK_MS, type NpcLifeState } from './live-alife';
@@ -99,6 +100,11 @@ interface SquadWork {
 }
 interface MapEvent extends LiveEvent { mapId: LiveMapId; point?: LivePoint }
 interface NoiseIncident { id: string; mapId: LiveMapId; point: LivePoint; until: number; responders: number }
+interface CombatCover {
+  targetId: string; observed: LivePoint; seenAt: number; rethinkAt: number;
+  plan: LiveCoverPlan | null; phase: 'seeking' | 'holding' | 'peeking' | 'returning';
+  holdUntil: number; fired: boolean; stance?: LiveEntity['combatStance'];
+}
 interface EconomyBinding { live_identity: string; owner_key: string; game_id: string }
 interface OutboxRow { id: string; identity: string; kind: "delivery" | "supply"; payload: string; message: string }
 const HEARTBEAT_MS = 15_000, RESPAWN_MS = 10_000, COOKIE_SECONDS = 30 * 24 * 60 * 60;
@@ -277,6 +283,8 @@ export function createLiveService(options: LiveOptions): LiveService {
   migrateExpandedLiveCoordinates(db, maps.get(DEFAULT_MAP)!);
   invalidateLiveGeometryRoutes(db, maps.get(DEFAULT_MAP)!.version);
   const players = new Map<string, Participant>(), scavs = new Map<string, Scav>(), drops = new Map<string, Drop>();
+  // Short-lived tactical observations never survive a restart or reveal enemy routes.
+  const combatCover = new Map<string, CombatCover>();
   const bossArenas = new Map(getLiveBossArenas(maps.get(DEFAULT_MAP)!).map(arena => [arena.bossId, arena]));
   const lifePlans = new Map(LIVE_MAPS.map(map => [map.id, createNpcLifePlans(map, point => walkable(map.id, point), (a, b) => navigation.get(map.id)!.hasLineOfSight(a, b),
     point => [...bossArenas.values()].some(arena => point.x >= arena.area.x && point.y >= arena.area.y && point.x < arena.area.x + arena.area.width && point.y < arena.area.y + arena.area.height))]));
@@ -328,12 +336,14 @@ export function createLiveService(options: LiveOptions): LiveService {
   const lootKey = (mapId: LiveMapId, point: LivePoint, containerId?: string): string => containerId ? `container:${containerId}` : `${mapId}:${point.x}:${point.y}`;
   const freshPath = (): PathCache => ({ path: [], pathGoal: null, replanAt: 0 });
   const startSortie = (player: Participant, routeId?: string): void => {
+    combatCover.delete(player.id);
     const bossPois = [...bossArenas.values()].sort((a, b) => Number(getBoss(b.bossId)!.districtId === player.districtId) - Number(getBoss(a.bossId)!.districtId === player.districtId)
       || distance(player, a.home) - distance(player, b.home)).map(arena => arena.poiId);
     Object.assign(player, createLiveSortie(maps.get(player.mapId)!, player.districtId, player.purpose, now(), routeId, bossPois));
     player.patrol = false; player.destination = null; player.targetId = null; player.searching = null; Object.assign(player, freshPath());
   };
   const pauseSortie = (player: Participant, reason = 'Ручное управление'): void => {
+    combatCover.delete(player.id);
     if (!player.automation || player.automation.stage === 'complete' || player.automation.stage === 'downed') return;
     if (player.sortie) delete player.sortie.lootCommitment;
     Object.assign(player.automation, { enabled: false, stage: 'paused', goal: 'Автобой приостановлен', reason, target: null, targetId: null });
@@ -385,7 +395,7 @@ export function createLiveService(options: LiveOptions): LiveService {
     if (wasAlive && player.health <= 0) down(player);
     return player;
   };
-  const event = (mapId: LiveMapId, kind: LiveEvent["kind"], text: string, actorId?: string, targetId?: string, shot?: Pick<LiveEvent, "from" | "to" | "damage">): void => {
+  const event = (mapId: LiveMapId, kind: LiveEvent["kind"], text: string, actorId?: string, targetId?: string, shot?: Pick<LiveEvent, "from" | "to" | "damage" | "impact">): void => {
     const actor = actorId ? [...players.values(), ...scavs.values()].find(entity => entity.id === actorId) : undefined;
     events.push({ mapId, id: randomUUID(), at: now(), kind, text, ...(actor ? { point: { x: actor.x, y: actor.y } } : {}), ...(actorId ? { actorId } : {}), ...(targetId ? { targetId } : {}), ...shot });
     // Each map keeps its own recent feed, even when another map has a busy battle.
@@ -465,6 +475,7 @@ export function createLiveService(options: LiveOptions): LiveService {
       ...(squad ? { npcSquad: { id: squad.id, leader: squadStates.get(squad.id)?.leaderId === entity.id } } : {}),
       bleeding: BODY_PARTS.some(part => entity.body.parts[part].bleeding !== "none"), limping: injuryEffects(entity.body, now()).movement < 1,
       moveIntervalMs: liveMovementInterval(entity.kind, injuryEffects(entity.body, now()).movement),
+      ...(entity.health > 0 && combatCover.get(entity.id)?.stance ? { combatStance: combatCover.get(entity.id)!.stance } : {}),
       ...(entity.aim ? { aimUntil: entity.aim.endsAt, aimTargetId: entity.aim.targetId } : {}) };
   };
   const durableWorld = () => ({ version: WORLD_VERSION, geometryVersion: maps.get(DEFAULT_MAP)!.version, startedAt,
@@ -857,6 +868,7 @@ export function createLiveService(options: LiveOptions): LiveService {
     entity.path.shift(); return step;
   };
   const down = (target: Participant | Scav, attacker?: Participant | Scav, defeatedAt = now()): void => {
+    combatCover.delete(target.id);
     if (!isParticipant(target) && target.bossId) {
       if (target.bossDeathSettled) return;
       const definition = getBoss(target.bossId)!;
@@ -964,7 +976,7 @@ export function createLiveService(options: LiveOptions): LiveService {
     if (result.damage > 0 && target.bossId && !isParticipant(target) && isParticipant(attacker)) target.bossLastHit = { identity: attacker.identity, playerId: attacker.id, at: now() };
     target.health = isAlive(target.body) ? healthPercent(target.body) : 0;
     const wound = target.body.parts[part];
-    event(attacker.mapId, "combat", `${attacker.name} → ${target.name}: ${BODY_PART_LABELS[part]}, −${Math.round(result.damage)} HP${result.absorbed > 0 ? `; броня остановила ${Math.round(result.absorbed)}` : ""}${wound.bleeding !== "none" ? `; ${wound.bleeding === "heavy" ? "тяжёлое" : "лёгкое"} кровотечение` : ""}${wound.fracture ? "; перелом" : ""}${wound.hp <= 0 ? "; зона выбита" : ""}.`, attacker.id, target.id, { from: { x: attacker.x, y: attacker.y }, to: { x: target.x, y: target.y }, damage: result.damage });
+    event(attacker.mapId, "combat", `${attacker.name} → ${target.name}: ${BODY_PART_LABELS[part]}, −${Math.round(result.damage)} HP${result.absorbed > 0 ? `; броня остановила ${Math.round(result.absorbed)}` : ""}${wound.bleeding !== "none" ? `; ${wound.bleeding === "heavy" ? "тяжёлое" : "лёгкое"} кровотечение` : ""}${wound.fracture ? "; перелом" : ""}${wound.hp <= 0 ? "; зона выбита" : ""}.`, attacker.id, target.id, { from: { x: attacker.x, y: attacker.y }, to: { x: target.x, y: target.y }, damage: result.damage, impact: result.absorbed > 0 ? 'armor' : 'body' });
     hearShot(attacker, target);
     if (target.health <= 0) down(target, attacker);
   };
@@ -990,6 +1002,90 @@ export function createLiveService(options: LiveOptions): LiveService {
     } else {
       attacker.nextAttack = now() + Math.ceil((isParticipant(attacker) && attacker.loadout ? attacker.loadout.attackMs : 900) / slowdown); shot(attacker, target, randomPart());
     }
+  };
+  /** Returns true while a local cover manoeuvre owns this tick. Every shot still
+   * goes through attackTarget; neither the hidden position nor a pose grants damage. */
+  const takeCombatCover = (entity: Participant | Scav, visibleTarget?: Participant | Scav): boolean => {
+    const time = now(), nav = navigation.get(entity.mapId)!;
+    let cover = combatCover.get(entity.id);
+    if (!visibleTarget && cover) {
+      const known = findTarget(cover.targetId);
+      if (known && known.health > 0 && known.mapId === entity.mapId && known.safeUntil <= time && (!isParticipant(known) || exposed(known))
+        && distance(entity, known) <= (isParticipant(entity) ? VISION_RADIUS : perceptionOf(entity))
+        && (isParticipant(entity) || insidePursuit(entity, known)) && lineOfSight(entity.mapId, entity, known)) visibleTarget = known;
+    }
+    if (visibleTarget && distance(entity, visibleTarget) > rangeOf(entity)) { combatCover.delete(entity.id); return false; }
+    if (cover && (visibleTarget && cover.targetId !== visibleTarget.id || !visibleTarget && time - cover.seenAt > LIVE_COVER_CONTACT_MS)) {
+      combatCover.delete(entity.id); cover = undefined;
+    }
+    if (!cover && !visibleTarget) return false;
+    if (!cover) {
+      cover = { targetId: visibleTarget!.id, observed: { x: visibleTarget!.x, y: visibleTarget!.y }, seenAt: time, rethinkAt: 0,
+        plan: null, phase: 'seeking', holdUntil: 0, fired: false };
+      combatCover.set(entity.id, cover);
+    }
+    if (visibleTarget) { cover.observed = { x: visibleTarget.x, y: visibleTarget.y }; cover.seenAt = time; }
+    const abandon = (): false => { cover!.plan = null; cover!.stance = undefined; cover!.rethinkAt = time + 1500; return false; };
+    if (cover.plan && visibleTarget && (nav.hasLineOfSight(cover.plan.covered, cover.observed)
+      || !nav.hasLineOfSight(cover.plan.peek, cover.observed) || distance(cover.plan.peek, cover.observed) > rangeOf(entity))) abandon();
+    if (!cover.plan) {
+      if (!visibleTarget || cover.rethinkAt > time || entity.aim) return false;
+      cover.plan = findLiveCombatCover(entity, cover.observed, rangeOf(entity), {
+        clear: point => clear(entity.mapId, point, entity.id), hasLineOfSight: nav.hasLineOfSight,
+        permitted: point => isParticipant(entity) || insidePursuit(entity, point),
+      });
+      cover.rethinkAt = time + 1500;
+      if (!cover.plan) return false;
+      cover.phase = 'seeking'; cover.fired = false;
+      Object.assign(entity, freshPath());
+    }
+    if (isParticipant(entity)) { entity.destination = null; entity.searching = null; cancelTreatment(entity); }
+    entity.action = 'combat';
+    const plan = cover.plan, at = (point: LivePoint) => point.x === entity.x && point.y === entity.y;
+    const hold = (): void => {
+      cover!.phase = 'holding'; cover!.stance = 'covered'; cover!.fired = false;
+      // Slightly different pauses keep opposing fighters from peeking in lockstep.
+      const stagger = [...entity.id].reduce((sum, letter) => (sum + letter.charCodeAt(0)) % 5, 0) * 100;
+      cover!.holdUntil = time + 650 + stagger;
+    };
+    const move = (point: LivePoint): boolean => {
+      if (entity.nextMove > time) return true;
+      if (Math.abs(entity.x - point.x) + Math.abs(entity.y - point.y) !== 1 || !clear(entity.mapId, point, entity.id)) return abandon();
+      entity.x = point.x; entity.y = point.y; entity.action = 'moving'; entity.aim = null;
+      entity.nextMove = time + liveMovementInterval(entity.kind, injuryEffects(entity.body, time).movement);
+      return true;
+    };
+    if (cover.phase === 'seeking') {
+      cover.stance = 'seeking-cover'; entity.aim = null;
+      if (at(plan.covered)) hold();
+      else {
+        const step = plan.route[0];
+        if (!step || !move(step)) return abandon();
+        if (at(step)) plan.route.shift();
+        if (at(plan.covered)) hold();
+      }
+      return true;
+    }
+    if (cover.phase === 'holding') {
+      cover.stance = 'covered'; entity.aim = null;
+      if (!at(plan.covered)) return abandon();
+      if (time < cover.holdUntil || time < entity.nextAttack) return true;
+      cover.phase = 'peeking';
+    }
+    if (cover.phase === 'peeking') {
+      cover.stance = 'peeking';
+      if (!at(plan.peek)) { if (!move(plan.peek)) return abandon(); return true; }
+      if (entity.aim) return true;
+      if (!cover.fired && visibleTarget && entity.nextAttack <= time) {
+        attack(entity, visibleTarget); cover.fired = true; return true;
+      }
+      if (!cover.fired && visibleTarget) return true;
+      cover.phase = 'returning';
+    }
+    cover.stance = 'seeking-cover';
+    if (!at(plan.covered) && !move(plan.covered)) return abandon();
+    if (at(plan.covered)) hold();
+    return true;
   };
   const finishSearch = (player: Participant): void => {
     if (!player.searching) return;
@@ -1063,6 +1159,7 @@ export function createLiveService(options: LiveOptions): LiveService {
       : amount ? `${player.name} сохранил груз: ${amount}.` : `${player.name} пополнил боекомплект на выходе.`, player.id);
   };
   const returnSortie = (player: Participant, reason: string): void => {
+    combatCover.delete(player.id);
     if (!player.automation || !player.sortie) startSortie(player);
     player.sortie!.recalling = true;
     player.sortie!.extractTarget = null; player.sortie!.blockedExtractKeys = []; player.sortie!.blockedAt = 0;
@@ -1111,6 +1208,11 @@ export function createLiveService(options: LiveOptions): LiveService {
         || (player.purpose === 'boss' ? Number(Boolean(b.bossId)) - Number(Boolean(a.bossId)) : 0)
         || distance(player, a) - distance(player, b));
     const inRange = hostiles.find(target => distance(player, target) <= rangeOf(player));
+    if (!plan.recalling && player.ammo > 0 && takeCombatCover(player, inRange)) {
+      delete plan.lootCommitment;
+      status('combat', combatCover.get(player.id)?.stance === 'covered' ? 'За укрытием' : combatCover.get(player.id)?.stance === 'peeking' ? 'Огонь из укрытия' : 'Занимаю укрытие', inRange ?? null, inRange?.id ?? null);
+      return true;
+    }
     if (inRange && player.ammo > 0 && !(plan.recalling && player.health < 40)) {
       delete plan.lootCommitment;
       status('combat', `Бой: ${inRange.name}`, inRange, inRange.id);
@@ -1275,16 +1377,19 @@ export function createLiveService(options: LiveOptions): LiveService {
   };
   const expire = (): void => {
     for (const player of players.values()) if (player.online && player.leaveAt > 0 && player.leaveAt <= now()) {
+      combatCover.delete(player.id);
       player.online = false; player.searching = null; Object.assign(player, freshPath()); player.leaveAt = 0; player.destination = null; player.patrol = false; player.aim = null; cancelTreatment(player);
       player.action = player.health > 0 ? "idle" : "downed"; player.targetId = null; player.disconnectAt = 0;
       event(player.mapId, "leave", `${player.name} покинул район. Ранения сохранены.`, player.id);
     }
     for (const player of players.values()) if (player.online && now() - player.heartbeat >= HEARTBEAT_MS) {
+      combatCover.delete(player.id);
       player.online = false; player.searching = null; Object.assign(player, freshPath()); player.destination = null; player.patrol = false; player.aim = null; cancelTreatment(player); player.graceUntil = now() + DISCONNECT_GRACE_MS; player.action = player.health > 0 ? "idle" : "downed";
       player.targetId = null; player.disconnectAt = 0;
       event(player.mapId, "leave", `${player.name} потерял связь; боец остаётся в мире ещё 30 секунд.`, player.id);
     }
     for (const [identity, player] of players) if (!player.online && now() - player.heartbeat >= 60_000) {
+      combatCover.delete(player.id);
       savePlayer.run(identity, JSON.stringify(durable(player))); players.delete(identity);
     }
   };
@@ -1585,7 +1690,7 @@ export function createLiveService(options: LiveOptions): LiveService {
       if (!scav.bossId) {
         const state = scav.alife ??= createNpcLife(scav, now()), time = now();
         const order = squadOrders.get(scav.id), garrison = garrisonOrders.get(scav.id), withdrawing = Boolean(garrison?.withdrawing || order && (order.decision.retreating || order.decision.phase === 'return' || ['haul', 'withdraw'].includes(order.directive.activity)));
-        if (withdrawing) scav.aim = null;
+        if (withdrawing) { scav.aim = null; combatCover.delete(scav.id); }
         let target: Participant | Scav | undefined;
         if (state.nextThinkAt <= time) {
           state.nextThinkAt = time + NPC_THINK_MS;
@@ -1602,6 +1707,7 @@ export function createLiveService(options: LiveOptions): LiveService {
           else state.targetId = null;
         }
         scav.action = scav.aim ? 'combat' : 'idle';
+        if (!withdrawing && takeCombatCover(scav, target)) continue;
         if (!withdrawing && target && distance(scav, target) <= rangeOf(scav) && lineOfSight(scav.mapId, scav, target)) {
           if (scav.nextAttack <= time && !scav.aim) attack(scav, target);
           scav.action = 'combat';
@@ -1954,6 +2060,7 @@ export function createLiveService(options: LiveOptions): LiveService {
       player.heartbeat = now();
       if (path === "/api/live/leave") {
         if (!exactKeys(body, [])) throw new LiveError(400, "invalid_request");
+        combatCover.delete(player.id);
         player.searching = null; Object.assign(player, freshPath());
         cancelTreatment(player); player.aim = null; player.targetId = null;
         if (player.automation?.stage !== 'complete' && player.health > 0 && (player.dangerUntil > now() || !isStable(player.body))) {

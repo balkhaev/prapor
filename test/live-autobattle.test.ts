@@ -8,6 +8,8 @@ import { getLiveMap, hasLiveLineOfSight, isLiveWalkable } from '../src/game/live
 import { createHealth, createMedicalInventory, healthPercent, type HealthState } from '../src/game/health';
 import type { LiveCommand, LiveSnapshot } from '../src/game/live';
 import { LiveApiError, readLiveSnapshot } from '../src/live-client';
+import { createLiveNavigation } from '../server/live-navigation';
+import { findLiveCombatCover } from '../server/live-combat-cover';
 
 const ORIGIN = 'https://game.delopusk.ru';
 const world = getLiveMap('perimeter');
@@ -63,6 +65,101 @@ beforeEach(async () => {
 afterEach(async () => { service.close(); await rm(folder, { recursive: true, force: true }); });
 
 describe('authoritative automatic sorties', () => {
+  test('automatic fighters physically take cover, peek to fire, and release the position on recall', async () => {
+    const nav = createLiveNavigation(world);
+    const arena = world.obstacles.filter(obstacle => obstacle.kind !== 'water').map(obstacle => ({
+      start: { x: obstacle.x - 1, y: obstacle.y - 1 }, threat: { x: obstacle.x + 4, y: obstacle.y - 1 },
+    })).find(({ start, threat }) => nav.walkable(start) && nav.walkable(threat) && nav.hasLineOfSight(start, threat)
+      && findLiveCombatCover(start, threat, 7, { clear: nav.walkable, hasLineOfSight: nav.hasLineOfSight }));
+    expect(arena).toBeDefined();
+    const fighter = await enter(), rival = await enter();
+    place(fighter.session, { ...arena!.start, purpose: 'pvp' }); place(rival.session, arena!.threat);
+    await enter(fighter.session); await enter(rival.session);
+    await act(fighter.session, { type: 'automation', enabled: true });
+    let previous = arena!.start, covered = false, peeked = false, shots = 0;
+    const seenShots = new Set<string>();
+    for (let step = 0; step < 32; step++) {
+      time += 250; service.tick();
+      const snapshot = await state(fighter.session); await state(rival.session);
+      const actor = snapshot.entities.find(entity => entity.id === fighter.session.id)!;
+      expect(Math.abs(actor.x - previous.x) + Math.abs(actor.y - previous.y)).toBeLessThanOrEqual(1);
+      expect(nav.walkable(actor)).toBe(true); previous = actor;
+      if (actor.combatStance === 'covered') {
+        expect(nav.hasLineOfSight(actor, arena!.threat)).toBe(false);
+        expect(snapshot.self.automation?.target).toBeNull();
+        if (!covered) {
+          expect((await call('action', fighter.session, { type: 'travel', mapId: 'perimeter' })).status).toBe(409);
+          expect((await state(fighter.session)).entities.find(entity => entity.id === actor.id)?.combatStance).toBe('covered');
+        }
+        covered = true;
+      }
+      if (actor.combatStance === 'peeking') peeked = true;
+      for (const event of snapshot.events.filter(event => event.actorId === actor.id && event.from && event.to && !seenShots.has(event.id))) {
+        seenShots.add(event.id); shots++;
+        expect(nav.hasLineOfSight(event.from!, event.to!)).toBe(true);
+        expect(event.impact).toBe('armor');
+      }
+    }
+    expect(covered).toBe(true); expect(peeked).toBe(true); expect(shots).toBeGreaterThan(0);
+    const recalled = await act(fighter.session, { type: 'recall' });
+    expect(recalled.entities.find(entity => entity.id === fighter.session.id)!.combatStance).toBeUndefined();
+    expect(recalled.self.automation?.stage).toBe('extract');
+  });
+
+  test('an ordinary NPC uses solid cover, keeps its aim cadence, and only damages along clear rays', async () => {
+    const nav = createLiveNavigation(world);
+    const arena = world.obstacles.filter(obstacle => obstacle.kind !== 'water').map(obstacle => ({
+      start: { x: obstacle.x - 1, y: obstacle.y - 1 }, threat: { x: obstacle.x + 4, y: obstacle.y - 1 },
+    })).find(({ start, threat }) => nav.walkable(start) && nav.walkable(threat) && nav.hasLineOfSight(start, threat)
+      && findLiveCombatCover(start, threat, 7, { clear: nav.walkable, hasLineOfSight: nav.hasLineOfSight }));
+    expect(arena).toBeDefined();
+    const observer = await enter(); place(observer.session, arena!.threat);
+    editStorage(db => {
+      const stored = JSON.parse(db.query<{ state: string }, []>('SELECT state FROM live_world WHERE id=1').get()!.state);
+      Object.assign(stored.scavs[0], arena!.start, { home: arena!.start, route: [arena!.start], role: 'marksman', nextMove: 0, nextAttack: 0, alife: undefined });
+      db.query('UPDATE live_world SET state=? WHERE id=1').run(JSON.stringify(stored));
+    });
+    await enter(observer.session);
+    const saved = new Database(dbPath, { readonly: true });
+    let covered = false, aimed = false, shots = 0;
+    const seenShots = new Set<string>();
+    try {
+      for (let step = 0; step < 36; step++) {
+        time += 250; service.tick(); const snapshot = await state(observer.session);
+        const actor = snapshot.entities.find(entity => entity.id === 'distant-scav');
+        aimed ||= Boolean(actor?.aimUntil && actor.combatStance === 'peeking');
+        if (step % 4 === 3) {
+          const npc = JSON.parse(saved.query<{ state: string }, []>('SELECT state FROM live_world WHERE id=1').get()!.state).scavs.find((npc: { id: string }) => npc.id === 'distant-scav');
+          if (!nav.hasLineOfSight(npc, arena!.threat)) covered = true;
+        }
+        for (const event of snapshot.events.filter(event => event.actorId === 'distant-scav' && event.from && event.to && !seenShots.has(event.id))) {
+          seenShots.add(event.id); shots++; expect(nav.hasLineOfSight(event.from!, event.to!)).toBe(true);
+        }
+      }
+    } finally { saved.close(); }
+    expect(covered).toBe(true); expect(aimed).toBe(true); expect(shots).toBeGreaterThan(0);
+    expect(service.healthy()).toBe(true);
+  });
+
+  test('an unseen contact expires instead of holding an automatic sortie at an empty corner forever', async () => {
+    const nav = createLiveNavigation(world);
+    const arena = world.obstacles.filter(obstacle => obstacle.kind !== 'water').map(obstacle => ({
+      start: { x: obstacle.x - 1, y: obstacle.y - 1 }, threat: { x: obstacle.x + 4, y: obstacle.y - 1 },
+    })).find(({ start, threat }) => nav.walkable(start) && nav.walkable(threat) && nav.hasLineOfSight(start, threat)
+      && findLiveCombatCover(start, threat, 7, { clear: nav.walkable, hasLineOfSight: nav.hasLineOfSight }));
+    const fighter = await enter(), rival = await enter();
+    place(fighter.session, { ...arena!.start, purpose: 'pvp' }); place(rival.session, arena!.threat);
+    await enter(fighter.session); await enter(rival.session); await act(fighter.session, { type: 'automation', enabled: true });
+    await advance(250, [fighter.session, rival.session]);
+    expect((await state(fighter.session)).self.automation?.stage).toBe('combat');
+    expect((await call('leave', rival.session, {})).status).toBe(200);
+    await advance(7000, [fighter.session]);
+    const resumed = await state(fighter.session);
+    expect(resumed.self.automation?.enabled).toBe(true);
+    expect(resumed.self.automation?.stage).not.toBe('combat');
+    expect(resumed.entities.find(entity => entity.id === fighter.session.id)?.combatStance).toBeUndefined();
+  });
+
   test('deploy chooses the authored purpose route, moves one server step, and pause/resume survives reconnect and restart', async () => {
     const fighter = await enter(undefined, { intent: 'deploy', districtId: 'customs', purpose: 'loot' });
     expect(fighter.state.self.automation?.routeId).toBe('route-customs-loot');

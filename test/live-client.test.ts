@@ -19,6 +19,31 @@ const fixture = (): LiveSnapshot => {
 }; };
 
 describe('live wire parser', () => {
+  test('only observed cover posture and confirmed hit surface enter public snapshots', () => {
+    const packet = fixture();
+    for (const combatStance of ['seeking-cover', 'covered', 'peeking'] as const) {
+      packet.entities[1]!.combatStance = combatStance;
+      Object.assign(packet.entities[1]!, { coverPlan: { x: 99, y: 88, targetId: 'unseen' } });
+      const parsed = readLiveSnapshot(packet);
+      expect(parsed.entities[1]!.combatStance).toBe(combatStance);
+      expect(parsed.entities[1]).not.toHaveProperty('coverPlan');
+      const { world: _world, ...cached } = packet;
+      expect(readLiveSnapshot(cached, packet.world).entities[1]!.combatStance).toBe(combatStance);
+    }
+    for (const impact of ['armor', 'body'] as const) {
+      packet.events = [{ id: 'shot', at: 1900, kind: 'combat', text: 'Выстрел', actorId: 'player-1', targetId: 'scav-1', from: { x: 2, y: 2 }, to: { x: 4, y: 6 }, damage: 8, impact }];
+      expect(readLiveSnapshot(packet).events[0]!.impact).toBe(impact);
+    }
+    for (const impact of ['metal', {}, null, 1]) {
+      Object.assign(packet.events[0]!, { impact });
+      expect(() => readLiveSnapshot(packet)).toThrow(LiveApiError);
+    }
+    packet.events = [];
+    for (const combatStance of ['hidden', {}, null, 1]) {
+      Object.assign(packet.entities[1]!, { combatStance });
+      expect(() => readLiveSnapshot(packet)).toThrow(LiveApiError);
+    }
+  });
   test('keeps only bounded observed NPC activity and accepts legacy snapshots', () => {
     const packet = fixture();
     expect(readLiveSnapshot(packet).entities[1]!.npcActivity).toBeUndefined();

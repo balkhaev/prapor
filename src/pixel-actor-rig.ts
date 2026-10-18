@@ -36,7 +36,8 @@ function foot(phase: number, stride: number, lift: number, stance: number): Foot
  * feet remain independent of breathing, shoulder recoil and upper-body sway. */
 export function pixelActorRig(animation: PixelActorFrame, limping = false): PixelActorRig {
   const frame = pixelActorFrameIndex(animation), mode = animation.mode, bearing = pixelBearing(animation.facing), lateral = { x: -bearing.y * 2, y: bearing.x * .5 };
-  const { move, aim, walkFrame } = pixelActorPresentation(animation);
+  const { move, aim, walkFrame, crouch = 0 } = pixelActorPresentation(animation);
+  const coverDrop = crouch * 28;
   const angle = frame / PIXEL_ACTOR_FRAMES[mode] * Math.PI * 2, walkPhase = walkFrame / PIXEL_ACTOR_FRAMES.walk, walkAngle = walkPhase * Math.PI * 2;
   let left: Foot = { stride: -2, lift: 0, heelLift: 0, toeLift: 0, contact: true }, right: Foot = { stride: 3, lift: 0, heelLift: 0, toeLift: 0, contact: true };
   if (move) {
@@ -57,7 +58,7 @@ export function pixelActorRig(animation: PixelActorFrame, limping = false): Pixe
   const loadAngle = walkAngle - Math.PI * .1, weight = Math.sin(loadAngle);
   const gaitBob = (1 - Math.cos(loadAngle * 2)) * (limping ? .8 : 1.5) - (limping ? (1 + weight) * .4 : 0);
   const gaitHipSway = -weight * (limping ? 1.5 : 2.7) + (limping ? .8 : 0), gaitLean = 2.6 + Math.sin(loadAngle * 2) * .45;
-  const bob = gaitBob * move * (1 - aim * .55) + mix(idleBreath, aimBreath, aim) * (1 - move) - hit;
+  const bob = gaitBob * move * (1 - aim * .55) + mix(idleBreath, aimBreath, aim) * (1 - move) - hit - coverDrop;
   const hipSway = mix(-hit * .4, gaitHipSway, move);
   const sway = mix(mode === 'idle' ? Math.cos(angle) * .65 : -hit, -gaitHipSway * .45, move) * (1 - aim * .55);
   const lowLean = mix(-hit * 1.6, gaitLean, move), lean = mix(lowLean, 3, aim) - absorbed * .6;
@@ -70,9 +71,9 @@ export function pixelActorRig(animation: PixelActorFrame, limping = false): Pixe
   // absorb the subtle chest movement instead of dragging the sights around.
   const gripSide = 15 + sway * .6 * (1 - aim) - recoil * .15;
   const gripForward = mix(17 + lowLean + Math.cos(walkAngle) * .8 * move, 20, aim) - recoil * .55;
-  const gripZ = mix(mode === 'hit' ? 81 - hit : 82 + bob * .7, 118, aim) + recoil * .25;
+  const gripZ = mix(mode === 'hit' ? 81 - hit : 82 + (bob + coverDrop) * .7, 118, aim) + recoil * .25 - coverDrop;
   const lowerBob = gaitBob * move - hit;
-  const hipForward = (gaitLean * .35 + Math.sin(loadAngle * 2) * .35) * move, hipZ = 57 + lowerBob * .45;
+  const hipForward = (gaitLean * .35 + Math.sin(loadAngle * 2) * .35) * move, hipZ = 57 + lowerBob * .45 - coverDrop;
   const hipTwist = Math.cos(walkAngle) * (limping ? 1 : 1.8) * move, hipDrop = weight * (limping ? .5 : 1) * move;
   const shoulderRoll = -weight * .7 * move * (1 - aim * .7) + (mode === 'aim' ? Math.cos(angle) * 1.25 * aim * (1 - move) : 0);
   const shoulderTwist = Math.cos(walkAngle) * 2.3 * move * (1 - aim * .75);
@@ -86,14 +87,17 @@ export function pixelActorRig(animation: PixelActorFrame, limping = false): Pixe
     // striding leg. Keep its knee almost over the ankle instead of folding
     // the longer walking links into a permanent crouch.
     const standingForward = hipForward + value.stride * .5 + 4 + aim * .5, standingZ = 33 + lowerBob * .4;
-    if (!move) return p(side + hipSway * .5, standingForward, standingZ);
+    const bendWeight = Math.max(move, crouch);
+    if (!bendWeight) return p(side + hipSway * .5, standingForward, standingZ);
     // Two fixed-length links in the forward/height plane. The forward solution
     // bends a swinging knee instead of stretching or shrinking the leg.
     const at = hip(side), thigh = 29, shin = 28, forward = value.stride - at.forward, vertical = ankleHeight(value) - at.z;
     const distance = Math.max(.001, Math.min(thigh + shin - .01, Math.hypot(forward, vertical)));
     const directionLength = Math.max(.001, Math.hypot(forward, vertical)), dx = forward / directionLength, dz = vertical / directionLength;
     const along = (thigh * thigh - shin * shin + distance * distance) / (2 * distance), bend = Math.sqrt(Math.max(0, thigh * thigh - along * along));
-    return p(side + hipSway * .5, mix(standingForward, at.forward + dx * along - dz * bend, move), mix(standingZ, at.z + dz * along + dx * bend, move));
+    // Cover lowers the pelvis while keeping both boots anchored. Its knee bend
+    // shares the walking chain, so settling into cover cannot slide the feet.
+    return p(side + hipSway * .5, mix(standingForward, at.forward + dx * along - dz * bend, bendWeight), mix(standingZ, at.z + dz * along + dx * bend, bendWeight));
   };
   return {
     anchor: { ...PIXEL_ACTOR_ANCHOR }, grip: p(gripSide, gripForward, gripZ),

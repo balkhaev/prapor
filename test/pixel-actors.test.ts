@@ -288,6 +288,32 @@ test('the support glove follows an installed foregrip rather than the factory ha
   art.clear();
 });
 
+test('covered sprites visibly duck with registered weapon sockets and distinct bounded cache entries', () => {
+  mockCanvases(); const art = new PixelActorArt();
+  for (const facing of PIXEL_FACINGS) {
+    const animation: PixelActorFrame = { mode: 'aim', frame: 0, facing, pose: { walkFrame: 0, move: 0, aim: 1 } };
+    const standing = surface(); paintPixelActor(standing.context, scav, animation, 'akm');
+    const standingSprite = art.get(scav, animation, 'akm');
+    const standingTop = Math.floor(standing.pixels.findIndex(Boolean) / W);
+    const silhouettes = new Set<number>();
+    for (const crouch of [.375, .625, 1]) {
+      const pose: PixelActorFrame = { ...animation, pose: { ...animation.pose!, crouch } }, painted = surface();
+      const metadata = paintPixelActor(painted.context, scav, pose, 'akm'), rig = pixelActorRig(pose);
+      const sockets = pixelWeaponAnchors('akm', rig.grip, facing, rig.weaponKick);
+      expect(painted.valid).toBe(true); expect(hasPadding(painted.pixels)).toBe(true);
+      expect(Math.floor(painted.pixels.findIndex(Boolean) / W)).toBeGreaterThan(standingTop + 8);
+      expect(metadata).toEqual({ muzzle: sockets.muzzle, ejection: sockets.ejection });
+      silhouettes.add(digest(painted.pixels));
+      const sprite = art.get(scav, pose, 'akm');
+      expect(sprite).not.toBe(standingSprite); expect(art.get(scav, pose, 'akm')).toBe(sprite);
+      expect(sprite.muzzle).toEqual({ x: sockets.muzzle.x - PIXEL_ACTOR_ANCHOR.x + sprite.anchor.x, y: sockets.muzzle.y - PIXEL_ACTOR_ANCHOR.y + sprite.anchor.y });
+      expect(art.retainedBytes).toBeLessThanOrEqual(PIXEL_ACTOR_CACHE_BYTES);
+    }
+    expect(silhouettes.size).toBe(3);
+  }
+  art.clear();
+});
+
 test('a changing arsenal stays within24MiB and evicts old full-build frames without invalidating returned socket coordinates', () => {
   mockCanvases(); const art = new PixelActorArt(), animation = { mode: 'aim' as const, frame: 0, facing: 'se' as const };
   const first = art.get(scav, animation, createWeaponShowcaseBuild('awm', 'field')), firstAnchor = { ...first.anchor }, firstMuzzle = { ...first.muzzle! };
