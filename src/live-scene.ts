@@ -40,6 +40,8 @@ import { buildStreetTerrainDetails, paintStreetTerrainDetail, type StreetTerrain
 import { buildRoadSurfaceArt, paintRoadSurfaceArt, type RoadSurfaceArt } from './live-road-surface';
 import { paintActorGroundShadows } from './live-actor-ground-shadows';
 import { CameraGesture, panIsometricCamera } from './camera-gesture';
+import { paintGunfire } from './pixel-combat-effects';
+import { BuildingActorOcclusion, buildingActorWindow, type BuildingActorWindow } from './live-building-occlusion';
 
 type Motion = PixelMotion;
 type LabelBox = { x: number; y: number; width: number; height: number };
@@ -88,8 +90,8 @@ export class LiveScene {
   private interactionEvents = new AbortController();
   private combatAnimation = new PixelCombatAnimation();
   private snapshotAt = 0;
-  private weaponMounts = new Map<string, { point: LivePoint; muzzle: LivePoint; ejection: LivePoint; offset: LivePoint; ejectOffset: LivePoint }>();
-  private shotRigs = new Map<string, { point: LivePoint; target: LivePoint; offset: LivePoint; ejectOffset: LivePoint }>();
+  private weaponMounts = new Map<string, { point: LivePoint; muzzle: LivePoint; ejection: LivePoint; offset: LivePoint; ejectOffset: LivePoint; bodyHeight: number; suppressed: boolean }>();
+  private shotRigs = new Map<string, { point: LivePoint; target: LivePoint; offset: LivePoint; ejectOffset: LivePoint; bodyHeight: number; suppressed: boolean }>();
   private terrain: LiveTerrain[] = [];
   private overviewTerrain: HTMLCanvasElement | null = null;
   private minimapTerrain: HTMLCanvasElement | null = null;
@@ -115,6 +117,8 @@ export class LiveScene {
   private buildingArt = new PixelBuildingArt();
   private buildingDetail: PixelDetail = 64;
   private cutawayBuildings = new Set<string>();
+  private buildingOcclusion = new BuildingActorOcclusion();
+  private buildingActorWindows: BuildingActorWindow[] = [];
   private surfaceMasks: SurfaceMasks = { road: new Uint8Array(), indoor: new Uint8Array(), roadRuns: [] };
   private environmentAt = 0;
   private environmentSun = 0;
@@ -236,6 +240,7 @@ export class LiveScene {
     this.courtyardGround = new SceneryIndex<CourtyardGroundDetail>([]);
     this.groundShadows = new SceneryIndex<GroundShadowCaster>([]); this.roadSurface = null;
     this.buildingForObstacle.clear(); this.buildingWalls.clear(); this.cutawayBuildings.clear(); this.distantBuildings.clear();
+    this.buildingOcclusion.clear(); this.buildingActorWindows = [];
     this.propArt.clear(); this.buildingArt.clear(); this.obstacleArt.clear(); this.actorArt.clear(); this.containerArt.clear();
     this.clearWetGround(); this.lampProps = [];
   }
@@ -619,7 +624,11 @@ export class LiveScene {
       return;
     }
     const detail = this.buildingDetail;
-    this.renderer.sprite(this.buildingArt.get(building, cutaway, detail, this.buildingWalls.get(building.id)), this.project({ x, y }), this.tile / detail, this.width, this.height);
+    const sprite = this.buildingArt.get(building, cutaway, detail, this.buildingWalls.get(building.id)), anchor = this.project({ x, y });
+    const revealed = !cutaway && this.buildingOcclusion.paint(this.context, sprite,
+      pixelSpriteRect(sprite, anchor, this.tile / detail, this.renderer.deviceRatio), building.x + building.y + building.width + building.height - 1.1,
+      this.buildingActorWindows, this.width, this.height, this.renderer.deviceRatio);
+    if (!revealed) this.renderer.sprite(sprite, anchor, this.tile / detail, this.width, this.height);
     if (!cutaway) this.paintAtmosphere(this.project({ x, y }), plot => paintBuildingAtmosphere(building, this.environmentAt, plot, this.reducedMotion?.matches));
   }
   private buildingVisible(building: LiveCityBuilding): boolean {
@@ -755,10 +764,13 @@ export class LiveScene {
     // footprint. Keep the broad phase tall enough, then use exact sprite culling.
     const visible = distant ? [] : this.scenery.visible({ x: minX - 15, y: minY - 15, width: maxX - minX + 30, height: maxY - minY + 30 });
     const activity: LivePoint[] = [...snapshot.drops];
+    this.buildingActorWindows = [];
     for (const entity of snapshot.entities) {
       activity.push(entity);
       const motion = this.motions.get(entity.id);
-      if (motion) activity.push(this.interpolated(motion, now));
+      const point = motion ? this.interpolated(motion, now) : entity;
+      if (motion) activity.push(point);
+      if (!this.overview && this.tile >= 14) this.buildingActorWindows.push(buildingActorWindow(point, this.project(point), this.tile / (this.width < 480 ? 48 : 64)));
     }
     this.cutawayBuildings.clear();
     for (const item of visible) if (item.type === 'architecture' && buildingNeedsCutaway(item.building, activity)) this.cutawayBuildings.add(item.building.id);
@@ -1077,43 +1089,15 @@ export class LiveScene {
       let rig = this.shotRigs.get(event.id);
       if (!rig) {
         const targetBody = event.targetId ? this.weaponMounts.get(event.targetId) : undefined;
-        rig = { point: mount?.point ?? event.from, target: targetBody?.point ?? event.to, offset: mount?.offset ?? { x: 0, y: -27 }, ejectOffset: mount?.ejectOffset ?? { x: 0, y: -27 } };
+        rig = { point: mount?.point ?? event.from, target: targetBody?.point ?? event.to, offset: mount?.offset ?? { x: 0, y: -27 }, ejectOffset: mount?.ejectOffset ?? { x: 0, y: -27 }, bodyHeight: targetBody?.bodyHeight ?? 27, suppressed: mount?.suppressed ?? false };
         this.shotRigs.set(event.id, rig);
       }
-      const ground = this.project(small ? event.from : rig.point), target = this.project(small ? event.to : rig.target, small ? 3 : 27 * scale);
+      const ground = this.project(small ? event.from : rig.point), target = this.project(small ? event.to : rig.target, small ? 3 : (event.damage === 0 && !event.impact ? 0 : rig.bodyHeight * scale));
       const from = small ? this.project(event.from, 3) : { x: ground.x + rig.offset.x * scale, y: ground.y + rig.offset.y * scale };
-      const flash = mount && !small && age < 85 ? mount.muzzle : from;
+      const flash = mount && !small ? mount.muzzle : from;
       const eject = small ? from : { x: ground.x + rig.ejectOffset.x * scale, y: ground.y + rig.ejectOffset.y * scale };
-      const seed = [...event.id].reduce((value, char) => Math.imul(value, 31) + char.charCodeAt(0), 17) >>> 0;
+      paintGunfire(c, { id: event.id, age, from, muzzle: flash, to: target, eject, scale, small, reducedMotion: this.reducedMotion?.matches, suppressed: rig.suppressed, surface: event.impact ?? (event.damage! > 0 ? 'body' : 'ground') });
       c.save();
-      if (age < 115) {
-        const head = Math.min(1, .18 + age / 75), tail = Math.max(0, head - .36), dx = target.x - from.x, dy = target.y - from.y;
-        c.globalAlpha = Math.max(.15, 1 - age / 140); c.strokeStyle = event.actorId === this.snapshot?.selfId ? T.tracer : P.woodLight; c.lineWidth = small ? 1 : Math.max(1, scale * .9);
-        c.beginPath(); c.moveTo(Math.round(from.x + dx * tail), Math.round(from.y + dy * tail)); c.lineTo(Math.round(from.x + dx * head), Math.round(from.y + dy * head)); c.stroke();
-      }
-      if (!small && age < 85) {
-        const dx = target.x - from.x, dy = target.y - from.y, length = Math.hypot(dx, dy) || 1, size = Math.max(2, Math.round(scale * (age < 35 ? 5 : 3)));
-        const mx = Math.round(flash.x), my = Math.round(flash.y);
-        c.globalAlpha = 1; c.fillStyle = P.yellow; c.fillRect(mx - size, my - 1, size * 2 + 1, 3); c.fillRect(mx - 1, my - size, 3, size * 2 + 1);
-        c.fillStyle = T.flash; c.fillRect(mx - 1, my - 1, 3, 3);
-        c.fillStyle = P.cream; c.fillRect(Math.round(mx + dx / length * size * 1.5), Math.round(my + dy / length * size * 1.5), Math.max(1, Math.round(scale)), Math.max(1, Math.round(scale)));
-      }
-      if (!small && age < 620) {
-        const t = age / 480, side = seed % 2 ? 1 : -1, ex = Math.round(eject.x + side * (9 + seed % 5) * scale * t), ey = Math.round(eject.y - 12 * scale * t + 18 * scale * t * t);
-        c.globalAlpha = Math.min(1, (620 - age) / 140); c.fillStyle = P.woodLight; c.fillRect(ex, ey, Math.max(1, Math.round(2 * scale)), Math.max(1, Math.round(scale))); c.fillStyle = P.woodShade; c.fillRect(ex + Math.max(1, Math.round(scale)), ey + Math.max(1, Math.round(scale)), Math.max(1, Math.round(scale)), 1);
-      }
-      if (age >= 45 && age < 330) {
-        const t = (age - 45) / 285, reach = (small ? 3 : 7 * scale) * t;
-        c.globalAlpha = 1 - t; c.fillStyle = event.damage! > 0 ? P.sand : P.steelLight;
-        for (let spark = 0; spark < (small ? 2 : 5); spark++) {
-          const angle = ((seed >>> (spark * 3)) % 360 + spark * 71) * Math.PI / 180;
-          c.fillRect(Math.round(target.x + Math.cos(angle) * reach), Math.round(target.y + Math.sin(angle) * reach * .6), small ? 1 : Math.max(1, Math.round(scale * 1.5)), small ? 1 : Math.max(1, Math.round(scale)));
-        }
-      }
-      if (!small && age < 440) {
-        const t = age / 440; c.globalAlpha = (1 - t) * .28; c.fillStyle = P.white;
-        c.fillRect(Math.round(from.x + (seed % 5 - 2) * scale * t), Math.round(from.y - 11 * scale * t), Math.max(1, Math.round((2 + t * 3) * scale)), Math.max(1, Math.round((1 + t * 2) * scale)));
-      }
       if (!small && event.damage! > 0) { c.globalAlpha = Math.max(0, 1 - age / 850); this.label(`−${Math.round(event.damage!)}`, target.x, target.y - 15 - age / 55, T.injured, 12); }
       c.restore();
     }
@@ -1143,7 +1127,7 @@ export class LiveScene {
     this.renderer.sprite(sprite, p, actorScale, this.width, this.height);
     if (sprite.muzzle && sprite.ejection) {
       const muzzle = this.renderer.spritePoint(sprite, p, actorScale, sprite.muzzle), ejection = this.renderer.spritePoint(sprite, p, actorScale, sprite.ejection);
-      this.weaponMounts.set(entity.id, { point, muzzle, ejection, offset: { x: (muzzle.x - p.x) / zoom, y: (muzzle.y - p.y) / zoom }, ejectOffset: { x: (ejection.x - p.x) / zoom, y: (ejection.y - p.y) / zoom } });
+      this.weaponMounts.set(entity.id, { point, muzzle, ejection, offset: { x: (muzzle.x - p.x) / zoom, y: (muzzle.y - p.y) / zoom }, ejectOffset: { x: (ejection.x - p.x) / zoom, y: (ejection.y - p.y) / zoom }, bodyHeight: 27 - (animation.pose?.crouch ?? 0) * 9, suppressed: Boolean(entity.visualLoadout?.modules?.muzzle?.includes('suppressor') || ['asval', 'vss'].includes(typeof weapon === 'string' ? weapon : weapon.weaponId)) });
     }
     // A distant body must remain the subject. Repeated name/loadout stacks can
     // be wider than the entire street; selection restores its identity while
@@ -1162,6 +1146,7 @@ export class LiveScene {
       c.fillStyle = T.panel; c.fillRect(p.x - width / 2, y, width, 3);
       c.fillStyle = entity.health > 35 ? T.healthy : T.injured; c.fillRect(p.x - width / 2, y, width * entity.health / 100, 3);
     }
+    if (entity.combatStance && (own || selected || !compact)) this.label(entity.combatStance === 'covered' ? 'В УКРЫТИИ' : entity.combatStance === 'peeking' ? 'ОГОНЬ ИЗ УКРЫТИЯ' : 'К УКРЫТИЮ', p.x, p.y + 34, T.muted, 7);
     if (entity.safeUntil > snapshot.now) this.label('ЗАЩИТА', p.x, p.y + 20, T.extract, 8);
     if (entity.aimUntil && entity.aimUntil > snapshot.now) {
       c.strokeStyle = T.hostile; c.lineWidth = 2; c.beginPath(); c.ellipse(p.x, p.y, 18 * zoom, 9 * zoom, 0, 0, Math.PI * 2); c.stroke();
