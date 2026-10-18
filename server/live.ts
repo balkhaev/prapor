@@ -11,6 +11,7 @@ import { advanceNpcRoutine, createNpcLife, createNpcLifePlans, investigateNpcNoi
 import { buildNpcSquadPlans, createNpcSquadState, restoreNpcSquadState, advanceNpcSquads, completeObjective, type NpcSquadState, type NpcSquadDecision, type NpcSquadPlan } from './live-squads';
 import { readNpcInventory, readNpcCacheInventory, canNpcCarry, takeNpcLoot, depositNpcLoot, drainNpcLoot, type NpcInventory } from './live-npc-loot';
 import { createNpcFactionAlerts, restoreNpcFactionAlerts, recordNpcBaseContact, recordNpcTerritoryLoss, NPC_BASE_ALARM_QUIET_MS, type NpcFactionAlerts } from './live-faction-alerts';
+import { buildNpcCampaignGeometry, createNpcCampaignState, restoreNpcCampaignState, npcCampaignPlans, advanceNpcCampaign, occupyNpcBase, getNpcOperationalBase, chooseNpcRefuge, type NpcCampaignState } from './live-npc-campaign';
 import { migratedContainerAnchor, migratedLootCooldownKey } from "./live-world-migration";
 import { migrateExpandedLiveCoordinates } from './live-coordinate-migration';
 import { invalidateLiveGeometryRoutes } from './live-geometry-revision';
@@ -68,6 +69,11 @@ interface Participant extends LiveEntity, LivePlayer, PathCache {
   /** Saved before the headquarters debit, consumed in the same transaction as its acknowledgement. */
   entryPending?: { id: string; districtId: LiveDistrictId; purpose: LivePurpose; x: number; y: number; respawn: boolean; automatic?: boolean };
 }
+interface NpcGarrison {
+  baseId: string | null; lostBaseId: string; lossId: string | null;
+  retreatUntil: number; holdPoint: LivePoint; arrivedAt: number | null;
+}
+interface NpcBaseHome { baseId: string; base: LivePoint; faction: 'scavs' | 'raiders' }
 interface Scav extends LiveEntity, PathCache {
   visualLoadout: LiveVisualLoadout;
   body: HealthState; healthAt: number; aim: { targetId: string; endsAt: number; part: BodyPart } | null;
@@ -80,6 +86,7 @@ interface Scav extends LiveEntity, PathCache {
   alife?: NpcLifeState;
   npcGeneration?: number;
   npcInventory?: NpcInventory;
+  npcGarrison?: NpcGarrison;
   bossCycle?: number; bossDeathSettled?: boolean;
   bossLastHit?: { identity: string; playerId: string; at: number };
 }
@@ -146,6 +153,8 @@ const squadGeometry = (() => {
   return buildNpcSquadPlans(world, navigation.get(DEFAULT_MAP)!, point => arenas.some(arena =>
     point.x >= arena.area.x && point.y >= arena.area.y && point.x < arena.area.x + arena.area.width && point.y < arena.area.y + arena.area.height));
 })();
+const campaignGeometry = buildNpcCampaignGeometry(maps.get(DEFAULT_MAP)!, squadGeometry, navigation.get(DEFAULT_MAP)!, point => getLiveBossArenas(maps.get(DEFAULT_MAP)!).some(arena =>
+  point.x >= arena.area.x && point.y >= arena.area.y && point.x < arena.area.x + arena.area.width && point.y < arena.area.y + arena.area.height));
 const districtFrom = (value: unknown): LiveDistrictId | null => ["customs", "sawmill", "depot", "village"].includes(value as string) ? value as LiveDistrictId : null;
 const purposeFrom = (value: unknown): LivePurpose | null => ["pvp", "pve", "loot", "quests", "boss"].includes(value as string) ? value as LivePurpose : null;
 const districtAt = (point: LivePoint): LiveDistrictId => {
@@ -275,6 +284,8 @@ export function createLiveService(options: LiveOptions): LiveService {
   const npcReplenishments = new Map<string, number>();
   const noiseIncidents: NoiseIncident[] = [];
   const squadStates = new Map(squadGeometry.squads.map(plan => [plan.id, createNpcSquadState(plan, now())]));
+  let npcCampaign = createNpcCampaignState(squadGeometry.squads);
+  let operationalPlans = npcCampaignPlans(campaignGeometry, npcCampaign, squadGeometry.squads);
   let npcFactionAlerts = createNpcFactionAlerts();
   const territoryOwners = new Map(squadGeometry.territories.map(site => [site.id, site.initialOwner]));
   const territoryById = new Map(squadGeometry.territories.map(site => [site.id, site]));
@@ -283,23 +294,34 @@ export function createLiveService(options: LiveOptions): LiveService {
   const squadWork = new Map<string, SquadWork>(), npcForageCooldowns = new Map<string, number>();
   const squadOrders = new Map<string, { plan: NpcSquadPlan; decision: NpcSquadDecision; directive: NpcSquadDecision['directives'][number] }>();
   const contestedSites = new Set<string>();
-  const baseDefenseOrders = new Map<string, NpcSquadPlan>();
+  const baseDefenseOrders = new Map<string, NpcBaseHome>();
+  const garrisonOrders = new Map<string, { destination: LivePoint | null; activity: 'withdraw' | 'regroup' | 'defend' | 'rest'; withdrawing: boolean }>();
+  const garrisonRefugeChecks = new Map<string, string>();
   let nextSquadThinkAt = 0;
   const squadOf = (scav: Scav): NpcSquadPlan | undefined => {
     const plan = squadByActor.get(scav.id), authored = maps.get(scav.mapId)!.npcSpawns[scav.spawnIndex];
     return plan && !scav.bossId && scav.mapId === DEFAULT_MAP && authored && scav.role === 'patrol' && authored.role === scav.role
       && scav.faction === plan.faction && authored.faction === scav.faction && distance(scav.home, authored.point) === 0 ? plan : undefined;
   };
-  const homeBaseOf = (scav: Scav): NpcSquadPlan | undefined => {
+  const authoredBaseOf = (scav: Scav): NpcSquadPlan | undefined => {
     if (scav.bossId || scav.mapId !== DEFAULT_MAP) return;
     const authored = maps.get(DEFAULT_MAP)!.npcSpawns[scav.spawnIndex];
     if (!authored || authored.faction !== scav.faction || distance(authored.point, scav.home) !== 0) return;
     return squadOf(scav) ?? squadGeometry.squads.find(plan => plan.faction === scav.faction && plan.baseId === planOf(scav).siteId && distance(scav.home, plan.base) <= 18);
   };
-  const defendedBaseOf = (scav: Scav): NpcSquadPlan | undefined => {
+  const ownedBase = (id: string | null | undefined, faction: Scav['faction']): NpcBaseHome | undefined => {
+    if (!id || territoryOwners.get(id) !== faction) return;
+    const base = campaignGeometry.bases.find(base => base.id === id);
+    return base ? { baseId: id, base: base.point, faction } : undefined;
+  };
+  const homeBaseOf = (scav: Scav): NpcBaseHome | undefined => {
+    const squad = squadOf(scav);
+    return ownedBase(squad ? getNpcOperationalBase(npcCampaign, squad.id) : scav.npcGarrison ? scav.npcGarrison.baseId : authoredBaseOf(scav)?.baseId, scav.faction);
+  };
+  const defendedBaseOf = (scav: Scav): NpcBaseHome | undefined => {
     const order = squadOrders.get(scav.id);
     return order?.decision.missionKind === 'defend' && !order.decision.retreating && order.decision.phase !== 'return'
-      ? squadGeometry.squads.find(plan => plan.baseId === order.decision.targetId) : baseDefenseOrders.get(scav.id);
+      ? ownedBase(order.decision.targetId, scav.faction) : ownedBase(baseDefenseOrders.get(scav.id)?.baseId, scav.faction);
   };
   let preparedBossCredits: BossKillCredit[] = [];
   const lootCooldowns = new Map<string, number>();
@@ -439,7 +461,7 @@ export function createLiveService(options: LiveOptions): LiveService {
     const order = squadOrders.get(entity.id);
     return { id: entity.id, kind: entity.kind, name: entity.name, appearance: entity.appearance, health: entity.health, action: entity.action, safeUntil: entity.safeUntil, x: entity.x, y: entity.y,
       ...(visualLoadout ? { visualLoadout } : {}), ...(entity.faction ? { faction: entity.faction } : {}), ...(entity.role ? { role: entity.role } : {}), ...(entity.bossId ? { bossId: entity.bossId } : {}),
-      ...(!isParticipant(entity) && !entity.bossId && entity.health > 0 && entity.alife ? { npcActivity: entity.aim ? 'combat' as const : order?.directive.activity ?? (baseDefenseOrders.has(entity.id) ? 'defend' as const : entity.alife.phase) } : {}),
+      ...(!isParticipant(entity) && !entity.bossId && entity.health > 0 && entity.alife ? { npcActivity: entity.aim ? 'combat' as const : order?.directive.activity ?? garrisonOrders.get(entity.id)?.activity ?? (baseDefenseOrders.has(entity.id) ? 'defend' as const : entity.alife.phase) } : {}),
       ...(squad ? { npcSquad: { id: squad.id, leader: squadStates.get(squad.id)?.leaderId === entity.id } } : {}),
       bleeding: BODY_PARTS.some(part => entity.body.parts[part].bleeding !== "none"), limping: injuryEffects(entity.body, now()).movement < 1,
       moveIntervalMs: liveMovementInterval(entity.kind, injuryEffects(entity.body, now()).movement),
@@ -448,7 +470,7 @@ export function createLiveService(options: LiveOptions): LiveService {
   const durableWorld = () => ({ version: WORLD_VERSION, geometryVersion: maps.get(DEFAULT_MAP)!.version, startedAt,
     scavs: [...scavs.values()].filter(scav => !scav.bossId).map(durable), drops: [...drops.values()], events,
     lootCooldowns: [...lootCooldowns], npcReplenishments: [...npcReplenishments], noiseIncidents,
-    npcSquads: [...squadStates.values()], npcFactionAlerts, territoryOwners: [...territoryOwners], squadWork: [...squadWork], npcForageCooldowns: [...npcForageCooldowns] });
+    npcSquads: [...squadStates.values()], npcFactionAlerts, npcCampaign, territoryOwners: [...territoryOwners], squadWork: [...squadWork], npcForageCooldowns: [...npcForageCooldowns] });
   const persist = (): void => {
     db.transaction(() => {
       for (const player of players.values()) savePlayer.run(player.identity, JSON.stringify(durable(player)));
@@ -649,8 +671,16 @@ export function createLiveService(options: LiveOptions): LiveService {
   const stored = db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get();
   if (stored) {
     const world = JSON.parse(stored.state) as { version?: number; geometryVersion?: string; startedAt: number; scavs: Scav[]; drops: Drop[]; events: MapEvent[]; lootCooldowns?: Array<[string, number]>; npcReplenishments?: Array<[string, number]>; noiseIncidents?: NoiseIncident[];
-      npcSquads?: NpcSquadState[]; npcFactionAlerts?: NpcFactionAlerts; territoryOwners?: Array<[string, 'scavs' | 'raiders' | null]>; squadWork?: Array<[string, SquadWork]>; npcForageCooldowns?: Array<[string, number]> };
+      npcSquads?: NpcSquadState[]; npcFactionAlerts?: NpcFactionAlerts; npcCampaign?: NpcCampaignState; territoryOwners?: Array<[string, 'scavs' | 'raiders' | null]>; squadWork?: Array<[string, SquadWork]>; npcForageCooldowns?: Array<[string, number]> };
     startedAt = world.startedAt;
+    if (world.version === WORLD_VERSION && world.geometryVersion === maps.get(DEFAULT_MAP)!.version) {
+      // Ownership is authoritative for caches, alarms and operational homes.
+      // Restore it before any of those records are interpreted.
+      for (const [id, owner] of world.territoryOwners ?? []) if (territoryById.has(id)
+        && (owner === 'scavs' || owner === 'raiders' || owner === null && !baseIds.has(id))) territoryOwners.set(id, owner);
+      npcCampaign = restoreNpcCampaignState(squadGeometry.squads, campaignGeometry, world.npcCampaign, now());
+      operationalPlans = npcCampaignPlans(campaignGeometry, npcCampaign, squadGeometry.squads);
+    }
     if (world.version !== WORLD_VERSION || world.geometryVersion !== maps.get(DEFAULT_MAP)!.version) for (const previous of world.scavs) {
       const carried = readNpcInventory(previous.npcInventory);
       if (!carried.items.length && !carried.money) continue;
@@ -682,6 +712,14 @@ export function createLiveService(options: LiveOptions): LiveService {
       scav.alife = restoreNpcLife(scav.alife, scav, now(), point => walkable(scav.mapId, point));
       scav.npcGeneration = Number.isSafeInteger(scav.npcGeneration) && scav.npcGeneration! >= 0 ? scav.npcGeneration : 0;
       scav.npcInventory = readNpcInventory(scav.npcInventory);
+      if (scav.npcGarrison) {
+        const refuge = scav.npcGarrison;
+        if (squadOf(scav) || !authoredBaseOf(scav) || !baseIds.has(refuge.lostBaseId) || !(refuge.baseId === null || baseIds.has(refuge.baseId))
+          || !(refuge.lossId === null || typeof refuge.lossId === 'string' && /^loss-[1-9][0-9]*$/.test(refuge.lossId))
+          || !Number.isSafeInteger(refuge.retreatUntil) || refuge.retreatUntil < 0
+          || !(refuge.arrivedAt === null || Number.isSafeInteger(refuge.arrivedAt) && refuge.arrivedAt >= 0 && refuge.arrivedAt <= now())
+          || !refuge.holdPoint || !walkable(scav.mapId, refuge.holdPoint)) delete scav.npcGarrison;
+      }
       scavs.set(scav.id, scav);
     }
     const claimedAnchors = new Set<string>(), currentWorld = maps.get(DEFAULT_MAP)!;
@@ -691,10 +729,10 @@ export function createLiveService(options: LiveOptions): LiveService {
         if (!drop.npcBase || typeof drop.npcBase.id !== 'string' || !['scavs', 'raiders'].includes(drop.npcBase.faction) || drop.containerId || drop.bossId) throw new Error('Invalid stored NPC cache');
         readNpcCacheInventory({ items: drop.items ?? [], money: drop.amount });
         drop.expiresAt = Number.MAX_SAFE_INTEGER;
-        if (!squadGeometry.squads.some(plan => plan.baseId === drop.npcBase!.id && plan.faction === drop.npcBase!.faction)) {
+        if (!baseIds.has(drop.npcBase.id)) {
           // A retired base becomes unowned physical cargo rather than blocking startup or deleting loot.
           drop.source = 'body'; delete drop.npcBase;
-        }
+        } else drop.npcBase.faction = territoryOwners.get(drop.npcBase.id)!;
       } else if (drop.npcBase) throw new Error('Invalid NPC cache source');
       if (drop.bossId && (!getBoss(drop.bossId) || drop.source !== 'body' || drop.containerId)) throw new Error('Invalid stored boss corpse');
       // A geometry revision moves existing cycles; it never rolls replacements for their contents.
@@ -715,12 +753,11 @@ export function createLiveService(options: LiveOptions): LiveService {
     }
     if (world.version === WORLD_VERSION && world.geometryVersion === maps.get(DEFAULT_MAP)!.version) {
       events = world.events.slice(-120).map(item => ({ ...item, mapId: DEFAULT_MAP }));
-      for (const plan of squadGeometry.squads) squadStates.set(plan.id, restoreNpcSquadState(plan, world.npcSquads?.find(state => state.id === plan.id), now()));
-      npcFactionAlerts = restoreNpcFactionAlerts(squadGeometry.squads, squadGeometry.territories, world.npcFactionAlerts, now());
-      for (const [id, owner] of world.territoryOwners ?? []) if (territoryById.has(id) && !baseIds.has(id) && (owner === null || owner === 'scavs' || owner === 'raiders')) territoryOwners.set(id, owner);
+      for (const plan of operationalPlans) squadStates.set(plan.id, restoreNpcSquadState(plan, world.npcSquads?.find(state => state.id === plan.id), now()));
+      npcFactionAlerts = restoreNpcFactionAlerts(squadGeometry.squads, squadGeometry.territories, world.npcFactionAlerts, now(), territoryOwners);
       for (const [id, work] of world.squadWork ?? []) if (squadStates.has(id) && work && territoryById.has(work.targetId)
         && [work.lastAt, work.captureMs, work.readyAt ?? 0].every(value => Number.isSafeInteger(value) && value >= 0)
-        && work.captureMs <= 20_000 && Array.isArray(work.attempted) && work.attempted.length <= 4 && work.attempted.every(value => typeof value === 'string')
+        && work.captureMs <= (baseIds.has(work.targetId) ? 30_000 : 20_000) && Array.isArray(work.attempted) && work.attempted.length <= 4 && work.attempted.every(value => typeof value === 'string')
         && (work.carrierId === undefined || typeof work.carrierId === 'string') && (work.dropId === undefined || typeof work.dropId === 'string')
         && (work.containerId === undefined || typeof work.containerId === 'string')) {
         // Offline time cannot finish a capture or a container search.
@@ -895,7 +932,7 @@ export function createLiveService(options: LiveOptions): LiveService {
     }
     incident.until = time + NPC_NOISE_INCIDENT_MS;
     if (incident.responders >= NPC_NOISE_RESPONDERS) return;
-    const candidates = [...scavs.values()].filter(scav => !scav.bossId && !squadOf(scav) && scav.role === 'patrol' && scav.health > 0 && scav.mapId === attacker.mapId && scav.id !== attacker.id && scav.id !== target.id
+    const candidates = [...scavs.values()].filter(scav => !scav.bossId && !squadOf(scav) && !scav.npcGarrison && scav.role === 'patrol' && scav.health > 0 && scav.mapId === attacker.mapId && scav.id !== attacker.id && scav.id !== target.id
       && !scav.aim && scav.alife && scav.alife.respondAfter <= time && scav.alife.phase !== 'combat' && scav.alife.phase !== 'investigate'
       && distance(scav, attacker) <= NPC_HEARING_RADIUS && distance(scav.home, attacker) <= planOf(scav).leash)
       .sort((a, b) => distance(a, attacker) - distance(b, attacker) || a.spawnIndex - b.spawnIndex);
@@ -1255,14 +1292,64 @@ export function createLiveService(options: LiveOptions): LiveService {
     if (scav.bossId) return getBoss(scav.bossId)!.live.aggroRange;
     const order = squadOrders.get(scav.id), target = order?.decision.targetId ? territoryById.get(order.decision.targetId) : undefined;
     const defense = defendedBaseOf(scav);
+    const garrison = scav.npcGarrison ? homeBaseOf(scav) : undefined;
     return Math.max(planOf(scav).leash, order ? distance(scav.home, order.plan.base) + 10 : 0,
       target ? distance(scav.home, target.point) + (order?.decision.missionKind === 'defend' ? 14 : 10) : 0,
-      defense ? distance(scav.home, defense.base) + 14 : 0);
+      defense ? distance(scav.home, defense.base) + 14 : 0, garrison ? distance(scav.home, garrison.base) + 14 : 0,
+      scav.npcGarrison ? distance(scav.home, scav.npcGarrison.holdPoint) + 10 : 0);
   };
   const perceptionOf = (scav: Scav): number => defendedBaseOf(scav) ? 14 : scav.role === 'marksman' ? 11 : scav.role === 'patrol' ? 9 : 7;
   const insidePursuit = (scav: Scav, point: LivePoint): boolean => {
     const defense = defendedBaseOf(scav);
-    return distance(scav.home, point) <= leashOf(scav) && (!defense || distance(scav, defense.base) > 18 || distance(point, defense.base) <= 14);
+    const garrison = scav.npcGarrison, station = garrison ? homeBaseOf(scav)?.base ?? garrison.holdPoint : undefined;
+    return distance(scav.home, point) <= leashOf(scav) && (!defense || distance(scav, defense.base) > 18 || distance(point, defense.base) <= 14)
+      && (!station || distance(point, station) <= 14);
+  };
+  const advanceGarrisons = (time: number): void => {
+    garrisonOrders.clear();
+    const ownership = campaignGeometry.bases.map(base => `${base.id}:${territoryOwners.get(base.id)}`).join('|');
+    for (const scav of scavs.values()) {
+      if (scav.bossId || scav.health <= 0 || squadOf(scav)) continue;
+      const authored = authoredBaseOf(scav);
+      if (!authored) continue;
+      let refuge = scav.npcGarrison;
+      const currentBase = refuge ? refuge.baseId : authored.baseId;
+      if (currentBase === null || territoryOwners.get(currentBase) !== scav.faction) {
+        const from = currentBase ?? refuge?.lostBaseId ?? authored.baseId;
+        const candidate = chooseNpcRefuge(campaignGeometry, from, scav.faction, territoryOwners)
+          ?? (territoryOwners.get(from) === scav.faction ? from : null);
+        // An unchanged stranded order must not restart its escape timer each tick.
+        if (!refuge || currentBase !== null || candidate !== null && garrisonRefugeChecks.get(scav.id) !== ownership) {
+          garrisonRefugeChecks.set(scav.id, ownership);
+          const base = campaignGeometry.bases.find(base => base.id === candidate);
+          const reachable = base && (navigation.get(DEFAULT_MAP)!.findPath(scav, base.point)?.length ?? Infinity) <= 640 ? base : undefined;
+          const lost = campaignGeometry.bases.find(base => base.id === from);
+          const escape = lost?.escapePoints.find(point => (navigation.get(DEFAULT_MAP)!.findPath(scav, point)?.length ?? Infinity) <= 80);
+          if (!refuge || currentBase !== null || reachable) {
+            refuge = scav.npcGarrison = { baseId: reachable?.id ?? null, lostBaseId: from,
+              lossId: npcFactionAlerts.losses.find(order => order.siteId === from && order.faction === scav.faction)?.id ?? refuge?.lossId ?? null,
+              retreatUntil: time + (reachable ? 600_000 : 60_000), holdPoint: reachable ? { ...reachable.point } : escape ? { ...escape } : { x: scav.x, y: scav.y }, arrivedAt: null };
+            scav.aim = null; if (scav.alife) { scav.alife.targetId = null; scav.alife.lastSeen = null; scav.alife.lastSeenUntil = 0; }
+            Object.assign(scav, freshPath());
+          }
+        }
+      }
+      if (!refuge) continue;
+      const base = refuge.baseId ? campaignGeometry.bases.find(base => base.id === refuge!.baseId) : undefined;
+      if (base && refuge.arrivedAt === null && distance(scav, base.point) <= 6 && lineOfSight(DEFAULT_MAP, scav, base.point)) refuge.arrivedAt = time;
+      if (refuge.arrivedAt === null && time >= refuge.retreatUntil) {
+        // A blocked retreat has a finite order and retains the body where it
+        // actually stopped. It cannot fall back to its lost authored home.
+        garrisonOrders.set(scav.id, { destination: null, activity: 'rest', withdrawing: false }); continue;
+      }
+      const arrived = refuge.arrivedAt !== null;
+      const rally = base?.rallyPoints.filter(point => lineOfSight(DEFAULT_MAP, point, base.point));
+      const station = rally?.length ? rally[(scav.spawnIndex + 1) % rally.length]! : refuge.holdPoint;
+      const carrying = Boolean(scav.npcInventory?.items.length || scav.npcInventory?.money);
+      const destination = base && (carrying || !arrived) ? { ...base.point } : distance(scav, station) > 1.5 ? { ...station } : null;
+      const alarm = base && npcFactionAlerts.alarms.some(alarm => alarm.baseId === base.id && alarm.faction === scav.faction);
+      garrisonOrders.set(scav.id, { destination, activity: !arrived ? 'withdraw' : time < refuge.arrivedAt! + 30_000 ? 'regroup' : alarm ? 'defend' : 'rest', withdrawing: !arrived });
+    }
   };
   const nearestTarget = (entity: Participant | Scav): Participant | Scav | undefined => {
     let nearest: Participant | Scav | undefined, nearestDistance = Infinity;
@@ -1293,11 +1380,21 @@ export function createLiveService(options: LiveOptions): LiveService {
     // NPC invasions require a living local witness. Player proximity alone
     // never summons help; their attack must pass the normal shot validation.
     const living = [...scavs.values()].filter(scav => !scav.bossId && scav.health > 0 && scav.mapId === DEFAULT_MAP);
-    for (const base of squadGeometry.squads) {
-      const witnesses = living.filter(scav => scav.faction === base.faction && distance(scav, base.base) <= 14
-        && (homeBaseOf(scav)?.baseId === base.baseId || defendedBaseOf(scav)?.baseId === base.baseId));
-      if (witnesses.some(witness => living.some(enemy => enemy.faction !== base.faction && distance(enemy, base.base) <= 14
-        && distance(witness, enemy) <= 14 && lineOfSight(DEFAULT_MAP, witness, enemy)))) recordNpcBaseContact(npcFactionAlerts, base.baseId, base.faction, time);
+    const caches = new Map([...drops.values()].filter(drop => drop.source === 'base' && drop.npcBase).map(drop => [drop.npcBase!.id, drop]));
+    const actors = new Map([...scavs.values()].filter(scav => squadOf(scav)).map(scav => {
+      const inventory = scav.npcInventory ??= { items: [], money: 0 }, home = homeBaseOf(scav), cache = home ? caches.get(home.baseId) : undefined;
+      return [scav.id, { id: scav.id, x: scav.x, y: scav.y, health: scav.health, lifeCycle: scav.npcGeneration ?? 0,
+        inCombat: Boolean(scav.aim || scav.alife?.targetId), carried: Boolean(inventory.items.length || inventory.money),
+        canForage: !inventory.items.length && !inventory.money && (!cache || (cache.items?.length ?? 0) < 32 && (cache.items ?? []).reduce((sum, item) => sum + getLiveLootWeight(item), 0) < 12 && cache.amount < 500) }] as const;
+    }));
+    operationalPlans = advanceNpcCampaign(campaignGeometry, npcCampaign, squadGeometry.squads, squadStates, actors, territoryOwners, npcFactionAlerts, time, (from, to) => lineOfSight(DEFAULT_MAP, from, to));
+    advanceGarrisons(time);
+    for (const base of campaignGeometry.bases) {
+      const faction = territoryOwners.get(base.id);
+      const witnesses = living.filter(scav => scav.faction === faction && distance(scav, base.point) <= 14
+        && (homeBaseOf(scav)?.baseId === base.id || defendedBaseOf(scav)?.baseId === base.id));
+      if (faction && witnesses.some(witness => living.some(enemy => enemy.faction !== faction && distance(enemy, base.point) <= 14
+        && distance(witness, enemy) <= 14 && lineOfSight(DEFAULT_MAP, witness, enemy)))) recordNpcBaseContact(npcFactionAlerts, base.id, faction, time);
     }
     squadOrders.clear(); baseDefenseOrders.clear(); contestedSites.clear();
     for (const scav of living) {
@@ -1306,33 +1403,29 @@ export function createLiveService(options: LiveOptions): LiveService {
       if (base && npcFactionAlerts.alarms.some(alarm => alarm.baseId === base.baseId && time - alarm.lastContactAt < NPC_BASE_ALARM_QUIET_MS)) baseDefenseOrders.set(scav.id, base);
     }
     for (const [id, until] of npcForageCooldowns) if (until <= time) npcForageCooldowns.delete(id);
-    const caches = new Map([...drops.values()].filter(drop => drop.source === 'base' && drop.npcBase).map(drop => [drop.npcBase!.id, drop]));
-    const actors = new Map([...scavs.values()].filter(scav => squadOf(scav)).map(scav => {
-      const inventory = scav.npcInventory ??= { items: [], money: 0 }, plan = squadOf(scav)!, cache = caches.get(plan.baseId);
-      return [scav.id, { id: scav.id, x: scav.x, y: scav.y, health: scav.health, lifeCycle: scav.npcGeneration ?? 0,
-        inCombat: Boolean(scav.aim || scav.alife?.targetId), carried: Boolean(inventory.items.length || inventory.money),
-        canForage: !inventory.items.length && !inventory.money && (!cache || (cache.items?.length ?? 0) < 32 && (cache.items ?? []).reduce((sum, item) => sum + getLiveLootWeight(item), 0) < 12 && cache.amount < 500) }] as const;
-    }));
-    const decisions = advanceNpcSquads(squadGeometry.squads, squadStates, actors, territoryOwners, time, npcFactionAlerts);
+    const decisions = advanceNpcSquads(operationalPlans, squadStates, actors, territoryOwners, time, npcFactionAlerts, (from, to) => lineOfSight(DEFAULT_MAP, from, to));
     const siteContested = (point: LivePoint, faction: Scav['faction']): boolean =>
       [...scavs.values()].some(other => !other.bossId && other.health > 0 && other.faction !== faction && distance(other, point) <= 8 && lineOfSight(DEFAULT_MAP, other, point))
       || [...players.values()].some(player => exposed(player) && player.health > 0 && distance(player, point) <= 8 && lineOfSight(DEFAULT_MAP, player, point));
-    for (const base of squadGeometry.squads) if (siteContested(base.base, base.faction)) contestedSites.add(base.baseId);
+    for (const base of campaignGeometry.bases) if (siteContested(base.point, territoryOwners.get(base.id)!)) contestedSites.add(base.id);
+    // Any surviving resident can deliver its existing parcel to its real allied
+    // refuge. Capacity and ownership never create or split a parcel.
+    for (const carrier of living) {
+      const home = homeBaseOf(carrier), inventory = carrier.npcInventory;
+      if (!home || !inventory || !inventory.items.length && !inventory.money || distance(carrier, home.base) > 2.5
+        || !lineOfSight(DEFAULT_MAP, carrier, home.base) || carrier.aim || siteContested(home.base, carrier.faction)) continue;
+      const existing = caches.get(home.baseId), cache = { items: existing?.items ?? [], money: existing?.amount ?? 0 };
+      if (!depositNpcLoot(inventory, cache)) continue;
+      const drop: Drop = existing ?? { id: randomUUID(), mapId: DEFAULT_MAP, ...home.base, amount: 0, items: [], source: 'base',
+        npcBase: { id: home.baseId, faction: carrier.faction }, expiresAt: Number.MAX_SAFE_INTEGER };
+      drop.items = cache.items; drop.amount = cache.money; drops.set(drop.id, drop); caches.set(home.baseId, drop);
+      event(DEFAULT_MAP, 'loot', `${carrier.name} доставил добычу на базу.`, carrier.id);
+    }
+    let baseChanged = false;
     for (const decision of decisions) {
-      const plan = squadGeometry.squads.find(candidate => candidate.id === decision.squadId)!;
+      const plan = operationalPlans.find(candidate => candidate.id === decision.squadId)!;
       for (const directive of decision.directives) squadOrders.set(directive.actorId, { plan, decision, directive });
-      // A carrier must actually reach its base; a full cache leaves its parcel on the carrier.
-      for (const id of plan.memberIds) {
-        const carrier = scavs.get(id), inventory = carrier?.npcInventory;
-        if (!carrier || !squadOf(carrier) || carrier.health <= 0 || !inventory || !inventory.items.length && !inventory.money
-          || distance(carrier, plan.base) > 2.5 || !lineOfSight(DEFAULT_MAP, carrier, plan.base) || carrier.aim || siteContested(plan.base, plan.faction)) continue;
-        const existing = caches.get(plan.baseId), cache = { items: existing?.items ?? [], money: existing?.amount ?? 0 };
-        if (!depositNpcLoot(inventory, cache)) continue;
-        const drop: Drop = existing ?? { id: randomUUID(), mapId: DEFAULT_MAP, ...plan.base, amount: 0, items: [], source: 'base',
-          npcBase: { id: plan.baseId, faction: plan.faction }, expiresAt: Number.MAX_SAFE_INTEGER };
-        drop.items = cache.items; drop.amount = cache.money; drops.set(drop.id, drop); caches.set(plan.baseId, drop);
-        event(DEFAULT_MAP, 'loot', `${carrier.name} доставил добычу на базу.`, carrier.id);
-      }
+      if (plan.operational === false || territoryOwners.get(plan.baseId) !== plan.faction) { squadWork.delete(plan.id); continue; }
       const target = decision.targetId ? territoryById.get(decision.targetId) : undefined;
       if (decision.phase !== 'objective' || !target || decision.retreating) { squadWork.delete(plan.id); continue; }
       if (decision.missionKind === 'defend') { squadWork.delete(plan.id); continue; }
@@ -1343,15 +1436,21 @@ export function createLiveService(options: LiveOptions): LiveService {
       const contested = siteContested(target.point, plan.faction);
       if (contested) contestedSites.add(target.id);
       const present = crew.filter(scav => distance(scav, target.point) <= 6 && lineOfSight(DEFAULT_MAP, scav, target.point));
-      if (decision.missionKind === 'capture' || decision.missionKind === 'retake') {
+      if (decision.missionKind === 'capture' || decision.missionKind === 'retake' || decision.missionKind === 'assault') {
         if (territoryOwners.get(target.id) === plan.faction) { completeObjective(squadStates.get(plan.id)!, time); continue; }
         if (contested || present.length < 2 || present.some(scav => scav.aim || nearestTarget(scav))) { work.captureMs = 0; continue; }
         work.captureMs += elapsed;
-        if (work.captureMs >= 20_000 && !baseIds.has(target.id)) {
-          recordNpcTerritoryLoss(npcFactionAlerts, target.id, territoryOwners.get(target.id) ?? null, plan.faction, time);
+        if (work.captureMs >= (baseIds.has(target.id) ? 30_000 : 20_000)) {
+          recordNpcTerritoryLoss(npcFactionAlerts, target.id, territoryOwners.get(target.id) ?? null, plan.faction, time, baseIds.has(target.id) ? 'base' : 'control');
           territoryOwners.set(target.id, plan.faction);
+          if (baseIds.has(target.id)) {
+            // A conquered cache stays where it was, with exactly the same
+            // parcel and identity. Only its faction marker changes hands.
+            for (const drop of drops.values()) if (drop.source === 'base' && drop.npcBase?.id === target.id) drop.npcBase.faction = plan.faction;
+            occupyNpcBase(npcCampaign, plan.id, target.id, time); baseChanged = true;
+          }
           const name = maps.get(DEFAULT_MAP)!.pois.find(poi => poi.id === target.poiId)!.name;
-          event(DEFAULT_MAP, 'travel', `${plan.faction === 'scavs' ? 'Отряд диких' : 'Отряд рейдеров'} ${decision.missionKind === 'retake' ? 'отбил' : 'взял под контроль'} ${name}.`, present[0]!.id);
+          event(DEFAULT_MAP, 'travel', `${plan.faction === 'scavs' ? 'Отряд диких' : 'Отряд рейдеров'} ${decision.missionKind === 'retake' ? 'отбил' : baseIds.has(target.id) ? 'захватил базу' : 'взял под контроль'} ${name}.`, present[0]!.id);
           completeObjective(squadStates.get(plan.id)!, time); squadWork.delete(plan.id);
         }
         continue;
@@ -1393,6 +1492,14 @@ export function createLiveService(options: LiveOptions): LiveService {
       npcForageCooldowns.set(target.id, time + 180_000);
       event(DEFAULT_MAP, 'loot', `${carrier.name} забрал припасы и возвращается с отрядом.`, carrier.id);
       completeObjective(squadStates.get(plan.id)!, time); squadWork.delete(plan.id);
+    }
+    if (baseChanged) {
+      operationalPlans = advanceNpcCampaign(campaignGeometry, npcCampaign, squadGeometry.squads, squadStates, actors, territoryOwners, npcFactionAlerts, time, (from, to) => lineOfSight(DEFAULT_MAP, from, to));
+      advanceGarrisons(time); squadOrders.clear();
+      for (const decision of advanceNpcSquads(operationalPlans, squadStates, actors, territoryOwners, time, npcFactionAlerts, (from, to) => lineOfSight(DEFAULT_MAP, from, to))) {
+        const plan = operationalPlans.find(plan => plan.id === decision.squadId)!;
+        for (const directive of decision.directives) squadOrders.set(directive.actorId, { plan, decision, directive });
+      }
     }
   };
   const simulate = (): void => {
@@ -1450,6 +1557,8 @@ export function createLiveService(options: LiveOptions): LiveService {
       if (scav.health <= 0) {
         if ((scav.nextRespawnCheckAt ?? 0) > now()) continue;
         scav.nextRespawnCheckAt = scav.respawnAt > now() ? Math.min(now() + NPC_RESPAWN_CHECK_MS, scav.respawnAt) : now() + NPC_RESPAWN_CHECK_MS;
+        const originalBase = scav.bossId ? undefined : authoredBaseOf(scav);
+        if (originalBase && territoryOwners.get(originalBase.baseId) !== scav.faction) { scav.respawnQuietSince = null; continue; }
         const authored = scav.bossId ? null : maps.get(scav.mapId)!.npcSpawns[scav.spawnIndex % maps.get(scav.mapId)!.npcSpawns.length]!;
         const occupiedArea = spawnAreaOccupied(scav.mapId, [scav, scav.home, ...scav.route, ...(authored ? [authored.point, ...authored.route] : [])]);
         if (occupiedArea) { scav.respawnQuietSince = null; continue; }
@@ -1466,6 +1575,7 @@ export function createLiveService(options: LiveOptions): LiveService {
           fresh = spawnScav(scav.mapId, scav.spawnIndex, scav.id, true);
           if (fresh.health <= 0) { scav.respawnQuietSince = null; continue; }
           fresh.npcGeneration = (scav.npcGeneration ?? 0) + 1; fresh.npcInventory = { items: [], money: 0 };
+          delete scav.npcGarrison; garrisonRefugeChecks.delete(scav.id);
         }
         Object.assign(scav, fresh);
         if (siteKey) npcReplenishments.set(siteKey, now() + NPC_SITE_REPLENISH_MS);
@@ -1474,7 +1584,7 @@ export function createLiveService(options: LiveOptions): LiveService {
       }
       if (!scav.bossId) {
         const state = scav.alife ??= createNpcLife(scav, now()), time = now();
-        const order = squadOrders.get(scav.id), withdrawing = Boolean(order && (order.decision.retreating || order.decision.phase === 'return' || ['haul', 'withdraw'].includes(order.directive.activity)));
+        const order = squadOrders.get(scav.id), garrison = garrisonOrders.get(scav.id), withdrawing = Boolean(garrison?.withdrawing || order && (order.decision.retreating || order.decision.phase === 'return' || ['haul', 'withdraw'].includes(order.directive.activity)));
         if (withdrawing) scav.aim = null;
         let target: Participant | Scav | undefined;
         if (state.nextThinkAt <= time) {
@@ -1499,10 +1609,10 @@ export function createLiveService(options: LiveOptions): LiveService {
           // Squad orders keep a shared route. Only a personally observed target may interrupt it.
           const defense = baseDefenseOrders.get(scav.id);
           const previousPhase = state.phase, destination = target && !withdrawing ? { x: target.x, y: target.y } : order ? order.directive.destination
-            : defense ? distance(scav, scav.home) > 2 ? scav.home : null : advanceNpcRoutine(scav, state, planOf(scav), time);
+            : garrison ? garrison.destination : defense ? distance(scav, defense.base) > 2 ? defense.base : null : advanceNpcRoutine(scav, state, planOf(scav), time);
           // Static visit validation happens once when a trip starts. An excessive
           // detour is abandoned; dynamic movement still uses occupied cells.
-          if (!order && !defense && !target && state.phase === 'travel' && previousPhase !== 'travel' && destination) {
+          if (!order && !garrison && !defense && !target && state.phase === 'travel' && previousPhase !== 'travel' && destination) {
             const route = navigation.get(scav.mapId)!.findPath(scav, destination);
             if (!route || route.length > 160) { state.phase = 'return'; state.destination = { ...scav.home }; state.until = time + 90_000; Object.assign(scav, freshPath()); continue; }
           }
