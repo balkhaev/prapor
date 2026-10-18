@@ -2,8 +2,8 @@ import type { LiveCityBuilding, LiveEntity, LiveEvent, LivePoint, LiveSnapshot, 
 import { createCityPreviewSnapshot } from './metropolis-preview';
 import { applyLiveIncomingFire, createLiveFirefightState, liveFirefightHitChance, stepLiveFirefight, type LiveFirefightDecision, type LiveFirefightState } from './game/live-firefight';
 import { traceLiveBulletImpact } from './game/live-ballistics';
-import { createLiveNavigation } from '../server/live-navigation';
-import { findLiveCombatCover, type LiveCoverPlan } from '../server/live-combat-cover';
+import { createLiveNavigation } from './game/live-navigation';
+import { findLiveCombatCover, type LiveCoverPlan } from './game/live-combat-cover';
 
 export const LIVE_COMBAT_PREVIEW_STEP_MS = 125;
 export const LIVE_COMBAT_PREVIEW_DURATION_MS = 45000;
