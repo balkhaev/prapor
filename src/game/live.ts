@@ -136,7 +136,7 @@ export interface LiveVisualLoadout {
   armor: boolean;
   backpack: boolean;
 }
-export const LIVE_NPC_ACTIVITIES = ['patrol', 'travel', 'inspect', 'rest', 'investigate', 'return', 'combat', 'assemble', 'capture', 'forage', 'haul', 'withdraw', 'defend', 'reinforce', 'retake'] as const;
+export const LIVE_NPC_ACTIVITIES = ['patrol', 'travel', 'inspect', 'rest', 'investigate', 'return', 'combat', 'assemble', 'capture', 'forage', 'haul', 'withdraw', 'defend', 'reinforce', 'retake', 'assault', 'regroup'] as const;
 export type LiveNpcActivity = typeof LIVE_NPC_ACTIVITIES[number];
 export interface LiveEntity extends LivePoint {
   id: string;
@@ -214,7 +214,7 @@ export interface LiveDrop extends LivePoint {
   bossId?: BossId;
   containerId?: string; containerKind?: LiveContainerKind;
   searched?: boolean;
-  /** A physical cache at an authored base; its normal loot rules are unchanged. */
+  /** A physical cache at an authored base, labelled by its current owner. */
   npcBase?: { id: string; faction: 'scavs' | 'raiders' };
 }
 /** Current local observations only, never a global faction intelligence feed. */

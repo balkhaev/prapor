@@ -56,16 +56,18 @@ describe('live wire parser', () => {
   });
   test('defense activity never imports private alarm, destination or reinforcement state', () => {
     const source = fixture();
-    for (const npcActivity of ['defend', 'reinforce', 'retake'] as const) {
-      Object.assign(source.entities[1]!, { npcActivity, alarmId: 'base-private-1', responseTarget: { id: 'hidden-site', x: 99, y: 88 }, incomingCount: 3 });
+    for (const npcActivity of ['defend', 'reinforce', 'retake', 'assault', 'regroup', 'withdraw'] as const) {
+      Object.assign(source.entities[1]!, { npcActivity, alarmId: 'base-private-1', responseTarget: { id: 'hidden-site', x: 99, y: 88 }, incomingCount: 3,
+        refugeBaseId: 'hidden-base', refugePoint: { x: 95, y: 80 }, survivors: ['hidden-npc'] });
       const parsed = readLiveSnapshot(source), actor = parsed.entities[1]!;
       expect(actor.npcActivity).toBe(npcActivity);
-      for (const key of ['alarmId', 'responseTarget', 'incomingCount']) expect(actor).not.toHaveProperty(key);
+      for (const key of ['alarmId', 'responseTarget', 'incomingCount', 'refugeBaseId', 'refugePoint', 'survivors']) expect(actor).not.toHaveProperty(key);
       const { world: _world, ...cached } = source;
       expect(readLiveSnapshot(cached, parsed.world).entities[1]).toEqual(actor);
     }
     const poi = source.world.pois[0]!, site = { id: poi.id, x: poi.x, y: poi.y, kind: 'base', owner: 'raiders', contested: true };
-    for (const extra of [{ alarmId: 'private-alarm' }, { incomingCount: 3 }, { target: { x: 99, y: 88 } }])
+    for (const extra of [{ alarmId: 'private-alarm' }, { incomingCount: 3 }, { target: { x: 99, y: 88 } },
+      { refugeBaseId: 'hidden-base' }, { survivors: ['hidden-npc'] }, { regroupUntil: 9000 }])
       expect(() => readLiveSnapshot({ ...source, factionSites: [{ ...site, ...extra }] })).toThrow(LiveApiError);
   });
   test('rejects invented squad identity, private orders and non-NPC membership', () => {
@@ -119,6 +121,20 @@ describe('live wire parser', () => {
       const { world: _world, ...cached } = source;
       expect(readLiveSnapshot(cached, parsed.world).drops[0]).toEqual(drop);
     }
+  });
+  test('an observed base ownership change updates its cache without replacing loot or retaining vanished observations', () => {
+    const source = fixture(), poi = source.world.pois[0]!, drop = source.drops[0]!;
+    source.factionSites = [{ id: poi.id, x: poi.x, y: poi.y, kind: 'base', owner: 'scavs', contested: false }];
+    drop.npcBase = { id: poi.id, faction: 'scavs' };
+    drop.items = [{ id: crypto.randomUUID(), modelId: 'gold-ring', foundAt: 1000 }];
+    const before = readLiveSnapshot(source);
+    source.factionSites[0]!.owner = 'raiders'; drop.npcBase.faction = 'raiders';
+    const { world: _world, ...cached } = source, captured = readLiveSnapshot(cached, before.world);
+    expect(captured.factionSites![0]!.owner).toBe('raiders');
+    expect(captured.drops[0]).toEqual({ ...before.drops[0]!, npcBase: { id: poi.id, faction: 'raiders' } });
+    expect(before.factionSites![0]!.owner).toBe('scavs'); expect(before.drops[0]!.npcBase!.faction).toBe('scavs');
+    const hidden = readLiveSnapshot({ ...cached, factionSites: [], drops: [] }, before.world);
+    expect(hidden.factionSites).toEqual([]); expect(hidden.drops).toEqual([]);
   });
   test('rejects invented base caches, private inventories and ambiguous container or boss identity', () => {
     const source = fixture(), base = { id: source.world.pois[0]!.id, faction: 'scavs' };

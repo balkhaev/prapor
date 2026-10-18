@@ -27,8 +27,9 @@ test('visible squad role and expedition activity explain the actor without expos
   for (const [npcActivity, label] of [
     ['travel', 'Идёт с отрядом'],
     ['assemble', 'Собирается с отрядом'], ['capture', 'Занимает точку'], ['forage', 'Ищет припасы'],
-    ['haul', 'Несёт добычу на базу'], ['withdraw', 'Отступает с отрядом'],
+    ['haul', 'Несёт добычу на базу'], ['withdraw', 'Отступает к своим'],
     ['defend', 'Защищает базу'], ['reinforce', 'Идёт на помощь'], ['retake', 'Отбивает точку'],
+    ['assault', 'Штурмует базу'], ['regroup', 'Перегруппировывается'],
   ] as const) {
     const contact = liveObservedContact({ ...squad, npcActivity }, npc, squad.id);
     expect(contact).toContain('Командир отряда 3');
@@ -42,6 +43,14 @@ test('visible squad role and expedition activity explain the actor without expos
   expect(liveNpcSquadLabel({ ...squad, npcSquad: { ...squad.npcSquad, leader: false } })).toBe('Боец отряда 3');
   for (const entity of [{ ...squad, npcSquad: undefined }, { ...squad, health: 0 },
     { ...squad, kind: 'player' as const }, { ...squad, bossId: 'lesnik' as const }]) expect(liveNpcSquadLabel(entity)).toBeNull();
+});
+
+test('a retreating guard has no invented squad or disclosed refuge', () => {
+  const guard = { ...npc, role: 'guard' as const, npcActivity: 'withdraw' as const };
+  const contact = liveObservedContact(guard, npc, null);
+  expect(contact).toContain('Отступает к своим');
+  expect(contact).not.toContain('отряда');
+  expect(liveNpcSquadLabel(guard)).toBeNull();
 });
 
 test('observed site text describes ownership and contest without inventing progress or defenders', () => {

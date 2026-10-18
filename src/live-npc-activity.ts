@@ -12,10 +12,12 @@ const labels: Record<LiveNpcActivity, string> = {
   capture: 'Занимает точку',
   forage: 'Ищет припасы',
   haul: 'Несёт добычу на базу',
-  withdraw: 'Отступает с отрядом',
+  withdraw: 'Отступает к своим',
   defend: 'Защищает базу',
   reinforce: 'Идёт на помощь',
   retake: 'Отбивает точку',
+  assault: 'Штурмует базу',
+  regroup: 'Перегруппировывается',
 };
 
 /** Only describe what the server has revealed about an observed ordinary NPC. */
