@@ -1,8 +1,9 @@
-export type GameSoundCue = 'select'|'confirm'|'blocked'|'assign'|'build'|'complete'|'depart'|'return'|'danger'|'search';
+export type GameSoundCue = 'select'|'confirm'|'blocked'|'assign'|'build'|'complete'|'depart'|'return'|'danger'|'search'|'gunshot'|'gunshot-muted';
+export interface GameSoundPosition { gain?: number; pan?: number }
 export interface GameSound {
 	readonly enabled: boolean;
 	setEnabled(enabled: boolean): Promise<boolean>;
-	play(cue: GameSoundCue): void;
+	play(cue: GameSoundCue, position?: GameSoundPosition): void;
 	destroy(): void;
 }
 
@@ -13,6 +14,7 @@ const MIN_CUE_GAP_MS = 40;
 const COOLDOWN_MS: Record<GameSoundCue, number> = {
 	select: 80, confirm: 160, blocked: 220, assign: 180, build: 260,
 	complete: 420, depart: 500, return: 600, danger: 700, search: 320,
+	gunshot: 65, 'gunshot-muted': 65,
 };
 
 /** Keeps a burst of UI or timeline events from turning into a loud pile of sounds. */
@@ -54,6 +56,8 @@ const CUES: Record<GameSoundCue, readonly Voice[]> = {
 	return: [noise(1600, .210, .10), tone(620, .043, .11, .012), tone(890, .080, .12, .073), tone(1180, .095, .08, .160)],
 	danger: [noise(600, .075, .23, 0, 'lowpass', 290), tone(75, .110, .16, 0, 42, 'triangle'), noise(2100, .175, .09, .035)],
 	search: [noise(2300, .105, .11, 0, 'highpass', 1400), noise(900, .070, .12, .035), tone(210, .055, .08, .090, 145, 'triangle')],
+	gunshot: [noise(3400, .048, .30, 0, 'highpass', 800), tone(150, .11, .24, 0, 42, 'triangle'), noise(650, .28, .15, .035, 'lowpass', 120)],
+	'gunshot-muted': [noise(1700, .037, .15, 0, 'bandpass', 550), tone(130, .070, .13, 0, 65, 'triangle'), noise(700, .10, .07, .026, 'lowpass')],
 };
 
 function storedPreference(): boolean {
@@ -77,7 +81,7 @@ export function createGameSound(): GameSound {
 	const onVisibility = () => { if (hidden()) { stopAll(); void context?.suspend().catch(() => {}); } };
 	if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibility);
 
-	function startVoice(part: Voice, at: number): void {
+	function startVoice(part: Voice, at: number, gain: number, pan: number): void {
 		if (!context || !master) return;
 		const audio = context, nodes: AudioNode[] = [];
 		let source: AudioScheduledSourceNode | null = null, timer: ReturnType<typeof setTimeout> | null = null;
@@ -94,10 +98,13 @@ export function createGameSound(): GameSound {
 			const envelope = audio.createGain(); nodes.push(envelope);
 			const start = at + part.delay, end = start + part.duration, pitch = .985 + Math.random() * .03;
 			envelope.gain.setValueAtTime(0, start);
-			envelope.gain.linearRampToValueAtTime(Math.min(.30, part.gain), start + Math.min(.006, part.duration / 4));
+			envelope.gain.linearRampToValueAtTime(Math.max(.0001, Math.min(.30, part.gain) * gain), start + Math.min(.006, part.duration / 4));
 			envelope.gain.exponentialRampToValueAtTime(.0001, end);
 			envelope.gain.setValueAtTime(0, end + .008);
-			envelope.connect(master);
+			if (pan && typeof audio.createStereoPanner === 'function') {
+				const panner = audio.createStereoPanner(); nodes.push(panner); panner.pan.value = pan;
+				envelope.connect(panner); panner.connect(master);
+			} else envelope.connect(master);
 			if (part.kind === 'tone') {
 				const oscillator = audio.createOscillator(); source = oscillator; nodes.push(oscillator);
 				oscillator.type = part.wave;
@@ -156,11 +163,13 @@ export function createGameSound(): GameSound {
 				return false;
 			}
 		},
-		play(cue: GameSoundCue): void {
+		play(cue: GameSoundCue, position?: GameSoundPosition): void {
 			if (destroyed || !enabled || hidden() || !context || context.state !== 'running' || !Object.hasOwn(CUES, cue)) return;
 			const parts = CUES[cue], duration = Math.max(...parts.map((part) => part.delay + part.duration));
 			if (active.size + parts.length > MAX_VOICES || !limiter.reserve(cue, context.currentTime * 1000, duration * 1000 + 25, parts.length)) return;
-			for (const part of parts) startVoice(part, context.currentTime + .004);
+			const gain = Number.isFinite(position?.gain) ? Math.max(0, Math.min(1, position!.gain!)) : 1;
+			const pan = Number.isFinite(position?.pan) ? Math.max(-1, Math.min(1, position!.pan!)) : 0;
+			for (const part of parts) startVoice(part, context.currentTime + .004, gain, pan);
 		},
 		destroy(): void {
 			if (destroyed) return; destroyed = true; change++; enabled = false; stopAll();

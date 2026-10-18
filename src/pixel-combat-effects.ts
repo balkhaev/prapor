@@ -16,7 +16,7 @@ const clamp = (value: number, lo: number, hi: number) => Math.max(lo, Math.min(h
 const lerp = (a: LivePoint, b: LivePoint, t: number) => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
 
 /** Pure event-time sampling: particles neither accumulate nor depend on render rate.
- * Only confirmed armor hits throw bright flecks; flesh/fabric and ground make dust. */
+ * Hard metal throws sparks; masonry, timber, fabric and soil have distinct debris. */
 export function sampleGunfire(input: GunfireInput): GunfireFrame {
   const { age, from, to, eject, surface, small, reducedMotion, suppressed } = input;
   const scale = clamp(Number.isFinite(input.scale) ? input.scale : 1, .1, 3);
@@ -57,15 +57,16 @@ export function sampleGunfire(input: GunfireInput): GunfireFrame {
   }
   const impactAge = age - flightMs;
   if (impactAge >= 0 && impactAge < 520) {
-    const count = small ? 2 : reducedMotion ? 3 : surface === 'armor' ? 10 : 7;
+    const metal = surface === 'armor' || surface === 'metal';
+    const count = small ? 2 : reducedMotion ? 3 : metal ? 10 : 7;
     for (let i = 0; i < count; i++) {
-      const spark = surface === 'armor' && i < (small ? 1 : 6), lifetime = spark ? 170 + noise(i + 7) * 160 : 440 + noise(i + 7) * 80;
+      const spark = metal && i < (small ? 1 : 6), lifetime = spark ? 170 + noise(i + 7) * 160 : 440 + noise(i + 7) * 80;
       if (impactAge >= lifetime) continue;
       const t = impactAge / lifetime, angle = Math.atan2(-uy, -ux) + (noise(i + 21) - .5) * 2.8;
       const speed = (spark ? 17 : 6) + noise(i + 31) * (spark ? 16 : 9), reach = speed * t * scale;
       const point = { x: to.x + Math.cos(angle) * reach, y: to.y + Math.sin(angle) * reach * .7 + t * t * (spark ? 13 : 8) * scale };
       add(spark ? 'spark' : 'dust', point, spark ? .8 : 1 + t * 2, (1 - t) * (spark ? .95 : .48),
-        spark ? i % 2 ? '#ffd58c' : '#fff0c5' : surface === 'body' ? '#a59780' : '#b8ac93',
+        spark ? i % 2 ? '#ffd58c' : '#fff0c5' : surface === 'body' ? '#a59780' : surface === 'masonry' ? '#d1c7b9' : surface === 'wood' ? '#ad8659' : '#b8ac93',
         spark ? { x: point.x - Math.cos(angle) * 4 * scale * (1 - t), y: point.y - Math.sin(angle) * 3 * scale * (1 - t) } : point);
     }
   }

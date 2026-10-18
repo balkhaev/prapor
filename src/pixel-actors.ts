@@ -60,7 +60,7 @@ function paintModel(r: PixelRaster, entity: ActorIdentity, animation: PixelActor
   const p = (side: number, forward: number, z = 0): LivePoint => point(PIXEL_ACTOR_ANCHOR.x + lateral.x * side + bearing.x * forward, PIXEL_ACTOR_ANCHOR.y + lateral.y * side + bearing.y * forward - z);
   const b = (side: number, forward: number, z: number): LivePoint => {
     const upper = Math.max(0, Math.min(1, (z - 57) / 53));
-    return p(side + rig.hipSway * (1 - upper) + rig.sway * upper, forward + rig.lean, z + rig.bob);
+    return p(side + rig.hipSway * (1 - upper) + rig.sway * upper, forward + rig.lean + rig.crouchLean * upper, z + rig.bob - rig.chestFold * upper);
   };
   const line = (a: LivePoint, c: LivePoint, color: string, width = 1) => r.line(a.x, a.y, c.x, c.y, color, width);
   const outline = (vertices: LivePoint[], fill: string, ink: string = P.ink) => { r.polygon(vertices, fill); vertices.forEach((a, i) => line(a, vertices[(i + 1) % vertices.length]!, ink)); };
@@ -150,9 +150,13 @@ function paintModel(r: PixelRaster, entity: ActorIdentity, animation: PixelActor
     softVolume(-wide - 2, -14, [[73, 3, 4], [89, 3, 4], [93, 2, 3]], ['#949877', '#5b6b51', '#bab798']);
   };
   if (!rear) pack();
-  const kick = rig.weaponKick, sockets = pixelWeaponAnchors(weapon, rig.grip, animation.facing, kick), gunProfile = pixelWeaponProfile(weapon);
+  const kick = rig.weaponKick, pitch = rig.weaponPitch, sockets = pixelWeaponAnchors(weapon, rig.grip, animation.facing, kick, pitch), gunProfile = pixelWeaponProfile(weapon);
   const twoHanded = gunProfile.twoHanded;
-  const leftHand = twoHanded ? sockets.forehand : b(-19, -rig.leftStride * .6, 57 + shouldered * 15), rightHand = rig.grip;
+  const support = twoHanded ? sockets.forehand : b(-19, -rig.leftStride * .6, 57 + shouldered * 15);
+  // While reloading, the support hand comes off the fore-end to the magazine
+  // well; the trigger hand continues to carry the same weapon grip.
+  const magazineHand = point(rig.grip.x + bearing.x * 7, rig.grip.y + bearing.y * 7 + 9);
+  const leftHand = point(support.x + (magazineHand.x - support.x) * rig.reload, support.y + (magazineHand.y - support.y) * rig.reload), rightHand = rig.grip;
   const arm = (side: number, hand: LivePoint, far: boolean) => {
     const shoulder = side < 0 ? rig.leftShoulder : rig.rightShoulder;
     const elbow = point(shoulder.x * .48 + hand.x * .52 - bearing.x * (far ? 6 : 3), shoulder.y * .48 + hand.y * .52 + 10 + shouldered * 2);
@@ -169,7 +173,7 @@ function paintModel(r: PixelRaster, entity: ActorIdentity, animation: PixelActor
     // Both forearms reach around the front of the torso. Painting their hands last
     // would make them show through the back plate and the backpack.
     arm(nearSign, nearHand, false);
-    paintPixelWeapon(r, weapon, rig.grip, animation.facing, kick); hand(farHand); hand(nearHand);
+    paintPixelWeapon(r, weapon, rig.grip, animation.facing, kick, pitch); hand(farHand); hand(nearHand);
   }
   softVolume(0, 0, [[62, 14, 9], [77, 17, 10], [96, torsoHalf - 1, 12], [106, torsoHalf, 10], [112 + shouldered * 3, 12, 8]], [rear ? shade : coat, shade, light]);
   softVolume(0, 1, [[53, 13, 8], [58, 16, 10], [64, 14, 9]], [trousers, '#435248', trouserLight]);
@@ -238,7 +242,7 @@ function paintModel(r: PixelRaster, entity: ActorIdentity, animation: PixelActor
     if (boss === 'komendant') { const badge = h(0, 12, 150); r.rect(badge.x - 2, badge.y - 2, 4, 4, '#d3c17f'); }
   } else { r.ellipse(head.x, head.y - 9, headW - 1, 8, hair); r.polygon([point(head.x - headW + 2, head.y - 7), point(head.x - 8, head.y - 15), point(head.x + 5, head.y - 15), point(head.x + 9, head.y - 9)], look % 4 === 2 ? '#b0a18a' : '#927757'); line(h(nearSign * 9, 9, 144), h(nearSign * 11, 8, 137), hair, 4); }
   if (!rear) {
-    paintPixelWeapon(r, weapon, rig.grip, animation.facing, kick);
+    paintPixelWeapon(r, weapon, rig.grip, animation.facing, kick, pitch);
     arm(nearSign, nearHand, false); hand(farHand); hand(nearHand);
   }
   return { ...(gunProfile.hasMuzzle ? { muzzle: sockets.muzzle } : {}), ...(gunProfile.hasEjection ? { ejection: sockets.ejection } : {}) };

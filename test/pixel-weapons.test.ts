@@ -8,13 +8,13 @@ import { createWeaponShowcaseBuild } from '../src/weapon-showcase';
 import { weaponActorArt, weaponBuildArt, weaponBuildGeometry } from '../src/armory-art';
 import { sampleWeaponContours, weaponPathContours } from '../src/pixel-weapon-geometry';
 
-function surface(input:PixelWeaponInput='akm',facing:typeof PIXEL_FACINGS[number]='e',kick=0){
+function surface(input:PixelWeaponInput='akm',facing:typeof PIXEL_FACINGS[number]='e',kick=0,pitch=0){
   const pixels=new Map<string,string>();let calls=0;
   const context={setTransform(){},fillStyle:'',fillRect(x:number,y:number,w:number,h:number){
     if(![x,y,w,h].every(Number.isInteger)||x<0||y<0||x+w>256||y+h>240||!/^#[\da-f]{6}$/i.test(context.fillStyle))throw new Error('Invalid native weapon pixel');
     calls++;for(let row=y;row<y+h;row++)for(let col=x;col<x+w;col++)pixels.set(`${col},${row}`,context.fillStyle);
   }};
-  const anchors=paintPixelWeapon(new PixelRaster(context as unknown as CanvasRenderingContext2D,256,240),input,{x:128,y:120},facing,kick);
+  const anchors=paintPixelWeapon(new PixelRaster(context as unknown as CanvasRenderingContext2D,256,240),input,{x:128,y:120},facing,kick,pitch);
   return{pixels,anchors,calls,signature:[...pixels].sort(([a],[b])=>a.localeCompare(b)).map(([point,color])=>`${point}:${color}`).join('|')};
 }
 function install(weapon:ReturnType<typeof createWeaponShowcaseBuild>,id:string){const model=MODULE_BY_ID[id]!;weapon.modules[model.slot]={id,modelId:id,durability:100,foundAt:0};}
@@ -80,6 +80,19 @@ describe('complete native arsenal and real installed assemblies',()=>{
         if(slot==='receiver')expect(pixelWeaponProfile(changed).hasEjection).toBe(false);
       }
       weapon.modules={};expect(surface(weapon).pixels.size).toBe(0);expect(pixelWeaponProfile(weapon).hasMuzzle).toBe(false);expect(pixelWeaponProfile(weapon).hasEjection).toBe(false);
+    }
+  });
+
+  test('lowering the bore rotates muzzle and support sockets downward in every bearing and stays bounded',()=>{
+    for(const id of ['pm','akm','awm','pkp'])for(const facing of PIXEL_FACINGS){
+      const weapon=createWeaponShowcaseBuild(id,'field'),neutral=surface(weapon,facing),low=surface(weapon,facing,0,.5);
+      expect(low.anchors).toEqual(pixelWeaponAnchors(weapon,{x:128,y:120},facing,0,.5));
+      expect(low.anchors.muzzle.y).toBeGreaterThan(neutral.anchors.muzzle.y+4);
+      expect(low.anchors.forehand.y).toBeGreaterThanOrEqual(neutral.anchors.forehand.y);
+      expect(low.pixels.get(`${low.anchors.muzzle.x},${low.anchors.muzzle.y}`)).toBe(PIXEL_WEAPON_PALETTE.outline);
+      expect(low.signature).not.toBe(neutral.signature);
+      expect(surface(weapon,facing,0,.51).signature).toBe(low.signature);
+      for(const invalid of [NaN,Infinity])expect(pixelWeaponAnchors(weapon,{x:128,y:120},facing,0,invalid)).toEqual(neutral.anchors);
     }
   });
 

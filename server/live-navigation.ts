@@ -147,5 +147,7 @@ export function createLiveNavigation(world: LiveWorld) {
     }
     return true;
   };
-  return { key, walkable, findPath, hasLineOfSight, storageBytes };
+  const blocksSight = (point: LivePoint): boolean => Number.isInteger(point.x) && Number.isInteger(point.y)
+    && point.x >= 0 && point.y >= 0 && point.x < world.width && point.y < world.height && sightWalls[key(point)] === 1;
+  return { key, walkable, findPath, hasLineOfSight, blocksSight, storageBytes };
 }

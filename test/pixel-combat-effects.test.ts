@@ -16,11 +16,19 @@ test('flight ends at the confirmed hit before any armor flecks appear', () => {
 });
 
 test('cloth and missed ground impacts make dust instead of metallic sparks', () => {
-  for (const surface of ['body', 'ground'] as const) {
+  for (const surface of ['body', 'ground', 'masonry', 'wood'] as const) {
     const particles = sampleGunfire({ ...input, age: 140, surface }).particles;
     expect(particles.some(p => p.kind === 'dust')).toBe(true);
     expect(particles.some(p => p.kind === 'spark')).toBe(false);
   }
+});
+
+test('a confirmed strike on metal emits sparks, while wall chips differ from timber', () => {
+  const metal = sampleGunfire({ ...input, age: 140, surface: 'metal' });
+  expect(metal.particles.some(p => p.kind === 'spark')).toBe(true);
+  const wall = sampleGunfire({ ...input, age: 140, surface: 'masonry' });
+  const wood = sampleGunfire({ ...input, age: 140, surface: 'wood' });
+  expect(wall.particles.find(p => p.kind === 'dust')!.color).not.toBe(wood.particles.find(p => p.kind === 'dust')!.color);
 });
 
 test('flash follows the barrel direction and a suppressor reduces its light and duration', () => {

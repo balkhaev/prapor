@@ -30,17 +30,40 @@ describe('live wire parser', () => {
       const { world: _world, ...cached } = packet;
       expect(readLiveSnapshot(cached, packet.world).entities[1]!.combatStance).toBe(combatStance);
     }
-    for (const impact of ['armor', 'body'] as const) {
+    for (const impact of ['armor', 'body', 'ground', 'masonry', 'metal', 'wood'] as const) {
       packet.events = [{ id: 'shot', at: 1900, kind: 'combat', text: 'Выстрел', actorId: 'player-1', targetId: 'scav-1', from: { x: 2, y: 2 }, to: { x: 4, y: 6 }, damage: 8, impact }];
       expect(readLiveSnapshot(packet).events[0]!.impact).toBe(impact);
     }
-    for (const impact of ['metal', {}, null, 1]) {
+    for (const impact of ['lava', {}, null, 1]) {
       Object.assign(packet.events[0]!, { impact });
       expect(() => readLiveSnapshot(packet)).toThrow(LiveApiError);
     }
     packet.events = [];
     for (const combatStance of ['hidden', {}, null, 1]) {
       Object.assign(packet.entities[1]!, { combatStance });
+      expect(() => readLiveSnapshot(packet)).toThrow(LiveApiError);
+    }
+  });
+  test('public pressure and actual strike positions are bounded and copied without private decisions', () => {
+    const packet = fixture();
+    for (const combatBehavior of ['acquiring', 'firing', 'suppressed', 'relocating', 'recovering', 'reloading'] as const) {
+      Object.assign(packet.entities[1]!, { combatBehavior, suppression: .65, firefight: { readyAt: 123, lastSeen: { x: 99, y: 99 } } });
+      const entity = readLiveSnapshot(packet).entities[1]!;
+      expect(entity.combatBehavior).toBe(combatBehavior); expect(entity.suppression).toBe(.65);
+      expect(entity).not.toHaveProperty('firefight');
+    }
+    for (const suppression of [-.1, 1.01, NaN, 'high', null]) {
+      Object.assign(packet.entities[1]!, { suppression });
+      expect(() => readLiveSnapshot(packet)).toThrow(LiveApiError);
+    }
+    delete packet.entities[1]!.suppression;
+    Object.assign(packet.entities[1]!, { combatBehavior: 'omniscient' });
+    expect(() => readLiveSnapshot(packet)).toThrow(LiveApiError);
+    delete packet.entities[1]!.combatBehavior;
+    packet.events = [{ id: 'miss', at: 1900, kind: 'combat', text: 'Промах', actorId: 'player-1', targetId: 'scav-1', from: { x: 2, y: 2 }, to: { x: 4, y: 6 }, impactPoint: { x: 5.25, y: 6.5 }, damage: 0, impact: 'masonry' }];
+    expect(readLiveSnapshot(packet).events[0]!.impactPoint).toEqual({ x: 5.25, y: 6.5 });
+    for (const impactPoint of [{ x: -1, y: 2 }, { x: Infinity, y: 3 }, {}, null]) {
+      Object.assign(packet.events[0]!, { impactPoint });
       expect(() => readLiveSnapshot(packet)).toThrow(LiveApiError);
     }
   });

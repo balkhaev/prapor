@@ -157,6 +157,9 @@ export interface LiveEntity extends LivePoint {
   aimTargetId?: string;
   /** Observed posture only; the shelter, route and remembered enemy remain private. */
   combatStance?: 'seeking-cover' | 'covered' | 'peeking';
+  /** Visible body language, never a private target, firing timer or route. */
+  combatBehavior?: 'acquiring' | 'firing' | 'suppressed' | 'relocating' | 'recovering' | 'reloading';
+  suppression?: number;
   faction?: "scavs" | "raiders";
   role?: "patrol" | "guard" | "marksman";
   /** Visible ordinary NPC activity only; goals, hearing and memory stay private. */
@@ -234,7 +237,9 @@ export interface LiveEvent {
   to?: LivePoint;
   damage?: number;
   /** Surface actually struck by the authoritative shot; older events can omit it. */
-  impact?: 'body' | 'armor';
+  impact?: 'body' | 'armor' | 'ground' | 'masonry' | 'metal' | 'wood';
+  /** Authoritative strike point; to remains the intended target for facing. */
+  impactPoint?: LivePoint;
 }
 export interface LiveBossStatus {
   bossId: BossId; name: string; districtId: LiveDistrictId; poiId: string;

@@ -196,7 +196,7 @@ test('long suppressed barrels, large scopes and bipods stay inside native/croppe
       }
       if (mode !== 'downed') {
         const rig = pixelActorRig(animation), recoil = rig.weaponKick;
-        const expected = pixelWeaponAnchors(build, rig.grip, facing, recoil);
+        const expected = pixelWeaponAnchors(build, rig.grip, facing, recoil, rig.weaponPitch);
         expect(metadata).toEqual({ muzzle: expected.muzzle, ejection: expected.ejection });
         if (pixelBearing(facing).y >= -.1) {
           const support = { x: expected.forehand.x - crop.x, y: expected.forehand.y - crop.y };
@@ -258,7 +258,7 @@ test('blended combat poses preserve weapon sockets, support hands and native fra
     for (let step = 0; step <= 8; step++) {
       const animation: PixelActorFrame = { mode: 'aim', frame: 0, facing, pose: { walkFrame: 17, move: .5, aim: step / 8 } };
       const native = surface(), metadata = paintPixelActor(native.context, scav, animation, build), rig = pixelActorRig(animation);
-      const sockets = pixelWeaponAnchors(build, rig.grip, facing, rig.weaponKick);
+      const sockets = pixelWeaponAnchors(build, rig.grip, facing, rig.weaponKick, rig.weaponPitch);
       expect(native.valid).toBe(true); expect(hasPadding(native.pixels), `${weapon} ${facing} ${step}`).toBe(true);
       silhouettes.add(digest(native.pixels)); expect(metadata).toEqual({ muzzle: sockets.muzzle, ejection: sockets.ejection });
       const sprite = art.get(scav, animation, build), crop = { x: PIXEL_ACTOR_ANCHOR.x - sprite.anchor.x, y: PIXEL_ACTOR_ANCHOR.y - sprite.anchor.y };
@@ -299,7 +299,7 @@ test('covered sprites visibly duck with registered weapon sockets and distinct b
     for (const crouch of [.375, .625, 1]) {
       const pose: PixelActorFrame = { ...animation, pose: { ...animation.pose!, crouch } }, painted = surface();
       const metadata = paintPixelActor(painted.context, scav, pose, 'akm'), rig = pixelActorRig(pose);
-      const sockets = pixelWeaponAnchors('akm', rig.grip, facing, rig.weaponKick);
+      const sockets = pixelWeaponAnchors('akm', rig.grip, facing, rig.weaponKick, rig.weaponPitch);
       expect(painted.valid).toBe(true); expect(hasPadding(painted.pixels)).toBe(true);
       expect(Math.floor(painted.pixels.findIndex(Boolean) / W)).toBeGreaterThan(standingTop + 8);
       expect(metadata).toEqual({ muzzle: sockets.muzzle, ejection: sockets.ejection });

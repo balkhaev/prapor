@@ -12,6 +12,7 @@ import { liveBossRoster, liveBossGuidance, readLiveBossRoute, getLiveBossHuntGui
 import { raidEntryMap, raidEntryPurposeName } from './raid-entry-ui';
 import { liveAutobattlePanel, liveAutobattleStatus, liveObservedContact } from './live-autobattle-ui';
 import { livePollDelay } from './game/live-timing';
+import type { GameSound } from './game-sound';
 
 const escape = (value: unknown) => String(value).replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!);
 const integer = (value: number) => Math.floor(value).toLocaleString('ru-RU');
@@ -28,6 +29,7 @@ const purposes: Record<LivePurpose, { name: string; description: string; tags: s
 const citySiteKinds = { courtyard: 'Жилой двор', arcade: 'Сквозной проход', workyard: 'Двор мастерских', 'service-yard': 'Служебный двор' } as const;
 
 export interface LiveModeOptions {
+  sound?: GameSound;
   world: HTMLElement;
   dock: HTMLElement;
   /** A sibling of auxiliary windows keeps raid controls available above them. */
@@ -71,7 +73,7 @@ export function createLiveMode(options: LiveModeOptions) {
   const overlay = document.createElement('div'); overlay.className = 'live-world-overlay';
   const raidStatus = document.createElement('section'); raidStatus.className = 'field-raid-status'; raidStatus.hidden = true;
   raidStatus.setAttribute('aria-label', 'Боец на Периметре: состояние и возвращение');
-  const scene = (options.sceneFactory ?? ((host, command, select) => new LiveScene(host, command, select)))(world, command => void send(command), id => { selectedId = id; revealContacts = true; render(); });
+  const scene = (options.sceneFactory ?? ((host, command, select) => new LiveScene(host, command, select, { sound: options.sound })))(world, command => void send(command), id => { selectedId = id; revealContacts = true; render(); });
   world.append(overlay);
   (options.hudRoot ?? world).append(raidStatus);
   const identity = (): LiveIdentity => ({ accountId: identityAccount, gameId: identityGame, ...(snapshot ? { playerId: snapshot.selfId, worldVersion: snapshot.worldVersion } : {}) });

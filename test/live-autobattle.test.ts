@@ -10,12 +10,13 @@ import type { LiveCommand, LiveSnapshot } from '../src/game/live';
 import { LiveApiError, readLiveSnapshot } from '../src/live-client';
 import { createLiveNavigation } from '../server/live-navigation';
 import { findLiveCombatCover } from '../server/live-combat-cover';
+import { getLiveLoadout } from '../src/game/live-entry';
 
 const ORIGIN = 'https://game.delopusk.ru';
 const world = getLiveMap('perimeter');
 interface Session { id: string; cookie: string }
-let folder: string, dbPath: string, service: LiveService, time: number;
-const options = () => ({ dbPath, secureCookies: true, allowedOrigins: [ORIGIN], now: () => time, random: () => .5, automaticTicks: false });
+let folder: string, dbPath: string, service: LiveService, time: number, roll: number;
+const options = () => ({ dbPath, secureCookies: true, allowedOrigins: [ORIGIN], now: () => time, random: () => roll, automaticTicks: false });
 async function call(path: string, session?: Session, body?: unknown) {
   const post = !['state', 'status'].includes(path);
   return (await service.fetch(new Request(`${ORIGIN}/api/live/${path}`, { method: post ? 'POST' : 'GET', headers: {
@@ -52,7 +53,7 @@ function place(session: Session, fields: Record<string, unknown>) {
   });
 }
 beforeEach(async () => {
-  folder = await mkdtemp(join(tmpdir(), 'prapor-autobattle-')); dbPath = join(folder, 'live.sqlite'); time = 1_800_000_000_000;
+  folder = await mkdtemp(join(tmpdir(), 'prapor-autobattle-')); dbPath = join(folder, 'live.sqlite'); time = 1_800_000_000_000; roll = .5;
   service = createLiveService(options());
   editStorage(db => {
     const stored = JSON.parse(db.query<{ state: string }, []>('SELECT state FROM live_world WHERE id=1').get()!.state);
@@ -65,6 +66,63 @@ beforeEach(async () => {
 afterEach(async () => { service.close(); await rm(folder, { recursive: true, force: true }); });
 
 describe('authoritative automatic sorties', () => {
+  test('50 ms server ticks deliver controlled bursts, real misses spend exact ammunition and quiet recovery prevents DPS multiplication', async () => {
+    const fighter = await enter(), rival = await enter();
+    place(fighter.session, { x: 0, y: 0, purpose: 'pvp', loadout: getLiveLoadout('assault') });
+    place(rival.session, { x: 4, y: 0 });
+    await enter(fighter.session); await enter(rival.session); roll = .99;
+    await act(fighter.session, { type: 'automation', enabled: true });
+    for (let elapsed = 0; elapsed < 9000; elapsed += 50) {
+      time += 50; service.tick();
+      if (elapsed % 1000 === 0) { await state(fighter.session); await state(rival.session); }
+    }
+    const snapshot = await state(fighter.session), shots = snapshot.events.filter(event => event.actorId === fighter.session.id && event.from && event.to);
+    expect(shots.length).toBeGreaterThanOrEqual(4);
+    expect(snapshot.self.ammo).toBe(60 - shots.length);
+    expect((await state(rival.session)).self.body).toEqual(createHealth());
+    for (const shot of shots) { expect(shot.damage).toBe(0); expect(shot.impactPoint).toBeDefined(); expect(shot.impactPoint).not.toEqual(shot.to); }
+    const gaps = shots.slice(1).map((shot, index) => shot.at - shots[index]!.at);
+    expect(gaps.some(gap => gap >= 150 && gap <= 300)).toBe(true);
+    expect(gaps.some(gap => gap >= 2000)).toBe(true);
+    expect(shots.length).toBeLessThan(9000 / getLiveLoadout('assault').attackMs);
+  });
+
+  test('a real incoming round interrupts automatic acquisition before ammunition is spent', async () => {
+    const fighter = await enter(), rival = await enter();
+    place(fighter.session, { x: 0, y: 0, purpose: 'pvp' }); place(rival.session, { x: 4, y: 0 });
+    await enter(fighter.session); await enter(rival.session); await act(fighter.session, { type: 'automation', enabled: true });
+    let aiming = false;
+    for (let elapsed = 0; elapsed < 1500; elapsed += 50) {
+      time += 50; service.tick();
+      const observed = await state(fighter.session);
+      if (observed.entities.find(entity => entity.id === fighter.session.id)?.aimUntil) { aiming = true; break; }
+    }
+    expect(aiming).toBe(true); expect((await state(fighter.session)).self.ammo).toBe(60);
+    await act(rival.session, { type: 'attack', targetId: fighter.session.id });
+    const interrupted = (await state(fighter.session)).entities.find(entity => entity.id === fighter.session.id)!;
+    expect(interrupted.aimUntil).toBeUndefined(); expect(interrupted.combatBehavior).toBe('suppressed'); expect(interrupted.suppression).toBeGreaterThan(.4);
+    await advance(750, [fighter.session, rival.session]);
+    expect((await state(fighter.session)).self.ammo).toBe(60);
+  });
+
+  test('automatic time-limit return during acquisition clears its unfinished aim and keeps walking to extraction', async () => {
+    const fighter = await enter(), rival = await enter();
+    place(fighter.session, { x: 0, y: 0, purpose: 'pvp' }); place(rival.session, { x: 4, y: 0 });
+    await enter(fighter.session); await enter(rival.session); await act(fighter.session, { type: 'automation', enabled: true });
+    editStorage(db => {
+      const row = db.query<{ identity: string; state: string }, []>('SELECT identity,state FROM live_players').all().find(row => JSON.parse(row.state).id === fighter.session.id)!;
+      const saved = JSON.parse(row.state); saved.automation.startedAt = time - 12 * 60_000 + 750;
+      db.query('UPDATE live_players SET state=? WHERE identity=?').run(JSON.stringify(saved), row.identity);
+    });
+    await enter(fighter.session); await enter(rival.session);
+    for (let elapsed = 0; elapsed < 500; elapsed += 50) { time += 50; service.tick(); }
+    expect((await state(fighter.session)).entities.find(entity => entity.id === fighter.session.id)?.aimUntil).toBeDefined();
+    await advance(750, [fighter.session, rival.session]);
+    const returning = await state(fighter.session), actor = returning.entities.find(entity => entity.id === fighter.session.id)!;
+    expect(returning.self.automation?.stage).toBe('extract'); expect(actor.aimUntil).toBeUndefined();
+    expect(returning.self.ammo).toBe(60); expect(actor.x + actor.y).toBeGreaterThan(0);
+  });
+
   test('automatic fighters physically take cover, peek to fire, and release the position on recall', async () => {
     const nav = createLiveNavigation(world);
     const arena = world.obstacles.filter(obstacle => obstacle.kind !== 'water').map(obstacle => ({
@@ -216,7 +274,10 @@ describe('authoritative automatic sorties', () => {
     place(fighter.session, { x: 0, y: 0, purpose: 'pvp', automation: undefined, sortie: undefined }); await enter(fighter.session); await enter(rival.session);
     await act(fighter.session, { type: 'automation', enabled: true }); await advance(250, [fighter.session, rival.session]);
     const fighting = await state(fighter.session);
-    expect(fighting.self.ammo).toBe(59); expect(fighting.self.automation?.stage).toBe('combat'); expect(fighting.self.automation?.targetId).toBe(rival.session.id);
+    expect(fighting.self.ammo).toBe(60); expect(fighting.self.automation?.stage).toBe('combat'); expect(fighting.self.automation?.targetId).toBe(rival.session.id);
+    // Even a close automatic contact needs a planted acquisition before a real round.
+    await advance(1750, [fighter.session, rival.session]);
+    expect((await state(fighter.session)).self.ammo).toBe(59);
   });
 
   test('automatic treatment uses and completes the existing physical medicine rather than healing immediately', async () => {

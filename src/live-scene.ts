@@ -1,5 +1,7 @@
 import { LIVE_TERRAIN_CODES, type LiveCityBuilding, type LiveCommand, type LiveDrop, type LiveEntity, type LiveFactionSite, type LiveLandscapePath, type LiveObstacle, type LivePoint, type LiveSnapshot, type LiveTerrain, type LiveWorld, type LiveWorldProp } from './game/live';
 import { PixelCombatAnimation, pixelFacing, samplePixelMotion, stopPixelMotion, updatePixelMotion, type PixelMotion } from './pixel-animation';
+import { LiveCombatSound } from './live-combat-sound';
+import type { GameSound } from './game-sound';
 import { liveDropLabel, liveLootTotals } from './live-loot-ui';
 import { liveFactionSiteLabel, liveNpcActivityLabel, liveNpcSquadLabel } from './live-npc-activity';
 import { getBoss } from './game/bosses';
@@ -89,6 +91,7 @@ export class LiveScene {
   private suppressPointerClick = false;
   private interactionEvents = new AbortController();
   private combatAnimation = new PixelCombatAnimation();
+  private combatSound = new LiveCombatSound();
   private snapshotAt = 0;
   private weaponMounts = new Map<string, { point: LivePoint; muzzle: LivePoint; ejection: LivePoint; offset: LivePoint; ejectOffset: LivePoint; bodyHeight: number; suppressed: boolean }>();
   private shotRigs = new Map<string, { point: LivePoint; target: LivePoint; offset: LivePoint; ejectOffset: LivePoint; bodyHeight: number; suppressed: boolean }>();
@@ -131,7 +134,7 @@ export class LiveScene {
   private lampProps: LiveWorldProp[] = [];
   private reducedMotion = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
 
-  constructor(private host: HTMLElement, _command: (command: LiveCommand) => void, private select: (id: string) => void, private options: { observer?: boolean; controls?: boolean } = {}) {
+  constructor(private host: HTMLElement, _command: (command: LiveCommand) => void, private select: (id: string) => void, private options: { observer?: boolean; controls?: boolean; sound?: GameSound } = {}) {
     const context = this.canvas.getContext('2d');
     if (!context) throw new Error('Canvas unavailable');
     this.context = context;
@@ -166,7 +169,7 @@ export class LiveScene {
 
   show(): void { if (this.active) return; this.active = true; this.resize(); this.animate(); }
   hide(): void { this.cancelDragging(); this.active = false; cancelAnimationFrame(this.frame); this.frame = 0; this.weatherCache.clear(); }
-  clear(): void { this.cancelDragging(); this.snapshot = null; this.weatherCache.clear(); this.clearWorldArt(); this.motions.clear(); this.selected = null; this.selectedFactionSite = null; this.factionSiteTargets = []; this.routePoiIds = []; this.waypointTargets = []; this.hitTargets = []; this.combatAnimation.clear(); this.weaponMounts.clear(); this.shotRigs.clear(); this.paint(); }
+  clear(): void { this.cancelDragging(); this.snapshot = null; this.weatherCache.clear(); this.clearWorldArt(); this.motions.clear(); this.selected = null; this.selectedFactionSite = null; this.factionSiteTargets = []; this.routePoiIds = []; this.waypointTargets = []; this.hitTargets = []; this.combatAnimation.clear(); this.combatSound.clear(); this.weaponMounts.clear(); this.shotRigs.clear(); this.paint(); }
   setSelected(id: string | null): void { if (this.selected !== id) this.selectedFactionSite = null; this.selected = id; }
   /** Inspect public architecture without issuing a movement command. */
   focusPoint(point: LivePoint): void {
@@ -200,10 +203,11 @@ export class LiveScene {
     this.overlayBoundsDirty = true;
     this.factionSiteTargets = [];
     if (this.snapshot?.worldVersion !== snapshot.worldVersion || !snapshot.factionSites?.some(site => site.id === this.selectedFactionSite)) this.selectedFactionSite = null;
-    if (this.snapshot?.worldVersion !== snapshot.worldVersion) { this.cancelDragging(); this.motions.clear(); this.combatAnimation.clear(); this.weaponMounts.clear(); this.shotRigs.clear(); this.selected = null; this.routePoiIds = []; this.waypointTargets = []; this.hitTargets = []; this.following = true; this.overview = false; this.cityOverview = false; this.zoom = 1; this.cacheTerrain(snapshot.world); }
+    if (this.snapshot?.worldVersion !== snapshot.worldVersion) { this.cancelDragging(); this.motions.clear(); this.combatAnimation.clear(); this.combatSound.clear(); this.weaponMounts.clear(); this.shotRigs.clear(); this.selected = null; this.routePoiIds = []; this.waypointTargets = []; this.hitTargets = []; this.following = true; this.overview = false; this.cityOverview = false; this.zoom = 1; this.cacheTerrain(snapshot.world); }
     const cityButton = this.controls.querySelector<HTMLButtonElement>('[data-live-zoom=city]');
     if (cityButton) cityButton.hidden = !snapshot.world.city;
     this.combatAnimation.update(snapshot.events, snapshot.now, at);
+    this.combatSound.update(snapshot, this.options.sound, this.options.observer ? this.camera : snapshot.entities.find(entity => entity.id === snapshot.selfId) ?? this.camera, this.active);
     for (const entity of snapshot.entities) {
       const existing = this.motions.get(entity.id);
       const shot = [...snapshot.events].reverse().find(event => event.kind === 'combat' && event.actorId === entity.id && event.from && event.to && typeof event.damage === 'number' && snapshot.now - event.at >= 0 && snapshot.now - event.at < 200);
@@ -1092,7 +1096,9 @@ export class LiveScene {
         rig = { point: mount?.point ?? event.from, target: targetBody?.point ?? event.to, offset: mount?.offset ?? { x: 0, y: -27 }, ejectOffset: mount?.ejectOffset ?? { x: 0, y: -27 }, bodyHeight: targetBody?.bodyHeight ?? 27, suppressed: mount?.suppressed ?? false };
         this.shotRigs.set(event.id, rig);
       }
-      const ground = this.project(small ? event.from : rig.point), target = this.project(small ? event.to : rig.target, small ? 3 : (event.damage === 0 && !event.impact ? 0 : rig.bodyHeight * scale));
+      const environmentHit = event.impact && !['body', 'armor'].includes(event.impact);
+      const strike = environmentHit ? event.impactPoint ?? event.to : small ? event.to : rig.target;
+      const ground = this.project(small ? event.from : rig.point), target = this.project(strike, small ? 3 : environmentHit ? (event.impact === 'ground' ? 0 : 18 * scale) : (event.damage === 0 && !event.impact ? 0 : rig.bodyHeight * scale));
       const from = small ? this.project(event.from, 3) : { x: ground.x + rig.offset.x * scale, y: ground.y + rig.offset.y * scale };
       const flash = mount && !small ? mount.muzzle : from;
       const eject = small ? from : { x: ground.x + rig.ejectOffset.x * scale, y: ground.y + rig.ejectOffset.y * scale };
@@ -1114,8 +1120,8 @@ export class LiveScene {
     const own = entity.id === snapshot.selfId, selected = entity.id === this.selected, color = own ? T.self : boss ? T.boss : entity.kind === 'player' ? T.ally : entity.faction === 'raiders' ? T.hostile : T.scav;
     if (this.overview || 160 * scale < 14) {
       c.fillStyle = color; c.strokeStyle = T.panel; c.lineWidth = 1.5; c.beginPath(); c.arc(p.x, p.y, own || selected ? 4.5 : 2.8, 0, Math.PI * 2); c.fill(); c.stroke();
-      if (entity.aimUntil && entity.aimUntil > snapshot.now && entity.aimTargetId === snapshot.selfId) this.label('ЦЕЛИТСЯ В ТЕБЯ', p.x, p.y - 14, T.injured, 8);
-      if (own || selected || boss) this.label(own ? 'ТЫ' : boss?`БОСС · ${boss.name}`:entity.name, p.x, p.y - 10, color, 9);
+      if (!this.options.observer && entity.aimUntil && entity.aimUntil > snapshot.now && entity.aimTargetId === snapshot.selfId) this.label('ЦЕЛИТСЯ В ТЕБЯ', p.x, p.y - 14, T.injured, 8);
+      if (own || selected || boss) this.label(own && !this.options.observer ? 'ТЫ' : boss?`БОСС · ${boss.name}`:entity.name, p.x, p.y - 10, color, 9);
       this.hitTargets.push({ entity, x: p.x, y: p.y }); return;
     }
     c.beginPath(); c.ellipse(p.x, p.y, (entity.health > 0 ? 9 : 13) * zoom, (entity.health > 0 ? 3.5 : 6) * zoom, 0, 0, Math.PI * 2); c.fillStyle = '#18312c42'; c.fill();
@@ -1134,8 +1140,8 @@ export class LiveScene {
     // the own fighter, bosses and observed combat warnings stay recognisable.
     const compact = 160 * scale < 36, named = !compact || own || selected || !!boss;
     const top = bounds.y - (compact ? 18 : 37);
-    if (named) this.label(own ? `ТЫ · ${entity.name}` : boss && compact ? `БОСС · ${boss.name}` : entity.name, p.x, top, color, own ? 11 : 10);
-    if (!compact) {
+    if (named) this.label(own && !this.options.observer ? `ТЫ · ${entity.name}` : boss && compact ? `БОСС · ${boss.name}` : entity.name, p.x, top, color, own ? 11 : 10);
+    if (!compact && (!this.options.observer || selected)) {
       const role = selected && liveNpcSquadLabel(entity) || (boss ? 'БОСС' : entity.kind === 'player' ? own ? 'ТВОЙ БОЕЦ' : 'ИГРОК' : entity.faction === 'raiders' ? 'РЕЙДЕР' : 'ДИКИЙ');
       const weaponName = WEAPON_BY_ID[typeof weapon === 'string' ? weapon : weapon.weaponId]?.name;
       const detail = selected ? liveNpcActivityLabel(entity) ?? weaponName : weaponName;
@@ -1146,9 +1152,9 @@ export class LiveScene {
       c.fillStyle = T.panel; c.fillRect(p.x - width / 2, y, width, 3);
       c.fillStyle = entity.health > 35 ? T.healthy : T.injured; c.fillRect(p.x - width / 2, y, width * entity.health / 100, 3);
     }
-    if (entity.combatStance && (own || selected || !compact)) this.label(entity.combatStance === 'covered' ? 'В УКРЫТИИ' : entity.combatStance === 'peeking' ? 'ОГОНЬ ИЗ УКРЫТИЯ' : 'К УКРЫТИЮ', p.x, p.y + 34, T.muted, 7);
+    if (entity.combatStance && selected) this.label(entity.combatBehavior === 'suppressed' ? 'ПОД ОГНЁМ' : entity.combatBehavior === 'relocating' ? 'МЕНЯЕТ ПОЗИЦИЮ' : entity.combatStance === 'covered' ? 'В УКРЫТИИ' : entity.combatStance === 'peeking' ? 'НА ПОЗИЦИИ' : 'К УКРЫТИЮ', p.x, p.y + 34, T.muted, 7);
     if (entity.safeUntil > snapshot.now) this.label('ЗАЩИТА', p.x, p.y + 20, T.extract, 8);
-    if (entity.aimUntil && entity.aimUntil > snapshot.now) {
+    if (!this.options.observer && entity.aimUntil && entity.aimUntil > snapshot.now && entity.aimTargetId === snapshot.selfId) {
       c.strokeStyle = T.hostile; c.lineWidth = 2; c.beginPath(); c.ellipse(p.x, p.y, 18 * zoom, 9 * zoom, 0, 0, Math.PI * 2); c.stroke();
       this.label(entity.aimTargetId === snapshot.selfId ? 'ЦЕЛИТСЯ В ТЕБЯ' : 'ПРИЦЕЛИВАЕТСЯ', p.x, p.y + 22, T.injured, 8);
     } else if (entity.bleeding || entity.limping) this.label(entity.bleeding ? 'КРОВОТЕЧЕНИЕ' : 'ХРОМАЕТ', p.x, p.y + 22, T.injured, 7);

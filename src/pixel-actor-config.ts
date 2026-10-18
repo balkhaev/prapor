@@ -1,10 +1,10 @@
 /** Shared art cycles. The scene samples analytic world distance; the model
  * viewer samples these same phases from a cosmetic playback clock. */
-export const PIXEL_ACTOR_FRAMES = { idle: 8, walk: 24, aim: 12, fire: 10, hit: 4, downed: 1 } as const;
+export const PIXEL_ACTOR_FRAMES = { idle: 8, walk: 24, aim: 12, fire: 10, hit: 8, downed: 1 } as const;
 export type PixelActorMode = keyof typeof PIXEL_ACTOR_FRAMES;
-export type PixelActorPose = { walkFrame: number; move: number; aim: number; crouch?: number };
+export type PixelActorPose = { walkFrame: number; move: number; aim: number; crouch?: number; reload?: number };
 export const PIXEL_ACTOR_FRAME_MS: Readonly<Record<PixelActorMode, number>> = {
-  idle: 280, walk: 40, aim: 100, fire: 22, hit: 55, downed: 1000,
+  idle: 280, walk: 40, aim: 100, fire: 22, hit: 45, downed: 1000,
 };
 export const PIXEL_ACTOR_CYCLE_MS = Object.fromEntries(Object.entries(PIXEL_ACTOR_FRAMES).map(([mode, count]) => [mode, count * PIXEL_ACTOR_FRAME_MS[mode as PixelActorMode]])) as Readonly<Record<PixelActorMode, number>>;
 export const PIXEL_ACTOR_ANCHOR = { x: 128, y: 192 } as const;
@@ -29,16 +29,18 @@ export function pixelActorPresentation(animation: PresentedActor): PixelActorPos
   const fallback = { move: animation.mode === 'walk' ? 1 : 0, aim: animation.mode === 'aim' || animation.mode === 'fire' ? 1 : 0 };
   const weight = (value: number | undefined, defaultValue: number) => Number.isFinite(value) ? Math.round(Math.max(0, Math.min(1, value!)) * 8) / 8 : defaultValue;
   const crouch = animation.mode === 'downed' ? 0 : weight(animation.pose?.crouch, 0);
+  const reload = animation.mode === 'downed' ? 0 : weight(animation.pose?.reload, 0);
   return {
     walkFrame: pixelActorFrameIndex({ mode: 'walk', frame: animation.pose?.walkFrame ?? (animation.mode === 'walk' ? animation.frame : 0) }),
     move: weight(animation.pose?.move, fallback.move), aim: weight(animation.pose?.aim, fallback.aim),
     ...(crouch ? { crouch } : {}),
+    ...(reload ? { reload } : {}),
   };
 }
 
 export function pixelActorPresentationKey(animation: PresentedActor): string {
   const pose = pixelActorPresentation(animation);
-  return `${animation.mode}:${pixelActorFrameIndex(animation)}:${pose.move}:${pose.aim}:${pose.move ? pose.walkFrame : 0}:${pose.crouch ?? 0}`;
+  return `${animation.mode}:${pixelActorFrameIndex(animation)}:${pose.move}:${pose.aim}:${pose.move ? pose.walkFrame : 0}:${pose.crouch ?? 0}:${pose.reload ?? 0}`;
 }
 
 export function pixelActorTimedFrame(mode: PixelActorMode, elapsed: number, loop = true): number {
