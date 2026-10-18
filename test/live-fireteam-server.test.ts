@@ -18,49 +18,92 @@ const origin = { x: 366, y: 465 }, threat = { x: origin.x + 5, y: origin.y };
 const cleanups: Array<() => void> = [];
 afterEach(() => { for (const cleanup of cleanups.splice(0)) cleanup(); });
 
-async function fixture(authored = true, canFire = true) {
+async function fixture(authored = true, canFire = true, corner = false) {
   const directory = mkdtempSync(join(tmpdir(), 'prapor-fireteam-')), dbPath = join(directory, 'live.sqlite');
   let time = NOW, id = '', cookie = '', roll = .99;
   const options = { dbPath, now: () => time, random: () => roll, automaticTicks: false, secureCookies: false, allowedOrigins: [ORIGIN] };
   let service: LiveService = createLiveService(options);
   cleanups.push(() => { service.close(); rmSync(directory, { recursive: true, force: true }); });
-  async function call(path: string, body?: object): Promise<LiveSnapshot> {
+  async function call(path: string, body?: object, session?: { id: string; cookie: string }): Promise<LiveSnapshot> {
+    const credentials = session ?? { id, cookie };
     const reply = await service.fetch(new Request(`${ORIGIN}/api/live/${path}`, { method: body ? 'POST' : 'GET', headers: {
-      ...(body ? { origin: ORIGIN, 'content-type': 'application/json' } : {}), ...(cookie ? { cookie, 'x-prapor-live': id } : {}),
+      ...(body ? { origin: ORIGIN, 'content-type': 'application/json' } : {}), ...(credentials.cookie ? { cookie: credentials.cookie, 'x-prapor-live': credentials.id } : {}),
     }, ...(body ? { body: JSON.stringify(body) } : {}) }));
     expect(reply?.status).toBe(200);
     const snapshot = await reply!.json() as LiveSnapshot;
     cookie ||= reply!.headers.get('set-cookie')!.split(';')[0]!; id ||= snapshot.selfId;
     return snapshot;
   }
-  await call('join', {}); service.close();
+  await call('join', {});
+  let observer: { id: string; cookie: string } | undefined;
+  if (corner) {
+    const reply = (await service.fetch(new Request(`${ORIGIN}/api/live/join`, { method: 'POST', headers: { origin: ORIGIN, 'content-type': 'application/json' }, body: '{}' })))!;
+    expect(reply.status).toBe(200); const snapshot = await reply.json() as LiveSnapshot;
+    observer = { id: snapshot.selfId, cookie: reply.headers.get('set-cookie')!.split(';')[0]! };
+  }
+  service.close();
   const db = new Database(dbPath);
   try {
     const value = JSON.parse(db.query<{ state: string }, []>('SELECT state FROM live_world WHERE id=1').get()!.state);
     value.scavs = value.scavs.filter((actor: { id: string }) => squad.memberIds.includes(actor.id));
     value.scavs.forEach((actor: Record<string, unknown>, index: number) => {
-      Object.assign(actor, { x: origin.x, y: origin.y + index, health: 100, body: createHealth(), healthAt: time,
-        nextMove: 0, nextAttack: canFire ? 0 : time + 60_000, aim: null, action: 'idle', safeUntil: 0, alife: undefined, npcGarrison: undefined });
+      Object.assign(actor, { x: corner ? 411 : origin.x, y: corner ? 480 - index : origin.y + index, health: 100, body: createHealth(), healthAt: time,
+        nextMove: corner ? time + 750 : 0, nextAttack: canFire ? 0 : time + 60_000, aim: null, action: 'idle', safeUntil: 0, alife: undefined, npcGarrison: undefined });
       if (!authored) actor.home = { x: origin.x, y: origin.y + index };
     });
+    if (corner) value.scavs.push({ ...structuredClone(value.scavs[0]), id: 'secondary-opponent', name: 'Второй противник',
+      x: 415, y: 475, home: { x: 415, y: 475 }, route: [{ x: 415, y: 475 }], faction: 'scavs', role: 'guard',
+      nextMove: time + 60_000, nextAttack: time + 60_000 });
     value.events = [];
     for (const state of value.npcSquads) { state.phase = 'rest'; state.restUntil = time + 60_000; }
     db.query('UPDATE live_world SET state=? WHERE id=1').run(JSON.stringify(value));
     const row = db.query<{ identity: string; state: string }, []>('SELECT identity,state FROM live_players').all().find(row => JSON.parse(row.state).id === id)!;
     const player = JSON.parse(row.state);
-    Object.assign(player, threat, { health: 100, body: createHealth(), healthAt: time, safeUntil: 0, dangerUntil: 0, graceUntil: 0,
+    Object.assign(player, corner ? { x: 415, y: 480 } : threat, { health: 100, body: createHealth(), healthAt: time, safeUntil: 0, dangerUntil: 0, graceUntil: 0,
       nextAttack: 0, destination: null, targetId: null, patrol: false, automation: undefined, aim: null, ammo: 60, leaveAt: 0 });
     db.query('UPDATE live_players SET state=? WHERE identity=?').run(JSON.stringify(player), row.identity);
+    if (observer) {
+      const row = db.query<{ identity: string; state: string }, []>('SELECT identity,state FROM live_players').all().find(row => JSON.parse(row.state).id === observer!.id)!;
+      const player = JSON.parse(row.state); Object.assign(player, { x: 409, y: 478, safeUntil: time + 60_000 });
+      db.query('UPDATE live_players SET state=? WHERE identity=?').run(JSON.stringify(player), row.identity);
+    }
   } finally { db.close(); }
-  service = createLiveService(options); await call('join', {});
+  service = createLiveService(options); await call('join', {}); if (observer) await call('join', {}, observer);
   return { id, now: () => time, state: () => call('state'), act: async (body: LiveCommand) => {
     roll = .5; try { return await call('action', body); } finally { roll = .99; }
   },
+    observe: () => call('state', undefined, observer),
     tick: async (ms = 50) => { for (let elapsed = 0; elapsed < ms; elapsed += 50) { time += 50; service.tick(); } return call('state'); }, healthy: () => service.healthy() };
 }
 const location = (entity: LivePoint): LivePoint => ({ x: entity.x, y: entity.y });
 
 describe('authoritative squad fire and movement', () => {
+  test('a briefly hidden primary threat keeps the active bound despite a second visible opponent', async () => {
+    const f = await fixture(true, true, true);
+    let started = false;
+    for (let elapsed = 0; elapsed < 12_000; elapsed += 50) {
+      await f.tick(); const snapshot = await f.observe();
+      if (snapshot.entities.some(actor => actor.combatRole === 'flanking')) { started = true; break; }
+    }
+    expect(started).toBe(true);
+    await f.act({ type: 'move', x: 415, y: 482 });
+    let hiddenAdvance = false, secondaryVisible = false;
+    const previous = new Map<string, LivePoint>();
+    for (let elapsed = 0; elapsed < 2000; elapsed += 50) {
+      const player = await f.tick(), snapshot = await f.observe();
+      const primary = player.entities.find(actor => actor.id === f.id)!;
+      for (const actor of snapshot.entities.filter(actor => squad.memberIds.includes(actor.id))) {
+        const before = previous.get(actor.id), moved = before && (actor.x !== before.x || actor.y !== before.y);
+        if (!nav.hasLineOfSight(actor, primary) && nav.hasLineOfSight(actor, { x: 415, y: 475 })) {
+          secondaryVisible = true;
+          hiddenAdvance ||= Boolean(moved && actor.combatRole === 'flanking');
+          if (actor.aimTargetId) expect(actor.aimTargetId).toBe(f.id);
+        }
+        previous.set(actor.id, location(actor));
+      }
+    }
+    expect(secondaryVisible).toBe(true); expect(hiddenAdvance).toBe(true); expect(f.healthy()).toBe(true);
+  });
   test('a real squad advances a flanker only behind recent actual covering rounds and keeps legal separate positions', async () => {
     for (let y = -7; y <= 7; y++) for (let x = -7; x <= 7; x++) expect(nav.walkable({ x: origin.x + x, y: origin.y + y })).toBe(true);
     const f = await fixture(), previous = new Map<string, LivePoint>(), events = new Map<string, LiveEvent>();

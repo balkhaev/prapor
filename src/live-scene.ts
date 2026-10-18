@@ -1154,7 +1154,7 @@ export class LiveScene {
     }
     if (entity.combatRole && entity.health > 0 && (selected || this.options.observer && !compact)) {
       const roles = { covering: 'ПРИКРЫТИЕ', flanking: 'ОБХОД', withdrawing: 'ОТХОД', regrouping: 'ПЕРЕГРУППИРОВКА' };
-      this.label(roles[entity.combatRole], p.x, p.y + 26, entity.combatRole === 'withdrawing' ? T.injured : color, 7);
+      this.label(roles[entity.combatRole], p.x, p.y + 26, entity.combatRole === 'withdrawing' ? T.injured : T.text, 9);
     } else if (entity.combatStance && selected) this.label(entity.combatBehavior === 'suppressed' ? 'ПОД ОГНЁМ' : entity.combatBehavior === 'relocating' ? 'МЕНЯЕТ ПОЗИЦИЮ' : entity.combatStance === 'covered' ? 'В УКРЫТИИ' : entity.combatStance === 'peeking' ? 'НА ПОЗИЦИИ' : 'К УКРЫТИЮ', p.x, p.y + 34, T.muted, 7);
     if (entity.safeUntil > snapshot.now) this.label('ЗАЩИТА', p.x, p.y + 20, T.extract, 8);
     if (!this.options.observer && entity.aimUntil && entity.aimUntil > snapshot.now && entity.aimTargetId === snapshot.selfId) {
