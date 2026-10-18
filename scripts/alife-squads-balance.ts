@@ -7,6 +7,7 @@ import type { EconomyLoot } from '../server/live-economy';
 import { readNpcCacheInventory, readNpcInventory, type NpcInventory } from '../server/live-npc-loot';
 import { createLiveNavigation } from '../server/live-navigation';
 import { buildNpcSquadPlans, type NpcSquadState } from '../server/live-squads';
+import type { NpcFactionAlerts } from '../server/live-faction-alerts';
 import { getLiveBossArenas } from '../src/game/live-boss-arenas';
 import { getLiveMap } from '../src/game/live-maps';
 import type { LiveEvent, LivePoint } from '../src/game/live';
@@ -18,6 +19,7 @@ interface SavedWorld {
   npcSquads?: NpcSquadState[];
   territoryOwners?: Array<[string, string | null]>;
   npcForageCooldowns?: Array<[string, number]>;
+  npcFactionAlerts?: NpcFactionAlerts;
 }
 interface OwnedItem { item: EconomyLoot; owner: string; kind: string; expiresAt: number }
 const fingerprint = (item: EconomyLoot) => JSON.stringify([item.id, item.modelId, item.kind ?? 'loot', item.foundAt, 'durability' in item ? item.durability : null]);
@@ -30,6 +32,7 @@ export function runSquadBalance(seconds = 1800) {
   const geometry = buildNpcSquadPlans(world, createLiveNavigation(world), point => arenas.some(arena => point.x >= arena.area.x
     && point.y >= arena.area.y && point.x < arena.area.x + arena.area.width && point.y < arena.area.y + arena.area.height));
   const plans = new Map(geometry.squads.map(plan => [plan.id, plan]));
+  const planByActor = new Map(geometry.squads.flatMap(plan => plan.memberIds.map(id => [id, plan] as const)));
   let time = 1_800_000_000_000, seed = 97331;
   const random = () => { seed = Math.imul(seed, 1664525) + 1013904223 | 0; return (seed >>> 0) / 4294967296; };
   const options = { dbPath: join(directory, 'live.sqlite'), now: () => time, random, automaticTicks: false,
@@ -49,18 +52,23 @@ export function runSquadBalance(seconds = 1800) {
     siteCooldownViolations: 0, minimumSupplyContainers: Number.MAX_SAFE_INTEGER, maximumCaches: 0, maximumCarriers: 0,
     final: { itemsInSupplies: 0, itemsInBodies: 0, itemsInCarriers: 0, itemsInBases: 0, caches: 0, alive: 0 },
     squadPhases: {} as Record<string, number>, changedTerritories: [] as string[],
+    responses: { alarms: 0, losses: 0, homeRecalls: 0, helperDispatches: 0, retakeDispatches: 0, completedRetakes: 0,
+      maximumPendingRetakes: 0, traveledSteps: 0, budgetViolations: 0, departureViolations: 0, generationReplacements: 0, deadlineViolations: 0,
+      samples: {} as Record<string, number> },
     districtActivity: Object.fromEntries(world.districts.map(district => [district.id, { squads: geometry.squads.filter(plan => plan.districtId === district.id).length,
-      activeSamples: 0, restSamples: 0, maximumActive: 0, launchedMissions: 0, finalActive: 0, finalRest: 0 }])),
-    finalSquads: [] as Array<Pick<NpcSquadState, 'id' | 'phase' | 'missionKind' | 'cycle' | 'outcome' | 'targetId'> & { districtId: string }>,
+      activeSamples: 0, restSamples: 0, localDefenseSamples: 0, maximumActive: 0, launchedMissions: 0, finalActive: 0, finalRest: 0 }])),
+    finalSquads: [] as Array<Pick<NpcSquadState, 'id' | 'phase' | 'missionKind' | 'cycle' | 'outcome' | 'targetId' | 'responseId' | 'localDefense'> & { districtId: string }>,
     finalCarriers: [] as Array<{ id: string; items: number; money: number; point: LivePoint; baseId: string | null; base: LivePoint | null; distanceToBase: number | null }>,
     minutes: [] as Array<{ minute: number; alive: number; moving: number; carriers: number; caches: number; supplies: number }>,
     errors: [] as string[], elapsedMs: 0, productionCadence: { ticks: 600, p50: 0, p95: 0, max: 0 } };
   const known = new Map<string, string>(), retired = new Set<string>(), events = new Set<string>(), sites = new Map<string, number>();
   const changedTerritories = new Set<string>(), minuteMovers = new Set<string>();
+  const alarms = new Set<string>(), losses = new Set<string>(), recalls = new Set<string>(), helpers = new Map<string, string>(), retakes = new Map<string, string>();
+  const manifests = new Map<string, string>(), launches = new Map<string, number>();
   let previous = new Map<string, OwnedItem>(), previousActors = new Map<string, Actor>(), previousOwners = new Map<string, string | null>();
   const error = (message: string) => { if (metrics.errors.length < 12) metrics.errors.push(message); };
   function sample(initial = false) {
-    const saved = read(), current = new Map<string, OwnedItem>(), occupied = new Set<number>();
+    const saved = read(), current = new Map<string, OwnedItem>(), occupied = new Set<number>(), squadStates = new Map((saved.npcSquads ?? []).map(state => [state.id, state]));
     const supplies = saved.drops.filter(drop => drop.source === 'supply'), caches = saved.drops.filter(drop => drop.source === 'base');
     const carriers = saved.scavs.filter(actor => actor.npcInventory && (actor.npcInventory.items.length || actor.npcInventory.money));
     metrics.squads = saved.npcSquads?.length ?? 0; metrics.healthy &&= service.healthy();
@@ -98,6 +106,7 @@ export function runSquadBalance(seconds = 1800) {
         const step = Math.abs(actor.x - old.x) + Math.abs(actor.y - old.y);
         if (step > 1) metrics.illegalSteps++;
         if (step) minuteMovers.add(actor.id); metrics.totalSteps += step;
+        const plan = planByActor.get(actor.id); if (plan && squadStates.get(plan.id)?.responseId) metrics.responses.traveledSteps += step;
       }
     }
     for (const [id, old] of previous) if (!current.has(id)) {
@@ -112,7 +121,24 @@ export function runSquadBalance(seconds = 1800) {
       events.add(event.id);
       if (event.text.includes('забрал припасы')) metrics.completedForages++;
       if (event.text.includes('доставил добычу на базу')) metrics.completedDeposits++;
-      if (event.text.includes('взял под контроль')) metrics.captures++;
+      if (event.text.includes('взял под контроль') || event.text.includes('отбил')) metrics.captures++;
+      if (event.text.includes('отбил')) metrics.responses.completedRetakes++;
+    }
+    for (const alarm of saved.npcFactionAlerts?.alarms ?? []) {
+      alarms.add(alarm.id); if (alarm.homeRecalled) recalls.add(alarm.id);
+      if (alarm.helperSquadId) {
+        if (helpers.has(alarm.id) && helpers.get(alarm.id) !== alarm.helperSquadId) { metrics.responses.budgetViolations++; error(`Second helper for ${alarm.id}`); }
+        helpers.set(alarm.id, alarm.helperSquadId);
+      }
+    }
+    const orders = saved.npcFactionAlerts?.losses ?? [];
+    metrics.responses.maximumPendingRetakes = Math.max(metrics.responses.maximumPendingRetakes, orders.filter(order => order.status === 'pending').length);
+    for (const order of orders) {
+      losses.add(order.id);
+      if (order.assignedSquadId) {
+        if (retakes.has(order.id) && retakes.get(order.id) !== order.assignedSquadId) { metrics.responses.budgetViolations++; error(`Second retaliation for ${order.id}`); }
+        retakes.set(order.id, order.assignedSquadId);
+      }
     }
     const activeByDistrict = new Map<string, number>();
     for (const squad of saved.npcSquads ?? []) {
@@ -120,7 +146,28 @@ export function runSquadBalance(seconds = 1800) {
       const plan = plans.get(squad.id), district = plan && metrics.districtActivity[plan.districtId];
       if (district) {
         if (phase === 'rest') district.restSamples++;
-        else { district.activeSamples++; activeByDistrict.set(plan.districtId, (activeByDistrict.get(plan.districtId) ?? 0) + 1); }
+        else {
+          district.activeSamples++;
+          if (squad.localDefense) district.localDefenseSamples++;
+          else activeByDistrict.set(plan.districtId, (activeByDistrict.get(plan.districtId) ?? 0) + 1);
+        }
+      }
+      if (squad.responseId && plan) {
+        const key = `${squad.responseId}:${squad.id}`, manifest = JSON.stringify(squad.members);
+        metrics.responses.samples[squad.missionKind] = (metrics.responses.samples[squad.missionKind] ?? 0) + 1;
+        if (!launches.has(key)) {
+          launches.set(key, squad.startedAt); manifests.set(key, manifest);
+          if (squad.missionKind === 'retake' || squad.targetId !== plan.baseId) {
+            for (const member of squad.members) {
+              const actor = previousActors.get(member.id) ?? saved.scavs.find(actor => actor.id === member.id);
+              if (!actor || Math.hypot(actor.x - plan.base.x, actor.y - plan.base.y) > 6) { metrics.responses.departureViolations++; error(`Response ${key} dispatched away from base`); }
+            }
+          }
+        } else {
+          if (launches.get(key) !== squad.startedAt) { metrics.responses.budgetViolations++; error(`Response ${key} launched again`); launches.set(key, squad.startedAt); }
+          if (manifests.get(key) !== manifest) { metrics.responses.generationReplacements++; error(`Response ${key} replaced its manifest`); manifests.set(key, manifest); }
+        }
+        if (!['rest', 'return'].includes(phase) && time >= squad.missionUntil + 1000) { metrics.responses.deadlineViolations++; error(`Expired response ${key} is still active`); }
       }
     }
     for (const [id, active] of activeByDistrict) metrics.districtActivity[id]!.maximumActive = Math.max(metrics.districtActivity[id]!.maximumActive, active);
@@ -146,10 +193,10 @@ export function runSquadBalance(seconds = 1800) {
       }
     }
     const final = read();
-    metrics.finalSquads = (final.npcSquads ?? []).map(({ id, phase, missionKind, cycle, outcome, targetId }) => {
+    metrics.finalSquads = (final.npcSquads ?? []).map(({ id, phase, missionKind, cycle, outcome, targetId, responseId, localDefense }) => {
       const districtId = plans.get(id)?.districtId ?? 'unknown', district = metrics.districtActivity[districtId];
       if (district) { district.launchedMissions += cycle; if (phase === 'rest') district.finalRest++; else district.finalActive++; }
-      return { id, districtId, phase, missionKind, cycle, outcome, targetId };
+      return { id, districtId, phase, missionKind, cycle, outcome, targetId, responseId, localDefense };
     });
     metrics.finalCarriers = final.scavs.filter(actor => actor.npcInventory && (actor.npcInventory.items.length || actor.npcInventory.money)).map(actor => {
       const plan = geometry.squads.find(plan => plan.memberIds.includes(actor.id));
@@ -162,6 +209,7 @@ export function runSquadBalance(seconds = 1800) {
     metrics.healthy &&= service.healthy(); ticks.sort((a, b) => a - b);
     metrics.productionCadence = { ticks: ticks.length, p50: Math.round(ticks[300]! * 100) / 100, p95: Math.round(ticks[570]! * 100) / 100, max: Math.round(ticks.at(-1)! * 100) / 100 };
     metrics.uniqueItems = known.size; metrics.changedTerritories = [...changedTerritories]; metrics.elapsedMs = Math.round(performance.now() - began);
+    Object.assign(metrics.responses, { alarms: alarms.size, losses: losses.size, homeRecalls: recalls.size, helperDispatches: helpers.size, retakeDispatches: retakes.size });
     return metrics;
   } finally { db.close(); service.close(); rmSync(directory, { recursive: true, force: true }); }
 }
@@ -170,5 +218,6 @@ if (import.meta.main) {
   const result = runSquadBalance(Number(Bun.argv[2]) || 1800);
   console.log(JSON.stringify(result, null, 2));
   if (!result.healthy || result.duplicateItems || result.mutatedItems || result.unexplainedLosses || result.resurrectedItems || result.invalidBirths
-    || result.capacityErrors || result.illegalSteps || result.collisions || result.populationChanges || result.siteCooldownViolations) process.exitCode = 1;
+    || result.capacityErrors || result.illegalSteps || result.collisions || result.populationChanges || result.siteCooldownViolations
+    || result.responses.budgetViolations || result.responses.departureViolations || result.responses.generationReplacements || result.responses.deadlineViolations) process.exitCode = 1;
 }

@@ -13,6 +13,9 @@ const labels: Record<LiveNpcActivity, string> = {
   forage: 'Ищет припасы',
   haul: 'Несёт добычу на базу',
   withdraw: 'Отступает с отрядом',
+  defend: 'Защищает базу',
+  reinforce: 'Идёт на помощь',
+  retake: 'Отбивает точку',
 };
 
 /** Only describe what the server has revealed about an observed ordinary NPC. */
@@ -31,5 +34,5 @@ export function liveNpcSquadLabel(entity: LiveEntity): string | null {
 export function liveFactionSiteLabel(site: LiveFactionSite): string {
   const place = site.kind === 'base' ? 'База' : 'Точка';
   const owner = site.owner === 'raiders' ? 'рейдеров' : site.owner === 'scavs' ? 'диких' : 'без владельца';
-  return `${place} ${owner}${site.contested ? ' · идёт бой за точку' : ''}`;
+  return `${place} ${owner}${site.contested ? site.kind === 'base' ? ' · идёт бой за базу' : ' · идёт бой за точку' : ''}`;
 }
