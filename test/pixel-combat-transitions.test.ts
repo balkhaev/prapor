@@ -100,4 +100,22 @@ describe('continuous combat presentation', () => {
     combat.observe(aiming, still, 600, 600); combat.clear();
     combat.observe(actor, still, 800, 800); expect(combat.frame(actor, still, 800, 800).pose!.aim).toBe(0);
   });
+
+  test('a newer confirmed impact interrupts recoil, dips the sights, and settles without foot movement', () => {
+    const combat = new PixelCombatAnimation(); combat.observe(aiming, still, 0, 0);
+    combat.update([shot(250)], 250, 250); combat.observe(aiming, still, 250, 250);
+    expect(combat.frame(aiming, still, 270, 270).mode).toBe('fire');
+    const impact: LiveEvent = { ...shot(280), id: 'incoming-impact', actorId: 'other', targetId: actor.id, damage: 18 };
+    combat.update([impact], 280, 280);
+    const first = combat.frame(aiming, still, 280, 280), peak = combat.frame(aiming, still, 370, 370);
+    expect(first.mode).toBe('hit'); expect(peak.mode).toBe('hit');
+    expect(peak.pose!.aim).toBeLessThan(first.pose!.aim);
+    const planted = pixelActorRig(first);
+    for (const at of [300, 370, 450, 550, 600]) {
+      const rig = pixelActorRig(combat.frame(aiming, still, at, at));
+      expect([rig.leftHeel, rig.leftToe, rig.rightHeel, rig.rightToe]).toEqual([planted.leftHeel, planted.leftToe, planted.rightHeel, planted.rightToe]);
+    }
+    expect(combat.frame(aiming, still, 650, 650)).toMatchObject({ mode: 'aim', pose: { aim: 1 } });
+    expect(combat.active(650)).toHaveLength(2);
+  });
 });

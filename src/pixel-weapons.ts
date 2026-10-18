@@ -183,17 +183,25 @@ function model(input: PixelWeaponInput): Model {
 export function pixelWeaponProfile(input: PixelWeaponInput): PixelWeaponProfile { return { ...model(input).profile }; }
 /** Factory dimensions are lazy; importing a scene never assembles39 profiles. */
 export const PIXEL_WEAPON_PROFILES: Readonly<Record<PixelWeaponId, PixelWeaponProfile>> = Object.fromEntries(PIXEL_WEAPON_IDS.map(id => [id, Object.defineProperties({}, { ...Object.fromEntries(['length', 'forward', 'rear', 'boreHeight', 'support', 'twoHanded', 'scoped', 'hasMuzzle', 'hasEjection'].map(field => [field, { enumerable: true, get: () => model(id).profile[field as keyof PixelWeaponProfile] }])) }) as PixelWeaponProfile]));
-function geometry(input: PixelWeaponInput, grip: LivePoint, facing: PixelFacing, kick: number) {
+function geometry(input: PixelWeaponInput, grip: LivePoint, facing: PixelFacing, kick: number, pitch = 0) {
     const value = model(input), bearing = pixelBearing(facing), side = { x: -bearing.y * 2, y: bearing.x * .5 }, recoil = Number.isFinite(kick) ? Math.round(Math.max(0, Math.min(4, kick)) * 2) / 2 : 0;
-    const project = (u: number, h: number, v = 0): LivePoint => ({ x: Math.round(grip.x) + Math.round(bearing.x * u + side.x * v), y: Math.round(grip.y) + Math.round(bearing.y * u + side.y * v + h - recoil * u / Math.max(1, value.muzzle.x)) });
-    return { value, bearing, side, recoil, project };
+    const lowered = Number.isFinite(pitch) ? Math.round(Math.max(-.25, Math.min(.625, pitch)) * 16) / 16 : 0;
+    const cosine = Math.cos(lowered), sine = Math.sin(lowered);
+    // Pitch is local to the bore: lowering a west-facing weapon still points
+    // its muzzle toward the ground, and the support socket rotates with it.
+    const rotate = (u: number, h: number) => ({ forward: u * cosine - h * sine, vertical: u * sine + h * cosine });
+    const project = (u: number, h: number, v = 0): LivePoint => {
+        const { forward, vertical } = rotate(u, h);
+        return { x: Math.round(grip.x) + Math.round(bearing.x * forward + side.x * v), y: Math.round(grip.y) + Math.round(bearing.y * forward + side.y * v + vertical - recoil * u / Math.max(1, value.muzzle.x)) };
+    };
+    return { value, bearing, side, recoil, lowered, rotate, project };
 }
-export function pixelWeaponAnchors(input: PixelWeaponInput, grip: LivePoint, facing: PixelFacing, kick = 0): PixelWeaponAnchors {
-    const { value, project } = geometry(input, grip, facing, kick);
+export function pixelWeaponAnchors(input: PixelWeaponInput, grip: LivePoint, facing: PixelFacing, kick = 0, pitch = 0): PixelWeaponAnchors {
+    const { value, project } = geometry(input, grip, facing, kick, pitch);
     return { muzzle: project(value.muzzle.x, value.muzzle.y), ejection: project(value.ejection.x, value.ejection.y, 3), forehand: project(value.forehand.x, value.forehand.y) };
 }
-function projected(input: PixelWeaponInput, facing: PixelFacing, kick: number): Image {
-    const { value, bearing, side, recoil, project } = geometry(input, { x: 128, y: 96 }, facing, kick), imageKey = `${value.signature}/${facing}/${recoil}`, previous = images.get(imageKey);
+function projected(input: PixelWeaponInput, facing: PixelFacing, kick: number, pitch = 0): Image {
+    const { value, bearing, side, recoil, lowered, rotate, project } = geometry(input, { x: 128, y: 96 }, facing, kick, pitch), imageKey = `${value.signature}/${facing}/${recoil}/${lowered}`, previous = images.get(imageKey);
     if (previous) {
         images.delete(imageKey);
         images.set(imageKey, previous);
@@ -212,7 +220,7 @@ function projected(input: PixelWeaponInput, facing: PixelFacing, kick: number): 
             number,
             number,
             number
-        ]>, color: string) => faces.push({ points: vertices.map(([u, h, v]) => project(u, h, v)), color, depth: vertices.reduce((sum, [u, h, v]) => sum + bearing.y * 2 * u + side.y * 2 * v - h * .5, 0) / 4 });
+        ]>, color: string) => faces.push({ points: vertices.map(([u, h, v]) => project(u, h, v)), color, depth: vertices.reduce((sum, [u, h, v]) => { const { forward, vertical } = rotate(u, h); return sum + bearing.y * 2 * forward + side.y * 2 * v - vertical * .5; }, 0) / 4 });
         add([[x, y, near * d / 2], [x + 1, y, near * d / 2], [x + 1, y + 1, near * d / 2], [x, y + 1, near * d / 2]], wear ? C.edge : cell.color);
         const upper = value.cells.get(key(x, y - 1));
         if (!upper || upper.depth < d)
@@ -254,11 +262,11 @@ function projected(input: PixelWeaponInput, facing: PixelFacing, kick: number): 
     return image;
 }
 /** Integer-painted extruded native parts, without asynchronous textures or DOM. */
-export function paintPixelWeapon(r: PixelRaster, input: PixelWeaponInput, grip: LivePoint, facing: PixelFacing, kick = 0): PixelWeaponAnchors {
-    const image = projected(input, facing, kick), x = Math.round(grip.x), y = Math.round(grip.y);
+export function paintPixelWeapon(r: PixelRaster, input: PixelWeaponInput, grip: LivePoint, facing: PixelFacing, kick = 0, pitch = 0): PixelWeaponAnchors {
+    const image = projected(input, facing, kick, pitch), x = Math.round(grip.x), y = Math.round(grip.y);
     for (const run of image.runs)
         r.rect(x + run.x, y + run.y, run.width, 1, run.color);
-    const anchors = pixelWeaponAnchors(input, grip, facing, kick);
+    const anchors = pixelWeaponAnchors(input, grip, facing, kick, pitch);
     if (model(input).profile.hasMuzzle)
         r.pixel(anchors.muzzle.x, anchors.muzzle.y, C.outline);
     return anchors;

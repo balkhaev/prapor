@@ -250,7 +250,8 @@ describe("shared endless live server", () => {
     editStorage(db => {
       const row = db.query<{ state: string }, []>("SELECT state FROM live_world WHERE id=1").get()!;
       const world = JSON.parse(row.state) as { scavs: Array<Record<string, unknown>> };
-      Object.assign(world.scavs[0]!, { x: 3, y: 0, home: { x: 3, y: 0 }, route: [{ x: 3, y: 0 }], health: 25, body: createHealth(25), nextAttack: 0 });
+      const body = createHealth(); body.parts.chest.hp = 20;
+      Object.assign(world.scavs[0]!, { x: 3, y: 0, home: { x: 3, y: 0 }, route: [{ x: 3, y: 0 }], health: 85, body, nextAttack: 0 });
       db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify(world));
     });
     await enter(first.session); await enter(second.session);
@@ -376,11 +377,12 @@ describe("shared endless live server", () => {
       }
       db.query("UPDATE live_world SET state=? WHERE id=1").run(JSON.stringify(world));
     });
-    await enter(guest.session); await advance(1500, [guest.session]);
+    await enter(guest.session); await advance(7000, [guest.session]);
     const battle = await state(guest.session);
     const rivals = battle.entities.filter(entity => entity.id.startsWith("rival-"));
     expect(rivals).toHaveLength(2); expect(rivals.every(entity => entity.health < 100)).toBe(true);
     expect(battle.events.some(event => event.actorId === "rival-0" && event.targetId === "rival-1")).toBe(true);
+    expect(battle.events.some(event => event.actorId === "rival-1" && event.targetId === "rival-0" && event.from)).toBe(true);
     expect(battle.self.kills).toBe(0); expect(battle.self.ammo).toBe(60); expect(service.healthy()).toBe(true);
   });
 

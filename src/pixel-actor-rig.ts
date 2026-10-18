@@ -8,6 +8,7 @@ export interface PixelActorRig {
   leftAnkle: LivePoint; rightAnkle: LivePoint;
   leftKnee: LivePoint; rightKnee: LivePoint; leftHeel: LivePoint; rightHeel: LivePoint; leftToe: LivePoint; rightToe: LivePoint;
   bob: number; lean: number; sway: number; hipSway: number; headBob: number; headForward: number; weaponKick: number; aim: number;
+  chestFold: number; crouchLean: number; reload: number; weaponPitch: number;
   leftStride: number; rightStride: number; leftLift: number; rightLift: number;
   leftHeelLift: number; rightHeelLift: number; leftToeLift: number; rightToeLift: number;
   leftContact: boolean; rightContact: boolean;
@@ -36,8 +37,11 @@ function foot(phase: number, stride: number, lift: number, stance: number): Foot
  * feet remain independent of breathing, shoulder recoil and upper-body sway. */
 export function pixelActorRig(animation: PixelActorFrame, limping = false): PixelActorRig {
   const frame = pixelActorFrameIndex(animation), mode = animation.mode, bearing = pixelBearing(animation.facing), lateral = { x: -bearing.y * 2, y: bearing.x * .5 };
-  const { move, aim, walkFrame, crouch = 0 } = pixelActorPresentation(animation);
-  const coverDrop = crouch * 28;
+  const { move, aim, walkFrame, crouch = 0, reload = 0 } = pixelActorPresentation(animation);
+  // Hips sit between bent knees; the chest folds and the chin tucks only when
+  // the sights are lowered. A peek opens that posture without moving a boot.
+  const coverDrop = crouch * 30, tuck = crouch * (1 - aim * .6);
+  const chestFold = tuck * 12, crouchLean = tuck * 9;
   const angle = frame / PIXEL_ACTOR_FRAMES[mode] * Math.PI * 2, walkPhase = walkFrame / PIXEL_ACTOR_FRAMES.walk, walkAngle = walkPhase * Math.PI * 2;
   let left: Foot = { stride: -2, lift: 0, heelLift: 0, toeLift: 0, contact: true }, right: Foot = { stride: 3, lift: 0, heelLift: 0, toeLift: 0, contact: true };
   if (move) {
@@ -50,7 +54,7 @@ export function pixelActorRig(animation: PixelActorFrame, limping = false): Pixe
   // Recovery takes most of the cycle, ending exactly at the held aim pose.
   const recoil = mode === 'fire' ? [0, 3.2, 4, 3.3, 2.5, 1.7, 1, .5, .2, 0][frame]! : 0;
   const absorbed = mode === 'fire' ? [0, .6, 2, 3.3, 3, 2.3, 1.5, .8, .3, 0][frame]! : 0;
-  const hit = mode === 'hit' ? [1, 3, 1.5, 0][frame]! : 0;
+  const hit = mode === 'hit' ? [.7, 2.5, 4.2, 3.5, 2.5, 1.3, .5, 0][frame]! : 0;
   const idleBreath = mode === 'idle' ? Math.sin(angle) * 1.8 : 0, aimBreath = mode === 'aim' ? Math.sin(angle) * .85 : 0;
   // The body settles after heel strike, rises over the planted foot and
   // transfers its weight before the other leg swings. The injured-side dip
@@ -63,15 +67,15 @@ export function pixelActorRig(animation: PixelActorFrame, limping = false): Pixe
   const sway = mix(mode === 'idle' ? Math.cos(angle) * .65 : -hit, -gaitHipSway * .45, move) * (1 - aim * .55);
   const lowLean = mix(-hit * 1.6, gaitLean, move), lean = mix(lowLean, 3, aim) - absorbed * .6;
   const lowHeadBob = mix(mode === 'idle' ? Math.sin(angle - .65) * .8 : -hit * .5, -gaitBob * .65, move);
-  const headBob = mix(lowHeadBob, -7 - Math.max(0, aimBreath) * .2 - absorbed * .15 - gaitBob * move * .3, aim);
-  const headForward = mix(mix(-hit, 1, move), 5, aim);
+  const headBob = mix(lowHeadBob, -7 - Math.max(0, aimBreath) * .2 - absorbed * .15 - gaitBob * move * .3, aim) - tuck * 5 - reload * 5;
+  const headForward = mix(mix(-hit, 1, move), 5, aim) + tuck * 2 + reload * 3;
   const p = (side: number, forward: number, z: number) => point(PIXEL_ACTOR_ANCHOR.x + lateral.x * side + bearing.x * forward, PIXEL_ACTOR_ANCHOR.y + lateral.y * side + bearing.y * forward - z);
-  const shoulderForward = lean - absorbed * .4, shoulderZ = 110 + bob - absorbed * .2;
+  const shoulderForward = lean + crouchLean - absorbed * .4, shoulderZ = 110 + bob - chestFold - absorbed * .2;
   // Aiming hands remain fixed through the breath cycle; shoulders and elbows
   // absorb the subtle chest movement instead of dragging the sights around.
   const gripSide = 15 + sway * .6 * (1 - aim) - recoil * .15;
-  const gripForward = mix(17 + lowLean + Math.cos(walkAngle) * .8 * move, 20, aim) - recoil * .55;
-  const gripZ = mix(mode === 'hit' ? 81 - hit : 82 + (bob + coverDrop) * .7, 118, aim) + recoil * .25 - coverDrop;
+  const gripForward = mix(17 + lowLean + Math.cos(walkAngle) * .8 * move, 20, aim) - recoil * .55 + crouchLean * (.5 + aim * .5) - reload * 4;
+  const gripZ = mix(mode === 'hit' ? 81 - hit : 82 + (bob + coverDrop) * .7, 118, aim) + recoil * .25 - coverDrop - chestFold * (.5 + aim * .5) + reload * 5;
   const lowerBob = gaitBob * move - hit;
   const hipForward = (gaitLean * .35 + Math.sin(loadAngle * 2) * .35) * move, hipZ = 57 + lowerBob * .45 - coverDrop;
   const hipTwist = Math.cos(walkAngle) * (limping ? 1 : 1.8) * move, hipDrop = weight * (limping ? .5 : 1) * move;
@@ -108,7 +112,8 @@ export function pixelActorRig(animation: PixelActorFrame, limping = false): Pixe
     leftKnee: knee(-8, left), rightKnee: knee(8, right),
     leftHeel: p(-8, left.stride - 4, left.heelLift + 2), rightHeel: p(8, right.stride - 4, right.heelLift + 2),
     leftToe: p(-8, left.stride + 8, left.toeLift + 1), rightToe: p(8, right.stride + 8, right.toeLift + 1),
-    bob, lean, sway, hipSway, headBob, headForward, weaponKick: recoil, aim,
+    bob, lean, sway, hipSway, headBob, headForward, weaponKick: recoil, aim, chestFold, crouchLean, reload,
+    weaponPitch: (1 - aim) * (.32 + crouch * .22) + reload * .08,
     leftStride: left.stride, rightStride: right.stride, leftLift: left.lift, rightLift: right.lift,
     leftHeelLift: left.heelLift, rightHeelLift: right.heelLift, leftToeLift: left.toeLift, rightToeLift: right.toeLift,
     leftContact: left.contact, rightContact: right.contact,

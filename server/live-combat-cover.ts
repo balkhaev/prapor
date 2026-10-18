@@ -7,6 +7,9 @@ interface CoverGeometry {
   clear(point: LivePoint): boolean;
   hasLineOfSight(from: LivePoint, to: LivePoint): boolean;
   permitted?(point: LivePoint): boolean;
+  /** A compromised firing corner must be replaced, not selected again at zero cost. */
+  avoid?: readonly LivePoint[];
+  solid?(point: LivePoint): boolean;
 }
 const adjacent = (point: LivePoint): LivePoint[] => [
   { x: point.x - 1, y: point.y }, { x: point.x + 1, y: point.y },
@@ -25,13 +28,17 @@ export function findLiveCombatCover(start: LivePoint, observedThreat: LivePoint,
   let best: { node: number; peek: LivePoint; score: number } | null = null;
   for (let cursor = 0; cursor < nodes.length; cursor++) {
     const node = nodes[cursor]!, hidden = !geometry.hasLineOfSight(node.point, observedThreat);
-    if (hidden) {
+    if (hidden && !geometry.avoid?.some(point => distance(point, node.point) < 1.5)) {
       const peek = adjacent(node.point).filter(point => geometry.clear(point) && (geometry.permitted?.(point) ?? true)
         && distance(point, observedThreat) > 2 && distance(point, observedThreat) <= range
         && geometry.hasLineOfSight(point, observedThreat))
         .sort((a, b) => distance(b, observedThreat) - distance(a, observedThreat))[0];
       if (peek) {
-        const score = node.steps + node.exposure * .35 + Math.max(0, range * .65 - distance(peek, observedThreat)) * 2;
+        // Get against the protecting object instead of crouching several cells
+        // out in its geometric shadow. This changes preference, never collision.
+        const againstCover = adjacent(node.point).some(point => geometry.solid?.(point) ?? !geometry.clear(point));
+        const score = node.steps + node.exposure * .35 + (againstCover ? 0 : 10)
+          + Math.max(0, range * .65 - distance(peek, observedThreat)) * 2;
         if (!best || score < best.score) best = { node: cursor, peek, score };
       }
     }

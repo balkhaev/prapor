@@ -45,4 +45,14 @@ describe('physical combat cover', () => {
     const cover = findLiveCombatCover({ x: 5, y: 2 }, { x: 10, y: 2 }, 7, { clear, hasLineOfSight: nav.hasLineOfSight });
     for (const point of cover ? [...cover.route, cover.covered, cover.peek] : []) expect(clear(point)).toBe(true);
   });
+  test('prefers contact with a real barrier over its distant shadow and changes a compromised corner', () => {
+    const nav = geometry([{ x: 9, y: 9, width: 1, height: 2, kind: 'container' }, { x: 9, y: 5, width: 1, height: 2, kind: 'container' }]);
+    const threat = { x: 14, y: 8 }, options = { clear: nav.walkable, hasLineOfSight: nav.hasLineOfSight, solid: nav.blocksSight };
+    const first = findLiveCombatCover({ x: 6, y: 9 }, threat, 12, options)!;
+    expect(first).not.toBeNull();
+    expect([{ x: first.covered.x - 1, y: first.covered.y }, { x: first.covered.x + 1, y: first.covered.y }, { x: first.covered.x, y: first.covered.y - 1 }, { x: first.covered.x, y: first.covered.y + 1 }].some(nav.blocksSight)).toBe(true);
+    const second = findLiveCombatCover(first.covered, threat, 12, { ...options, avoid: [first.covered] });
+    expect(second).not.toBeNull(); expect(second!.covered).not.toEqual(first.covered);
+    expect(nav.hasLineOfSight(second!.covered, threat)).toBe(false); expect(nav.hasLineOfSight(second!.peek, threat)).toBe(true);
+  });
 });

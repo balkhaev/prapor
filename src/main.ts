@@ -3225,6 +3225,7 @@ const accountUI = mountAccountUI({
   onReconnect:async()=>{await loadServerProgress();},onSync:async()=>{await refreshServerProgress();},
 });
 liveMode = createLiveMode({
+	sound: gameSound,
 	world: document.querySelector<HTMLElement>('#live-world')!,
 	hudRoot: app,
 	dock: document.querySelector<HTMLElement>('#command-dock')!,
